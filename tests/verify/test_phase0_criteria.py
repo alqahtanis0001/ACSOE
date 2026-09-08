@@ -647,6 +647,119 @@ def test_a_crash_is_recognised_per_tool_by_that_tools_own_exit_range(
     assert "CRASHED" not in verify_module.describe_exit("pytest", 5, "no tests ran", 5)
 
 
+# The retry. There is a known intermittent native memory fault in the seed write
+# path - not root-caused, suspected hardware - and the gate retries a *crash* once so
+# that it is not the thing holding the phase. The four below pin the boundaries of
+# that allowance, because a retry loop that grew a second attempt, or that started
+# retrying verdicts, would turn the whole gate into the "re-run until green" habit
+# `describe_exit` was written to prevent.
+
+CRASH_OUTPUT = ".....\n520 passed in 12.68s\nWindows fatal exception"
+
+
+def scripted_toolchain(
+    verify_module: ModuleType,
+    bare_tree: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    results: list[tuple[int | None, str]],
+) -> list[str]:
+    """Drive `toolchain_green` against a fixed sequence of subprocess results.
+
+    Returns the list of tool names actually invoked, in order, so a test can assert
+    on how many attempts each command got rather than only on the message.
+    """
+    (bare_tree / "src").mkdir(exist_ok=True)
+    monkeypatch.setattr(
+        verify_module, "_interpreter_with_toolchain", lambda root: ("python.exe", [])
+    )
+    calls: list[str] = []
+    remaining = list(results)
+
+    def fake_run(
+        interpreter: str, args: list[str], root: Path, env: dict[str, str]
+    ) -> tuple[int | None, str]:
+        calls.append(args[1])
+        return remaining.pop(0)
+
+    monkeypatch.setattr(verify_module, "_run_tool", fake_run)
+    return calls
+
+
+def test_a_crash_is_retried_once_and_a_clean_retry_passes_with_the_crash_named(
+    verify_module: ModuleType, bare_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mitigation. A crash says nothing about the code, so the command runs
+    again - but the PASS still names it, because a mitigated fault that stops being
+    reported stops being a known risk and quietly becomes the normal noise level."""
+    calls = scripted_toolchain(
+        verify_module,
+        bare_tree,
+        monkeypatch,
+        [(3221225477, CRASH_OUTPUT), (0, ""), (0, ""), (0, "")],
+    )
+    outcome = run(verify_module, "toolchain_green", bare_tree)
+    assert outcome.result is verify_module.Result.PASS
+    assert "RETRIED AFTER CRASH" in outcome.message
+    assert "0xC0000005 ACCESS_VIOLATION" in outcome.message
+    assert "520 passed in 12.68s" in outcome.message
+    assert calls == ["pytest", "pytest", "mypy", "ruff"]
+
+
+def test_a_second_crash_fails_and_the_retry_is_not_repeated(
+    verify_module: ModuleType, bare_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bounded at one. Two crashes in a row is no longer noise worth absorbing, and
+    a third attempt would be the first step of an unbounded loop."""
+    calls = scripted_toolchain(
+        verify_module,
+        bare_tree,
+        monkeypatch,
+        [(3221225477, CRASH_OUTPUT), (3221226356, ""), (0, ""), (0, "")],
+    )
+    outcome = run(verify_module, "toolchain_green", bare_tree)
+    assert outcome.result is verify_module.Result.FAIL
+    assert outcome.message.startswith("CRASH - ")
+    assert "the retry crashed too" in outcome.message
+    assert calls == ["pytest", "pytest", "mypy", "ruff"]
+
+
+def test_a_verdict_is_never_retried(
+    verify_module: ModuleType, bare_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The line the retry must not cross. Exit 1 is pytest reporting on the code; it
+    is the same answer every time, and running it again until it disagrees is the
+    exact failure mode this whole criterion exists to stop."""
+    calls = scripted_toolchain(
+        verify_module,
+        bare_tree,
+        monkeypatch,
+        [(1, "1 failed, 519 passed in 13.0s"), (0, ""), (0, "")],
+    )
+    outcome = run(verify_module, "toolchain_green", bare_tree)
+    assert outcome.result is verify_module.Result.FAIL
+    assert not outcome.message.startswith("CRASH - ")
+    assert "pytest exit 1" in outcome.message
+    assert calls == ["pytest", "mypy", "ruff"]
+
+
+def test_a_verdict_on_the_retry_stands_as_the_verdict(
+    verify_module: ModuleType, bare_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The retry crashed first and then reported a real failure. The failure is the
+    finding; the crash is context and is kept, not dropped."""
+    calls = scripted_toolchain(
+        verify_module,
+        bare_tree,
+        monkeypatch,
+        [(3221225477, CRASH_OUTPUT), (1, "1 failed, 519 passed in 13.0s"), (0, ""), (0, "")],
+    )
+    outcome = run(verify_module, "toolchain_green", bare_tree)
+    assert outcome.result is verify_module.Result.FAIL
+    assert "pytest exit 1" in outcome.message
+    assert "the first attempt crashed" in outcome.message
+    assert calls == ["pytest", "pytest", "mypy", "ruff"]
+
+
 # --------------------------------------------------------------------------- #
 # is_gate_matches_registry
 # --------------------------------------------------------------------------- #

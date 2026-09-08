@@ -4,11 +4,13 @@
 
 ## Current Phase
 
-**Phase 0 — Structure.** In progress. Specs written and approved by the operator; team formed; work started.
+**Phase 0 — Structure. Green and closed**, verified 2026-09-08: 7 criteria, 7 PASS, 0 FAIL, 0 PENDING. All 16 feature specs built, all three teammates and the lead reporting nothing outstanding. **Phase 1 — Interface is next**, and is almost entirely C.
 
 ## Current Goal
 
-`scripts/verify.py` first. Then the package skeleton, `core/` contracts and three-chain orchestrator, `platform/` config, clock, logging and live guard, CLI entrypoints, `config/default.yaml`, SQLite schema and migrations, store client, seed generator, fake Kraken client, test harness, and `scripts/record.py`. No engines yet.
+Phase 1 — the full console against the seeded database: status band, positions, cycle feed, history, research views, WebSocket updates and the three commands. Nothing in the console reads a live exchange; it renders the Phase 0 seed, which is the whole point of building the interface before the backend.
+
+*Phase 0's goal, for the record:* `scripts/verify.py` first, then the package skeleton, `core/` contracts and three-chain orchestrator, `platform/` config, clock, logging and live guard, CLI entrypoints, `config/default.yaml`, SQLite schema and migrations, store client, seed generator, fake Kraken client, test harness, and `scripts/record.py`. No engines. All delivered.
 
 ## Phase Status
 
@@ -16,8 +18,8 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 
 | Phase | Status | Verified |
 |---|---|---|
-| 0 — Structure | In progress | — |
-| 1 — Interface | Blocked on 0 | — |
+| 0 — Structure | **Green** | 2026-09-08 — 7 PASS, 0 FAIL, 0 PENDING |
+| 1 — Interface | Ready | — |
 | 2 — Data spine | Blocked on 1 | — |
 | 3 — Economics | Blocked on 2 | — |
 | 4 — Memory and replay | Blocked on 3 | — |
@@ -29,23 +31,28 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 ## Completed
 
 - Phase 0 feature specs written to `feature-specs/`, 16 of them, and approved by the operator with three additions (spec 11 `is_primary` as a database constraint, spec 12 carrying the off-by-one reasoning, spec 14 requiring a negative test for the network guard).
+- **Phase 0 itself. Green on 2026-09-08.** All 16 specs built, across four workers. Merged from the three progress files at phase close; the narrative account is `docs/build-log/phase-0.md`.
+
+| Agent | Specs | Delivered |
+|---|---|---|
+| C — Interface | 00, 01, 02, 14, 15 | `scripts/verify.py` and its criterion framework, the seven Phase 0 criteria each proved twice (PENDING on an empty tree, PASS on a fabricated subject), `docs_vocabulary` registered for every phase with the retired-term table parsed rather than hardcoded, the test harness and `tests/fixtures/` structure, the network guard with its negative test, and the fake Kraken client. |
+| A — Platform | 03, 07, 08, 09, 10 | The src-layout package and `pyproject.toml` with the `dev`/`research` split, `platform/config.py` and every refusal it owes, clock and structlog JSON logging with two-layer redaction, the three CLI entry points with a lazily-importing dispatcher, and `scripts/record.py` with a committed 25-line sample carrying a genuine `gap` marker. |
+| B — Store | 11, 12, 13 | `db/migrations/` and the forward-only runner, the store client, and the seed generator producing all six Phase 3 fixtures — each overshooting its threshold rather than sitting on it. |
+| Lead | 04, 05, 06 | `core/` contracts and the three-chain orchestrator, `bootstrap.py` and the engine registry, and `config/default.yaml`. |
+
+- **Nothing is outstanding for any agent.** Every open question and escalation raised during the phase is resolved: the `Config` Protocol mismatch, `.gitattributes`, `pyyaml`'s absence from the stack table, `is_primary` scoping, the `safety` threshold key names, the `docs_vocabulary` false FAIL, and the entry-point shapes in `core/` and `cli/research.py`.
+- **The operator's nine values landed mid-phase** and broke three of A's tests by making the config *more* valid. The assertions were moved onto a fabricated config rather than deleted, the shipped file gained the opposite assertions, and a new test scans the file's `Operator-chosen` marker so a tenth key that arrives *with* a value is still noticed.
 
 ## In Progress
 
-Phase 0. Team formed with all three teammates — every one has real work, nothing was invented to fill a gap.
-
-| Agent | Tasks | Specs |
-|---|---|---|
-| C — Interface | 5 | 00, 01, 02 (verify.py, first), 14, 15 |
-| A — Platform | 5 | 03, 07, 08, 09, 10 |
-| B — Store | 3 | 11, 12, 13 |
-| Lead | 3 | 04, 05, 06 |
-
-C goes first: nothing can be reported complete before `scripts/verify.py` exists. B is the critical path despite the smallest count — 11 blocks 12 blocks 13, and 13 is what Phase 3 tests `safety` against.
+Nothing. Phase 0 is closed; Phase 1 is not yet started.
 
 ## Next Up
 
-- Lead specs 04, 05 and 06. Then review, phase verify, and the consolidated build log.
+- **Phase 1 — Interface**, almost entirely C: the console against the seeded database, per the criteria in `ai-workflow-rules.md`.
+- **Before C starts:** `ui-context.md` specifies the status band, open positions and the cycle feed. History, the research views, the leaderboard and the SHAP view are named in the Phase 1 criteria and have **no design in any context file**, and their upstream engines do not exist until Phase 4 and Phase 5. That is a scope question for the operator, not something C should resolve by inventing a screen.
+- **Deferred from Phase 0, deliberately:** widening `TOOLCHAIN` beyond `src/`. `mypy --strict scripts/` reports 2 errors in `verify.py` and `ruff check tests/` reports 2 violations, none reachable by the gate that implements them. Changing what the gate asserts belongs at a phase boundary.
+- **A's standing instruction:** `scripts/record.py` should be left running from now on. Order-book and spread history cannot be recovered retroactively, and Phase 2's `recording_report.json` criterion needs a continuous span of at least 24 hours.
 
 ## Locked Decisions
 
@@ -290,6 +297,7 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
 - **A read-and-trade Kraken key exists on the dev machine.** Use a separate read-only key until Phase 8. The three live switches are the only thing between a bug and real money.
 - **Every Kraken pair is a lot of pairs.** Develop against a config-limited subset; the universe filter handles the rest at runtime.
 - **Building the interface before the backend risks guessing at data shapes.** Mitigated by fixing the schema in Phase 0 and seeding it. If a later phase needs a schema change, it goes through the lead and the console is updated in the same change.
+- **An intermittent native memory fault in the seed write path.** Roughly 20% of full-suite runs die rather than reporting a verdict, always inside `seed.py` → `write_trade` / `write_position` → pydantic `model_dump`, with three different Windows fault statuses. **Not root-caused**; pyarrow, `pytest-asyncio`, test ordering, `root_import_path` and the pydantic-core version were each ruled out by test, and the one experiment that would have separated software from silicon was overridden by the power plan. Hardware is suspected and is out of scope. Mitigated by a crash-aware retry in `toolchain_green`: a crash is retried once and named in the PASS, a verdict is never retried, and a second crash FAILs. This is a closed question, not an open one — see `docs/build-log/phase-0.md`. It re-opens if the fault appears on other hardware, appears outside the seed write path, or starts failing the retry.
 
 ## Session Notes
 

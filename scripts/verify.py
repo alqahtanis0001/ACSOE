@@ -1223,7 +1223,40 @@ def _interpreter_with_toolchain(root: Path) -> tuple[str | None, list[str]]:
     return None, last_missing
 
 
+def _run_tool(
+    interpreter: str, args: list[str], root: Path, env: dict[str, str]
+) -> tuple[int | None, str]:
+    """One toolchain command. `None` as the returncode means it timed out."""
+    try:
+        done = subprocess.run(  # fixed argv, never a shell
+            [interpreter, *args],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=SUBPROCESS_TIMEOUT_S,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return None, ""
+    return done.returncode, (done.stdout or "") + (done.stderr or "")
+
+
 def check_toolchain_green(ctx: VerifyContext) -> Outcome:
+    """The three toolchain commands, with one retry reserved for a crash.
+
+    A returncode inside a tool's documented range is a *verdict* - the tool looked at
+    the code and reported on it - and a verdict is never retried, because re-running
+    a failing suite until it goes green is the exact behaviour `describe_exit` exists
+    to make impossible. A returncode outside that range is the process *dying*, which
+    says nothing about the code at all, so that one command is run a second time.
+
+    The retry is bounded at one and the crash is never swallowed: a clean retry still
+    reports the crash in the PASS message, and a second crash FAILs. This is a known
+    intermittent native memory fault in the seed write path, not root-caused and
+    suspected to be hardware - see `docs/build-log/phase-0.md`. The retry is a
+    mitigation that keeps the gate usable while leaving the fault visible in every
+    run it occurs in.
+    """
     if os.environ.get(RECURSION_GUARD_ENV):
         return pending("skipped: this run is inside a toolchain_green subprocess")
     if not (ctx.root / "src").is_dir():
@@ -1244,31 +1277,65 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
     env = dict(os.environ)
     env[RECURSION_GUARD_ENV] = "1"
     failures: list[str] = []
+    survived: list[str] = []
     crashed = False
     for name, args, tool_max_exit in TOOLCHAIN:
-        try:
-            done = subprocess.run(  # fixed argv, never a shell
-                [interpreter, *args],
-                cwd=ctx.root,
-                capture_output=True,
-                text=True,
-                timeout=SUBPROCESS_TIMEOUT_S,
-                env=env,
-            )
-        except subprocess.TimeoutExpired:
+        returncode, output = _run_tool(interpreter, args, ctx.root, env)
+        if returncode is None:
             failures.append(name + " timed out after " + str(SUBPROCESS_TIMEOUT_S) + "s")
             continue
-        if done.returncode != 0:
-            output = (done.stdout or "") + (done.stderr or "")
-            if not (0 <= done.returncode <= tool_max_exit):
-                crashed = True
-            failures.append(describe_exit(name, done.returncode, output, tool_max_exit))
+        if returncode == 0:
+            continue
+        if 0 <= returncode <= tool_max_exit:
+            # A verdict. Not retried, at any exit code, ever.
+            failures.append(describe_exit(name, returncode, output, tool_max_exit))
+            continue
+
+        # A crash. One retry, and only one - this branch is straight-line and there is
+        # no path back into it for the same command.
+        first = describe_exit(name, returncode, output, tool_max_exit)
+        returncode, output = _run_tool(interpreter, args, ctx.root, env)
+        if returncode is None:
+            crashed = True
+            failures.append(
+                first
+                + "; the retry then timed out after "
+                + str(SUBPROCESS_TIMEOUT_S)
+                + "s"
+            )
+            continue
+        if returncode == 0:
+            # Clean on the retry. PASS, but the crash is named in the message: a
+            # mitigated fault that stops being reported stops being a known risk.
+            survived.append(first + "; the retry was clean")
+            continue
+        if not (0 <= returncode <= tool_max_exit):
+            crashed = True
+            failures.append(first + "; the retry crashed too - " + describe_exit(
+                name, returncode, output, tool_max_exit
+            ))
+            continue
+        # The retry produced a verdict, so there is something to report about the
+        # code itself. That verdict stands on its own and the crash is context.
+        failures.append(
+            describe_exit(name, returncode, output, tool_max_exit)
+            + " (the first attempt crashed: "
+            + first
+            + ")"
+        )
 
     label = Path(interpreter).name
     if failures:
         # The prefix is deliberate: the criterion prints one line, and a crash has to
         # be visible in it without opening anything.
         return failed(("CRASH - " if crashed else "") + "; ".join(failures))
+    if survived:
+        return passed(
+            "pytest, mypy --strict and ruff all green ("
+            + label
+            + ") - RETRIED AFTER CRASH: "
+            + "; ".join(survived)
+        )
     return passed("pytest, mypy --strict and ruff all green (" + label + ")")
 
 

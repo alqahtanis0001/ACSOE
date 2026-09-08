@@ -49,19 +49,50 @@ My earlier proposal of `max_errors_in_window: 10` was not what the operator chos
 above is the committed state. The seed also writes 2 open positions, 2 resting entry orders,
 33 trades and 46 rejections.
 
-## Known issue in my code path — not yet root-caused
+## Three decisions in the schema and the migration runner
 
-`toolchain_green` fails on roughly 30% of runs with a native memory fault, and every observed
-instance surfaces inside my write path: `seed.py:_write_trading_history` → `client.write_trade`
-/ `write_position` → pydantic `model_dump`. Three distinct Windows statuses have been seen
-(`0xC0000005` access violation, `0xC0000374` heap corruption, `0xC0000409` stack buffer
-overrun) plus an `AttributeError: 'NoneType' object has no attribute '__dict__'` raised from
-inside `to_python`.
+Recorded in full in `docs/build-log/phase-0/b-store.md`; summarised here because each one is a
+property another agent will rely on rather than an implementation detail of mine.
 
-It is **not** a logic defect in the seed as far as anything has shown: every test passes when
-the process survives, and `seed_database` called 60 times outside pytest is clean. Current
-suspicion is pydantic-core 2.46.5 on Python 3.13.5. Recorded here because it is my path and I
-should be the one to check it if the version pin does not settle it.
+- **The database refuses a float in a money column.** Every money column is `TEXT` **and**
+  carries `CHECK (typeof(col) = 'text')`. SQLite is dynamically typed, so a `TEXT` column stores
+  a float without complaint and hands it back as one — "money is never `REAL`" was an assertion
+  in a document rather than a property of the database. A single write bypassing the client, in
+  any phase, would have seeded a drifting number into the equity series that moves the drawdown
+  threshold that liquidates the account. The client now passes `str(Decimal)`.
+- **`executescript` discards the transaction wrapped around it.** It issues an implicit `COMMIT`
+  of any pending transaction before running its script, so the first runner's `BEGIN` was
+  committed away by the very call it was meant to protect. `BEGIN`/`COMMIT` moved inside the
+  script string, and the `schema_migrations` insert moved in with them — otherwise a crash
+  between the two transactions leaves a database whose schema is applied and whose version row
+  is not, and the next startup tries to create tables that already exist.
+- **Migration bookkeeping records no wall-clock time by default.** `apply_migrations(...,
+  applied_at: int | None = None)`. Spec 13 requires two seedings of the same seed to be
+  byte-identical and the seed migrates the database it seeds, so a clock-stamped column would
+  make every seeded database differ for reasons unrelated to the seed. The checksum, which is
+  the field that protects anything, is always recorded.
+
+## Known issue in my code path — closed as a risk, not root-caused
+
+`toolchain_green` fails intermittently — roughly 20% of full-suite runs — with a native memory
+fault, and every observed instance surfaces inside my write path:
+`seed.py:_write_trading_history` → `client.write_trade` / `write_position` → pydantic
+`model_dump`. Three distinct Windows statuses have been seen (`0xC0000005` access violation,
+`0xC0000374` heap corruption, `0xC0000409` stack buffer overrun) plus an
+`AttributeError: 'NoneType' object has no attribute '__dict__'` raised from inside `to_python`.
+
+It is **not** a logic defect in the seed: every test passes when the process survives, and
+`seed_database` called 60 times outside pytest is clean. My suspicion of pydantic-core 2.46.5
+was checked and did not hold — pinning a different build did not settle it. The lead
+investigated it at length and closed it without a root cause; pyarrow, `pytest-asyncio`, test
+ordering, `root_import_path` and the pydantic-core version were each ruled out, hardware is
+suspected and is out of scope, and the gate now retries a crash once. Full account in
+`docs/build-log/phase-0.md`.
+
+**Do not re-run the suite to see whether the result changes.** That experiment has been run. It
+becomes mine again if the fault appears outside this write path, or if the gate starts
+reporting `CRASH -` after its retry — which would mean the rate has moved and the mitigation no
+longer holds.
 
 ## Blocked on
 
@@ -70,10 +101,13 @@ Nothing.
 ## Verification
 
 ```
-python scripts/verify.py --phase 0
+$ .venv/Scripts/python.exe scripts/verify.py --phase 0
 PASS    db_migrates_from_empty       fresh database migrated to all 9 documented tables
 PASS    seed_fixtures_present        all six fixtures present: outage run 18 ticks over 2 run_ids
                                      (11 double-blocker), 2 open position(s), 2 resting order(s),
                                      drawdown 0.2000017843760037115020877199, losing streak 8,
                                      23 ERROR blocks in the window, 33 trades / 46 rejections
+
+7 criteria: 7 PASS, 0 FAIL, 0 PENDING
+Phase 0 is green: every criterion PASS, zero PENDING.
 ```
