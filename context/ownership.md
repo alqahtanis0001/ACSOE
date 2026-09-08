@@ -76,6 +76,8 @@ Agree the contract first, mock it, build against the mock.
 | Safety self-freeze rows on that same table | B writes, Lead reads | — | `clients/store/contracts.py` |
 | Decision-bar tick (`bar_closed`) | A | C | `engines/market_sensor/contracts.py` |
 | Close-all completion flags | B | Lead | `engines/position_manager/contracts.py`, `engines/exit/contracts.py` |
+| Manage-chain hold (`hold_reason`) | B | C (19 `memory`, console) | `engines/position_manager/contracts.py` |
+| Per-tick block record, and the outage count derived from it | C (19 `memory`) writes, B (17 `safety`) reads | — | `clients/store/contracts.py` |
 | Offline chain invocation | A owns `acsoe research`; C owns engines 20 and 23 | — | `cli/research.py` |
 | 15-minute candles | A | C | `engines/market_sensor/contracts.py` |
 | Store read and write | B | A, C | `clients/store/contracts.py` |

@@ -113,7 +113,9 @@ for engine in MANAGE_CHAIN:                    # exactly: 21, 22, 19
     state[engine.name] = result.data
 
 # 4. Clear close_intent only once the close actually finished.
-if close_intent_set and entry_orders_cancelled and positions_closed:
+if state["system"]["close_intent"] \
+        and state.get("position_manager", {}).get("entry_orders_cancelled") \
+        and state.get("exit", {}).get("positions_closed"):
     state["system"]["close_intent"] = False
     mark_command_consumed()
 ```
@@ -126,7 +128,17 @@ if close_intent_set and entry_orders_cancelled and positions_closed:
 
 **When the guard rejects the data, the manage chain holds.** `data_guard` blocking means the tick's market data is stale, has a negative spread, or is missing candles. The opportunity chain is skipped, but the manage chain still runs — and a target or stop computed from exactly that data would be a fabricated trigger. So when `state["trading_blocked_by"] == "data_guard"`, engines 21 and 22 **place no exit**: no target exit, no stop exit, no timeout exit. They still run, because engine 19 must still record the tick and because holding is itself a fact worth recording. Engine 21 reports `state["position_manager"]["hold_reason"]`, a short string naming why it held, and null on any tick where it did not.
 
-The one exception is `close_intent`. An emergency stop proceeds regardless of the guard, because a bad fill is a smaller risk than unknown exposure: when the operator or `safety` has ordered a liquidation, the system stops reasoning about price quality and gets flat. This is the only place in the system where a gate's block is deliberately overridden, and it is overridden in the direction of less exposure, never more — which is why it does not violate invariant 4.
+**The hold is bounded.** A hold that never ends is its own failure: a position with a breached stop would sit unexited for as long as the feed stayed bad, and nothing would say so. Engine 17 `safety` therefore counts consecutive ticks blocked by `data_guard` and writes a `close_all` row once that count exceeds `safety.max_consecutive_data_blocks`. The default is **15** — fifteen one-minute ticks is one full decision bar, long enough that a websocket reconnect or a single stale poll never liquidates the account, and short enough that no position is carried through a second bar on data nobody trusts.
+
+**The counter comes from the store, not from `state`.** `state` is fresh every tick and `safety` may not write `state["system"]`, so there is nowhere in memory for a counter to live. Engine 19 `memory` writes one block record per blocked tick carrying `cycle_id`, `trading_blocked_by` and `block_reason`; `safety` reads the trailing run of those records and counts how many consecutive most-recent ticks were blocked by `data_guard`. Because the count lives in SQLite it survives a restart — a daemon that dies mid-outage and comes back does not reset the clock on an outage that is still happening.
+
+The arithmetic is fixed here rather than left to the implementer, because it is off by one in the obvious reading. `data_guard` (4) runs *before* `safety` (17) in the guard chain, so the current tick's block is already visible in `state["trading_blocked_by"]`. `memory` (19) runs *later*, in the manage chain, so the store holds records only through the previous tick. The count is therefore **stored consecutive `data_guard` blocks through tick T−1, plus one if this tick is also blocked by `data_guard`**. Getting it wrong fires the breaker a minute early or a minute late; neither is acceptable.
+
+Emitting the escalation obeys the same idempotency rule as any other `safety` emission: once `close_intent` is set, nothing is re-emitted while the outage continues.
+
+**Engine 19 writes a block record on every blocked tick, candidate or not.** Invariant 12 already requires a rejection to reach storage. This states the weaker case explicitly, because the outage counter is built from those rows: a tick where `data_guard` blocked and no candidate ever existed still produces a record.
+
+**A liquidation is never held.** When `close_intent` is set, engines 21 and 22 proceed regardless of the guard *and* regardless of a failed fetch, using last known good balances and cached pair metadata past its TTL. That is **invariant 14**, and the reasoning and its constraints live there. Do not restate them here, and do not weaken this file to disagree with them.
 
 A block from any engine other than `data_guard` does not hold the manage chain. Those blocks concern whether a *new* trade is wise; they say nothing about whether the data underneath an *open* position is trustworthy.
 
@@ -205,7 +217,7 @@ The README is not optional. It is how the next agent understands the engine with
 
 Each engine's `data` payload is typed in its own `contracts.py`. Orchestrator-level keys:
 
-- `state["system"]` — the only persistent region. `mode` and `close_intent`. Written only by the orchestrator's command reader; readable by any engine.
+- `state["system"]` — the only persistent region. `mode` and `close_intent`. **Written only by the orchestrator**, in exactly two places: the command reader sets `mode` and `close_intent` at step 0, and step 4 clears `close_intent` once the manage chain reports the close finished. No engine writes it; any engine may read it.
 - `state["cycle_id"]` — fresh per tick, minted by the orchestrator, joins logs, decisions and SHAP rows.
 - `state["trading_blocked_by"]`, `state["block_reason"]` — set on block, fresh per tick.
 
@@ -222,6 +234,6 @@ Most of an engine's `data` is its own business, typed in its own `contracts.py`.
 | `state["exit"]["positions_closed"]` | 22 `exit` (B) | orchestrator (Lead) | No open position remains |
 | `state["position_manager"]["hold_reason"]` | 21 `position_manager` (B) | 19 `memory` (C), console | Why the manage chain placed no exit this tick; null when it did not hold |
 
-The last two are only meaningful while `close_intent` is set. Absent or false always means "not finished", never "finished" — the same fail-closed default the gates use.
+`entry_orders_cancelled` and `positions_closed` are only meaningful while `close_intent` is set; absent or false always means "not finished", never "finished" — the same fail-closed default the gates use. `hold_reason` is the opposite: it is meaningful on ordinary ticks and is null during a liquidation, because a liquidation never holds. Name these fields when you refer to them; do not point at them by position, because this table gets appended to.
 
 **The orchestrator holds the `Clock`.** It is constructed by the CLI, passed to the orchestrator, and used once per tick to stamp `context.now`. No engine ever sees it.

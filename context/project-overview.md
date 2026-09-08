@@ -15,7 +15,7 @@ Most of the system exists to say no. Nine of the twenty-three engines contain no
 ## What makes it different from a retail bot
 
 1. **It does not predict price.** It predicts which of three barriers price touches first: a profit target, a stop, or a timeout.
-2. **Multi-stage fail-closed gating.** Any gate can halt the pipeline. Nothing overrides a gate.
+2. **Multi-stage fail-closed gating.** Any gate can halt the pipeline. No model output ever overrides one. The single deliberate override in the whole system is an emergency liquidation, which can only reduce exposure, never open a position — invariant 14.
 3. **The Skeptic.** A second model whose only job is to find reasons not to trade, plus a dissimilarity check that refuses to predict on market conditions it has never seen.
 4. **Rejected-trade memory.** Every refused candidate is logged with its reason and its SHAP explanation, creating a counterfactual dataset.
 5. **Cost-adaptive selectivity.** The trade hurdle is computed from the live Kraken fee tier, so the system is stricter when the account is small and loosens automatically as the tier improves.

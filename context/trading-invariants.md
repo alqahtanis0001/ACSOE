@@ -29,7 +29,7 @@ There is no hardcoded fee, minimum, tick size or precision anywhere in the codeb
 
 ### What a failed fetch does, by mode
 
-**In live mode, a failed fetch always blocks.** Blocking is the correct response to not knowing a cost. There is no exception, and nothing below applies.
+**In live mode, a failed fetch always blocks.** Blocking is the correct response to not knowing a cost. The single exception is an emergency liquidation under rule 14, which must be able to complete during the outage that triggered it. Nothing else below applies to live mode.
 
 **In paper mode**, so that a fresh clone with an empty `.env` can still run the pipeline and generate research data:
 
@@ -42,17 +42,19 @@ There is no hardcoded fee, minimum, tick size or precision anywhere in the codeb
 
 Every decision affected by a fallback records which fallback fired. A fallback is never optimistic: it may only make the system less willing to trade.
 
-This is the only exception in this document. Where any other rule here says a failed fetch blocks, it means live mode, and this section is what governs paper.
+These are the paper-mode fallbacks, and rule 14 is the only other exception in this document. Where any other rule here says a failed fetch blocks, it means live mode, and this section is what governs paper.
 
 ## 3. Every gate is fail-closed
 
-A gate that errors blocks. A gate that cannot reach its data blocks, subject only to the paper-mode fallbacks in rule 2. A gate that returns an unparseable result blocks. Absence of a "no" is never a "yes".
+A gate that errors blocks. A gate that cannot reach its data blocks, subject only to the paper-mode fallbacks in rule 2 and to the emergency liquidation in rule 14. A gate that returns an unparseable result blocks. Absence of a "no" is never a "yes".
 
 Gate engines: 4 (data guard), 7 (scout), 10 (cost), 11 (risk), 13 (anomaly), 15 (skeptic), 17 (safety).
 
 ## 4. No model output may bypass a gate
 
 No confidence score, probability, ensemble weight, or router decision may skip, soften, or override engines 4, 7, 10, 11, 13, or 17. A model may only ever make the system *less* willing to trade, never more.
+
+Rule 14 describes the one override in the system. It is not a model output, and it moves the system towards less exposure, so it does not weaken this rule.
 
 **Engine 7 `scout` is deterministic and is protected.** Its universe filter is arithmetic over `ordermin`, `costmin`, tick size, live spread and balance, and its candidate ranking is a deterministic score over features. It contains no model, so nothing may override it.
 
@@ -123,3 +125,21 @@ When a gate blocks, the memory engine still runs. A rejection that is not writte
 ## 13. Secrets never enter the repo
 
 API keys come from the environment only. Never logged, never committed, never written into config files, never echoed in error messages or console output. The web console holds no credentials and cannot place orders.
+
+## 14. Emergency liquidation is the one deliberate override
+
+Everything else in this document makes the system less willing to act. This rule is the single place where the system is made *more* willing to act, and it exists because **unknown exposure is worse than a bad fill**.
+
+When `close_intent` is set — by an operator pressing Close all, or by engine 17 `safety` — the liquidation proceeds regardless of:
+
+- **A `data_guard` block.** The manage chain normally holds when the guard rejects the tick's data, placing no target, stop or timeout exit. A liquidation is not held. The system stops reasoning about price quality and gets flat.
+- **A failed fetch, in any mode.** This is the case that matters most and is the easiest to miss: a feed outage is what triggers the escalation, and the same outage is likely failing the balance and order-book fetches. If rule 2's live-mode block applied here, `close_all` would be blocked by the exact condition it exists to answer. During a liquidation, engines 21 and 22 may use the last known good balances and the cached `AssetPairs` metadata **past its TTL**. This is the only place in the system where a stale cache is acceptable.
+
+Constraints that still hold during a liquidation:
+
+- Quantities are still rounded **down** using the cached `lot_decimals`. Rounding down leaves dust; rounding up produces an order Kraken rejects, and a rejected order during an emergency is worse than dust.
+- Every order still carries a `userref` and is still checked for idempotency. A liquidation that double-sells is not a liquidation.
+- The override applies only to exiting. It never permits an entry, and it never relaxes a gate for a new position.
+- Every fetch failure tolerated under this rule is recorded on the resulting trade, exactly as a paper-mode fallback is, so the fill is never mistaken for one priced on good data.
+
+This rule is why `project-overview.md` says gates are overridden in exactly one direction, and why `engine-contracts.md` does not restate the reasoning: it lives here.
