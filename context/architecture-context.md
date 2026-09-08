@@ -136,8 +136,8 @@ The console writes rows to a `commands` table; the daemon reads them. Semantics:
 | Command | Effect |
 |---|---|
 | `activate` | Mode goes `idle` to `running`. The opportunity chain begins running. |
-| `freeze` | Mode goes to `frozen`. The opportunity chain stops. **The guard chain keeps recording and keeps running `safety`, and the manage chain keeps managing open positions.** Freeze never stops data collection. |
-| `close_all` | Mode goes to `frozen` and `close_intent` is set. In the same tick engine 21 cancels every **resting entry order** and engine 22 exits every **open position** as a taker. The orchestrator clears the intent only when both report done, and retries next tick if not. |
+| `freeze` | Mode goes to `frozen`. The opportunity chain stops. **The guard chain keeps recording and keeps running `safety`, and the manage chain keeps managing open positions.** Freeze never stops data collection. Managing remains subject to the data-guard hold: on a tick where `data_guard` blocked, no exit is placed. |
+| `close_all` | Mode goes to `frozen` and `close_intent` is set. In the same tick engine 21 cancels every **resting entry order** and engine 22 exits every **open position** as a taker. The orchestrator clears the intent only when both report done, and retries next tick if not. This is the one operation that proceeds even when `data_guard` has blocked — an emergency stop accepts a bad fill over unknown exposure. |
 
 **The kill switch is `close_all`. There is no fourth mechanism.** `freeze` stops new trades and keeps managing what is open; `close_all` is the emergency stop that ends exposure. Phase 8 verifies `close_all`, not something separate.
 

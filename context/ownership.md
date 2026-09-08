@@ -20,7 +20,7 @@ Not every phase needs all three. Phase 1 is almost entirely C; Phase 3 is almost
 | Agent | Task |
 |---|---|
 | **Lead** | `core/`: `BaseEngine`, `EngineContext`, `EngineResult`, `EngineStatus`, `State`, the three-chain orchestrator (guard, opportunity, manage) including the two-phase command reader, the empty `bootstrap.py` registry, and `config/default.yaml` with every threshold named |
-| **A** | Package skeleton, `pyproject.toml`, and `src/acsoe/platform/`: config loader and validation, `structlog` setup, the injected clock. Plus `acsoe engine` and `acsoe console` CLI entrypoints and `scripts/record.py` |
+| **A** | Package skeleton, `pyproject.toml`, and `src/acsoe/platform/`: config loader and validation, `structlog` setup, the injected clock. Plus all three CLI entrypoints — `acsoe engine`, `acsoe console`, and `acsoe research` as a stub that reports no offline engines registered until Phase 4 — and `scripts/record.py` |
 | **B** | SQLite schema and migrations, the store client, and the seed generator producing realistic fake trades, rejections, positions and leaderboard rows |
 | **C** | `scripts/verify.py` **first**, then the test harness, the fake Kraken client with recorded fixtures, and shared pytest fixtures. Verify must exist before A and B can report anything complete |
 

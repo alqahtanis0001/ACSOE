@@ -105,6 +105,9 @@ if state["system"]["mode"] == "running" and "trading_blocked_by" not in state:
             break                              # no candidate this cycle
 
 # 3. MANAGE — every tick, every mode. Never stops.
+#    Every engine still runs and still records. But 21 and 22 must not place
+#    an exit when the guard rejected the data this tick, unless close_intent
+#    is set. See "When the guard rejects the data, the manage chain holds".
 for engine in MANAGE_CHAIN:                    # exactly: 21, 22, 19
     result = run(engine)
     state[engine.name] = result.data
@@ -120,6 +123,12 @@ if close_intent_set and entry_orders_cancelled and positions_closed:
 **Why `safety` is a guard and not a judgement.** Engine 17 asks an account-level question — how far is equity down, how many losses in a row, how many errors this hour. That question has nothing to do with the candidate under consideration, and it must be answered on ticks where there is no candidate at all. Placed at the end of the opportunity chain it would run only when every other gate had already passed: on roughly fourteen ticks in fifteen that chain stops at `feature` because no bar closed, and on the remainder any earlier gate blocking stops it sooner. An account bleeding while every candidate is rejected by the cost gate would never trip the breaker. In the guard chain it runs on every tick in every mode, which is the only placement that makes it a circuit breaker rather than a formality.
 
 **Why manage is its own chain.** The loop ticks every minute but a candidate is only born when a 15-minute bar closes, so the opportunity chain stops early on roughly fourteen ticks out of fifteen. If position management sat in it, an open trade would go unwatched for fourteen minutes at a time and its stop would never fire. `position_manager`, `exit` and `memory` therefore run on every tick no matter what.
+
+**When the guard rejects the data, the manage chain holds.** `data_guard` blocking means the tick's market data is stale, has a negative spread, or is missing candles. The opportunity chain is skipped, but the manage chain still runs — and a target or stop computed from exactly that data would be a fabricated trigger. So when `state["trading_blocked_by"] == "data_guard"`, engines 21 and 22 **place no exit**: no target exit, no stop exit, no timeout exit. They still run, because engine 19 must still record the tick and because holding is itself a fact worth recording. Engine 21 reports `state["position_manager"]["hold_reason"]`, a short string naming why it held, and null on any tick where it did not.
+
+The one exception is `close_intent`. An emergency stop proceeds regardless of the guard, because a bad fill is a smaller risk than unknown exposure: when the operator or `safety` has ordered a liquidation, the system stops reasoning about price quality and gets flat. This is the only place in the system where a gate's block is deliberately overridden, and it is overridden in the direction of less exposure, never more — which is why it does not violate invariant 4.
+
+A block from any engine other than `data_guard` does not hold the manage chain. Those blocks concern whether a *new* trade is wise; they say nothing about whether the data underneath an *open* position is trustworthy.
 
 **What stops the opportunity chain on a non-bar tick.** Engine 3 `market_sensor` owns the decision-bar clock. It publishes `state["market_sensor"]["bar_closed"]` — true only on the tick where a 15-minute candle completed — together with that bar's close timestamp. Engine 5 `feature`, first in the opportunity chain, returns `PASS` when `bar_closed` is false, and the chain stops there. No other engine may infer the bar boundary for itself, and the orchestrator does not know about bars at all: cadence is a property of the candle stream, not of `core/`.
 
@@ -204,13 +213,14 @@ Each engine's `data` payload is typed in its own `contracts.py`. Orchestrator-le
 
 ### Cross-chain keys the contract fixes
 
-Most of an engine's `data` is its own business, typed in its own `contracts.py`. Three fields are different: another chain depends on them, they cross an ownership boundary, and the orchestrator reads them. They are fixed here and may not be renamed without the lead.
+Most of an engine's `data` is its own business, typed in its own `contracts.py`. Four fields are different: another chain depends on them, they cross an ownership boundary, or the orchestrator reads them. They are fixed here and may not be renamed without the lead.
 
 | Key | Written by | Read by | Meaning |
 |---|---|---|---|
 | `state["market_sensor"]["bar_closed"]` | 3 `market_sensor` (A) | 5 `feature` (C) | A 15-minute decision bar closed on this tick |
 | `state["position_manager"]["entry_orders_cancelled"]` | 21 `position_manager` (B) | orchestrator (Lead) | No resting entry order remains |
 | `state["exit"]["positions_closed"]` | 22 `exit` (B) | orchestrator (Lead) | No open position remains |
+| `state["position_manager"]["hold_reason"]` | 21 `position_manager` (B) | 19 `memory` (C), console | Why the manage chain placed no exit this tick; null when it did not hold |
 
 The last two are only meaningful while `close_intent` is set. Absent or false always means "not finished", never "finished" — the same fail-closed default the gates use.
 
