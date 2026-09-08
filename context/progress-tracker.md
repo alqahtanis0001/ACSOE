@@ -4,7 +4,7 @@
 
 ## Current Phase
 
-**Phase 0 — Structure.** Not started.
+**Phase 0 — Structure.** In progress. Specs written and approved by the operator; team formed; work started.
 
 ## Current Goal
 
@@ -16,7 +16,7 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 
 | Phase | Status | Verified |
 |---|---|---|
-| 0 — Structure | Not started | — |
+| 0 — Structure | In progress | — |
 | 1 — Interface | Blocked on 0 | — |
 | 2 — Data spine | Blocked on 1 | — |
 | 3 — Economics | Blocked on 2 | — |
@@ -28,15 +28,24 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 
 ## Completed
 
-- None yet.
+- Phase 0 feature specs written to `feature-specs/`, 16 of them, and approved by the operator with three additions (spec 11 `is_primary` as a database constraint, spec 12 carrying the off-by-one reasoning, spec 14 requiring a negative test for the network guard).
 
 ## In Progress
 
-- None yet.
+Phase 0. Team formed with all three teammates — every one has real work, nothing was invented to fill a gap.
+
+| Agent | Tasks | Specs |
+|---|---|---|
+| C — Interface | 5 | 00, 01, 02 (verify.py, first), 14, 15 |
+| A — Platform | 5 | 03, 07, 08, 09, 10 |
+| B — Store | 3 | 11, 12, 13 |
+| Lead | 3 | 04, 05, 06 |
+
+C goes first: nothing can be reported complete before `scripts/verify.py` exists. B is the critical path despite the smallest count — 11 blocks 12 blocks 13, and 13 is what Phase 3 tests `safety` against.
 
 ## Next Up
 
-- Phase 0. See the split in `context/ownership.md`.
+- Lead specs 04, 05 and 06. Then review, phase verify, and the consolidated build log.
 
 ## Locked Decisions
 
@@ -64,7 +73,27 @@ Settled with evidence. Do not relitigate. Changing one requires the operator, no
 
 ## Open Questions
 
-- None. Add here rather than guessing.
+**Eight config values are trading behaviour that no context file specifies, and the lead may not invent them.** They are written into `config/default.yaml` as `null` and marked OPERATOR REQUIRED; the loader refuses to start while any is null, naming the key. Phase 0 does not need the values — no engine reads them until Phase 3 — but Phase 3 cannot start without them.
+
+| Key | Named in | Why it cannot be guessed |
+|---|---|---|
+| `trading.hurdle_multiple` | invariant 5 | It is the whole selectivity of the system. `net_edge > hurdle_multiple x friction`, and no file gives the multiple. |
+| `trading.risk_fraction_per_trade` | invariant 6 | "The configured fraction of total account equity" — this is how much money is at risk per trade. |
+| `trading.max_concurrent_positions` | invariant 6 | "A configured maximum." Portfolio-level exposure. |
+| `trading.entry_unfilled_window_s` | invariant 8 | How long a post-only entry rests before it is cancelled and the candidate abandoned. |
+| `trading.base_reporting_currency` | invariant 7 | Every PnL, equity figure and risk limit is expressed in it. Probably a fiat; "probably" is not a specification. |
+| `paper.starting_balances` | invariant 2 | A currency-to-amount map. Determines which pairs are executable at all in paper mode. |
+| `safety.max_drawdown_pct` | invariant 14 | "Its configured drawdown limits." The point at which the system liquidates itself. |
+| `safety.max_consecutive_losses` | invariant 14 | Same sentence, same absence. |
+| `safety.error_rate_window_s` + `max_errors_in_window` | engine-contracts | The error rate that trips the breaker needs both a window and a count. |
+
+A guessed default for any of these is a silent decision about real money wearing the costume of a sane-looking number. The operator sets them.
+
+## Decisions taken at Phase 0 assignment
+
+- **`scripts/verify.py` belongs to C, permanently.** The roster gave A all of `scripts/` while the Phase 0 split gave C `verify.py` — two agents owning one file, which rule 1 forbids. Verification is C's surface, so `verify.py` sits with C and A keeps the rest of `scripts/`, including `record.py`. `ownership.md` corrected.
+- **`platform/live_guard.py` stays in Phase 8**, and spec 07 has the config loader refuse to start unless `mode` is `paper` until it exists. The absence of a guard is not permission.
+- **There is no `TaskCreate`/`TaskList` tooling in this build**, so `feature-specs/PHASE-0-TASKS.md` is the shared list and `SendMessage` is the coordination channel. Teammates claim by recording the spec number in their own progress file, which is what ownership rule 5 already required and avoids three agents writing one file.
 
 ## Decision history
 

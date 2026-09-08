@@ -1,0 +1,158 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acsoe"
+version = "0.1.0"
+description = "Adaptive Crypto Spot Opportunity Engine — an automated Kraken spot trading system"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "ACSOE" }]
+
+# Every dependency below appears in the stack table of
+# context/architecture-context.md. Adding one that does not is an escalation to
+# the lead, not a decision an agent may take.
+dependencies = [
+    # Exchange transport
+    "websockets>=13.0",
+    "httpx>=0.27",
+    "tenacity>=9.0",
+    # Contracts
+    "pydantic>=2.9",
+    # Dataframes and numerics
+    "polars>=1.9",
+    "numpy>=1.26",
+    # Columnar store
+    "pyarrow>=17.0",
+    "duckdb>=1.1",
+    # Serialisation on the recording hot path
+    "orjson>=3.10",
+    # Console
+    "fastapi>=0.115",
+    "uvicorn>=0.31",
+    # Structured logging
+    "structlog>=24.4",
+    # Configuration. Added to the stack table by the lead after C escalated
+    # that the table named no YAML parser while config/default.yaml requires
+    # one. Approved with a restriction that is part of the approval, not a
+    # style note: `yaml.safe_load` only, never `yaml.load`.
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Model, regime, explanation and statistics libraries. Split out of the base
+# install by lead decision: nothing on the live loop path imports them before
+# Phase 5, and architecture invariant 5 says the live loop never imports from
+# research/ — the packaging now says so too. Every name is from the stack
+# table; nothing has been added or dropped.
+research = [
+    "scikit-learn>=1.5",
+    "lightgbm>=4.5",
+    "hmmlearn>=0.3.2",
+    "shap>=0.46",
+    "statsmodels>=0.14",
+]
+# `dev` includes `research`, so `pip install -e ".[dev]"` still installs
+# everything and the setup line in README.md stays true.
+dev = [
+    "acsoe[research]",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6.112",
+    "mypy>=1.11",
+    "ruff>=0.6",
+    "types-PyYAML>=6.0",
+]
+
+[project.scripts]
+acsoe = "acsoe.cli.main:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+acsoe = ["py.typed"]
+
+# ---------------------------------------------------------------------------
+# mypy — code-standards.md requires --strict to pass on src/
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+disallow_any_generics = true
+no_implicit_reexport = true
+show_error_codes = true
+pretty = false
+
+[[tool.mypy.overrides]]
+# Third-party packages that ship no type information.
+module = [
+    "duckdb.*",
+    "hmmlearn.*",
+    "lightgbm.*",
+    "shap.*",
+    "sklearn.*",
+    "statsmodels.*",
+]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors — includes E722, no bare except
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear — includes B006, no mutable default arguments
+    "C4",   # comprehensions
+    "PTH",  # flake8-use-pathlib — pathlib over os.path string handling
+    "DTZ",  # flake8-datetimez — catches naive datetime.now() and utcnow()
+    "SIM",  # flake8-simplify
+    "RET",  # flake8-return
+    "ARG",  # unused arguments
+    "TID",  # tidy imports
+    "T20",  # no print() — the CLI and scripts/ are excepted below
+    "RUF",  # ruff-specific
+    "A",    # builtin shadowing
+    "ISC",  # implicit string concat
+    "PIE",
+    "N",    # pep8 naming
+]
+ignore = [
+    "E501",   # line length is enforced by the formatter, not the linter
+    "RUF012", # ClassVar annotation on mutable class attrs — noisy with pydantic
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The CLI and the standalone recorder write to stdout on purpose.
+"src/acsoe/cli/*" = ["T20"]
+"scripts/*" = ["T20"]
+"tests/*" = ["T20", "ARG", "N806"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "strict"
+filterwarnings = ["error::DeprecationWarning:acsoe.*"]

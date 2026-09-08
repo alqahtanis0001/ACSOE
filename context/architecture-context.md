@@ -16,6 +16,7 @@
 | Relational store | `sqlite3` (stdlib) | Trades, rejections, runs, leaderboard |
 | Columnar store | `pyarrow`, `duckdb` | Feature snapshots, recordings, analysis |
 | Serialization | `orjson` | Recording hot path |
+| Config parsing | `pyyaml` | `config/default.yaml`. **`yaml.safe_load` only, never `yaml.load`** |
 | Console | `fastapi`, `uvicorn` | Local read-only dashboard |
 | Logging | `structlog` | Structured JSON logs |
 | Tests | `pytest`, `pytest-asyncio`, `hypothesis` | Unit and property tests |

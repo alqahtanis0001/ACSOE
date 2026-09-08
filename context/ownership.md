@@ -9,9 +9,9 @@ Confirm you own a file before editing it. If you do not, escalate.
 | Agent | Owns | Heaviest in phases |
 |---|---|---|
 | **Lead** | `src/acsoe/core/`, `bootstrap.py`, `config/`, `context/*` except `progress/`, `feature-specs/`, all merges, all schema approvals | All |
-| **A — Platform** | `pyproject.toml`, `src/acsoe/platform/`, `src/acsoe/cli/`, `scripts/`, `clients/kraken/`, `clients/recorder/`, `logs/`, `data/`, `engines/exchange`, `market_data_recorder`, `market_sensor`, `data_guard`, `research/replay.py`, `research/historical.py` | 0, 2, 4 |
+| **A — Platform** | `pyproject.toml`, `src/acsoe/platform/`, `src/acsoe/cli/`, `scripts/` **except `scripts/verify.py`**, `clients/kraken/`, `clients/recorder/`, `logs/`, `data/`, `engines/exchange`, `market_data_recorder`, `market_sensor`, `data_guard`, `research/replay.py`, `research/historical.py` | 0, 2, 4 |
 | **B — Store and trading** | `clients/store/`, `db/migrations/`, `engines/scout`, `cost`, `risk`, `safety`, `decision`, `execution`, `position_manager`, `exit` | 0, 3, 5, 6, 8 |
-| **C — Interface and models** | `console/`, `tests/harness/`, `engines/feature`, `macro_context`, `prediction`, `regime`, `anomaly`, `order_book`, `adaptive_router`, `skeptic`, `memory`, `tournament`, `research/labelling.py`, `research/training.py`, `research/walkforward.py` | 0, 1, 4, 5, 6, 7, 8 |
+| **C — Interface and models** | `console/`, `scripts/verify.py`, `tests/harness/`, `engines/feature`, `macro_context`, `prediction`, `regime`, `anomaly`, `order_book`, `adaptive_router`, `skeptic`, `memory`, `tournament`, `research/labelling.py`, `research/training.py`, `research/walkforward.py` | 0, 1, 4, 5, 6, 7, 8 |
 
 Not every phase needs all three. Phase 1 is almost entirely C; Phase 3 is almost entirely B. Run the agents who have real work and let the others sit out — the ownership map is permanent, only the headcount per phase flexes. Never invent filler tasks. Nobody idles mid-phase: if you are waiting on another agent's interface, agree the contract, mock it, and keep building.
 
@@ -27,6 +27,8 @@ Not every phase needs all three. Phase 1 is almost entirely C; Phase 3 is almost
 `scripts/record.py` is deliberately in Phase 0 and deliberately dumb: a standalone WebSocket-to-JSONL recorder with no dependency on the engine framework. Order-book and spread history cannot be recovered retroactively, so it starts collecting on day one and is superseded by Engines 1 and 2 in Phase 2.
 
 ## Paths nobody was assigned
+
+**`scripts/`.** A owns the directory and `scripts/record.py`; **C owns `scripts/verify.py`**. The permanent roster used to hand A all of `scripts/` while the Phase 0 split handed C `verify.py`, which is two agents owning one file. Verification is C's surface — C owns the test harness and the fixtures the criteria read — so `verify.py` sits with C, permanently, not just in Phase 0.
 
 **Tests.** C owns the `tests/` root scaffolding, `tests/conftest.py`, the *structure* of `tests/fixtures/`, the shared fixtures, and `tests/harness/`. Beyond that, each agent owns `tests/` mirroring the source paths it owns.
 

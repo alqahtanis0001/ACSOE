@@ -1,0 +1,83 @@
+# ACSOE default configuration.
+#
+# Percentages are decimals: 0.03 means 3%. Durations are seconds unless the key
+# name says otherwise. Money values are Decimal — quote them so YAML does not
+# parse them as floats.
+#
+# NOTHING the exchange can tell us appears in this file. No fee, no order
+# minimum, no tick size, no precision. Those are fetched at runtime, every time.
+# See rule 2 of context/trading-invariants.md.
+#
+# A key whose value is `null` is OPERATOR REQUIRED: the context files name the
+# key but never specify its value, and it is trading behaviour, so the lead may
+# not invent one. The loader must REFUSE TO START while any of them is null,
+# naming the key. That is fail-closed and deliberate — a plausible default here
+# is a number that silently decides how much money is at risk.
+
+mode: paper                      # paper | live | replay. Phase 0 accepts paper only:
+                                 # platform/live_guard.py is a Phase 8 deliverable, and
+                                 # the absence of the guard is not permission.
+
+console:
+  port: 8765                     # README default; the config is the source of truth
+  poll_interval_ms: 500          # ui-context.md; watermark poll, not browser polling
+  stale_after_ms: 120000         # ui-context.md; two loop ticks. A figure older than
+                                 # this renders at 50% opacity with its age beside it.
+                                 # Validation: poll_interval_ms <= stale_after_ms / 4
+
+logging:
+  level: "INFO"                  # requested by A, spec 08
+  retention_days: 14             # daily rotation in logs/. Covers Phase 8's 7-day soak
+                                 # plus slack, so the run log outlives the run it proves.
+
+timeframes:
+  decision_bar_s: 900            # 15 minutes. Candidates are born only on a closed bar.
+  loop_tick_s: 60                # 1 minute. Manages positions and entry orders; never
+                                 # generates a signal.
+
+barriers:                        # Locked decisions; triple-barrier labelling
+  target_pct: 0.03               # +3%
+  stop_pct: 0.015                # -1.5%
+  timeout_bars: 48               # 48 x 15m = 12h, consistent with the 2-12h horizon
+
+safety:                          # Engine 17, the circuit breaker. Guard chain, every tick.
+  max_consecutive_data_blocks: 15   # invariant 14. One full decision bar at a 1m tick:
+                                    # long enough that a websocket reconnect never
+                                    # liquidates the account, short enough that nothing
+                                    # is carried through a second bar on bad data.
+  max_drawdown_pct: null            # OPERATOR REQUIRED — invariant 14 says "its configured
+                                    # drawdown limits" and never gives a number.
+  max_consecutive_losses: null      # OPERATOR REQUIRED — same sentence, same problem.
+  error_rate_window_s: null         # OPERATOR REQUIRED — the window over which engine
+  max_errors_in_window: null        # OPERATOR REQUIRED — errors are counted, and the count
+                                    # that trips the breaker.
+
+trading:
+  hurdle_multiple: null          # OPERATOR REQUIRED — invariant 5 is
+                                 # `net_edge > hurdle_multiple x friction` and never
+                                 # sets the multiple. It decides how selective the
+                                 # system is; a guessed value is a guessed strategy.
+  risk_fraction_per_trade: null  # OPERATOR REQUIRED — invariant 6, "the configured
+                                 # fraction of total account equity".
+  max_concurrent_positions: null # OPERATOR REQUIRED — invariant 6, "a configured maximum".
+  entry_unfilled_window_s: null  # OPERATOR REQUIRED — invariant 8, "the configured window"
+                                 # after which an unfilled post-only entry is cancelled.
+  base_reporting_currency: null  # OPERATOR REQUIRED — invariant 7. Every PnL, equity and
+                                 # risk limit is expressed in it. Probably a fiat, but
+                                 # "probably" is not a specification.
+  allow_crypto_quoted: false     # invariant 7. Crypto-quoted pairs are a second
+                                 # directional bet the system did not choose to make.
+
+paper:
+  starting_balances: null        # OPERATOR REQUIRED — invariant 2's paper-mode fallback,
+                                 # a currency-to-amount map, e.g. {USD: "1000.00"}.
+                                 # Amounts are quoted strings, parsed as Decimal.
+
+backtest:
+  training_window_days: 90       # Locked decision: rolling 90-day cap
+  retrain_interval_days: 7       # Locked decision: weekly, matching the live cadence
+
+seeds:
+  global: 20260908               # Every random seed comes from config, so a training run
+  train: 20260908                # is reproducible from its config plus its data.
+  seed_generator: 20260908       # B's fixture generator, so seeding twice is identical.
