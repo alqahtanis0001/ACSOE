@@ -4,19 +4,29 @@
 --
 -- Conventions, and why:
 --
---   Money is an exact decimal string in TEXT, never REAL. `Decimal` in Python, exact
---   string in SQLite, conversion only at the store-client boundary. A float equity
---   series drifts, and a drifting equity series moves the drawdown threshold that
---   liquidates the account. SQLite is dynamically typed, so a declared TEXT column will
---   happily store a float — every money column therefore carries an explicit
---   `typeof(col) = 'text'` CHECK so the database refuses a float rather than silently
---   accepting one. See `context/architecture-context.md`, storage model.
+--   Every table is STRICT. Without it SQLite's dynamic typing lets any column hold any
+--   type: a text `ts` sorts as text, an integer `cycle_id` can arrive as a string, and
+--   the ordering the outage counter depends on quietly stops being numeric.
+--
+--   Money is an exact decimal string. `Decimal` in Python, exact string in SQLite,
+--   conversion only at the store-client boundary. A float equity series drifts, and a
+--   drifting equity series moves the drawdown threshold that liquidates the account.
+--
+--   Money columns are therefore declared `ANY` with `CHECK (typeof(col) = 'text')`,
+--   which is the only declaration in SQLite that actually refuses a float. This looks
+--   wrong and is not: a column declared `TEXT` has TEXT *affinity*, so an inserted
+--   float is silently converted to text BEFORE any CHECK runs — `0.1 + 0.2` lands as
+--   the string '0.3' and `typeof()` reports 'text'. Declaring `TEXT` enforces nothing.
+--   STRICT does not close it either; its TEXT columns convert numbers the same way.
+--   `ANY` is the one type that stores a value as given, so the CHECK sees a real REAL
+--   and rejects it. The *contents* of these columns are guaranteed TEXT far more
+--   strongly than a `TEXT` declaration would have guaranteed it.
 --
 --   Timestamps are INTEGER microseconds since the Unix epoch, UTC. They come from
 --   `context.now`; nothing here reads a clock.
 --
---   `cycle_id` is INTEGER and is minted per tick *within a run*. It restarts with the
---   process, so it is never unique on its own and never an ordering key: a tick is
+--   `cycle_id` is INTEGER and is minted per tick *within a run*, restarting at 1 with
+--   each process. It is never unique on its own and never an ordering key: a tick is
 --   identified by `(run_id, cycle_id)` and a cross-restart sequence is ordered by `ts`.
 --
 --   `updated_at` is on every table the console renders. `MAX(updated_at)` across those
@@ -36,7 +46,7 @@ CREATE TABLE runs (
     acsoe_version  TEXT,
     config_digest  TEXT,
     updated_at     INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX idx_runs_started_at ON runs (started_at);
 
@@ -64,7 +74,7 @@ CREATE TABLE commands (
     claimed_by_run_id TEXT,
     consumed_at       INTEGER,
     updated_at        INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX idx_commands_pending ON commands (created_at)
     WHERE claimed_at IS NULL;
@@ -99,7 +109,7 @@ CREATE TABLE block_records (
     is_primary   INTEGER NOT NULL CHECK (is_primary IN (0, 1)),
     status       TEXT    NOT NULL CHECK (status IN ('BLOCK', 'ERROR')),
     updated_at   INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX idx_block_records_ts ON block_records (ts);
 
@@ -128,15 +138,15 @@ CREATE TABLE equity_snapshots (
     run_id              TEXT    NOT NULL,
     ts                  INTEGER NOT NULL,
     currency            TEXT    NOT NULL,
-    equity              TEXT    NOT NULL CHECK (typeof(equity) = 'text'),
-    peak_equity         TEXT    NOT NULL CHECK (typeof(peak_equity) = 'text'),
-    cash                TEXT    NOT NULL CHECK (typeof(cash) = 'text'),
-    positions_value     TEXT    NOT NULL CHECK (typeof(positions_value) = 'text'),
-    unrealised_pnl      TEXT    NOT NULL CHECK (typeof(unrealised_pnl) = 'text'),
-    realised_pnl_cum    TEXT    NOT NULL CHECK (typeof(realised_pnl_cum) = 'text'),
+    equity              ANY     NOT NULL CHECK (typeof(equity) = 'text'),
+    peak_equity         ANY     NOT NULL CHECK (typeof(peak_equity) = 'text'),
+    cash                ANY     NOT NULL CHECK (typeof(cash) = 'text'),
+    positions_value     ANY     NOT NULL CHECK (typeof(positions_value) = 'text'),
+    unrealised_pnl      ANY     NOT NULL CHECK (typeof(unrealised_pnl) = 'text'),
+    realised_pnl_cum    ANY     NOT NULL CHECK (typeof(realised_pnl_cum) = 'text'),
     open_position_count INTEGER NOT NULL,
     updated_at          INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX idx_equity_snapshots_ts ON equity_snapshots (ts);
 
@@ -158,19 +168,19 @@ CREATE TABLE positions (
     quote          TEXT    NOT NULL,
     side           TEXT    NOT NULL CHECK (side = 'long'),
     status         TEXT    NOT NULL CHECK (status IN ('open', 'closed')),
-    qty            TEXT    NOT NULL CHECK (typeof(qty) = 'text'),
-    entry_price    TEXT    NOT NULL CHECK (typeof(entry_price) = 'text'),
-    target_price   TEXT    NOT NULL CHECK (typeof(target_price) = 'text'),
-    stop_price     TEXT    NOT NULL CHECK (typeof(stop_price) = 'text'),
+    qty            ANY     NOT NULL CHECK (typeof(qty) = 'text'),
+    entry_price    ANY     NOT NULL CHECK (typeof(entry_price) = 'text'),
+    target_price   ANY     NOT NULL CHECK (typeof(target_price) = 'text'),
+    stop_price     ANY     NOT NULL CHECK (typeof(stop_price) = 'text'),
     timeout_at     INTEGER NOT NULL,
     entry_userref  INTEGER,
-    last_price     TEXT    CHECK (last_price IS NULL OR typeof(last_price) = 'text'),
-    unrealised_pnl TEXT    CHECK (unrealised_pnl IS NULL OR typeof(unrealised_pnl) = 'text'),
+    last_price     ANY     CHECK (last_price IS NULL OR typeof(last_price) = 'text'),
+    unrealised_pnl ANY     CHECK (unrealised_pnl IS NULL OR typeof(unrealised_pnl) = 'text'),
     opened_at      INTEGER NOT NULL,
     closed_at      INTEGER,
     trade_id       TEXT,
     updated_at     INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX idx_positions_status ON positions (status);
 
@@ -202,15 +212,15 @@ CREATE TABLE orders (
     status         TEXT    NOT NULL CHECK (
                        status IN ('pending', 'resting', 'filled',
                                   'cancelled', 'rejected', 'expired')),
-    qty            TEXT    NOT NULL CHECK (typeof(qty) = 'text'),
-    limit_price    TEXT    CHECK (limit_price IS NULL OR typeof(limit_price) = 'text'),
-    filled_qty     TEXT    NOT NULL CHECK (typeof(filled_qty) = 'text'),
-    avg_fill_price TEXT    CHECK (avg_fill_price IS NULL OR typeof(avg_fill_price) = 'text'),
-    fee            TEXT    CHECK (fee IS NULL OR typeof(fee) = 'text'),
+    qty            ANY     NOT NULL CHECK (typeof(qty) = 'text'),
+    limit_price    ANY     CHECK (limit_price IS NULL OR typeof(limit_price) = 'text'),
+    filled_qty     ANY     NOT NULL CHECK (typeof(filled_qty) = 'text'),
+    avg_fill_price ANY     CHECK (avg_fill_price IS NULL OR typeof(avg_fill_price) = 'text'),
+    fee            ANY     CHECK (fee IS NULL OR typeof(fee) = 'text'),
     placed_at      INTEGER NOT NULL,
     closed_at      INTEGER,
     updated_at     INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX idx_orders_status ON orders (status);
 
@@ -241,26 +251,26 @@ CREATE TABLE trades (
     base               TEXT    NOT NULL,
     quote              TEXT    NOT NULL,
     side               TEXT    NOT NULL CHECK (side = 'long'),
-    qty                TEXT    NOT NULL CHECK (typeof(qty) = 'text'),
-    entry_price        TEXT    NOT NULL CHECK (typeof(entry_price) = 'text'),
-    exit_price         TEXT    NOT NULL CHECK (typeof(exit_price) = 'text'),
-    entry_fee          TEXT    NOT NULL CHECK (typeof(entry_fee) = 'text'),
-    exit_fee           TEXT    NOT NULL CHECK (typeof(exit_fee) = 'text'),
+    qty                ANY     NOT NULL CHECK (typeof(qty) = 'text'),
+    entry_price        ANY     NOT NULL CHECK (typeof(entry_price) = 'text'),
+    exit_price         ANY     NOT NULL CHECK (typeof(exit_price) = 'text'),
+    entry_fee          ANY     NOT NULL CHECK (typeof(entry_fee) = 'text'),
+    exit_fee           ANY     NOT NULL CHECK (typeof(exit_fee) = 'text'),
     entry_userref      INTEGER,
     exit_userref       INTEGER,
     opened_at          INTEGER NOT NULL,
     closed_at          INTEGER NOT NULL,
     outcome            TEXT    NOT NULL CHECK (
                            outcome IN ('target', 'stop', 'timeout', 'liquidation')),
-    realised_pnl       TEXT    NOT NULL CHECK (typeof(realised_pnl) = 'text'),
-    realised_pnl_pct   TEXT    NOT NULL CHECK (typeof(realised_pnl_pct) = 'text'),
-    realised_pnl_quote TEXT    NOT NULL CHECK (typeof(realised_pnl_quote) = 'text'),
+    realised_pnl       ANY     NOT NULL CHECK (typeof(realised_pnl) = 'text'),
+    realised_pnl_pct   ANY     NOT NULL CHECK (typeof(realised_pnl_pct) = 'text'),
+    realised_pnl_quote ANY     NOT NULL CHECK (typeof(realised_pnl_quote) = 'text'),
     reporting_currency TEXT    NOT NULL,
-    fx_rate_entry      TEXT    NOT NULL CHECK (typeof(fx_rate_entry) = 'text'),
-    fx_rate_exit       TEXT    NOT NULL CHECK (typeof(fx_rate_exit) = 'text'),
+    fx_rate_entry      ANY     NOT NULL CHECK (typeof(fx_rate_entry) = 'text'),
+    fx_rate_exit       ANY     NOT NULL CHECK (typeof(fx_rate_exit) = 'text'),
     fallbacks_used     TEXT    NOT NULL DEFAULT '[]',
     updated_at         INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX idx_trades_closed_at ON trades (closed_at);
 
@@ -275,7 +285,7 @@ CREATE INDEX idx_trades_pair ON trades (pair);
 --
 -- `reason_code` is machine-readable for research; `reason` is written for the operator,
 -- because the console renders it ("Net edge -0.21% after fees", not `cost_gate_fail`).
--- The economics columns are TEXT decimal strings: they are derived from live fees and
+-- The economics columns are exact decimal strings: they are derived from live fees and
 -- they gate a trade, so they are money, not statistics.
 -- ---------------------------------------------------------------------------
 CREATE TABLE rejections (
@@ -287,15 +297,15 @@ CREATE TABLE rejections (
     rejected_by       TEXT    NOT NULL,
     reason_code       TEXT    NOT NULL,
     reason            TEXT    NOT NULL,
-    expected_move_pct TEXT    CHECK (expected_move_pct IS NULL OR typeof(expected_move_pct) = 'text'),
-    friction_pct      TEXT    CHECK (friction_pct IS NULL OR typeof(friction_pct) = 'text'),
-    net_edge_pct      TEXT    CHECK (net_edge_pct IS NULL OR typeof(net_edge_pct) = 'text'),
-    hurdle_pct        TEXT    CHECK (hurdle_pct IS NULL OR typeof(hurdle_pct) = 'text'),
+    expected_move_pct ANY     CHECK (expected_move_pct IS NULL OR typeof(expected_move_pct) = 'text'),
+    friction_pct      ANY     CHECK (friction_pct IS NULL OR typeof(friction_pct) = 'text'),
+    net_edge_pct      ANY     CHECK (net_edge_pct IS NULL OR typeof(net_edge_pct) = 'text'),
+    hurdle_pct        ANY     CHECK (hurdle_pct IS NULL OR typeof(hurdle_pct) = 'text'),
     candidate_score   REAL,
     shap_ref          TEXT,
     details           TEXT,
     updated_at        INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX idx_rejections_ts ON rejections (ts);
 
@@ -308,7 +318,7 @@ CREATE INDEX idx_rejections_rejected_by ON rejections (rejected_by);
 --
 -- Metrics are statistics, so REAL is correct for them (`code-standards.md`: float is
 -- fine for features, indicators, model inputs and statistics). `net_pnl` is money and
--- is therefore TEXT like every other money column.
+-- is therefore an exact decimal string like every other money column.
 -- ---------------------------------------------------------------------------
 CREATE TABLE leaderboard (
     id                 INTEGER PRIMARY KEY,
@@ -324,12 +334,12 @@ CREATE TABLE leaderboard (
     alpha              REAL,
     beta               REAL,
     brier              REAL,
-    net_pnl            TEXT    CHECK (net_pnl IS NULL OR typeof(net_pnl) = 'text'),
+    net_pnl            ANY     CHECK (net_pnl IS NULL OR typeof(net_pnl) = 'text'),
     reporting_currency TEXT,
     promoted           INTEGER NOT NULL CHECK (promoted IN (0, 1)),
     notes              TEXT,
     updated_at         INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX idx_leaderboard_model ON leaderboard (model_id, model_version);
 

@@ -152,3 +152,54 @@ let a phase sit at "no FAIL" while nothing was being checked. It reports FAIL wi
 
 **Because.** The value of three results instead of two is entirely in the distinction between
 "not built yet" and "wrong". Anything that blurs it turns the gate back into a checklist.
+
+### `EngineStatus` was `(str, Enum)`, and that is a silent bug under the circuit breaker
+
+**Agent:** Lead · **Task:** spec 04 · **Date:** 2026-09-08 · *found by B, ruled by the lead*
+
+**What happened.** Ruff's UP042 fired on B's ten store enums, wanting `StrEnum`. B switched them
+and gave a reason better than the lint rule: with `(str, Enum)`, an accidental
+`str(OrderStatus.RESTING)` writes `"OrderStatus.RESTING"` into a column queried for `'resting'`.
+C then pointed out that `engine-contracts.md` specifies `class EngineStatus(str, Enum)` verbatim,
+so my file would trip the same rule and could not be fixed the same way without changing a
+contract declared fixed. Both suggested a per-file ignore.
+
+**Why the ignore was wrong.** `EngineStatus` values do not stay in memory. `state["guard_blockers"]`
+carries `result.status`, engine 19 writes it to `block_records.status`, and engine 17 `safety`
+queries that column for `status = 'ERROR'` to compute the error rate that trips the breaker. An
+f-string or `str()` anywhere on that path writes `"EngineStatus.ERROR"` — a plausible-looking
+string that never matches. The error rate then reads zero forever and the breaker never fires on
+it. Nothing fails; a safety mechanism just quietly stops working.
+
+**Fix.** `engine-contracts.md` now specifies `class EngineStatus(StrEnum)`. `StrEnum` has been
+stdlib since 3.11, already the project floor. No per-file ignore; UP042 stays on everywhere. Spec
+04 requires a test asserting `str(EngineStatus.ERROR) == "ERROR"`.
+
+**Consequence.** This is a change to a file whose header says the interface is fixed and that
+changing it requires the lead. Taken deliberately: the contract's *intent* was a string enum whose
+members equal their string values, and `StrEnum` implements that intent where `(str, Enum)` only
+approximates it. The alternative was carrying a known silent defect in the safety path to keep a
+linter quiet.
+
+### No `.gitattributes`, and Windows was quietly rewriting the evidence
+
+**Agent:** A · **Task:** spec 10 · **Date:** 2026-09-08 · *escalated by A, fixed by the lead*
+
+**What happened.** Staging `tests/fixtures/record_sample.jsonl` warned that LF would be replaced
+by CRLF. `core.autocrlf` is `true` in `C:/Program Files/Git/etc/gitconfig` — the Git for Windows
+system default, set by nobody here — and the repository had no `.gitattributes` at all.
+
+**Why.** Every committed-fixture criterion in this project compares bytes that git would rewrite
+between commit and clone, against a rule that says a criterion passing only on the machine that
+produced it is broken. The text fixtures survive parsing; the danger is Phase 4's
+`labelled_sample.parquet`. Git's text/binary detection is a heuristic, and a wrong guess rewrites
+`0x0A` bytes inside the payload. It does not fail loudly. It fails weeks later on another machine
+as a fixture that will not parse, with nothing pointing back at a line-ending default nobody set.
+
+**Fix.** `.gitattributes` at the root: `* text=auto eol=lf`, `tests/fixtures/** -text`, and
+explicit `binary` for `*.parquet`, `*.sqlite`, `*.sqlite-journal`. `git add --renormalize .` run;
+`git ls-files --eol` confirms `attr/-text` on the fixtures.
+
+**Consequence.** Found in Phase 0 by an agent staging one file and reading the warning instead of
+dismissing it. The cost of finding it in Phase 4 would have been a corrupted binary fixture and no
+obvious cause.

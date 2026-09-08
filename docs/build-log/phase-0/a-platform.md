@@ -81,6 +81,16 @@ delays look fine.
 place. Re-running the induced-disconnect capture gives 0.8, 1.1, 0.9, 0.7, 1.4, 1.1, 1.1 — flat,
 as it should be.
 
+**How it was noticed.** Not by reading the code — it reads correctly. It surfaced because
+producing the committed sample required a `gap` marker, which required inducing real
+disconnects, which printed four reconnect lines to stderr in one 20-second run:
+`reconnecting in 0.6s (attempt 1)`, then `1.3s (attempt 1)`, `2.0s (attempt 1)`, `4.2s (attempt 1)`.
+The delay doubling while `attempt` stayed at 1 is the whole tell: `attempt` resets on a
+successful connect and the delay did not, so the two were being reset at different points in the
+loop. Without a fixture that had to contain a gap marker there would have been no reason to
+disconnect the recorder repeatedly in a short window, and nothing would have made the pattern
+visible.
+
 **Consequence.** This mattered more than an ordinary retry bug. A recorder that drops once an
 hour would, after twelve hours, sit out a full minute after each fault. Order-book and spread
 history cannot be recovered retroactively, so every one of those minutes is data that no later

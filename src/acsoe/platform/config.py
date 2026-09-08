@@ -1,0 +1,429 @@
+"""Configuration: the pydantic model, the loader, and the refusals.
+
+``config/default.yaml`` is parsed into a validated :class:`Config` at startup and
+the process refuses to start on an invalid one. There is no partially-valid
+config and no "sensible default" applied on the way past a problem — a plausible
+default for ``trading.risk_fraction_per_trade`` is a guessed answer to how much
+money is at risk.
+
+Three refusals are worth reading before changing anything here.
+
+**Mode.** Phase 0 accepts ``paper`` and nothing else. ``platform/live_guard.py``,
+which implements the three switches of invariant 1, is a Phase 8 deliverable.
+Until it exists the loader refuses to start on any other mode. The absence of the
+guard is not permission, and no code path may promote paper to live implicitly.
+
+**Nulls.** ``config/default.yaml`` writes ten keys as ``null`` and marks them
+OPERATOR REQUIRED: the context files name them and value none of them, and every
+one is trading behaviour. A null is refused, by name, rather than defaulted.
+
+**Floats.** Every money-valued key is a ``Decimal``. YAML parses ``0.03`` as a
+float, so the conversion goes through ``Decimal(str(value))`` — ``str`` of a float
+is its shortest round-tripping repr, so ``0.03`` becomes exactly ``Decimal("0.03")``
+and never ``0.0299999999999999988...``. A float with more precision than that can
+survive is refused, with a message telling the author to quote it.
+
+This module is the **only** place in the system that reads an environment
+variable. It deliberately does not read ``ACSOE_LIVE``: that is one of invariant
+1's three switches and belongs to ``live_guard.py`` in Phase 8.
+"""
+
+from __future__ import annotations
+
+import os
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Annotated, Any, Final, Literal, Self
+
+import yaml
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError, model_validator
+
+from acsoe.platform.logging import register_secret
+
+DEFAULT_CONFIG_PATH: Final = Path("config") / "default.yaml"
+DEFAULT_ENV_PATH: Final = Path(".env")
+
+#: Environment variables holding credentials. Read here and nowhere else, and
+#: registered with the log redactor the moment they enter the process, so the
+#: logger is armed before any client that could leak one exists.
+CREDENTIAL_ENV_VARS: Final = ("KRAKEN_API_KEY", "KRAKEN_API_SECRET")
+
+#: A float carrying more significant digits than this was never an exact decimal
+#: literal, so `Decimal(str(value))` would silently invent precision.
+MAX_FLOAT_SIGNIFICANT_DIGITS: Final = 15
+
+
+class ConfigError(RuntimeError):
+    """The configuration is invalid and the process must not start."""
+
+
+# ---------------------------------------------------------------------------
+# Money
+# ---------------------------------------------------------------------------
+
+
+def _to_decimal(value: Any) -> Any:
+    """Coerce a YAML scalar to ``Decimal`` without ever going through binary float
+    arithmetic."""
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, bool):
+        raise ValueError("a boolean is not a number")
+    if isinstance(value, int):
+        return Decimal(value)
+    if isinstance(value, float):
+        text = str(value)
+        digits = len(Decimal(text).as_tuple().digits)
+        if digits > MAX_FLOAT_SIGNIFICANT_DIGITS:
+            raise ValueError(
+                f"{value!r} has more precision than a YAML float can carry exactly; "
+                "quote it in the config file so it is read as a decimal string"
+            )
+        return Decimal(text)
+    if isinstance(value, str):
+        try:
+            return Decimal(value.strip())
+        except InvalidOperation as exc:
+            raise ValueError(f"{value!r} is not a decimal number") from exc
+    raise ValueError(f"expected a number, got {type(value).__name__}")
+
+
+Money = Annotated[Decimal, BeforeValidator(_to_decimal)]
+#: A ratio expressed as a decimal: 0.03 means 3%. `code-standards.md` — never 3.
+Ratio = Annotated[Decimal, BeforeValidator(_to_decimal)]
+
+
+# ---------------------------------------------------------------------------
+# Sections
+# ---------------------------------------------------------------------------
+
+
+class _Section(BaseModel):
+    # A stray key is refused rather than ignored. A typo'd threshold that is
+    # silently dropped leaves the system running on a default nobody chose.
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class ConsoleConfig(_Section):
+    port: int = Field(gt=0, lt=65536)
+    poll_interval_ms: int = Field(gt=0)
+    stale_after_ms: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _poll_well_below_stale(self) -> Self:
+        """`ui-context.md`: the poll interval must stay under a quarter of the
+        stale threshold. Without it a slow poll fades the whole screen to half
+        opacity permanently, and the operator learns to ignore the one signal
+        that says the data is old."""
+        limit = self.stale_after_ms / 4
+        if self.poll_interval_ms > limit:
+            raise ValueError(
+                f"console.poll_interval_ms ({self.poll_interval_ms}) must be at most a "
+                f"quarter of console.stale_after_ms ({self.stale_after_ms}), i.e. {limit:.0f}"
+            )
+        return self
+
+
+class LoggingConfig(_Section):
+    level: str = "INFO"
+    retention_days: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _known_level(self) -> Self:
+        allowed = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
+        if self.level.upper() not in allowed:
+            raise ValueError(f"logging.level must be one of {sorted(allowed)}, got {self.level!r}")
+        return self
+
+
+class TimeframesConfig(_Section):
+    decision_bar_s: int = Field(gt=0)
+    loop_tick_s: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _tick_divides_the_bar(self) -> Self:
+        """The decision bar is measured in loop ticks. A tick that does not divide
+        the bar means `market_sensor` can never land exactly on a bar close."""
+        if self.loop_tick_s > self.decision_bar_s:
+            raise ValueError(
+                "timeframes.loop_tick_s must not exceed timeframes.decision_bar_s"
+            )
+        if self.decision_bar_s % self.loop_tick_s != 0:
+            raise ValueError(
+                f"timeframes.decision_bar_s ({self.decision_bar_s}) must be a whole number of "
+                f"loop ticks ({self.loop_tick_s})"
+            )
+        return self
+
+
+class BarriersConfig(_Section):
+    target_pct: Ratio = Field(gt=0, le=1)
+    stop_pct: Ratio = Field(gt=0, le=1)
+    timeout_bars: int = Field(gt=0)
+
+
+class SafetyConfig(_Section):
+    max_consecutive_data_blocks: int = Field(gt=0)
+    max_drawdown_pct: Ratio = Field(gt=0, le=1)
+    max_consecutive_losses: int = Field(gt=0)
+    error_rate_window_s: int = Field(gt=0)
+    max_errors_in_window: int = Field(gt=0)
+
+
+class TradingConfig(_Section):
+    hurdle_multiple: Money = Field(gt=0)
+    risk_fraction_per_trade: Ratio = Field(gt=0, le=1)
+    max_concurrent_positions: int = Field(gt=0)
+    entry_unfilled_window_s: int = Field(gt=0)
+    base_reporting_currency: str = Field(min_length=1)
+    allow_crypto_quoted: bool
+
+    @model_validator(mode="after")
+    def _currency_is_a_bare_code(self) -> Self:
+        code = self.base_reporting_currency
+        if code != code.strip() or " " in code:
+            raise ValueError(
+                f"trading.base_reporting_currency must be a bare currency code, got {code!r}"
+            )
+        return self
+
+
+def _require_currency_map(value: Any) -> Any:
+    if not isinstance(value, dict):
+        raise ValueError(
+            "paper.starting_balances must be a currency-to-amount map, "
+            f'e.g. {{USD: "1000.00"}}, got {type(value).__name__}'
+        )
+    if not value:
+        raise ValueError("paper.starting_balances must name at least one currency")
+    for currency in value:
+        if not isinstance(currency, str) or not currency.strip():
+            raise ValueError(
+                f"paper.starting_balances keys must be currency codes, got {currency!r}"
+            )
+    return value
+
+
+class PaperConfig(_Section):
+    starting_balances: Annotated[dict[str, Money], BeforeValidator(_require_currency_map)]
+
+    @model_validator(mode="after")
+    def _balances_are_not_negative(self) -> Self:
+        for currency, amount in self.starting_balances.items():
+            if amount < 0:
+                raise ValueError(
+                    f"paper.starting_balances[{currency}] is negative ({amount}); "
+                    "a simulated account cannot start overdrawn"
+                )
+        return self
+
+
+class BacktestConfig(_Section):
+    training_window_days: int = Field(gt=0)
+    retrain_interval_days: int = Field(gt=0)
+
+
+class SeedsConfig(_Section):
+    # `global` is a Python keyword, so the field is aliased. `populate_by_name`
+    # lets code refer to it as `global_` while the YAML keeps the readable name.
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    global_: int = Field(alias="global")
+    train: int
+    seed_generator: int
+
+
+# ---------------------------------------------------------------------------
+# The config
+# ---------------------------------------------------------------------------
+
+
+class Config(BaseModel):
+    """The whole configuration, validated. Satisfies the ``Config`` Protocol in
+    ``core/contracts.py``; ``core/`` declares the shape, ``platform/`` implements it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: Literal["paper", "live", "replay"]
+    console: ConsoleConfig
+    logging: LoggingConfig
+    timeframes: TimeframesConfig
+    barriers: BarriersConfig
+    safety: SafetyConfig
+    trading: TradingConfig
+    paper: PaperConfig
+    backtest: BacktestConfig
+    seeds: SeedsConfig
+
+    @model_validator(mode="after")
+    def _phase_0_forces_paper(self) -> Self:
+        """Invariant 1. ``platform/live_guard.py`` is a Phase 8 deliverable.
+
+        Until it exists this loader is the only thing standing between a config
+        file and real money, so it fails closed. Do not add a flag that skips
+        this, and do not implement the three switches here — they belong to
+        ``live_guard.py``, and three conditions checked in the module that
+        forbids them is not a guard.
+        """
+        if self.mode == "live":
+            raise ValueError(
+                "mode: live is refused. Live trading requires all three switches of "
+                "invariant 1 in context/trading-invariants.md, implemented in "
+                "platform/live_guard.py, which is a Phase 8 deliverable and does not "
+                "exist yet. The absence of the guard is not permission. Set mode: paper."
+            )
+        if self.mode != "paper":
+            raise ValueError(
+                f"mode: {self.mode} is refused. Phase 0 accepts mode: paper only; "
+                "replay is built in Phase 4 and live in Phase 8."
+            )
+        return self
+
+    @classmethod
+    def load(cls, path: Path | None = None) -> Config:
+        """Parse and validate. Raises :class:`ConfigError` and never returns a
+        half-valid config."""
+        config_path = (path or DEFAULT_CONFIG_PATH).resolve()
+        if not config_path.is_file():
+            raise ConfigError(f"configuration file not found: {config_path}")
+
+        raw = load_yaml_mapping(config_path)
+        _refuse_nulls(raw, config_path)
+
+        try:
+            return cls.model_validate(raw)
+        except ValidationError as exc:
+            raise ConfigError(_readable(exc, config_path)) from exc
+
+
+def load_yaml_mapping(path: Path) -> dict[str, Any]:
+    """`yaml.safe_load` only, never `yaml.load` — the restriction under which the
+    dependency was approved."""
+    with path.open("r", encoding="utf-8") as handle:
+        parsed = yaml.safe_load(handle)
+    if parsed is None:
+        raise ConfigError(f"configuration file is empty: {path}")
+    if not isinstance(parsed, dict):
+        raise ConfigError(f"configuration file must be a mapping, got {type(parsed).__name__}")
+    return parsed
+
+
+def _null_paths(node: Any, prefix: str = "") -> list[str]:
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if value is None:
+                found.append(path)
+            else:
+                found.extend(_null_paths(value, path))
+    return found
+
+
+def _refuse_nulls(raw: dict[str, Any], path: Path) -> None:
+    """Refuse every null key by name, all of them at once.
+
+    ``config/default.yaml`` marks these OPERATOR REQUIRED: the context files name
+    the key and never specify its value, and every one is trading behaviour, so
+    nobody may invent one. Reporting all ten together rather than one per run is
+    the difference between one conversation with the operator and ten.
+    """
+    nulls = _null_paths(raw)
+    if not nulls:
+        return
+    listed = "\n".join(f"  - {name}" for name in nulls)
+    raise ConfigError(
+        f"{len(nulls)} configuration value(s) in {path} are null and must be supplied by the "
+        f"operator before the system can start:\n{listed}\n"
+        "These are marked OPERATOR REQUIRED in the file. Each one is trading behaviour that "
+        "the context files name but never value, so no agent may choose it and no default is "
+        "applied. Refusing to start is deliberate: a plausible default here is a guessed "
+        "answer to how much money is at risk."
+    )
+
+
+def _readable(exc: ValidationError, path: Path) -> str:
+    lines = [f"configuration in {path} is invalid:"]
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error["loc"]) or "<root>"
+        lines.append(f"  - {location}: {error['msg']}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+
+
+def parse_dotenv(text: str) -> dict[str, str]:
+    """Parse a ``.env`` file. ``KEY=VALUE``, ``#`` comments, optional quotes.
+
+    Deliberately minimal and stdlib-only: no interpolation, no command
+    substitution, no multi-line values. A config parser that can execute
+    something is a config parser that will, and adding a dependency for fifteen
+    lines is not worth an escalation.
+    """
+    values: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = line.removeprefix("export ").strip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if key:
+            values[key] = value
+    return values
+
+
+def load_dotenv(path: Path | None = None) -> int:
+    """Load ``.env`` into the process environment. Returns how many were set.
+
+    An existing environment variable always wins: a value already exported by the
+    operator is a deliberate act and a file must not override it.
+    """
+    env_path = path or DEFAULT_ENV_PATH
+    if not env_path.is_file():
+        return 0
+    loaded = 0
+    for key, value in parse_dotenv(env_path.read_text(encoding="utf-8")).items():
+        if key not in os.environ:
+            os.environ[key] = value
+            loaded += 1
+    return loaded
+
+
+def arm_secret_redaction() -> int:
+    """Register every credential in the environment with the log redactor.
+
+    Called at startup, before any client exists. Returns the count — never a
+    value. Invariant 13: a credential is never logged, printed or echoed, and
+    that includes by the function whose job is to protect it.
+    """
+    armed = 0
+    for name in CREDENTIAL_ENV_VARS:
+        if register_secret(os.environ.get(name)):
+            armed += 1
+    return armed
+
+
+def load_config(
+    path: Path | None = None,
+    *,
+    env_path: Path | None = None,
+    load_env: bool = True,
+) -> Config:
+    """The startup entry point: load ``.env``, arm redaction, then validate the config.
+
+    Redaction is armed *before* the config is parsed, so even a failure message
+    from this function cannot carry a credential.
+    """
+    if load_env:
+        load_dotenv(env_path)
+        arm_secret_redaction()
+    return Config.load(path)

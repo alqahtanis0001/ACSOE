@@ -1,0 +1,41 @@
+{
+  "error": [],
+  "result": {
+    "BTC/USD": {
+      "base": "BTC",
+      "quote": "USD",
+      "ordermin": "0.00005",
+      "costmin": "5.00",
+      "tick_size": "0.1",
+      "lot_decimals": 8,
+      "pair_decimals": 1
+    },
+    "ETH/USD": {
+      "base": "ETH",
+      "quote": "USD",
+      "ordermin": "0.002",
+      "costmin": "5.00",
+      "tick_size": "0.01",
+      "lot_decimals": 8,
+      "pair_decimals": 2
+    },
+    "SOL/USD": {
+      "base": "SOL",
+      "quote": "USD",
+      "ordermin": "0.05",
+      "costmin": "5.00",
+      "tick_size": "0.001",
+      "lot_decimals": 8,
+      "pair_decimals": 3
+    },
+    "ETH/BTC": {
+      "base": "ETH",
+      "quote": "BTC",
+      "ordermin": "0.002",
+      "costmin": "0.00010",
+      "tick_size": "0.00001",
+      "lot_decimals": 8,
+      "pair_decimals": 5
+    }
+  }
+}
