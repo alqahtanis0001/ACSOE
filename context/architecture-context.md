@@ -116,7 +116,10 @@ Engine 9 (order book) and the spread component of Engine 10 cannot be backtested
 | Raw market recordings | JSONL in `data/raw/` | Append-only, daily rotation, compacted to Parquet |
 | Built candles, feature snapshots | Parquet in `data/derived/` | Rebuildable from raw |
 | Trades, rejections, runs, leaderboard | SQLite | Small, relational, queried constantly |
-| Block records | SQLite, table `block_records` | One row per **tick** on which trading was blocked. Not a column on `rejections` — see below |
+| Open and closed positions | SQLite, table `positions` | What the console renders and what `safety` counts |
+| Orders, including resting entries | SQLite, table `orders` | Keyed by `userref`; a resting post-only buy lives here |
+| Equity series | SQLite, table `equity_snapshots` | One row per tick. Feeds `safety`'s drawdown and the Phase 7 alpha curve, which needs cash periods too |
+| Block records | SQLite, table `block_records` | One row per guard blocker per **tick**. Not a column on `rejections` — see below |
 | Trained models | Files in `models/` | Versioned by training run id, never overwritten |
 | SHAP explanations | Parquet, joined by decision id | One row per decision |
 
@@ -135,10 +138,35 @@ Engine 17 `safety` derives its outage count from this table, so the columns are 
 | `cycle_id` | The tick. Joins to `rejections`, logs and SHAP rows |
 | `run_id` | The daemon process |
 | `ts` | `context.now`, UTC, microseconds since epoch |
-| `blocked_by` | Engine name, from `state["trading_blocked_by"]` |
-| `block_reason` | The reason string, from `state["block_reason"]` |
+| `blocked_by` | Engine name |
+| `block_reason` | The reason string |
+| `is_primary` | True for the blocker that set `state["trading_blocked_by"]` — the first one. False for a co-occurring blocker on the same tick |
+| `status` | `BLOCK` or `ERROR`. `safety`'s error rate counts the `ERROR` rows in the trailing hour |
 
 **Order by `ts`, never by `cycle_id`.** `cycle_id` is minted per tick within a run and restarts with the process, so ordering a cross-restart sequence by it silently interleaves two runs. The outage counter has to survive a restart, which is precisely the case that would break.
+
+Because the guard chain records every blocker, the outage count is **the number of consecutive most-recent `cycle_id`s that have any `data_guard` row**, not the number of rows. A tick where `data_guard` and `safety` both blocked contributes one to the count, not two.
+
+### Engine 19 `memory` is the single writer of relational rows
+
+`trades`, `positions`, `orders`, `equity_snapshots`, `block_records` and `rejections` are all written by engine 19 `memory`, from `state`, in the manage chain. No other engine writes a relational row. Engine 22 `exit` closes a position on the exchange; `memory` records that it happened. Keeping one writer is what makes the manage chain's "always runs" guarantee sufficient for invariant 12, and it is why `memory` is the dependency under `safety`'s entire input surface.
+
+Money columns are stored as **exact decimal strings in TEXT**, never `REAL`. `Decimal` in, `Decimal` out. A float equity series drifts, and a drifting equity series moves a drawdown threshold that liquidates the account.
+
+### What engine 17 `safety` reads
+
+`safety` runs in the guard chain, *before* the manage chain, and `state` is fresh every tick — so `state["position_manager"]` and `state["exit"]` do not exist when it runs. Every input comes from the store. These are fixed, because `safety` is the circuit breaker and an ambiguous input is a breaker that two agents implement two ways:
+
+| Input | Table | Fields | Written by | Built in |
+|---|---|---|---|---|
+| Equity drawdown | `equity_snapshots` | latest row: `equity`, `peak_equity`; drawdown is `(peak_equity − equity) / peak_equity` | 19 `memory` | Phase 4 |
+| Consecutive losses | `trades` | trailing run ordered by `closed_at`: `realised_pnl`, `outcome` | 19 `memory` | Phase 4 |
+| Error rate | `block_records` | rows in the trailing hour with `status = 'ERROR'` | 19 `memory` | Phase 4 |
+| Open positions | `positions` | count where `status = 'open'` | 19 `memory` | Phase 4 |
+| Resting entry orders | `orders` | count where `status = 'resting'` | 19 `memory` | Phase 4 |
+| Consecutive data blocks | `block_records` | trailing consecutive `cycle_id`s with a `data_guard` row, ordered by `ts` | 19 `memory` | Phase 4 |
+
+**Every one of those producers is Phase 4, and `safety` is built in Phase 3.** That is a forward dependency on all six inputs, not just the block count, and it is resolved the same way: B's Phase 0 seed generator produces all six, and Phase 3 tests `safety` against the seeded database. Phase 4 then proves the live `memory` engine writes rows `safety` reads to the same totals. Nothing in Phase 3 may touch a live engine 19.
 
 ## Build order
 

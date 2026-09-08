@@ -84,12 +84,17 @@ Every tick runs the guard and manage chains. The opportunity chain runs only whe
 consume_commands()
 
 # 1. GUARD — every tick, every mode. Never breaks early.
+state["guard_blockers"] = []
 for engine in GUARD_CHAIN:                     # exactly: 1, 2, 3, 4, 17
     result = run(engine)
     state[engine.name] = result.data
-    if result.blocks_trading and "trading_blocked_by" not in state:
-        state["trading_blocked_by"] = engine.name    # first blocker wins
-        state["block_reason"] = result.reason
+    if result.blocks_trading:
+        state["guard_blockers"].append(              # every blocker, for engine 19
+            {"engine": engine.name, "reason": result.reason,
+             "status": result.status})
+        if "trading_blocked_by" not in state:        # the first one is primary
+            state["trading_blocked_by"] = engine.name
+            state["block_reason"] = result.reason
         # the chain still finishes; only the opportunity chain is skipped
 
 # 2. OPPORTUNITY — only if running and nothing blocked. May stop early.
@@ -120,7 +125,7 @@ if state["system"]["close_intent"] \
     mark_command_consumed()
 ```
 
-**Why the guard chain never stops.** Freeze must stop trading without stopping data collection, because order-book and spread history can never be recovered. Engines 1 to 4 therefore run in every mode including `frozen` and `idle`. The chain also never breaks on a block: a bad-data block from `data_guard` must not stop `safety` from evaluating, so every guard engine runs every tick and only the first blocker is recorded.
+**Why the guard chain never stops.** Freeze must stop trading without stopping data collection, because order-book and spread history can never be recovered. Engines 1 to 4 therefore run in every mode including `frozen` and `idle`. The chain also never breaks on a block: a bad-data block from `data_guard` must not stop `safety` from evaluating, so every guard engine runs every tick. The first blocker is the primary one that gates the opportunity chain, and **every** blocker is recorded — see invariant 12.
 
 **Why `safety` is a guard and not a judgement.** Engine 17 asks an account-level question — how far is equity down, how many losses in a row, how many errors this hour. That question has nothing to do with the candidate under consideration, and it must be answered on ticks where there is no candidate at all. Placed at the end of the opportunity chain it would run only when every other gate had already passed: on roughly fourteen ticks in fifteen that chain stops at `feature` because no bar closed, and on the remainder any earlier gate blocking stops it sooner. An account bleeding while every candidate is rejected by the cost gate would never trip the breaker. In the guard chain it runs on every tick in every mode, which is the only placement that makes it a circuit breaker rather than a formality.
 
@@ -132,7 +137,7 @@ The hold suppresses **exits only**. Engine 21 still cancels an entry order that 
 
 **The hold is bounded.** Engine 17 `safety` counts consecutive ticks blocked by `data_guard` and writes a `close_all` row once that count exceeds `safety.max_consecutive_data_blocks`. **Invariant 14** holds the threshold, its default, the conditions under which `safety` escalates at all, and the reasoning. Do not restate them here. What follows is only how the count is obtained.
 
-**The counter comes from the store, not from `state`.** `state` is fresh every tick and `safety` may not write `state["system"]`, so there is nowhere in memory for a counter to live. Engine 19 `memory` writes one row per blocked tick into the `block_records` table — columns in `architecture-context.md` — and `safety` reads the trailing run of those rows, **ordered by `ts`**, counting how many consecutive most-recent ticks were blocked by `data_guard`. Ordering by `cycle_id` would be wrong: it restarts with the process, and surviving a restart is the whole point of putting the counter in the store. Because the count lives in SQLite it survives a restart — a daemon that dies mid-outage and comes back does not reset the clock on an outage that is still happening.
+**The counter comes from the store, not from `state`.** `state` is fresh every tick and `safety` may not write `state["system"]`, so there is nowhere in memory for a counter to live. Engine 19 `memory` writes one row per entry in `state["guard_blockers"]` into the `block_records` table — columns in `architecture-context.md` — and `safety` reads the trailing run of those rows, **ordered by `ts`**, counting how many consecutive most-recent `cycle_id`s carry a `data_guard` row. Consecutive *ticks*, not rows: a tick on which two guards blocked contributes one. Ordering by `cycle_id` would be wrong: it restarts with the process, and surviving a restart is the whole point of putting the counter in the store. Because the count lives in SQLite it survives a restart — a daemon that dies mid-outage and comes back does not reset the clock on an outage that is still happening.
 
 The arithmetic is fixed here rather than left to the implementer, because it is off by one in the obvious reading. `data_guard` (4) runs *before* `safety` (17) in the guard chain, so the current tick's block is already visible in `state["trading_blocked_by"]`. `memory` (19) runs *later*, in the manage chain, so the store holds records only through the previous tick. The count is therefore **stored consecutive `data_guard` blocks through tick T−1, plus one if this tick is also blocked by `data_guard`**. Getting it wrong fires the breaker a minute early or a minute late; neither is acceptable.
 
@@ -221,7 +226,8 @@ Each engine's `data` payload is typed in its own `contracts.py`. Orchestrator-le
 
 - `state["system"]` — the only persistent region. `mode` and `close_intent`. **Written only by the orchestrator**, in exactly two places: the command reader sets `mode` and `close_intent` at step 0, and step 4 clears `close_intent` once the manage chain reports the close finished. No engine writes it; any engine may read it.
 - `state["cycle_id"]` — fresh per tick, minted by the orchestrator, joins logs, decisions and SHAP rows.
-- `state["trading_blocked_by"]`, `state["block_reason"]` — set on block, fresh per tick.
+- `state["trading_blocked_by"]`, `state["block_reason"]` — the **primary** blocker: the first engine to block this tick, and what gates the opportunity chain. Fresh per tick.
+- `state["guard_blockers"]` — every guard engine that blocked this tick, in chain order, each with its reason and status. The guard chain never breaks early, so there can be more than one. Engine 19 writes one `block_records` row per entry, `is_primary` on the first. An empty list on an unblocked tick, never absent.
 
 `run_id` is `context.run_id`, nowhere else.
 

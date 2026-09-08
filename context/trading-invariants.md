@@ -30,7 +30,9 @@ There is no hardcoded fee, minimum, tick size or precision anywhere in the codeb
 **A cache stale beyond its TTL counts as a failed fetch, and is retained anyway.** Those are two rules sharing a word, and collapsing them into one breaks the kill switch:
 
 - *For trading*, a stale value does not exist. It may never price a hurdle, size a position, or satisfy a gate. That is all "counts as a failed fetch" means.
-- *For an emergency liquidation*, it is the last thing the system knows, and knowing it beats being stuck. `clients/kraken/` **retains the last successful value of every row in the table above**, with the timestamp it was fetched, and never discards it on a failure. Only rule 14 may read it.
+- *For an emergency liquidation*, it is the last thing the system knows, and knowing it beats being stuck. `clients/kraken/` **retains the last successful balances and the last successful `AssetPairs` metadata** — exactly what rule 14 authorises using, and nothing else — with the timestamp each was fetched, and never discards them on a failure. Only rule 14 may read them.
+
+**Spread and the fee tier are deliberately not retained.** Their only possible reader is the cost gate, and the paper-mode table below says in as many words that an assumed spread invalidates that gate. A retained stale spread would be a loaded gun pointed at the one input that must never have a fallback, and a liquidation does not need it: it sells as a taker at whatever the book is, having already decided that getting flat beats getting a good price.
 
 Discarding on failure would make rule 14 unimplementable at exactly the moment it is needed, so retention is a requirement on Agent A's client, not an optimisation.
 
@@ -129,6 +131,10 @@ Raw market recordings are append-only. Never edit, backfill, interpolate, or "cl
 ## 12. Rejections are logged before the pipeline stops
 
 When a gate blocks, the memory engine still runs. A rejection that is not written to storage is lost research data and counts as a defect equal to a lost trade.
+
+**The guard chain records every blocker, not just the one that stopped the pipeline.** The guard chain never breaks early, so two guards can block on the same tick — typically `data_guard` on bad data and `safety` on an account condition. `state["trading_blocked_by"]` holds the first, because that is what gates the opportunity chain, but engine 19 writes one `block_records` row per blocker with `is_primary` set on the first only.
+
+Without that, a `safety` block co-occurring with a `data_guard` block would leave no trace in `block_records` at all, and this rule would promise more than it delivered. The command row `safety` writes is a record of the *decision*; the block row is the record of the *evaluation*, and research needs both.
 
 ## 13. Secrets never enter the repo
 

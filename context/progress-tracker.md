@@ -217,6 +217,30 @@ Six of the eight findings came from the seventh audit's own fixes. The pattern i
 - The console compares `run_id` against the previous row of the `runs` table, server-side in SQLite. "Since the console last saw one" was not implementable: the console is a separate process with no memory across its own restarts, and Phase 1 has to verify it.
 - Invariant 14 no longer ends with a footnote about how other files are worded. That is the same coupling as the "last two" bug — a rule that describes its neighbours goes stale when a neighbour is reworded. It states the rule and stops.
 
+**Correction, recorded by the ninth audit.** The step-4 dependency table reported with this audit listed `hold_reason` as producer B / Phase 6, consumer Phase 6. The seam row written in the same commit says the consumer is C — engine 19 `memory`, built in Phase 4, and the console, built in Phase 1. A consumer therefore *does* precede its producer, and the conclusion "no consumer precedes its producer's phase" was not supported by the check that was supposed to establish it. The dependency is harmless in practice, because a missing key reads as null exactly like the close-all flags — but the table was filled in from memory rather than read off the seam rows, and then presented as verification. Step 4 is now run against the parsed seam table, not by recall.
+
+### After the ninth audit
+
+All five findings were from the eighth audit's own fixes. The theme is narrower than last time and worse: a new clause was written into a rule without asking what the rule would need in order to run.
+
+**The circuit breaker had no defined inputs.**
+
+- Engine 17 asks about equity drawdown, consecutive losses, error rate, open positions and resting entry orders. Only the block count had a named source. It cannot read `state` — it runs in the guard chain, before the manage chain, and `state` is fresh every tick — so every input must come from the store, and none of them were specified. B would have invented five schemas.
+- `architecture-context.md` now names the table and fields for each of the six inputs, and adds the three tables that were assumed everywhere and listed nowhere: `positions`, `orders` and `equity_snapshots`. The equity series was already required by the locked decision that alpha attribution uses the full curve including cash periods; nothing had ever given it a home.
+- **Engine 19 `memory` is the single writer of every relational row** — trades, positions, orders, equity snapshots, block records, rejections. That was implicit and is now stated, because it is what makes the manage chain's always-runs guarantee sufficient for invariant 12, and it is why `memory` sits underneath `safety`'s entire input surface.
+- Money columns are exact decimal strings in TEXT, never `REAL`. A drifting float equity series moves a drawdown threshold that liquidates the account.
+- **All six producers are Phase 4 and `safety` is Phase 3.** The eighth audit fixed that forward dependency for one input and left it standing for five. Every one now takes the same seeded-fixture treatment.
+
+**The seeded fixtures are named rather than assumed.**
+
+- Phase 3's escalation criterion only passed because B's seed happens to contain an open position — invariant 14 gates emission on positions open or orders resting. Nothing said so. The Phase 0 split and the Phase 0 exit criteria now name all six fixtures explicitly: the consecutive block run, an open position, a resting entry order, an equity series with a drawdown past the limit, and a losing-trade streak past the limit.
+
+**Two rules that promised more than they delivered.**
+
+- **Retention is scoped to what rule 14 authorises.** Invariant 2 had required retaining the last successful value of *every* row in its table, including Spread — an input rule 2's own paper-mode table says must never have a fallback because an assumed spread invalidates the cost gate. Retention is now balances and `AssetPairs` only, and the file says plainly that spread and fee tier are not retained and why: a liquidation sells as a taker at whatever the book is, having already decided that getting flat beats getting a good price.
+- **The guard chain records every blocker.** It never breaks early, so `data_guard` and `safety` can block on the same tick — and only the first was written, so a breaker firing during an outage left no row in `block_records` at all. The orchestrator now collects `state["guard_blockers"]`, engine 19 writes one row per blocker with `is_primary` on the first, and invariant 12 says so. The command row records the decision; the block row records the evaluation, and research needs both.
+- The outage count is consecutive `cycle_id`s carrying a `data_guard` row, not consecutive rows. A tick where two guards blocked contributes one.
+
 ## Architecture Decisions
 
 - Engines communicate only through `state`. No engine imports another.
