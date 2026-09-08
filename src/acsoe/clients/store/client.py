@@ -298,7 +298,10 @@ class StoreClient:
         )
 
     def stored_consecutive_data_block_ticks_excluding_current_tick(
-        self, *, scan_limit: int = DEFAULT_OUTAGE_SCAN_LIMIT
+        self,
+        *,
+        current_tick: tuple[str, int] | None = None,
+        scan_limit: int = DEFAULT_OUTAGE_SCAN_LIMIT,
     ) -> int:
         """The stored half of `safety`'s outage count. **Not the effective count.**
 
@@ -314,12 +317,19 @@ class StoreClient:
         here would double-count it; omitting it in the caller fires the breaker a minute
         late. Neither is acceptable, so the boundary is in the method name.
 
-        See :meth:`stored_data_guard_outage_excluding_current_tick` for the detail.
+        **Pass `current_tick` as `(run_id, cycle_id)` whenever the caller has one.** It
+        is what lets the walk tell "tick T-1 was blocked" from "tick T-1 was clean and
+        wrote no row"; see :meth:`stored_data_guard_outage_excluding_current_tick`.
         """
-        return self.stored_data_guard_outage_excluding_current_tick(scan_limit=scan_limit).length
+        return self.stored_data_guard_outage_excluding_current_tick(
+            current_tick=current_tick, scan_limit=scan_limit
+        ).length
 
     def stored_data_guard_outage_excluding_current_tick(
-        self, *, scan_limit: int = DEFAULT_OUTAGE_SCAN_LIMIT
+        self,
+        *,
+        current_tick: tuple[str, int] | None = None,
+        scan_limit: int = DEFAULT_OUTAGE_SCAN_LIMIT,
     ) -> DataGuardOutage:
         """The trailing run of stored ticks carrying a `data_guard` block record.
 
@@ -347,12 +357,22 @@ class StoreClient:
           behaviour the docs require, since a daemon that dies mid-outage must not reset
           the clock on an outage that is still happening.
 
+        **Pass `current_tick` whenever the caller has one.** Without it the walk starts
+        at whatever the newest stored tick happens to be, and cannot tell "tick T-1 was
+        blocked" from "tick T-1 was clean and therefore wrote nothing". Those give
+        different answers, and the wrong one over-counts — firing the breaker early and
+        liquidating an account over an outage that already ended. With the anchor, the
+        newest stored tick has to *be* `(run_id, cycle_id - 1)` or the run is empty.
+        Omit it only when inspecting a database that has no current tick, such as a
+        seeded fixture, where "the trailing run of stored ticks" is exactly the question.
+
         **One residual blind spot, stated rather than hidden.** If a daemon's final tick
         before dying was *clean* and its first tick after restarting is blocked, nothing
         in `block_records` records that clean tick, and this counter joins the two runs'
-        outages into one. It over-counts, which fires the breaker early rather than
-        late. Closing it would mean reading the true tick timeline from
-        `equity_snapshots`, which has a row for every tick — but
+        outages into one. The anchor cannot help: `cycle_id` restarts at 1, so there is
+        no arithmetic that reaches back across the restart. It over-counts, which fires
+        the breaker early rather than late. Closing it would mean reading the true tick
+        timeline from `equity_snapshots`, which has a row for every tick — but
         `architecture-context.md` fixes this counter's source as `block_records`, so
         that is an escalation and not a decision to take here.
         """
@@ -372,7 +392,10 @@ class StoreClient:
 
         ticks: list[tuple[str, int]] = []
         timestamps: list[int] = []
-        previous: tuple[str, int] | None = None
+        # Seeding the walk with the current tick is the whole anchor: the adjacency
+        # check below then requires the newest stored tick to be the one immediately
+        # before it, rather than accepting whatever row happens to be newest.
+        previous: tuple[str, int] | None = current_tick
         for row in rows:
             if not int(row["has_data_guard"]):
                 break

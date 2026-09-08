@@ -46,6 +46,56 @@ _BLOCK_INSERT = (
     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
+#: Every money column in the schema, pinned as a **set** rather than as a count.
+#:
+#: A count silently accepts a swap: drop one money column, add an unrelated one, and the
+#: total is unchanged while the test stays green. Pinning the pairs makes both directions
+#: visible — an added money column that nobody declared `ANY`, and a money column that
+#: quietly stopped being one.
+#:
+#: The four `*_pct` columns on `rejections` and `realised_pnl_pct` on `trades` are here
+#: deliberately. `code-standards.md` allows `float` for "features, indicators, model
+#: inputs and statistics", and these are none of those: net edge, friction and the hurdle
+#: are the arithmetic of invariant 5, computed from live fees, and they decide whether a
+#: trade happens. `fx_rate_entry`/`fx_rate_exit` are here because invariant 7 converts
+#: PnL through them into the reporting currency.
+EXPECTED_MONEY_COLUMNS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("equity_snapshots", "equity"),
+        ("equity_snapshots", "peak_equity"),
+        ("equity_snapshots", "cash"),
+        ("equity_snapshots", "positions_value"),
+        ("equity_snapshots", "unrealised_pnl"),
+        ("equity_snapshots", "realised_pnl_cum"),
+        ("leaderboard", "net_pnl"),
+        ("orders", "qty"),
+        ("orders", "limit_price"),
+        ("orders", "filled_qty"),
+        ("orders", "avg_fill_price"),
+        ("orders", "fee"),
+        ("positions", "qty"),
+        ("positions", "entry_price"),
+        ("positions", "target_price"),
+        ("positions", "stop_price"),
+        ("positions", "last_price"),
+        ("positions", "unrealised_pnl"),
+        ("rejections", "expected_move_pct"),
+        ("rejections", "friction_pct"),
+        ("rejections", "net_edge_pct"),
+        ("rejections", "hurdle_pct"),
+        ("trades", "qty"),
+        ("trades", "entry_price"),
+        ("trades", "exit_price"),
+        ("trades", "entry_fee"),
+        ("trades", "exit_fee"),
+        ("trades", "realised_pnl"),
+        ("trades", "realised_pnl_pct"),
+        ("trades", "realised_pnl_quote"),
+        ("trades", "fx_rate_entry"),
+        ("trades", "fx_rate_exit"),
+    }
+)
+
 _POSITION_INSERT = (
     "INSERT INTO positions (position_id, run_id, cycle_id, pair, base, quote, side, "
     "status, qty, entry_price, target_price, stop_price, timeout_at, opened_at, "
@@ -298,40 +348,10 @@ def test_every_money_column_is_declared_any_with_a_text_check(migrated_db: Path)
     nothing at all; `ANY` stores the value as given and the CHECK then sees a REAL and
     refuses it. The contents are guaranteed text more strongly, not less.
     """
-    money_names = {
-        "equity",
-        "peak_equity",
-        "cash",
-        "positions_value",
-        "unrealised_pnl",
-        "realised_pnl_cum",
-        "realised_pnl",
-        "realised_pnl_pct",
-        "realised_pnl_quote",
-        "qty",
-        "filled_qty",
-        "entry_price",
-        "exit_price",
-        "limit_price",
-        "avg_fill_price",
-        "target_price",
-        "stop_price",
-        "last_price",
-        "entry_fee",
-        "exit_fee",
-        "fee",
-        "fx_rate_entry",
-        "fx_rate_exit",
-        "net_pnl",
-        "expected_move_pct",
-        "friction_pct",
-        "net_edge_pct",
-        "hurdle_pct",
-    }
     conn = open_connection(migrated_db)
     try:
         offenders: list[str] = []
-        checked = 0
+        found: set[tuple[str, str]] = set()
         for table in sorted(EXPECTED_TABLES):
             create_sql = conn.execute(
                 "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
@@ -339,17 +359,17 @@ def test_every_money_column_is_declared_any_with_a_text_check(migrated_db: Path)
             if "STRICT" not in create_sql:
                 offenders.append(f"{table} is not STRICT")
             for column in conn.execute(f"PRAGMA table_info({table})"):
-                if column["name"] not in money_names:
+                name = str(column["name"])
+                if str(column["type"]).upper() != "ANY":
                     continue
-                checked += 1
-                if column["type"].upper() != "ANY":
-                    offenders.append(f"{table}.{column['name']} is {column['type']}, not ANY")
-                if f"typeof({column['name']}) = 'text'" not in create_sql:
-                    offenders.append(f"{table}.{column['name']} has no typeof CHECK")
+                found.add((table, name))
+                if f"typeof({name}) = 'text'" not in create_sql:
+                    offenders.append(f"{table}.{name} has no typeof CHECK")
     finally:
         close_connection(conn)
+
     assert offenders == []
-    assert checked == 29
+    assert found == EXPECTED_MONEY_COLUMNS
 
 
 def test_an_unrecognised_command_can_be_stored(migrated_db: Path) -> None:
