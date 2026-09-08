@@ -5,27 +5,101 @@ Never edit the tracker directly.
 
 ## Current Task
 
-**Claimed: specs 03, 07, 08, 09, 10.** All five Phase 0 tasks for Agent A.
+**Claimed: specs 03, 07, 08, 09, 10.** All five Phase 0 tasks for Agent A. All five are
+finished. Nothing of mine is outstanding.
 
-Order of work: 03 (package skeleton — everyone else's imports depend on it), then 10
-(`scripts/record.py`, standalone and the only network-touching work this phase), then 08
-(clock, logging, directory creation), 07 (config loader), 09 (CLI entrypoints).
+This session was a follow-up, not a new spec: the operator supplied the nine OPERATOR REQUIRED
+values, three of my tests asserted the committed config refuses to load, and those assertions
+had to move rather than be deleted. Done, and Phase 0 now reports 7 PASS / 0 FAIL / 0 PENDING.
 
 ## Completed
 
-- None yet.
+- **Spec 03 — package skeleton and `pyproject.toml`.** src layout, the stack table's
+  dependencies and nothing else, `dev` and `research` extras, mypy `--strict` and the ruff
+  rule set the standards imply, the package tree, and the `acsoe` console script.
+- **Spec 07 — `platform/config.py`.** Pydantic model over every key in `config/default.yaml`,
+  `yaml.safe_load` only, `Decimal` for money, and the refusals: every null OPERATOR REQUIRED
+  key named together, `mode: live` refused naming invariant 1 and Phase 8, a poll interval
+  above a quarter of the stale threshold refused, `starting_balances` required to be a
+  currency map. The only module in the system that reads an environment variable.
+- **Spec 08 — clock, logging, directory creation.** `SystemClock`/`FixedClock`, structlog JSON
+  with daily rotation, two-layer redaction (recursive key-name redaction plus registered-value
+  scrubbing of the rendered line), `run_id`/`cycle_id` binding, and idempotent creation of
+  `data/{raw,historical,derived,db}` and `logs/`.
+- **Spec 10 — `scripts/record.py` and `tests/fixtures/record_sample.jsonl`.** Standalone
+  Kraken WebSocket v2 to JSONL recorder with no dependency on the engine framework, gap
+  markers on reconnect, and a committed redacted 25-line sample that `record_sample_valid`
+  reports PASS on.
+- **Spec 09 — the three CLI entry points.**
+  - `acsoe engine` builds config, clock, logging, clients and the orchestrator, then runs the
+    tick loop at `timeframes.loop_tick_s`. The loop is mine; the tick is the lead's. A stop is
+    checked **between** ticks only, so an interrupt never lands inside a half-run manage chain.
+  - `acsoe console` loads the same config, prepares logging and the runtime directories, asks
+    C's `acsoe.console.app.create_app` for the application and serves it on `console.port`.
+  - `acsoe research` assembles `OFFLINE_CHAIN` in `cli/research.py` — never in `bootstrap.py` —
+    reports that no offline engines are registered, and exits zero.
+  - `tests/cli/test_entrypoints.py`, now 24 tests.
+- **Follow-up — the operator's nine values.** The refusal tests moved off the committed file
+  and onto a fabricated one; the committed file gained the opposite assertions. Detail below.
+
+## The operator's nine values — what changed on my side
+
+The operator supplied all nine previously-null OPERATOR REQUIRED keys, so `config/default.yaml`
+carries zero nulls. Three of my tests asserted that file **refuses to load** and went red. That
+was my design working: I duplicated the key list into `tests/cli/test_entrypoints.py` on purpose
+so a change to the set would fail loudly rather than be silently inherited. It fired in the
+direction I had not anticipated — the config becoming *more* valid, not a tenth key appearing.
+
+**Nothing was deleted and no refusal machinery was weakened.** `platform/config.py` is unchanged
+except for two docstrings that still claimed the shipped file carries nine nulls.
+`_refuse_nulls` counts what it finds and never held a list of key names, which is why a config
+with zero nulls needed no code change at all.
+
+Three properties are now asserted separately, because they were previously conflated into one:
+
+1. **A null OPERATOR REQUIRED key stops the process, by name.** Against a config the test
+   fabricates — `unset_operator_config` (CLI) and `with_nulled()` (platform) — built by taking
+   the shipped file and setting the nine back to `null`. Nine parametrised single-key cases
+   proving one unset key is enough on its own and that the message names *that* key and no
+   other, plus the all-nine-at-once message, plus both entry points refusing with exit code 2.
+   `safety.error_rate_window_s` must still never appear in a refusal: it is specified as the
+   trailing hour by `architecture-context.md` and was never the operator's to supply.
+2. **A null anywhere stops the process.** `test_a_null_anywhere_is_refused` was already there
+   and now carries more weight: it is what keeps the machinery honest with zero nulls shipped.
+3. **The committed file is known-good.** It loads with no overlay and no fill-in, `mode` is
+   `paper`, `acsoe engine --config config/default.yaml --ticks 1` completes a tick and exits
+   zero, `acsoe console` accepts it, and each of the nine parses to the expected type — Decimal
+   for money and rates, int for counts and durations, and `paper.starting_balances` as a
+   currency-to-Decimal map whose `USD` still reads exactly `5000.00`. That last one is asserted
+   twice on purpose: once on the raw YAML (the value is a *string*, so it never touches binary
+   float) and once on the parsed Decimal (`str()` still shows the cents). The parsed value alone
+   cannot tell you which route it took, because `Decimal("5000.0") == Decimal("5000.00")`.
+
+One replacement was needed for a signal that would otherwise have been lost. While the nine were
+null, the shipped config refusing to load *was* the tenth-key alarm. With zero nulls, the lead
+could add a tenth key **and supply it** and nothing would notice.
+`test_the_file_marks_exactly_these_nine_keys_as_the_operator_s` scans `config/default.yaml` for
+its `Operator-chosen` marker and compares the set to the tests' own list. The marker is a
+documented convention — the file's own header states it — not an inference from formatting. The
+opposite case still needs no marker: a tenth key added as `null` survives the overlay in
+`complete_config_dict()` / `startable_config` and takes every test using those fixtures down.
+
+**I have not touched the operator's values and will not.** The tracker records both consequences
+the lead checked by arithmetic — nothing clears the cost gate at tier 1 at `hurdle_multiple: 1.5`
+with a 3.0% target, and `max_concurrent_positions: 3` is inert at a $5,000 balance where one
+position is ~$3,333 notional. Neither is a defect and neither is mine. The loader-mechanics tests
+deliberately use their own values (`starting_balances: {USD: "1000.00"}`) rather than the
+operator's, so that revising a provisional trading number in Phase 3 does not churn a test about
+YAML parsing. Assertions about the shipped numbers live in the `test_default_yaml_*` tests and
+nowhere else.
 
 ## In Progress
 
-- Spec 03 — `pyproject.toml` and the package tree.
+- Nothing.
 
 ## Blocked On
 
-- Nothing hard-blocking. Two soft dependencies on the lead, both mockable:
-  - Spec 07 needs `config/default.yaml` (lead spec 06) and the `Config` Protocol
-    (lead spec 04). Building the pydantic model against the spec-06 key list until they land.
-  - Spec 09 needs the orchestrator and `bootstrap.py` (lead spec 05). CLI will import them
-    lazily and degrade to a clear message if absent, so it is testable either way.
+- Nothing.
 
 ## Open Questions
 
@@ -37,21 +111,81 @@ Unresolved requirements go here and that unit of work stops. Never guess at trad
 
 Anything touching `core/`, `bootstrap.py`, the engine registry, an invariant, a dependency, or another agent's schema.
 
-- None yet.
+- **Nothing outstanding.** The `Config` Protocol mismatch and `.gitattributes`, both raised in
+  earlier sessions, are closed.
+- **Two prose corrections outside my lane, flagged not edited.** Both are stale in the same way
+  my two docstrings were, and both are harmless — the code around them behaves correctly:
+  - `tests/conftest.py` (C), the `paper_config` fixture docstring: "Its OPERATOR REQUIRED nulls
+    are left as nulls." There are none left.
+  - `scripts/verify.py` (C), around the `KEY_MAX_*` constants: "Three of them are written as
+    null and marked OPERATOR REQUIRED." All three now carry values, which is why
+    `seed_fixtures_present` has stopped reporting PENDING. `required_thresholds()` itself is
+    correct and needs no change — it distinguishes absent from null and would go back to PENDING
+    if a value were withdrawn.
+
+## Notes for other agents
+
+- **For C:** the two docstrings above, and one thing worth knowing before Phase 1's console
+  work. A test that asserts a *refusal* from a function whose success path starts a server needs
+  `uvicorn.run` stubbed anyway. While my `test_console_refuses_the_committed_config` was red it
+  did not merely fail — it fell through into `uvicorn.run` and bound 127.0.0.1:8765 from inside
+  the suite (`SystemExit: 3`, `[Errno 10048]`). The refusal was the only thing between the test
+  and a real socket. `asgi_get` in `tests/cli/test_entrypoints.py` is the driver to copy: it
+  runs a request through the real ASGI app with no httpx and no socket, so C's network guard
+  never has to be relaxed for it.
+- **For B:** `clients/store/seed.py` carries its own fixture-shape constants for keys that used
+  to be OPERATOR REQUIRED, commented as such. Now that the config has real values, worth
+  deciding whether the seed should read them or deliberately keep its own — the seed's numbers
+  must stay independent of a provisional trading value that Phase 3 will revise, or every
+  fixture moves when the operator retunes one number. Not mine to change; flagging the choice.
 
 ## Verification
 
 Paste the real output of your last run. Never report a task complete without it.
 
 ```
-pytest tests/ -q
-mypy --strict src/
-ruff check src/
-python scripts/verify.py --phase 0
+$ .venv/Scripts/python.exe -m pytest tests/ -q
+430 passed in 8.75s
+
+$ .venv/Scripts/python.exe -m mypy --strict src/
+Success: no issues found in 29 source files
+
+$ .venv/Scripts/python.exe -m ruff check src/
+All checks passed!
+
+$ .venv/Scripts/python.exe scripts/verify.py --phase 0
+ACSOE verify - phase 0
+repo: C:\Users\saad2\Documents\GitHub\ACSOE
+
+PASS    docs_vocabulary              14 files scanned, 9 retired terms, no hit
+PASS    orchestrator_empty_registry  one tick completed against 0 registered engines; empty chains are valid, state["system"]["mode"]='idle'
+PASS    db_migrates_from_empty       fresh database migrated to all 9 documented tables
+PASS    seed_fixtures_present        all six fixtures present: outage run 18 ticks over 2 run_ids (11 double-blocker), 2 open position(s), 2 resting order(s), drawdown 0.2000017843760037115020877199, losing streak 8, 23 ERROR blocks in the window, 33 trades / 46 rejections
+PASS    record_sample_valid          25 lines valid against the recorder schema; kinds present: gap, session, tick
+PASS    toolchain_green              pytest, mypy --strict and ruff all green (python.exe)
+PASS    is_gate_matches_registry     0 engines registered; 0 mismatches
+
+7 criteria: 7 PASS, 0 FAIL, 0 PENDING
+Phase 0 is green: every criterion PASS, zero PENDING.
 ```
 
-- Not run yet.
+Phase 0 is green. `seed_fixtures_present` was the last PENDING and cleared on its own when the
+operator supplied `safety.max_drawdown_pct` and the other two breaker limits — B's seed was
+correct all along and was blocked on a value, not a bug.
+
+`ruff check tests/cli tests/platform` is also clean; the standard's four commands cover `src/`
+only, so I run it over my own test paths separately.
 
 ## Notes For Next Session
 
-- None.
+- Phase 2 is my next heavy phase: engines 1 `exchange`, 2 `market_data_recorder`,
+  3 `market_sensor`, 4 `data_guard`, the historical OHLCVT loader, and `clients/kraken/`.
+- `scripts/record.py` should be left running from now on. Order-book and spread history cannot
+  be recovered retroactively, and Phase 2's `recording_report.json` criterion needs a
+  continuous span of at least 24 hours.
+- `Clients` in `cli/engine.py` carries three `None`s in Phase 0 because no engine is
+  registered. Wiring B's store client into it is Phase 2 work, not a Phase 0 omission.
+- If the operator withdraws a provisional value back to `null`, nothing in `platform/` needs
+  editing — that is the point of the machinery. What *will* fail is
+  `test_default_yaml_loads_cleanly` and the type-parsing cases, which is correct: the file would
+  no longer be known-good. The refusal tests would keep passing throughout.

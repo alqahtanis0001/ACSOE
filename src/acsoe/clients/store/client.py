@@ -300,7 +300,7 @@ class StoreClient:
     def stored_consecutive_data_block_ticks_excluding_current_tick(
         self,
         *,
-        current_tick: tuple[str, int] | None = None,
+        current_tick: tuple[str, int] | None,
         scan_limit: int = DEFAULT_OUTAGE_SCAN_LIMIT,
     ) -> int:
         """The stored half of `safety`'s outage count. **Not the effective count.**
@@ -317,9 +317,14 @@ class StoreClient:
         here would double-count it; omitting it in the caller fires the breaker a minute
         late. Neither is acceptable, so the boundary is in the method name.
 
-        **Pass `current_tick` as `(run_id, cycle_id)` whenever the caller has one.** It
-        is what lets the walk tell "tick T-1 was blocked" from "tick T-1 was clean and
-        wrote no row"; see :meth:`stored_data_guard_outage_excluding_current_tick`.
+        **`current_tick` has no default, and `safety` must pass its own
+        `(run_id, cycle_id)`.** "Consecutive ticks through T-1" is not a question the
+        table can answer without knowing T: a clean tick writes no `block_records` row,
+        so an outage that ended two ticks ago is indistinguishable from one still
+        running unless the walk is anchored to the current tick. `None` asks the other
+        question — "what is the trailing run of ticks *in the table*" — which is right
+        for inspecting a seeded fixture that has no current tick, and wrong for the
+        breaker. See :meth:`stored_data_guard_outage_excluding_current_tick`.
         """
         return self.stored_data_guard_outage_excluding_current_tick(
             current_tick=current_tick, scan_limit=scan_limit
@@ -328,7 +333,7 @@ class StoreClient:
     def stored_data_guard_outage_excluding_current_tick(
         self,
         *,
-        current_tick: tuple[str, int] | None = None,
+        current_tick: tuple[str, int] | None,
         scan_limit: int = DEFAULT_OUTAGE_SCAN_LIMIT,
     ) -> DataGuardOutage:
         """The trailing run of stored ticks carrying a `data_guard` block record.
@@ -357,14 +362,16 @@ class StoreClient:
           behaviour the docs require, since a daemon that dies mid-outage must not reset
           the clock on an outage that is still happening.
 
-        **Pass `current_tick` whenever the caller has one.** Without it the walk starts
-        at whatever the newest stored tick happens to be, and cannot tell "tick T-1 was
-        blocked" from "tick T-1 was clean and therefore wrote nothing". Those give
-        different answers, and the wrong one over-counts — firing the breaker early and
-        liquidating an account over an outage that already ended. With the anchor, the
-        newest stored tick has to *be* `(run_id, cycle_id - 1)` or the run is empty.
-        Omit it only when inspecting a database that has no current tick, such as a
-        seeded fixture, where "the trailing run of stored ticks" is exactly the question.
+        **`current_tick` is required, and `None` is a different question.** Without the
+        anchor the walk starts at whatever the newest stored tick happens to be, and
+        cannot tell "tick T-1 was blocked" from "tick T-1 was clean and therefore wrote
+        nothing". Those give different answers, and the anchorless one over-counts —
+        firing the breaker early and liquidating an account over an outage that already
+        ended, which is why the parameter has no default and every caller has to say
+        which question it is asking. With the anchor, the newest stored tick has to *be*
+        `(run_id, cycle_id - 1)` or the run is empty. Pass `None` only when inspecting a
+        database that has no current tick, such as a seeded fixture, where "the trailing
+        run of stored ticks" is exactly the question being asked.
 
         **One residual blind spot, stated rather than hidden.** If a daemon's final tick
         before dying was *clean* and its first tick after restarting is blocked, nothing

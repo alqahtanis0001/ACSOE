@@ -45,7 +45,7 @@ pytestmark = pytest.mark.skipif(GIT is None, reason="git is not on PATH")
 
 def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     assert GIT is not None
-    return subprocess.run(  # noqa: S603 - fixed argv, no shell
+    return subprocess.run(  # fixed argv, never a shell
         [GIT, *args], cwd=repo_root, capture_output=True, text=True, check=False
     )
 

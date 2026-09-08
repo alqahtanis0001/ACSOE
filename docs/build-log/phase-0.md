@@ -104,6 +104,22 @@ column without complaint, so "money is never `REAL`" was an assertion in a docum
 anything the database would enforce. A drifting float equity series moves the drawdown threshold
 that liquidates the account. Approved as written.
 
+**Follow-up, and the part that actually made it work.** The first implementation declared the
+money columns `TEXT` with that CHECK, and B found it enforced nothing. A column declared `TEXT`
+has TEXT *affinity*: an inserted REAL `0.3` is silently converted to the string `'0.3'`, and
+`typeof()` then reports `'text'`, so the CHECK passes and the float is already lost. `STRICT`
+does not close it either — its TEXT columns convert numbers the same way.
+
+The working form is `ANY` in a `STRICT` table with `CHECK (typeof(col) = 'text')`. `ANY` is the
+one declaration that stores the value as given, so the CHECK sees a real REAL and rejects it.
+Counter-intuitively, the *contents* are guaranteed TEXT far more strongly by declaring `ANY`
+than by declaring `TEXT`.
+
+Recording this loudly because it looks wrong on sight and invites "correction". Agent A saw
+`equity_snapshots.equity is ANY` in a test failure and proposed adding `TEXT` back, which would
+have reopened the hole. The reasoning is the defence; a lint-shaped fix here is a silent
+regression in the money path.
+
 ### Decision: retired terms may carry a same-line qualifier
 
 **Agent:** Lead · **Task:** spec 02 · **Date:** 2026-09-08
@@ -203,3 +219,147 @@ explicit `binary` for `*.parquet`, `*.sqlite`, `*.sqlite-journal`. `git add --re
 **Consequence.** Found in Phase 0 by an agent staging one file and reading the warning instead of
 dismissing it. The cost of finding it in Phase 4 would have been a corrupted binary fixture and no
 obvious cause.
+
+### Spec 01 made Phase 0 impossible to finish
+
+**Agent:** Lead · **Task:** spec 01 · **Date:** 2026-09-08
+
+**What happened.** With the orchestrator and an empty `bootstrap.py` landed,
+`is_gate_matches_registry` settled on PENDING: "no engine is registered yet". Spec 01 told
+Agent C to report exactly that. But Phase 0 registers no engines by design, and a phase is
+green only when every criterion is PASS with zero PENDING — so the criterion as written made
+the phase structurally uncompletable.
+
+**Why.** I wrote "PENDING while no engine exists" thinking about the *engines* rather than
+about the *assertion*. PENDING means the subject does not exist yet. The subject here is
+"every registered engine's `is_gate` matches the registry table", and with an empty registry
+that assertion has been evaluated and holds. Zero engines matching zero rows is satisfied, not
+absent.
+
+**Fix.** Vacuous PASS on an empty registry, with the count in the message —
+`0 engines registered; 0 mismatches`. The count is the guard: it tells a reader exactly how
+much assurance the PASS represents, and if it ever reads 0 in a phase where engines were
+supposed to be registered, that is itself the bug worth seeing.
+
+**Consequence.** Worth noting the shape, because it is the third time a criterion has been
+written that could not be satisfied in the phase that owns it — the Phase 3 forward dependency
+on engine 19, the environment-degrades-to-PENDING case, and now this. The common error is
+reasoning about what exists rather than about what the check actually asserts.
+
+### Decision: `pyyaml` added to the architecture stack table
+
+**Agent:** Lead · **Task:** spec 07 · **Date:** 2026-09-08
+
+**What happened.** Agent C escalated that `config/default.yaml` is YAML and the stack table in
+`architecture-context.md` listed no YAML parser, while `ai-workflow-rules.md` makes a dependency
+outside that table an escalation. Spec 07 was therefore either impossible or a silent dependency
+addition.
+
+**Options.** Add `pyyaml` to the table, or move the config to TOML and use stdlib `tomllib` for
+zero new dependencies.
+
+**Chose.** `pyyaml`, with **`yaml.safe_load` only, never `yaml.load`** written into the table row
+itself rather than left as a convention.
+
+**Because.** Every context file already says `config/default.yaml`, and YAML's nested maps suit
+`paper.starting_balances` — a currency-to-amount map — better than TOML would. The stdlib win was
+real but smaller than the doc churn and the ergonomic loss.
+
+**Consequence.** C had built a tiny stdlib fallback parser to keep working while blocked; I had it
+deleted rather than kept as a safety net. Two config parsers are two behaviours that diverge on
+something subtle at the worst possible moment.
+
+### Decision: the `Config` Protocol is `mode` plus `get(dotted_key)`
+
+**Agent:** Lead · **Task:** specs 04 and 07 · **Date:** 2026-09-08
+
+**What happened.** `core/contracts.py` declared `Config` as a Protocol with a `mode` property and
+`get("safety.max_consecutive_data_blocks")`. A's `platform/config.py` was a structured pydantic
+model with nested sections and no `get`, so mypy refused it at the seam: "expected
+acsoe.core.contracts.Config".
+
+**Chose.** Keep the Protocol; A adds `get` to the model, walking the nested sections and **raising
+on a miss** rather than returning a default.
+
+**Because.** The alternative was pinning field names in the Protocol, which puts the same keys in
+two files — the lead owns `config/default.yaml`, A owns the model — and lets them drift silently.
+A dotted accessor means an engine reads a threshold without depending on the model's shape.
+
+**Consequence.** A implemented it with no default parameter in the signature at all, and a test
+asserting that, on the grounds that a `dict.get`-shaped signature invites `config.get(key,
+fallback)` and a fallback for a trading threshold is a guessed answer to how much money is at
+risk. That is a better guard than the one I asked for. A also added
+`isinstance(config, contracts.Config)` against the runtime-checkable Protocol, so the next
+divergence fails a test instead of waiting to cross the seam.
+
+### Decision: Python 3.13, with the model libraries in a `research` extra
+
+**Agent:** Lead · **Task:** spec 03 · **Date:** 2026-09-08
+
+The machine's default interpreter is 3.14, and `lightgbm`, `shap`, `hmmlearn`, `statsmodels` and
+`scikit-learn` have no reliable Windows wheels for it. Approved building on 3.13 with
+`requires-python = ">=3.11"` unchanged.
+
+Rather than take A's proposed fallback of moving those five to an extra only if the install broke,
+I made the split the plan: base is the live-loop runtime, `research` holds the five model
+libraries, and `dev` includes `research` so `pip install -e ".[dev]"` still installs everything and
+`README.md` stays true. Every name stays inside the stack table.
+
+The split also makes the packaging express architecture invariant 5 — the live loop never imports
+from `research/` — which the flat list did not. A failing Phase 0 install was never an acceptable
+outcome: it is a Phase 0 exit criterion.
+
+### Decision: the CLI dispatcher imports command modules lazily
+
+**Agent:** A · **Task:** spec 09 · **Date:** 2026-09-08 · *(approved by the lead)*
+
+A changed `cli/main.py` to import each command module inside its dispatch branch rather than at
+module scope, and asked whether to revert it as an unconventional shape.
+
+**Approved, and it should not be reverted.** Today `cli/research.py` imports nothing, so
+architecture invariant 5 holds trivially. From Phase 4 it registers engines 20 and 23 and
+therefore imports `acsoe.research` — at which point an eager dispatcher pulls `research/` into the
+daemon's process on every `acsoe engine` invocation, **and nothing fails**. The invariant would be
+violated in a way no test, no linter and no reviewer would notice, during the phase least able to
+afford the distraction.
+
+Fifteen lines now against an entry-point edit landed in the middle of the phase that is trying to
+ship the offline chain. A's test asserts the property in a subprocess, because this process has
+already imported all three modules and an in-process check would pass for the wrong reason — that
+detail is what makes the test worth having.
+
+### The verify criteria were reporting on this repository, not the tree under test
+
+**Agent:** C · **Date:** 2026-09-08 · *flagged by A, verified by the lead*
+
+**What happened.** Mid-phase, five of `tests/verify/test_phase0_criteria.py` began failing:
+`orchestrator_empty_registry`, `is_gate_matches_registry` and `db_migrates_from_empty` stopped
+reporting PENDING against a fabricated bare tree once the lead's and B's real modules landed.
+Agent A spotted it and flagged that the criteria appeared to resolve `acsoe.*` from the installed
+package rather than from the tree under test.
+
+**Why it mattered more than the failing tests.** A criterion that silently reports on this
+repository instead of its fabricated subject does not fail — it passes, for the wrong reason. The
+symptom was five red tests; the disease would have been a phase gate that could no longer tell an
+unbuilt tree from a built one.
+
+**Fix, and it is the cause rather than the symptom.** `root_import_path` drops every managed
+module from `sys.modules`, inserts the tree's `root` and `root/src` at `sys.path[0]`, invalidates
+the import caches, and restores all of it on exit. `unbuilt_tree` adds an empty `src/acsoe/` for
+criteria that reach the package by import, because without a package present the editable install
+leaks straight through.
+
+**Verified independently by the lead**, not taken on report: a fabricated tree does shadow the
+installed package, `acsoe.bootstrap` is correctly absent inside it although it exists in the real
+tree, and the real package is restored afterwards.
+
+**The residual risk, and why it will not bite silently.** This works because the editable install
+is a plain `.pth` file appending `src` to `sys.path` — there is no PEP 660 meta-path finder, so
+`sys.path` ordering genuinely decides. Confirmed: `sys.meta_path` holds only the three stdlib
+finders. If the build backend ever emits a meta-path finder instead, `sys.path[0]` would stop
+winning and every fabricated-subject test would quietly start testing the real package.
+
+C documented exactly that in `tests/verify/conftest.py` and wrote
+`test_fabrication_actually_shadows_the_real_package` to fail loudly if it ever happens. That test
+passes. This is the right shape for a risk you cannot remove: name it, and leave a tripwire rather
+than a comment.

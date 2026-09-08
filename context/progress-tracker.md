@@ -73,27 +73,33 @@ Settled with evidence. Do not relitigate. Changing one requires the operator, no
 
 ## Open Questions
 
-**Nine config values are trading behaviour that no context file specifies, and the lead may not invent them.** They are written into `config/default.yaml` as `null` and marked OPERATOR REQUIRED; the loader refuses to start while any is null, naming the key. Phase 0 does not need the values — no engine reads them until Phase 3 — but Phase 3 cannot start without them.
+- None blocking. The nine operator-required values are set; see below.
 
-| Key | Named in | Why it cannot be guessed |
-|---|---|---|
-| `trading.hurdle_multiple` | invariant 5 | It is the whole selectivity of the system. `net_edge > hurdle_multiple x friction`, and no file gives the multiple. |
-| `trading.risk_fraction_per_trade` | invariant 6 | "The configured fraction of total account equity" — this is how much money is at risk per trade. |
-| `trading.max_concurrent_positions` | invariant 6 | "A configured maximum." Portfolio-level exposure. |
-| `trading.entry_unfilled_window_s` | invariant 8 | How long a post-only entry rests before it is cancelled and the candidate abandoned. |
-| `trading.base_reporting_currency` | invariant 7 | Every PnL, equity figure and risk limit is expressed in it. Probably a fiat; "probably" is not a specification. |
-| `paper.starting_balances` | invariant 2 | A currency-to-amount map. Determines which pairs are executable at all in paper mode. |
-| `safety.max_drawdown_pct` | invariant 14 | "Its configured drawdown limits." The point at which the system liquidates itself. |
-| `safety.max_consecutive_losses` | invariant 14 | Same sentence, same absence. |
-| `safety.max_errors_in_window` | engine-contracts | How many errors in the trailing hour trip the breaker. The window itself is specified as 3600s and is set. |
+## Operator-chosen starting values (2026-09-08)
 
-A guessed default for any of these is a silent decision about real money wearing the costume of a sane-looking number. The operator sets them.
+The operator supplied the nine values the context files name but never specify. **These are starting values, not settled ones — explicitly subject to revision once Phase 3 measures what the economics actually are.** They exist so Phase 3 can run, not because anyone yet knows they are right.
 
-## Decisions taken at Phase 0 assignment
+| Key | Value |
+|---|---|
+| `trading.hurdle_multiple` | 1.5 |
+| `trading.risk_fraction_per_trade` | 0.01 |
+| `trading.max_concurrent_positions` | 3 |
+| `trading.entry_unfilled_window_s` | 300 |
+| `trading.base_reporting_currency` | USD |
+| `paper.starting_balances` | `{USD: "5000.00"}` |
+| `safety.max_drawdown_pct` | 0.10 |
+| `safety.max_consecutive_losses` | 5 |
+| `safety.max_errors_in_window` | 20 |
 
-- **`scripts/verify.py` belongs to C, permanently.** The roster gave A all of `scripts/` while the Phase 0 split gave C `verify.py` — two agents owning one file, which rule 1 forbids. Verification is C's surface, so `verify.py` sits with C and A keeps the rest of `scripts/`, including `record.py`. `ownership.md` corrected.
-- **`platform/live_guard.py` stays in Phase 8**, and spec 07 has the config loader refuse to start unless `mode` is `paper` until it exists. The absence of a guard is not permission.
-- **There is no `TaskCreate`/`TaskList` tooling in this build**, so `feature-specs/PHASE-0-TASKS.md` is the shared list and `SendMessage` is the coordination channel. Teammates claim by recording the spec number in their own progress file, which is what ownership rule 5 already required and avoids three agents writing one file.
+The OPERATOR REQUIRED machinery stays in place. It is what will protect the tenth such key, and the loader still refuses to start on a null.
+
+### Two consequences of these values, checked by arithmetic before they surprise anyone
+
+**1. At tier 1, nothing clears the cost gate — by construction.** Invariant 5 requires `net_edge > hurdle_multiple x friction`, which rearranges to `expected_move > (1 + hurdle) x friction`. At `hurdle_multiple: 1.5` that is `2.5 x friction`. Tier 1 friction is ~1.25%, so a candidate needs an expected move above **3.125%** — and the target barrier is **3.0%**. The gate is therefore unreachable at tier 1 with these barriers. At tier 3 (~0.65% friction) the bar is 1.625% and clears comfortably.
+
+This is consistent with the project's cost-adaptive selectivity and with "a negative result is a valid result", so it is recorded rather than corrected. But **Phase 6 must not read zero trades at tier 1 as a bug**: that is these three numbers interacting exactly as specified. Either the hurdle comes down, the target goes up, or tier 1 is understood to be a no-trade regime.
+
+**2. `max_concurrent_positions: 3` is inert at this balance.** Risk of 1% of $5,000 is $50; a 1.5% stop implies ~$3,333 of notional per position. Three would need ~$10,000 against a $5,000 balance, so the **balance binds first and concurrency is effectively 1**. Invariant 6 already forbids allocating cash the account does not hold, so nothing is wrong — but a Phase 6 test asserting three simultaneous positions would fail for reasons unrelated to the code under test.
 
 ## Decision history
 

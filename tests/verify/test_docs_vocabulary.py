@@ -295,6 +295,45 @@ def test_the_exclusion_is_a_section_and_not_the_whole_file(
     assert "ai-workflow-rules.md" in outcome.message
 
 
+def test_decision_history_is_the_only_excluded_region_of_the_tracker(
+    verify_module: ModuleType, repo_root: Path
+) -> None:
+    """A new tracker section must be scanned by default, never excluded by default.
+
+    Asserted as set equality rather than by naming today's sections, so a section
+    added tomorrow is covered without anyone remembering to come back here. The
+    tracker gained `## Operator-chosen starting values` on 2026-09-08; it is
+    current-state text and this is what proves the exclusion did not swallow it.
+    """
+    table = verify_module.parse_retired_terms(repo_root)
+    excluded = verify_module.excluded_lines(repo_root, TRACKER, table)
+    history = verify_module.section_lines(repo_root / TRACKER, "## Decision history")
+    assert history, "the tracker has no `## Decision history` section"
+    assert excluded == history
+
+
+def test_the_operator_chosen_section_of_the_tracker_is_scanned(
+    verify_module: ModuleType, bare_tree: Path
+) -> None:
+    """The section recording the operator's supplied values is current-state text.
+
+    Found by prefix, because the heading carries the date it was written and the
+    date is not the property under test.
+    """
+    tracker = bare_tree / TRACKER
+    lines = tracker.read_text(encoding="utf-8").splitlines()
+    heading = next(
+        (line for line in lines if line.startswith("## Operator-chosen starting values")),
+        None,
+    )
+    if heading is None:
+        pytest.skip("the tracker no longer has an operator-chosen-values section")
+    insert_after_heading(tracker, heading, "- `paper.starting_balance` was set to 5000.")
+    outcome = run(verify_module, bare_tree)
+    assert outcome.result is verify_module.Result.FAIL
+    assert "paper.starting_balance" in outcome.message
+
+
 def test_a_section_after_the_excluded_one_is_still_scanned(
     verify_module: ModuleType, bare_tree: Path
 ) -> None:

@@ -3,12 +3,28 @@
 The refusals are the point. A config layer that accepts a bad file and carries on
 is worse than none: it turns "the operator never chose a risk fraction" into
 "something chose one for them".
+
+**The shipped file used to be unstartable and is not any more.** Until 2026-09-08
+`config/default.yaml` carried nine null OPERATOR REQUIRED keys and this file
+asserted that it refused to load. The operator has now supplied all nine, so that
+assertion has moved rather than gone: the refusal is proved against a *fabricated*
+config carrying nulls, and the shipped file has acquired the opposite assertion —
+that it loads cleanly and every one of the nine parses to the type it is supposed
+to be. The nine values are provisional (`context/progress-tracker.md`) and a null
+can come back, which is why none of the machinery was weakened to get here.
+
+Three properties have to survive together, and each has its own test below:
+
+1. A null OPERATOR REQUIRED key still stops the process, named.
+2. A null *anywhere* still stops the process, so the machinery keeps its teeth
+   with zero nulls in the shipped file.
+3. The shipped file is known-good, exactly as committed.
 """
 
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -19,6 +35,7 @@ import yaml
 from acsoe.platform.config import (
     Config,
     ConfigError,
+    ConfigKeyError,
     arm_secret_redaction,
     load_config,
     load_dotenv,
@@ -29,9 +46,37 @@ from acsoe.platform.logging import clear_secrets, registered_secret_count
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_YAML = REPO_ROOT / "config" / "default.yaml"
 
-#: Values the operator has not supplied yet. Chosen here only so the *loader*
-#: can be tested; they are not defaults and nothing outside tests may use them.
-#: `config/default.yaml` keeps them null on purpose — see `_refuse_nulls`.
+#: The nine keys the context files name but never value. The operator supplied all
+#: nine on 2026-09-08 and they are marked `Operator-chosen` in the file; before
+#: that they were null and marked OPERATOR REQUIRED. Either way this is the set
+#: that no agent may choose a value for, and the set the refusal has to name.
+OPERATOR_REQUIRED_KEYS: tuple[str, ...] = (
+    "safety.max_drawdown_pct",
+    "safety.max_consecutive_losses",
+    "safety.max_errors_in_window",
+    "trading.hurdle_multiple",
+    "trading.risk_fraction_per_trade",
+    "trading.max_concurrent_positions",
+    "trading.entry_unfilled_window_s",
+    "trading.base_reporting_currency",
+    "paper.starting_balances",
+)
+
+#: `safety.error_rate_window_s` is the near miss: it lives beside three keys that
+#: were operator-required and it never was, because `architecture-context.md`
+#: fixes the error rate at the trailing hour. Naming it in a refusal would train
+#: the operator to skim the list, and the list is the only thing between a fresh
+#: clone and a daemon trading on numbers nobody chose.
+NEVER_OPERATOR_REQUIRED = "safety.error_rate_window_s"
+
+#: Test values, deliberately **not** the operator's. They exist so the *loader*
+#: can be exercised on a config whose numbers cannot move; they are not defaults,
+#: not recommendations, and nothing outside tests may use them. Kept distinct from
+#: the shipped values on purpose: the nine in `config/default.yaml` are
+#: provisional and will be revised once Phase 3 measures the economics, and a
+#: loader test that moves when a trading number is retuned is a loader test that
+#: will be edited under pressure. Assertions about the *shipped* numbers belong in
+#: `test_default_yaml_*` and nowhere else.
 OPERATOR_VALUES: dict[str, dict[str, Any]] = {
     "safety": {
         "max_drawdown_pct": "0.10",
@@ -50,11 +95,28 @@ OPERATOR_VALUES: dict[str, dict[str, Any]] = {
 
 
 def complete_config_dict() -> dict[str, Any]:
-    """`config/default.yaml` with the OPERATOR REQUIRED nulls filled in."""
+    """`config/default.yaml` with the operator's nine replaced by test values.
+
+    Built from the shipped file rather than written out here, so a key the lead
+    adds arrives automatically. That is also what keeps this file honest about a
+    *tenth* operator-required key: a new null in the shipped file survives the
+    overlay, `Config.load` refuses it, and every test using `complete` fails at
+    once instead of one of them silently inheriting a number chosen elsewhere.
+    """
     raw = yaml.safe_load(DEFAULT_YAML.read_text(encoding="utf-8"))
     for section, values in OPERATOR_VALUES.items():
         raw[section].update(copy.deepcopy(values))
     return dict(raw)
+
+
+def with_nulled(raw: dict[str, Any], keys: Sequence[str]) -> dict[str, Any]:
+    """Set each dotted key to `None`, the way an unset OPERATOR REQUIRED key looks."""
+    for dotted in keys:
+        section, _, leaf = dotted.rpartition(".")
+        node = raw[section] if section else raw
+        assert leaf in node, f"{dotted} is not in the shipped config"
+        node[leaf] = None
+    return raw
 
 
 def write_config(tmp_path: Path, raw: dict[str, Any]) -> Path:
@@ -76,41 +138,164 @@ def _no_leaked_secrets() -> Iterator[None]:
 
 
 # --------------------------------------------------------------------------
-# The shipped file
+# An unset OPERATOR REQUIRED key stops the process
+# --------------------------------------------------------------------------
+#
+# Asserted against a fabricated config, not the shipped one. Until 2026-09-08 the
+# shipped file was itself the fixture — it carried all nine as null — and these
+# tests read it directly. That was true and is not any more, so the assertion
+# moved to a file the test builds. The property it protects has not changed: a
+# null OPERATOR REQUIRED key must stop the process by name, whether it is the
+# tenth key the lead adds or one of the nine the operator later withdraws.
+
+
+def test_every_unset_operator_key_is_named_in_one_message(tmp_path: Path) -> None:
+    """All nine at once, not the first one nine times over.
+
+    Reporting them one per run is the difference between one conversation with
+    the operator and nine, and an operator who has to run the daemon nine times
+    to learn what it needs is an operator who fills the last four in by guessing.
+    """
+    raw = with_nulled(complete_config_dict(), OPERATOR_REQUIRED_KEYS)
+    with pytest.raises(ConfigError) as caught:
+        Config.load(write_config(tmp_path, raw))
+    message = str(caught.value)
+    for key in OPERATOR_REQUIRED_KEYS:
+        assert key in message
+    assert "OPERATOR REQUIRED" in message
+    # Naming a key the operator never had to supply trains them to skim the list.
+    assert NEVER_OPERATOR_REQUIRED not in message
+
+
+@pytest.mark.parametrize("key", OPERATOR_REQUIRED_KEYS)
+def test_one_unset_operator_key_is_enough_to_refuse(tmp_path: Path, key: str) -> None:
+    """Each of the nine on its own, and the message names that one and no other.
+
+    The parametrisation is the point: a refusal that fires only when several keys
+    are missing would leave the single-key case — the realistic one, an operator
+    revising one number and leaving it blank — starting on a `None` threshold.
+    """
+    raw = with_nulled(complete_config_dict(), [key])
+    with pytest.raises(ConfigError) as caught:
+        Config.load(write_config(tmp_path, raw))
+    message = str(caught.value)
+    assert key in message
+    for other in OPERATOR_REQUIRED_KEYS:
+        if other != key:
+            assert other not in message
+    assert NEVER_OPERATOR_REQUIRED not in message
+
+
+# --------------------------------------------------------------------------
+# The shipped file is known-good
 # --------------------------------------------------------------------------
 
 
-def test_default_yaml_refuses_to_load_and_names_every_operator_key() -> None:
-    """The shipped config is deliberately unstartable.
+def test_default_yaml_loads_cleanly() -> None:
+    """The committed file, exactly as committed, starts the system.
 
-    Nine keys are OPERATOR REQUIRED: the context files name them and value none
-    of them, and every one is trading behaviour. The loader names all of them in
-    one message rather than one per run.
+    Note what this test does *not* take: the `complete` fixture. No overlay, no
+    fill-in, nothing supplied on the way past — because since 2026-09-08 the file
+    needs none. That is the whole assertion.
     """
-    with pytest.raises(ConfigError) as caught:
-        Config.load(DEFAULT_YAML)
-    message = str(caught.value)
-    for key in (
-        "safety.max_drawdown_pct",
-        "safety.max_consecutive_losses",
-        "safety.max_errors_in_window",
-        "trading.hurdle_multiple",
-        "trading.risk_fraction_per_trade",
-        "trading.max_concurrent_positions",
-        "trading.entry_unfilled_window_s",
-        "trading.base_reporting_currency",
-        "paper.starting_balances",
-    ):
-        assert key in message
-    assert "OPERATOR REQUIRED" in message
+    config = Config.load(DEFAULT_YAML)
+    assert config.mode == "paper"
+    assert config.console.port == 8765
+    assert config.safety.max_consecutive_data_blocks == 15
+    assert config.timeframes.loop_tick_s == 60
 
 
 def test_default_yaml_is_paper_mode() -> None:
+    """Asserted on the file's own text as well as on the parsed model, because
+    `mode: live` reaching a fresh clone is the one edit nobody may make quietly."""
     raw = yaml.safe_load(DEFAULT_YAML.read_text(encoding="utf-8"))
     assert raw["mode"] == "paper"
 
 
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        # Money and rates are Decimal. `0.10` and `0.01` are YAML floats, so the
+        # equality is with the decimal the author wrote, reached through `str()`.
+        ("safety.max_drawdown_pct", Decimal("0.10")),
+        ("trading.hurdle_multiple", Decimal("1.5")),
+        ("trading.risk_fraction_per_trade", Decimal("0.01")),
+        # Counts and durations are int.
+        ("safety.max_consecutive_losses", 5),
+        ("safety.max_errors_in_window", 20),
+        ("trading.max_concurrent_positions", 3),
+        ("trading.entry_unfilled_window_s", 300),
+        # A currency code is neither.
+        ("trading.base_reporting_currency", "USD"),
+        ("paper.starting_balances", {"USD": Decimal("5000.00")}),
+    ],
+)
+def test_every_operator_value_parses_to_the_expected_type(key: str, expected: Any) -> None:
+    """The nine, read off the shipped file through the accessor engines will use.
+
+    The type matters as much as the value. `risk_fraction_per_trade` arriving as a
+    float rather than a `Decimal` would not fail here, it would fail four phases
+    later as an order quantity Kraken rejects, so it is pinned at the boundary
+    where it is cheap to see.
+    """
+    value = Config.load(DEFAULT_YAML).get(key)
+    assert value == expected
+    if isinstance(expected, dict):
+        assert all(isinstance(amount, Decimal) for amount in value.values())
+    elif isinstance(expected, Decimal):
+        assert isinstance(value, Decimal)
+    elif isinstance(expected, int):
+        # `isinstance(True, int)` is True, so the strict check is the type itself.
+        assert type(value) is int
+    else:
+        assert type(value) is type(expected)
+
+
+def test_the_starting_balance_is_quoted_in_yaml_and_keeps_its_cents() -> None:
+    """`{USD: "5000.00"}` is quoted for a reason and the quotes are load-bearing.
+
+    Unquoted, YAML reads `5000.00` as the float `5000.0`, `str()` of that is
+    `"5000.0"`, and the balance silently loses a decimal place on the way to
+    `Decimal`. Quoted, it never touches binary floating point at all: the string
+    reaches `Decimal` intact and the exponent survives, which is what makes
+    `str()` still read `5000.00`. Asserting the raw YAML type as well as the
+    parsed one is deliberate — the parsed value alone cannot tell you which route
+    it took, because `Decimal("5000.0") == Decimal("5000.00")`.
+    """
+    raw = yaml.safe_load(DEFAULT_YAML.read_text(encoding="utf-8"))
+    assert isinstance(raw["paper"]["starting_balances"]["USD"], str)
+
+    balances = Config.load(DEFAULT_YAML).paper.starting_balances
+    assert str(balances["USD"]) == "5000.00"
+
+
+def test_the_file_marks_exactly_these_nine_keys_as_the_operator_s() -> None:
+    """The shipped file still agrees with this file about which keys are the
+    operator's.
+
+    While the nine were null, `Config.load(DEFAULT_YAML)` raising was itself the
+    check: a tenth key would have appeared in the refusal message and the tests
+    would have said so. With zero nulls that signal is gone in one direction —
+    the lead can now add a tenth *and supply it*, and nothing would notice. The
+    file's `Operator-chosen` marker is the replacement, and it is a documented
+    convention rather than a guess: the header of `config/default.yaml` states it.
+
+    The other direction is still covered without a marker at all: a tenth key
+    added as `null` survives the overlay in `complete_config_dict` and takes every
+    test using the `complete` fixture down with it.
+    """
+    marked = {
+        line.split(":", 1)[0].strip()
+        for line in DEFAULT_YAML.read_text(encoding="utf-8").splitlines()
+        if "Operator-chosen" in line and ":" in line.split("#", 1)[0]
+    }
+    assert marked == {key.rpartition(".")[2] for key in OPERATOR_REQUIRED_KEYS}
+    assert NEVER_OPERATOR_REQUIRED.rpartition(".")[2] not in marked
+
+
 def test_the_completed_default_yaml_validates(complete: Path) -> None:
+    """The overlay itself loads, so a failure in a test using `complete` is about
+    the thing that test changed and not about the fixture."""
     config = Config.load(complete)
     assert config.mode == "paper"
     assert config.console.port == 8765
@@ -202,7 +387,7 @@ def test_an_unknown_key_is_refused_rather_than_ignored(tmp_path: Path) -> None:
 def test_a_null_anywhere_is_refused(tmp_path: Path) -> None:
     raw = complete_config_dict()
     raw["barriers"]["target_pct"] = None
-    with pytest.raises(ConfigError, match="barriers.target_pct"):
+    with pytest.raises(ConfigError, match=r"barriers\.target_pct"):
         Config.load(write_config(tmp_path, raw))
 
 
@@ -221,7 +406,7 @@ def test_an_empty_file_is_refused(tmp_path: Path) -> None:
 def test_the_config_is_immutable(complete: Path) -> None:
     """Nothing may mutate a threshold after startup."""
     config = Config.load(complete)
-    with pytest.raises(ValueError, match="frozen|immutable"):
+    with pytest.raises(ValueError, match=r"frozen|immutable"):
         config.trading.max_concurrent_positions = 99  # type: ignore[misc]
 
 
@@ -474,3 +659,94 @@ def test_load_config_arms_redaction_before_parsing(
     with pytest.raises(ConfigError):
         load_config(tmp_path / "missing.yaml", env_path=tmp_path / "absent-env")
     assert registered_secret_count() == 1
+
+
+# --------------------------------------------------------------------------
+# The `Config` Protocol's dotted accessor
+# --------------------------------------------------------------------------
+#
+# `core/contracts.py` declares `Config` as two members: a `mode` property and
+# `get("safety.max_consecutive_data_blocks")`. The lead chose a dotted accessor
+# over a fixed field list so the key names live in `config/default.yaml` and this
+# model only, and cannot drift into a third copy inside `core/`. These tests are
+# the conformance proof for the half of that Protocol which is not `mode`.
+
+
+def test_the_model_satisfies_the_config_protocol(complete: Path) -> None:
+    contracts = pytest.importorskip("acsoe.core.contracts")
+    config = load_config(complete, load_env=False)
+    assert isinstance(config, contracts.Config)
+
+
+def test_get_resolves_a_dotted_path(complete: Path) -> None:
+    config = load_config(complete, load_env=False)
+    assert config.get("mode") == "paper"
+    assert config.get("safety.max_consecutive_data_blocks") == 15
+    assert config.get("timeframes.loop_tick_s") == 60
+
+
+def test_get_returns_money_as_decimal(complete: Path) -> None:
+    config = load_config(complete, load_env=False)
+    assert config.get("barriers.target_pct") == Decimal("0.03")
+    assert isinstance(config.get("barriers.target_pct"), Decimal)
+
+
+def test_get_descends_into_a_mapping_value(complete: Path) -> None:
+    """`paper.starting_balances` is a map, so both it and a currency inside it
+    are addressable. A caller that had to special-case the one mapping key in the
+    file would be a caller that eventually forgets to."""
+    config = load_config(complete, load_env=False)
+    assert config.get("paper.starting_balances") == {"USD": Decimal("1000.00")}
+    assert config.get("paper.starting_balances.USD") == Decimal("1000.00")
+
+
+def test_get_reaches_the_seed_aliased_around_the_python_keyword(complete: Path) -> None:
+    """`seeds.global` is a perfectly good configuration key and `global` is a
+    Python keyword, so the field is `global_` with an alias. A lookup that knew
+    only the Python name would work for every key in the file except that one."""
+    config = load_config(complete, load_env=False)
+    assert config.get("seeds.global") == 20260908
+    assert config.get("seeds.global_") == 20260908
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "nonexistent",
+        "safety.nonexistent",
+        "safety.max_drawdown_pct.deeper",
+        "paper.starting_balances.EUR",
+        "",
+        "   ",
+    ],
+)
+def test_get_raises_on_a_miss_and_never_returns_none(complete: Path, missing: str) -> None:
+    """The single most important property of the accessor.
+
+    An engine silently receiving `None` for a threshold is the failure this
+    project exists to prevent: a null hurdle multiple does not stop a trade, it
+    prices one at zero. The raise becomes `ERROR` at the orchestrator, and
+    `ERROR` blocks.
+    """
+    config = load_config(complete, load_env=False)
+    with pytest.raises(ConfigKeyError):
+        config.get(missing)
+
+
+def test_a_missing_key_message_names_the_key_and_what_was_available(complete: Path) -> None:
+    config = load_config(complete, load_env=False)
+    with pytest.raises(ConfigKeyError) as caught:
+        config.get("safety.max_drawdown")
+    message = str(caught.value)
+    assert "safety.max_drawdown" in message
+    assert "max_drawdown_pct" in message
+    assert message[0] != "'", "KeyError's repr rendering would mangle a multi-line message"
+
+
+def test_get_has_no_default_parameter() -> None:
+    """`dict.get`-shaped signatures invite `config.get(key, fallback)`, and a
+    fallback here is a guessed answer to how much money is at risk."""
+    import inspect
+
+    parameters = list(inspect.signature(Config.get).parameters)
+    assert parameters == ["self", "dotted_key"]

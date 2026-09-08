@@ -21,11 +21,14 @@ from the loop counter that wrote them. Those two numbers are equal only when the
 bug, which is the entire reason for reading them back.
 
 **The two runs deliberately overlap in `cycle_id`, and that overlap is load-bearing.**
-`cycle_id` restarts at 1 with each process. If the two seeded runs used disjoint
-`cycle_id` ranges, then ordering the outage by `cycle_id` would give the same answer as
-ordering it by `ts`, and the Phase 3 criterion that exists specifically to prove "order
-by `ts`, never by `cycle_id`" would pass against an implementation that orders by the
-wrong column. Do not tidy the run IDs apart. It would silently disarm the test.
+`cycle_id` restarts at 1 with each process, so `run_b`'s cycles land back down in
+`run_a`'s opening minutes, and `block_records` carries rows on both sides of the
+collision — `(run_a, 4)` and `(run_b, 4)` are different ticks hours apart. Two separate
+bugs survive a database without that overlap: a counter that orders by `cycle_id`
+instead of `ts` reads the outage backwards, and one that groups ticks by `cycle_id`
+alone merges two runs into one. The seed exists to fail both, and
+`SeedFixtures.cycle_ids_shared_across_runs` names the values that do it. Do not tidy the
+run IDs apart, and do not renumber the opening ticks. It would silently disarm the test.
 
 **Nothing here is real.** No live mode, no key, no real balance, no real fee. Every
 number is fabricated for a fixture. In particular the fee fractions below are **not a fee
@@ -45,6 +48,7 @@ as `SeedFixtures.seed_now`; a Phase 3 test sets `context.now` from it.
 from __future__ import annotations
 
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
@@ -94,6 +98,16 @@ SEED_ANCHOR: Final = datetime(2026, 9, 8, 12, 0, 0, tzinfo=UTC)
 SEED_ANCHOR_TS: Final = to_micros(SEED_ANCHOR)
 
 MICROS_PER_MINUTE: Final = 60 * 1_000_000
+
+#: Loop ticks per decision bar — 15 one-minute ticks, from `architecture-context.md`.
+#: Candidates are born only when a bar closes, so rejections land on these ticks and
+#: block records stay off them.
+DECISION_BAR_TICKS: Final = 15
+
+#: How many opening ticks are held clear of trading activity so the `cycle_id`
+#: collision between the two runs has somewhere to live. Fewer than one decision bar,
+#: and well below the first trade close, so nothing else has to move to accommodate it.
+RESERVED_TICKS: Final = DECISION_BAR_TICKS // 2
 
 #: Specified in `config/default.yaml`, not invented here: one full decision bar.
 FIXTURE_SHAPE_BLOCK_LIMIT: Final = 15
@@ -301,6 +315,10 @@ class SeedFixtures:
     order_count: int
     equity_snapshot_count: int
     block_record_count: int
+    #: `cycle_id` values that appear in `block_records` under more than one `run_id`.
+    #: Spec 11 requires these: they are what make "a tick is `(run_id, cycle_id)`, never
+    #: `cycle_id` alone" a claim this database can falsify rather than merely state.
+    cycle_ids_shared_across_runs: tuple[int, ...] = field(default=())
     warnings: tuple[str, ...] = field(default=())
 
 
@@ -344,10 +362,17 @@ class _SeedBuilder:
         self.n_ticks = max(720, outage_len + 240)
         self.outage_start = self.n_ticks - outage_len
         # The daemon dies part-way through the outage and comes back. That is what puts
-        # the run boundary *inside* the outage, which is what makes the two runs overlap
-        # in `cycle_id` and the `ts` ordering load-bearing.
+        # the run boundary *inside* the outage, and what makes the `ts` ordering
+        # load-bearing: `run_b` restarts at `cycle_id` 1 while `run_a` is in the
+        # seven-hundreds, so a `cycle_id`-ordered walk never reaches the newer ticks.
         self.run_boundary = self.outage_start + outage_len // 2
         self.error_window_ticks = max(1, thresholds.error_rate_window_s // 60)
+        # `run_b` restarts at cycle 1, so the only ticks in `run_a` whose `cycle_id`s it
+        # can collide with are the opening few. Those are kept clear of entries and
+        # exits, because a block record on a tick that placed an order is a timeline
+        # that could not have happened. Bounded well below the first close so a trade
+        # can never be clamped to open after it closed.
+        self.reserved_opening_ticks = min(self.n_ticks - self.run_boundary, RESERVED_TICKS)
 
         self.run_a = "seed-run-0001"
         self.run_b = "seed-run-0002"
@@ -358,6 +383,10 @@ class _SeedBuilder:
     def ts(self, tick: int) -> int:
         """Microseconds for a tick index. The last tick is exactly the seed's "now"."""
         return SEED_ANCHOR_TS - (self.n_ticks - 1 - tick) * MICROS_PER_MINUTE
+
+    def tick_of(self, moment: int) -> int:
+        """Inverse of :meth:`ts`, for placing a block record relative to a written row."""
+        return (moment - self.ts(0)) // MICROS_PER_MINUTE
 
     def run_id_for(self, tick: int) -> str:
         return self.run_a if tick < self.run_boundary else self.run_b
@@ -376,10 +405,10 @@ class _SeedBuilder:
             store.migrate()
             with store.transaction():
                 self._write_runs(store)
-                trades, positions, _orders = self._write_trading_history(store)
+                trades, positions, orders = self._write_trading_history(store)
                 self._write_equity(store, trades, positions)
-                self._write_blocks(store)
-                self._write_rejections(store)
+                blocked = self._write_blocks(store, self._trading_ticks(positions, orders))
+                self._write_rejections(store, blocked)
                 self._write_leaderboard(store)
                 self._write_commands(store)
             return self._derive_fixtures(store)
@@ -492,7 +521,10 @@ class _SeedBuilder:
     ) -> tuple[TradeRow, PositionRow, OrderRow, OrderRow]:
         pair, base, quote, reference = _PAIRS[index % len(_PAIRS)]
         hold_ticks = self.rng.randint(120, 700)
-        open_tick = max(0, close_tick - hold_ticks)
+        # Clamped to the reserved opening ticks, not to zero: a long hold would otherwise
+        # pile every early entry onto tick 0, and those are the only ticks whose
+        # `cycle_id`s are low enough for `run_b` to collide with.
+        open_tick = max(self.reserved_opening_ticks, close_tick - hold_ticks)
         opened_at = self.ts(open_tick)
         closed_at = self.ts(close_tick)
 
@@ -828,9 +860,32 @@ class _SeedBuilder:
 
     # -- block records ----------------------------------------------------
 
-    def _write_blocks(self, store: StoreClient) -> None:
+    def _trading_ticks(
+        self, positions: Sequence[PositionRow], orders: Sequence[OrderRow]
+    ) -> frozenset[int]:
+        """Ticks on which the seed placed, filled, cancelled, opened or closed something.
+
+        A blocked tick skips the opportunity chain and holds the manage chain, so an
+        order placed or a position opened on a tick that also carries a block record is
+        a timeline that could not have happened. The block writer takes this set and
+        stays off it. It is derived from the rows actually written rather than from the
+        arithmetic that placed them, because the two agree only when there is no bug.
+        """
+        moments: list[int] = []
+        for position in positions:
+            moments.extend(m for m in (position.opened_at, position.closed_at) if m is not None)
+        for order in orders:
+            moments.extend(m for m in (order.placed_at, order.closed_at) if m is not None)
+        return frozenset(self.tick_of(moment) for moment in moments)
+
+    def _write_blocks(self, store: StoreClient, trading_ticks: frozenset[int]) -> frozenset[int]:
         """Build the tick-to-blockers map, then write it with `is_primary` on the first
-        blocker of each tick in guard-chain order."""
+        blocker of each tick in guard-chain order.
+
+        Returns the ticks that ended up blocked, so the rejection writer can stay off
+        them: a guard block skips the opportunity chain, so a blocked tick never had a
+        candidate to refuse.
+        """
         per_tick: dict[int, list[tuple[str, BlockStatus, str]]] = {}
 
         def add(tick: int, engine: str, status: BlockStatus, reason: str) -> None:
@@ -883,10 +938,21 @@ class _SeedBuilder:
                 error_slots.append((tick, engine))
         needed = self.thresholds.error_row_count
         if needed > len(error_slots):
+            # Not a seed limitation to work around: `block_records` holds one row per
+            # blocker per tick, so the number of ERROR rows that can exist inside the
+            # window is bounded by ticks x engines whatever writes them. Say so, with
+            # both ceilings — this seed's, and the one the guard chain itself imposes —
+            # rather than advising the operator to lower a trading threshold to suit a
+            # fixture.
             raise ValueError(
-                f"cannot place {needed} ERROR rows in a {self.error_window_ticks}-tick "
-                f"window with {len(_ERROR_ENGINES)} engines; raise the window or lower "
-                "safety.max_errors_in_window"
+                f"cannot place {needed} ERROR rows inside the {self.error_window_ticks}-tick "
+                f"error window: block_records carries at most one row per engine per tick, "
+                f"and this seed errors {len(_ERROR_ENGINES)} engines, so its ceiling is "
+                f"{len(error_slots)}. safety.max_errors_in_window="
+                f"{self.thresholds.max_errors_in_window} needs {needed}. The whole guard "
+                f"chain is {len(GUARD_CHAIN_ORDER)} engines, so a limit above "
+                f"{self.error_window_ticks * len(GUARD_CHAIN_ORDER)} could not be reached "
+                "by a real timeline either, and that breaker would never fire."
             )
         for tick, engine in error_slots[:needed]:
             add(tick, engine, BlockStatus.ERROR, f"{engine} raised during the tick")
@@ -903,6 +969,35 @@ class _SeedBuilder:
                 "Negative spread reported on the book",
             )
         add(early + 3, "market_sensor", BlockStatus.BLOCK, "Candle gap in the 15-minute stream")
+
+        # `cycle_id` collisions between the two runs, mandated by spec 11 and placed
+        # here rather than left to chance.
+        #
+        # `run_b` restarts at cycle 1 and only lives for the tail of the outage, so its
+        # cycle numbers sit in `run_a`'s opening minutes. Blocking a few of those opening
+        # ticks makes `(run_a, 4)` and `(run_b, 4)` both real rows in `block_records`,
+        # which is what turns "a tick is `(run_id, cycle_id)`, never `cycle_id` alone"
+        # into something a fixture can fail. Without the collision, a counter that
+        # grouped by `cycle_id` alone and a partial unique index scoped to `cycle_id`
+        # alone would both survive this database unnoticed. With it, the first counts
+        # the wrong outage and the second refuses to insert.
+        #
+        # They sit at the very start of the history, hundreds of ticks behind the
+        # terminator above, so no trailing count can reach them, and they avoid every
+        # tick that placed or closed an order.
+        run_b_cycles = self.n_ticks - self.run_boundary
+        collidable = [
+            tick
+            for tick in range(run_b_cycles)
+            if tick not in trading_ticks and tick % DECISION_BAR_TICKS != 0
+        ]
+        for tick in collidable[-4:]:
+            add(
+                tick,
+                DATA_GUARD_ENGINE,
+                BlockStatus.BLOCK,
+                "Book subscription not yet confirmed after start-up",
+            )
 
         for tick in sorted(per_tick):
             blockers = sorted(
@@ -923,18 +1018,24 @@ class _SeedBuilder:
                         updated_at=moment,
                     )
                 )
+        return frozenset(per_tick)
 
     # -- rejections -------------------------------------------------------
 
-    def _write_rejections(self, store: StoreClient) -> None:
-        """One or two per closed decision bar, on ticks the guard chain did not block.
+    def _write_rejections(self, store: StoreClient, blocked_ticks: frozenset[int]) -> None:
+        """One per closed decision bar, on ticks the guard chain did not block.
 
         A guard block skips the opportunity chain entirely, so a blocked tick never has
         a candidate to reject. Candidates are born only on a closed 15-minute bar, so
-        rejections land on every fifteenth tick.
+        rejections land on every fifteenth tick — minus the ones `_write_blocks` took,
+        which is why the blocked set is passed in rather than recomputed from the
+        outage arithmetic. The earlier episodes move when the injected thresholds move,
+        and one of them landing on a bar close is otherwise invisible.
         """
         blocked_from = self.outage_start - 1
-        for tick in range(15, blocked_from, 15):
+        for tick in range(DECISION_BAR_TICKS, blocked_from, DECISION_BAR_TICKS):
+            if tick in blocked_ticks:
+                continue
             engine, code, reason = _REJECTION_REASONS[
                 self.rng.randrange(len(_REJECTION_REASONS))
             ]
@@ -1034,7 +1135,10 @@ class _SeedBuilder:
         conn = store.connection
         warnings: list[str] = []
 
-        outage = store.stored_data_guard_outage_excluding_current_tick()
+        # `current_tick=None` on purpose: a seeded database is a finished timeline with
+        # no tick in flight, so "the trailing run of stored ticks" *is* the question.
+        # `safety` never reads it this way — it anchors the walk to its own tick.
+        outage = store.stored_data_guard_outage_excluding_current_tick(current_tick=None)
         double_blockers = tuple(
             (str(row["run_id"]), int(row["cycle_id"]))
             for row in conn.execute(
@@ -1095,6 +1199,19 @@ class _SeedBuilder:
         open_positions = tuple(p.position_id for p in store.open_positions())
         resting = tuple(o.userref for o in store.resting_orders(intent=OrderIntent.ENTRY))
 
+        shared_cycles = tuple(
+            int(row["cycle_id"])
+            for row in conn.execute(
+                """
+                SELECT cycle_id
+                FROM block_records
+                GROUP BY cycle_id
+                HAVING COUNT(DISTINCT run_id) > 1
+                ORDER BY cycle_id ASC
+                """
+            )
+        )
+
         def count(table: str) -> int:
             row = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
             return int(row["n"])
@@ -1127,6 +1244,12 @@ class _SeedBuilder:
             warnings.append("no open position")
         if not resting:
             warnings.append("no resting entry order")
+        if not shared_cycles:
+            warnings.append(
+                "no cycle_id appears under two run_ids in block_records, so nothing here "
+                "distinguishes a tick keyed on (run_id, cycle_id) from one keyed on "
+                "cycle_id alone"
+            )
 
         return SeedFixtures(
             db_path=self.db_path,
@@ -1148,5 +1271,6 @@ class _SeedBuilder:
             order_count=count("orders"),
             equity_snapshot_count=count("equity_snapshots"),
             block_record_count=count("block_records"),
+            cycle_ids_shared_across_runs=shared_cycles,
             warnings=tuple(warnings),
         )

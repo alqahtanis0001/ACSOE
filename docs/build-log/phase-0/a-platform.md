@@ -161,3 +161,238 @@ passes on the machine that produced it is a broken criterion, and this is the me
 produces exactly that. It also threatens C's `tests/fixtures/labelled_sample.parquet`: Parquet
 is binary, git's text/binary heuristic is a guess, and a wrong guess corrupts the file silently
 rather than failing loudly.
+
+### The `Config` Protocol had two members and the model implemented one
+
+**Agent:** A · **Task:** spec 09 · **Date:** 2026-09-08
+
+**What happened.** `acsoe engine` could not be typed against the real orchestrator.
+`mypy --strict` reported `Argument "config" to "Orchestrator" has incompatible type
+"acsoe.platform.config.Config"; expected "acsoe.core.contracts.Config"`. The model built for
+spec 07 satisfied the Protocol's `mode` property and nothing else — `core/contracts.py` also
+declares `get(dotted_key, /)`, a dotted-path accessor, and the model had no `get` at all.
+
+**Why.** Spec 07 was built before `core/contracts.py` existed, against the key list in spec 06.
+Every key in `config/default.yaml` was covered, so the model looked complete and the tests
+passed; what was missing was not a key but the *access shape* the lead had chosen for engines
+to reach one. Nothing failed until an object crossed the seam, which is the point at which a
+structural Protocol is actually checked.
+
+**Fix.** Added `Config.get` in `platform/config.py`, walking sections and mapping values alike
+so both `"paper.starting_balances"` and `"paper.starting_balances.USD"` resolve, and matching a
+section field by its YAML name as well as its Python name so `"seeds.global"` reaches a field
+Python will not let anyone name `global`. It **raises on a miss and has no default parameter**.
+That is the whole reason the method is worth writing carefully: a `dict.get`-shaped signature
+invites `config.get(key, fallback)`, and a fallback here is a guessed answer to how much money
+is at risk. The exception is `ConfigKeyError`, deliberately distinct from `ConfigError` — the
+latter means the file is invalid and the process must not start; this means running code asked
+for a key that does not exist. It subclasses `KeyError`, so an engine reaching for a threshold
+it never had gets an exception the orchestrator converts to `ERROR`, and `ERROR` blocks.
+
+**Consequence.** `tests/platform/test_config.py` now asserts `isinstance(config,
+contracts.Config)` against the runtime-checkable Protocol, so the next divergence between the
+lead's shape and my implementation fails a test rather than waiting for the next object to
+cross the seam. `ConfigKeyError.__str__` is overridden because `KeyError` renders its argument
+with `repr`, which would wrap the multi-line "here is what was available" diagnostic in quotes
+and escape every newline in it — the message is the entire value of the exception, so having it
+arrive mangled would have defeated the point of writing one.
+
+### Decision: the dispatcher imports each command module lazily
+
+**Agent:** A · **Task:** spec 09 · **Date:** 2026-09-08
+
+**Options.** `cli/main.py` imported `engine`, `console` and `research` at module scope and hung
+each subcommand's handler off `set_defaults`. That is the ordinary argparse shape and it works.
+The alternative is to resolve the handler after parsing, importing only the chosen module.
+
+**Chose.** Lazy. `resolve_handler(command)` matches on the subcommand name and imports inside
+the branch.
+
+**Because.** Architecture invariant 5 says the live loop never imports from `research/`. Today
+that is trivially true because `cli/research.py` imports nothing. From Phase 4 it registers
+engines 20 `tournament` and 23 `backtest`, so it will import from `acsoe.research` — and an
+eager dispatcher would then pull `research/` into the daemon's process on every `acsoe engine`.
+Nothing would fail. That is precisely the problem: an invariant nobody can observe being broken
+is one that gets broken. Making the import graph enforce it costs about fifteen lines now and
+nothing later, whereas noticing it in Phase 4 means editing the entry point during the phase
+that is trying to land the offline chain.
+
+**Cost.** The handler is no longer discoverable from the parser, so `main()` dispatches on
+`args.command` rather than calling an attribute argparse filled in. `tests/cli/test_entrypoints.py`
+asserts the property directly, in a subprocess — this process has already imported all three
+modules, so an in-process `sys.modules` check would pass for the wrong reason.
+
+### The console health check cannot use `TestClient`
+
+**Agent:** A · **Task:** spec 09 · **Date:** 2026-09-08
+
+**What happened.** The obvious way to assert that `acsoe console` serves a health response is
+`fastapi.testclient.TestClient(app).get("/health")`. It raises `NetworkAccessError` from C's
+network guard.
+
+**Why.** `TestClient` is an `httpx.Client` subclass and does not override `send`, and the guard
+in `tests/conftest.py` patches `httpx.Client.send` for every test. The call never leaves the
+process — `TestClient` uses an ASGI transport — but the guard sits above the transport and
+cannot tell an in-process ASGI request from a real one. Reaching around it would have meant
+relaxing the guard for convenience, which spec 14 forbids in as many words, and a guard that is
+slightly over-broad is the correct trade for a system whose tests must never touch Kraken.
+
+**Fix.** `asgi_get` in `tests/cli/test_entrypoints.py` drives the ASGI callable directly: it
+builds an HTTP scope, awaits `app(scope, receive, send)`, and reassembles the status and body
+from the messages the app sends back. No socket, no httpx, nothing to relax. It exercises the
+same routing and response path uvicorn would, which is more than calling the endpoint function
+would have proved.
+
+**Consequence.** Worth knowing before Phase 1, when C tests the real console: the same
+constraint applies to every HTTP assertion in this repository, and the twenty-line driver is
+the answer rather than an exemption.
+
+### `--ticks 3` would have made the test suite take two minutes
+
+**Agent:** A · **Task:** spec 09 · **Date:** 2026-09-08
+
+**What happened.** The natural test of the daemon is `acsoe engine --ticks 3`. `run_loop` sleeps
+`timeframes.loop_tick_s` — sixty seconds — *between* ticks, so that is a two-minute test. It is
+not a bug in the loop: the sleep is the loop tick, and a daemon that ticked without waiting
+would hammer the exchange.
+
+**Fix.** The end-to-end test through the dispatcher uses `--ticks 1`, which breaks before the
+first sleep. Multi-tick behaviour is exercised by calling `run_loop` directly with
+`tick_seconds=0.0`, which is the seam that exists precisely so cadence is set by the caller.
+Deliberately did **not** add a `--tick-seconds` flag: an operator-visible knob that makes the
+daemon spin faster than the exchange expects is a worse thing to have in the CLI than a
+slightly less convenient test.
+
+**Consequence.** The shutdown property that actually matters — that a stop request never lands
+inside a tick — is tested by subclassing the real `Orchestrator`, setting the stop event from
+inside `tick()`, and asserting exactly one tick completed. That is the manage chain's
+guarantee: it runs every tick in every mode and is what records that an open position was
+watched, so a tick abandoned halfway is a decision taken and never written down.
+
+### `acsoe console` no longer carries a fallback application
+
+**Agent:** A · **Task:** spec 09 · **Date:** 2026-09-08
+
+**What happened.** While `src/acsoe/console/app.py` did not exist, `cli/console.py` carried its
+own `build_placeholder_app` and fell back to it on `ImportError`. C's module landed during the
+session and the fallback was deleted rather than kept as a safety net.
+
+**Why.** Two applications that both answer `/health` mean a health endpoint that proves nothing:
+`acsoe console` would look identical whether it was serving the console or serving the thing
+that stands in for the console. Keeping it would also have been dead code the moment C's file
+existed, and `console/` is C's path — a placeholder living in `cli/` was only ever justified by
+the other file's absence.
+
+**Fix.** `cli/console.py` imports `create_app` at module scope. If `acsoe.console.app` is ever
+missing, the command fails loudly at import rather than quietly serving something else. The
+import shape was agreed with C directly before either of us wrote to it: `create_app(config) ->
+FastAPI`, taking the `Config` **Protocol** from `core/contracts.py` rather than my concrete
+model, so `console/` does not depend on `platform/`.
+
+### The null count in `platform/config.py` said ten and the file has nine
+
+**Agent:** A · **Task:** spec 09 · **Date:** 2026-09-08
+
+**What happened.** Two docstrings in `platform/config.py` — the module header and
+`_refuse_nulls` — said `config/default.yaml` carries ten OPERATOR REQUIRED nulls and that the
+loader reports "all ten" at once. It carries nine.
+
+**Why.** `safety.error_rate_window_s` was originally null and was set to `3600` after B pointed
+out that `architecture-context.md` specifies the trailing hour, so the value was specified all
+along and never operator-required. The code was correct — it counts what it finds — but the
+prose was written when the answer was ten and nobody re-read it when the tenth key was filled.
+
+**Fix.** Both corrected to nine. `AGENTS.md` requires that an implementation contradicting a
+context file be fixed in the same change; this is the same defect one level down, in a
+docstring rather than a document. Recording it because it is exactly the class of drift
+`docs_vocabulary` exists to catch and cannot: a bare count is not a distinctive token, so no
+grep would ever have found it.
+
+**Consequence.** `tests/cli/test_entrypoints.py` asserts that the refusal message names all
+nine keys **and** that it does not name `safety.error_rate_window_s`. Listing a key the
+operator does not have to supply is not a cosmetic error — it trains them to skim the list, and
+the list is the only thing standing between a fresh clone and a daemon trading on numbers
+nobody chose.
+
+### A test that encoded a transitional state as a permanent assertion
+
+**Agent:** A · **Task:** specs 07, 09 · **Date:** 2026-09-08
+
+**What happened.** The operator supplied all nine OPERATOR REQUIRED values and three of my
+tests went red:
+`test_engine_refuses_the_committed_config_and_names_the_unset_keys`,
+`test_console_refuses_the_committed_config` and
+`test_default_yaml_refuses_to_load_and_names_every_operator_key`. Each asserted that
+`config/default.yaml` **refuses to load**. With zero nulls in the file, it loads.
+
+**Why.** The assertion was true on the day it was written and was never going to stay true. It
+conflated two different things: *the behaviour* — a null OPERATOR REQUIRED key must stop the
+process, which is permanent — and *the state of one file on one day* — the shipped config
+happens to carry nine of them, which was always transitional. Writing the behaviour test
+against the shipped file was convenient (the fixture already existed, committed) and that
+convenience is exactly what welded the two together. The failure direction is worth naming: the
+tests broke because the config became **more** valid, which is not a direction anyone writes a
+test expecting to be pushed in.
+
+**Fix.** Moved the assertion rather than deleting it. The refusals now run against a config the
+test fabricates — `unset_operator_config` in `tests/cli/test_entrypoints.py`, `with_nulled()` in
+`tests/platform/test_config.py` — built by taking the shipped file and setting the nine keys
+back to `null`. The shipped file acquired the opposite assertions: it loads cleanly, `mode` is
+`paper`, and each of the nine parses to its expected type. Nothing in `platform/config.py`
+changed except two stale docstrings; `_refuse_nulls` still counts what it finds and never held a
+list of key names, which is why zero nulls needed no code change at all.
+
+**Consequence.** Three properties are now separately testable and all three are asserted: a null
+OPERATOR REQUIRED key stops the process **by name** (nine parametrised cases, one per key, plus
+the all-nine-at-once message); a null **anywhere** stops the process, so the machinery keeps its
+teeth with zero nulls shipped; and the committed file is known-good. The general lesson, which
+is the reason this is in the log: **assert the behaviour against a fixture you control, and
+assert the committed artefact's state separately.** A test that reads a real file to prove a
+rule will pin that file's contents whether or not anyone meant it to.
+
+### The duplicated key list fired, in the direction nobody expected
+
+**Agent:** A · **Task:** spec 09 · **Date:** 2026-09-08
+
+**What happened.** `tests/cli/test_entrypoints.py` and `tests/platform/test_config.py` each hold
+their own copy of the nine operator keys, deliberately unshared, so that a tenth key would make
+both files fail loudly rather than silently inherit a value chosen elsewhere. It worked — but it
+fired on the operator *filling the nine in*, not on a tenth being added.
+
+**Why.** The duplication protects against a **change to the set**, and a value arriving is a
+change to the set as surely as a key arriving. That is the mechanism behaving correctly; my note
+in the previous session's progress file predicted only the addition case.
+
+**Consequence.** With zero nulls in the shipped file, one direction of that signal was lost: the
+lead can now add a tenth key **and supply a value for it**, and nothing would have noticed.
+`test_the_file_marks_exactly_these_nine_keys_as_the_operator_s` restores it by scanning the
+shipped file for its `Operator-chosen` marker and comparing the set to the tests' own list. That
+marker is a documented convention — the header of `config/default.yaml` states it — not an
+inference from formatting. The other direction still needs no marker: a tenth key added as
+`null` survives the overlay in `complete_config_dict()` / `startable_config` and takes every test
+using those fixtures down at once.
+
+### A failing test bound a real socket
+
+**Agent:** A · **Task:** spec 09 · **Date:** 2026-09-08
+
+**What happened.** While `test_console_refuses_the_committed_config` was red, it did not merely
+fail. `cli_main.main(["--config", DEFAULT_YAML, "console"])` no longer returned 2 at the config
+check, so it fell through the whole entry point into `uvicorn.run` and tried to bind
+127.0.0.1:8765 from inside the test suite. It surfaced as `SystemExit: 3` and an
+`[Errno 10048] only one usage of each socket address` in the captured stderr.
+
+**Why.** The test asserted a return code on a call with a side effect at the far end of it. As
+long as the refusal happened, the side effect was unreachable, so the assertion and the guard
+against the side effect were the same line — and when the assertion stopped holding, both went
+at once.
+
+**Fix.** `test_console_accepts_the_committed_config` stubs `uvicorn.run` before calling the
+entry point, captures the app it was handed, and drives `/health` through it with the existing
+`asgi_get` driver. Nothing in this repository may bind a port or reach a socket to prove a
+config was accepted.
+
+**Consequence.** Worth generalising before Phase 1, when C tests the real console: a test that
+asserts a *refusal* from a function whose success path starts a server needs the server stubbed
+regardless, because the refusal is the only thing standing between the test and the server, and
+tests exist precisely for the days that refusal stops happening.

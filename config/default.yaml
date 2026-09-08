@@ -13,6 +13,11 @@
 # not invent one. The loader must REFUSE TO START while any of them is null,
 # naming the key. That is fail-closed and deliberate — a plausible default here
 # is a number that silently decides how much money is at risk.
+#
+# As of 2026-09-08 there are none left: the operator supplied all nine. They are
+# marked "Operator-chosen" and are PROVISIONAL — starting values to make Phase 3
+# runnable, to be revised once the economics are measured rather than assumed.
+# The refusal machinery stays; it is what protects the tenth such key.
 
 mode: paper                      # paper | live | replay. Phase 0 accepts paper only:
                                  # platform/live_guard.py is a Phase 8 deliverable, and
@@ -45,35 +50,34 @@ safety:                          # Engine 17, the circuit breaker. Guard chain, 
                                     # long enough that a websocket reconnect never
                                     # liquidates the account, short enough that nothing
                                     # is carried through a second bar on bad data.
-  max_drawdown_pct: null            # OPERATOR REQUIRED — invariant 14 says "its configured
-                                    # drawdown limits" and never gives a number.
-  max_consecutive_losses: null      # OPERATOR REQUIRED — same sentence, same problem.
+  max_drawdown_pct: 0.10            # Operator-chosen 2026-09-08. Invariant 14's "configured
+                                    # drawdown limits". Provisional — see the tracker.
+  max_consecutive_losses: 5         # Operator-chosen 2026-09-08. At a ~61% break-even win
+                                    # rate a 5-loss run is roughly a 1-in-100 event.
   error_rate_window_s: 3600         # architecture-context.md specifies "the trailing hour"
                                     # for the error rate, so this one is specified, not
                                     # operator-required. B caught that it was wrongly null.
-  max_errors_in_window: null        # OPERATOR REQUIRED — how many errors in that hour trip
-                                    # the breaker. The window is specified; the count is not.
+  max_errors_in_window: 20          # Operator-chosen 2026-09-08. 20 engine errors inside the
+                                    # 3600s window trips the breaker.
 
 trading:
-  hurdle_multiple: null          # OPERATOR REQUIRED — invariant 5 is
-                                 # `net_edge > hurdle_multiple x friction` and never
-                                 # sets the multiple. It decides how selective the
-                                 # system is; a guessed value is a guessed strategy.
-  risk_fraction_per_trade: null  # OPERATOR REQUIRED — invariant 6, "the configured
-                                 # fraction of total account equity".
-  max_concurrent_positions: null # OPERATOR REQUIRED — invariant 6, "a configured maximum".
-  entry_unfilled_window_s: null  # OPERATOR REQUIRED — invariant 8, "the configured window"
-                                 # after which an unfilled post-only entry is cancelled.
-  base_reporting_currency: null  # OPERATOR REQUIRED — invariant 7. Every PnL, equity and
-                                 # risk limit is expressed in it. Probably a fiat, but
-                                 # "probably" is not a specification.
+  hurdle_multiple: 1.5           # Operator-chosen 2026-09-08. Invariant 5 requires
+                                 # net_edge > hurdle_multiple x friction, so a candidate
+                                 # needs expected_move > 2.5 x friction. At tier 1 that is
+                                 # 3.125%, above the 3% target barrier — nothing clears the
+                                 # cost gate at tier 1 by design. See the tracker.
+  risk_fraction_per_trade: 0.01  # Operator-chosen 2026-09-08. 1% of total equity.
+  max_concurrent_positions: 3    # Operator-chosen 2026-09-08. Note the balance binds first
+                                 # at $5,000: one position is ~$3,333 notional. See tracker.
+  entry_unfilled_window_s: 300   # Operator-chosen 2026-09-08. 5 minutes, a third of a
+                                 # decision bar, then cancel and abandon. Never chase.
+  base_reporting_currency: USD   # Operator-chosen 2026-09-08.
   allow_crypto_quoted: false     # invariant 7. Crypto-quoted pairs are a second
                                  # directional bet the system did not choose to make.
 
 paper:
-  starting_balances: null        # OPERATOR REQUIRED — invariant 2's paper-mode fallback,
-                                 # a currency-to-amount map, e.g. {USD: "1000.00"}.
-                                 # Amounts are quoted strings, parsed as Decimal.
+  starting_balances: {USD: "5000.00"}   # Operator-chosen 2026-09-08. Currency-to-amount
+                                 # map; amounts are quoted strings, parsed as Decimal.
 
 backtest:
   training_window_days: 90       # Locked decision: rolling 90-day cap

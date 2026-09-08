@@ -311,9 +311,8 @@ def test_writer_appends_and_never_truncates(tmp_path: Path) -> None:
 def test_writer_refuses_to_write_a_malformed_line(tmp_path: Path) -> None:
     """Validation happens before the bytes hit the file, because an append-only
     recording cannot be corrected afterwards."""
-    with record.JsonlWriter(tmp_path) as writer:
-        with pytest.raises(record.SchemaError):
-            writer.write({"v": 1, "kind": "tick"})
+    with record.JsonlWriter(tmp_path) as writer, pytest.raises(record.SchemaError):
+        writer.write({"v": 1, "kind": "tick"})
     assert not list(tmp_path.glob("*.jsonl"))
 
 

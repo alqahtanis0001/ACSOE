@@ -25,7 +25,12 @@ checks, reporting PENDING until the thing each judges is built.
      subprocesses and reports their combined result.
    - `is_gate_matches_registry` — asserts every registered engine's `is_gate` matches the
      Gate column of the registry table in `context/engine-contracts.md`, including the
-     offline-chain engines assembled in `cli/research.py`. PENDING while no engine exists.
+     offline-chain engines assembled in `cli/research.py`. **On an empty registry this is a
+     vacuous PASS, not PENDING** — zero engines matching zero rows is a satisfied assertion,
+     not an absent one, and Phase 0 registers no engines by design, so PENDING here would
+     make the phase structurally impossible to complete. The message must state the count
+     (`0 engines registered; 0 mismatches`) so a vacuous pass can never be mistaken for a
+     real one.
 2. Each criterion reports PENDING, not FAIL, when its subject does not exist yet: no
    `bootstrap.py`, no `db/migrations/`, no seeded database, no fixture file.
 3. The temporary database goes in a pytest `tmp_path` or the system temp directory — never

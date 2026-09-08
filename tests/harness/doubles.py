@@ -85,6 +85,25 @@ class MappingConfig:
     def __init__(self, data: Mapping[str, Any]) -> None:
         self._data = dict(data)
 
+    @property
+    def mode(self) -> Any:
+        """Declared explicitly, not reached through `__getattr__`.
+
+        This looks redundant - `__getattr__` already answers `config.mode` - and it
+        is not. Since Python 3.12, `isinstance(x, SomeRuntimeCheckableProtocol)`
+        resolves each member with `inspect.getattr_static`, which walks the class
+        dictionary and the MRO and deliberately never calls `__getattr__`. A double
+        that supplies `mode` dynamically therefore *works* everywhere it is used and
+        still reports `isinstance(config, Config) is False`, with no error to read.
+
+        `mode` is also the one field `core/contracts.py` pins by name, so writing it
+        out is honest rather than merely expedient.
+        """
+        try:
+            return self._data["mode"]
+        except KeyError as exc:
+            raise AttributeError("config has no key 'mode'") from exc
+
     def __getattr__(self, name: str) -> Any:
         try:
             value = self._data[name]
@@ -95,11 +114,28 @@ class MappingConfig:
     def __contains__(self, name: str) -> bool:
         return name in self._data
 
-    def get(self, dotted: str, default: Any = None) -> Any:
+    def get(self, dotted: str, /) -> Any:
+        """Look a value up by dotted path. **Raises** when the key is absent.
+
+        Raising is the contract, not an opinion: `core/contracts.py` says "a missing
+        configuration key is a defect, and an engine silently receiving `None` for a
+        threshold is exactly the failure this project refuses to allow". An earlier
+        version of this double took a `default` and returned it, which made the fake
+        kinder than the real `platform/config.py` - and a fake kinder than reality
+        hides fail-closed bugs, which is the one thing a test double must never do.
+
+        A key that is *present* and `null` still returns `None`. That is a different
+        state and deliberately not an error: the lead writes OPERATOR REQUIRED
+        thresholds as `null`, and "the operator has not decided yet" is not the same
+        as "this key does not exist".
+        """
         node: Any = self._data
-        for part in dotted.split("."):
+        for index, part in enumerate(dotted.split(".")):
             if not isinstance(node, Mapping) or part not in node:
-                return default
+                reached = ".".join(dotted.split(".")[:index]) or "(root)"
+                raise KeyError(
+                    f"config has no key {dotted!r}; {part!r} is not present under {reached}"
+                )
             node = node[part]
         return node
 

@@ -13,9 +13,14 @@ which implements the three switches of invariant 1, is a Phase 8 deliverable.
 Until it exists the loader refuses to start on any other mode. The absence of the
 guard is not permission, and no code path may promote paper to live implicitly.
 
-**Nulls.** ``config/default.yaml`` writes ten keys as ``null`` and marks them
-OPERATOR REQUIRED: the context files name them and value none of them, and every
-one is trading behaviour. A null is refused, by name, rather than defaulted.
+**Nulls.** A key written as ``null`` in ``config/default.yaml`` is marked OPERATOR
+REQUIRED: the context files name it and value it nowhere, and it is trading
+behaviour, so nobody may invent one. It is refused by name rather than defaulted.
+The shipped file carried nine such keys until 2026-09-08 and now carries none —
+the operator supplied all nine, and they are provisional starting values subject
+to revision once Phase 3 measures the economics. This code is unchanged by that
+and must stay so: it counts what it finds, the tenth such key is why it exists,
+and a withdrawn value has to stop the process exactly as an unsupplied one does.
 
 **Floats.** Every money-valued key is a ``Decimal``. YAML parses ``0.03`` as a
 float, so the conversion goes through ``Decimal(str(value))`` — ``str`` of a float
@@ -55,6 +60,25 @@ MAX_FLOAT_SIGNIFICANT_DIGITS: Final = 15
 
 class ConfigError(RuntimeError):
     """The configuration is invalid and the process must not start."""
+
+
+class ConfigKeyError(KeyError):
+    """No such configuration key.
+
+    Distinct from :class:`ConfigError` on purpose. ``ConfigError`` means the file
+    is invalid and the process must not start; this means running code asked for
+    a key that does not exist, which is a defect in that code rather than in the
+    operator's file. It is a ``KeyError`` because a failed lookup is what it is,
+    so an engine that reaches for a threshold it never had gets an exception the
+    orchestrator turns into ``ERROR`` — and ``ERROR`` blocks. Fail closed.
+
+    ``__str__`` is overridden because ``KeyError`` renders its argument with
+    ``repr``, which would wrap a multi-line diagnostic in quotes and escape every
+    newline in it.
+    """
+
+    def __str__(self) -> str:
+        return str(self.args[0]) if self.args else ""
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +303,54 @@ class Config(BaseModel):
             )
         return self
 
+    def get(self, dotted_key: str, /) -> Any:
+        """Look up a value by dotted path, e.g. ``"safety.max_consecutive_data_blocks"``.
+
+        The second half of the ``Config`` Protocol in ``core/contracts.py``. The
+        lead chose a dotted accessor over a fixed field list so that the key
+        names live in ``config/default.yaml`` and this model only, and cannot
+        drift into a third copy inside ``core/``.
+
+        **Raises on a miss. Never returns a default, and never returns None to
+        mean "absent".** An engine silently receiving ``None`` for a threshold is
+        the exact failure this project exists to prevent: a null hurdle multiple
+        does not stop a trade, it prices one at zero. The raise becomes ``ERROR``
+        at the orchestrator, and ``ERROR`` blocks.
+
+        Descends through sections and through mapping values alike, so both
+        ``"paper.starting_balances"`` and ``"paper.starting_balances.USD"``
+        resolve. Section field names are matched by their YAML name as well as
+        their Python name, which is what makes ``"seeds.global"`` work against a
+        field Python will not let anyone call ``global``.
+        """
+        if not dotted_key or not dotted_key.strip():
+            raise ConfigKeyError("a configuration key must be a non-empty dotted path")
+
+        node: Any = self
+        walked: list[str] = []
+        for part in dotted_key.split("."):
+            if isinstance(node, BaseModel):
+                found, child = _model_attribute(node, part)
+                if not found:
+                    raise ConfigKeyError(
+                        _no_such_key(dotted_key, walked, part, _model_keys(node))
+                    )
+                node = child
+            elif isinstance(node, dict):
+                if part not in node:
+                    raise ConfigKeyError(
+                        _no_such_key(dotted_key, walked, part, sorted(str(k) for k in node))
+                    )
+                node = node[part]
+            else:
+                raise ConfigKeyError(
+                    f"configuration key {dotted_key!r} is not resolvable: "
+                    f"{'.'.join(walked) or '<root>'} is a {type(node).__name__}, "
+                    f"which has no member {part!r}"
+                )
+            walked.append(part)
+        return node
+
     @classmethod
     def load(cls, path: Path | None = None) -> Config:
         """Parse and validate. Raises :class:`ConfigError` and never returns a
@@ -294,6 +366,38 @@ class Config(BaseModel):
             return cls.model_validate(raw)
         except ValidationError as exc:
             raise ConfigError(_readable(exc, config_path)) from exc
+
+
+def _model_keys(model: BaseModel) -> list[str]:
+    """The names a section answers to, as they appear in the YAML."""
+    fields = type(model).model_fields
+    return sorted(info.alias or name for name, info in fields.items())
+
+
+def _model_attribute(model: BaseModel, part: str) -> tuple[bool, Any]:
+    """Resolve one path segment against a section, by YAML name or Python name.
+
+    Both, because ``seeds.global`` is a perfectly good configuration key and
+    ``global`` is a Python keyword, so the field is ``global_`` with an alias. A
+    lookup that knew only one of the two names would work for every key in the
+    file except that one, which is precisely the kind of gap nobody finds until
+    a training run cannot read its seed.
+    """
+    fields = type(model).model_fields
+    for name, info in fields.items():
+        if part in (name, info.alias or name):
+            return True, getattr(model, name)
+    return False, None
+
+
+def _no_such_key(dotted_key: str, walked: list[str], part: str, available: list[str]) -> str:
+    location = ".".join(walked) or "<root>"
+    return (
+        f"no such configuration key: {dotted_key!r}. "
+        f"{location} has no member {part!r}. "
+        f"Available at {location}: {', '.join(available)}. "
+        "A missing configuration key is a defect, not a reason to fall back to a default."
+    )
 
 
 def load_yaml_mapping(path: Path) -> dict[str, Any]:
@@ -323,10 +427,17 @@ def _null_paths(node: Any, prefix: str = "") -> list[str]:
 def _refuse_nulls(raw: dict[str, Any], path: Path) -> None:
     """Refuse every null key by name, all of them at once.
 
-    ``config/default.yaml`` marks these OPERATOR REQUIRED: the context files name
-    the key and never specify its value, and every one is trading behaviour, so
-    nobody may invent one. Reporting all ten together rather than one per run is
-    the difference between one conversation with the operator and ten.
+    ``config/default.yaml`` marks a null key OPERATOR REQUIRED: the context files
+    name it and never specify its value, and it is trading behaviour, so nobody
+    may invent one. Reporting all of them together rather than one per run is the
+    difference between one conversation with the operator and nine — an operator
+    who has to start the daemon nine times to learn what it needs is an operator
+    who fills the last four in by guessing.
+
+    Deliberately counts what it finds rather than checking a list of key names.
+    The shipped file has carried nine of these and now carries none; a hard-coded
+    list would have had to be edited on both of those days and would be a second
+    place for the set to drift from ``config/default.yaml``.
     """
     nulls = _null_paths(raw)
     if not nulls:

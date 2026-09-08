@@ -384,7 +384,11 @@ def test_a_tick_with_two_blockers_counts_once(store: StoreClient) -> None:
         ],
     )
 
-    assert store.stored_consecutive_data_block_ticks_excluding_current_tick() == 3
+    stored = store.stored_consecutive_data_block_ticks_excluding_current_tick(
+        current_tick=("run-a", 4)
+    )
+
+    assert stored == 3
 
 
 def test_a_tick_without_a_data_guard_row_ends_the_run(store: StoreClient) -> None:
@@ -399,7 +403,11 @@ def test_a_tick_without_a_data_guard_row_ends_the_run(store: StoreClient) -> Non
         ],
     )
 
-    assert store.stored_consecutive_data_block_ticks_excluding_current_tick() == 2
+    stored = store.stored_consecutive_data_block_ticks_excluding_current_tick(
+        current_tick=("run-a", 6)
+    )
+
+    assert stored == 2
 
 
 def test_a_clean_tick_inside_a_run_ends_the_run(store: StoreClient) -> None:
@@ -416,7 +424,40 @@ def test_a_clean_tick_inside_a_run_ends_the_run(store: StoreClient) -> None:
         ],
     )
 
-    assert store.stored_consecutive_data_block_ticks_excluding_current_tick() == 2
+    stored = store.stored_consecutive_data_block_ticks_excluding_current_tick(
+        current_tick=("run-a", 6)
+    )
+
+    assert stored == 2
+
+
+def test_a_clean_tick_before_the_current_tick_ends_the_run(store: StoreClient) -> None:
+    """The hole the anchor exists to see. Ticks 4 and 5 passed the guard and wrote
+    nothing, so by tick 6 the outage is over — but the newest row in the table is still
+    tick 3, and a walk that starts there reports an outage that ended two minutes ago.
+
+    Anchored, the answer is 0 and `safety` does nothing. Unanchored, it is 3, and with a
+    real threshold in front of it that is an account liquidated over a feed hiccup that
+    already recovered. The two calls below are the same table asked two questions.
+    """
+    write_timeline(
+        store,
+        [
+            ("run-a", 1, 1_000, ["data_guard"]),
+            ("run-a", 2, 2_000, ["data_guard"]),
+            ("run-a", 3, 3_000, ["data_guard"]),
+        ],
+    )
+
+    anchored = store.stored_consecutive_data_block_ticks_excluding_current_tick(
+        current_tick=("run-a", 6)
+    )
+    unanchored = store.stored_consecutive_data_block_ticks_excluding_current_tick(
+        current_tick=None
+    )
+
+    assert anchored == 0
+    assert unanchored == 3
 
 
 def test_a_clean_first_tick_after_a_restart_ends_the_run(store: StoreClient) -> None:
@@ -432,7 +473,11 @@ def test_a_clean_first_tick_after_a_restart_ends_the_run(store: StoreClient) -> 
         ],
     )
 
-    assert store.stored_consecutive_data_block_ticks_excluding_current_tick() == 2
+    stored = store.stored_consecutive_data_block_ticks_excluding_current_tick(
+        current_tick=("run-b", 4)
+    )
+
+    assert stored == 2
 
 
 def test_a_restart_mid_outage_does_not_reset_the_count(store: StoreClient) -> None:
@@ -448,7 +493,11 @@ def test_a_restart_mid_outage_does_not_reset_the_count(store: StoreClient) -> No
         ],
     )
 
-    assert store.stored_consecutive_data_block_ticks_excluding_current_tick() == 4
+    stored = store.stored_consecutive_data_block_ticks_excluding_current_tick(
+        current_tick=("run-b", 3)
+    )
+
+    assert stored == 4
 
 
 def test_ordering_by_cycle_id_would_give_a_different_answer(store: StoreClient) -> None:
@@ -484,7 +533,12 @@ def test_ordering_by_cycle_id_would_give_a_different_answer(store: StoreClient) 
         wrong += 1
 
     assert wrong == 2
-    assert store.stored_consecutive_data_block_ticks_excluding_current_tick() == 4
+    assert (
+        store.stored_consecutive_data_block_ticks_excluding_current_tick(
+            current_tick=("run-b", 3)
+        )
+        == 4
+    )
 
 
 def test_the_method_name_says_the_current_tick_is_excluded(store: StoreClient) -> None:
@@ -497,7 +551,9 @@ def test_the_method_name_says_the_current_tick_is_excluded(store: StoreClient) -
         [("run-a", index, index * 1_000, ["data_guard"]) for index in range(1, 15)],
     )
 
-    stored = store.stored_consecutive_data_block_ticks_excluding_current_tick()
+    stored = store.stored_consecutive_data_block_ticks_excluding_current_tick(
+        current_tick=("run-a", 15)
+    )
 
     assert stored == 14
     assert stored + 1 == 15  # what `safety` acts on when this tick is also blocked
@@ -512,7 +568,9 @@ def test_the_outage_detail_reports_ticks_in_ts_order(store: StoreClient) -> None
         ],
     )
 
-    outage = store.stored_data_guard_outage_excluding_current_tick()
+    outage = store.stored_data_guard_outage_excluding_current_tick(
+        current_tick=("run-b", 2)
+    )
 
     assert outage.ticks == (("run-a", 900), ("run-b", 1))
     assert outage.first_ts == 1_000
@@ -535,12 +593,19 @@ def test_the_counter_matches_the_timeline_across_a_restart(
     blocked by something else, `C` is a clean tick that writes no row at all. The
     expected answer is read off the timeline, not recomputed by the implementation.
 
+    The pattern is the timeline through tick T-1; the current tick T is the one after
+    it, and it is what the counter is anchored to. That anchor is not decoration — a
+    clean tick writes nothing, so without knowing T the walk cannot tell "T-1 was
+    blocked" from "T-1 passed the guard and left no row", and the two answers differ
+    every time a pattern ends in `C`.
+
     One case is excluded because it is a documented blind spot rather than a bug: a
     clean tick as the *last* tick of a run leaves no trace anywhere, and after a restart
-    nothing in `block_records` can say how many ticks the dead run had. It over-counts,
-    which fires the breaker early rather than late; closing it would mean reading the
-    tick timeline from `equity_snapshots`, and `architecture-context.md` fixes this
-    counter's source as `block_records`.
+    nothing in `block_records` can say how many ticks the dead run had. `cycle_id`
+    restarts at 1, so no anchor arithmetic reaches back across the restart either. It
+    over-counts, which fires the breaker early rather than late; closing it would mean
+    reading the tick timeline from `equity_snapshots`, and `architecture-context.md`
+    fixes this counter's source as `block_records`.
     """
     boundary = min(boundary, len(pattern))
     if 0 < boundary <= len(pattern) and pattern[boundary - 1] == "C":
@@ -567,7 +632,14 @@ def test_the_counter_matches_the_timeline_across_a_restart(
                 engines = ["data_guard"] if kind == "D" else ["market_sensor"]
             write_timeline(store, [(run_id, cycle_id, (index + 1) * 1_000, engines)])
 
-        assert store.stored_consecutive_data_block_ticks_excluding_current_tick() == expected
+        # Tick T, minted by the same rule the loop uses for tick index `len(pattern)`.
+        # `safety` runs on it, and asks the store for everything through T-1.
+        current_tick = ("run-b", len(pattern) - boundary + 1)
+        stored = store.stored_consecutive_data_block_ticks_excluding_current_tick(
+            current_tick=current_tick
+        )
+
+    assert stored == expected
 
 
 # --------------------------------------------------------------------------- #

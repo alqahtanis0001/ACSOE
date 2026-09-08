@@ -24,8 +24,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import Any, Protocol
+from typing import Any
 
+from acsoe.bootstrap import build_chains
+from acsoe.core.orchestrator import Orchestrator
 from acsoe.platform.clock import Clock, SystemClock
 from acsoe.platform.config import Config, ConfigError, load_config
 from acsoe.platform.logging import bind_run, clear_cycle, configure_logging, get_logger
@@ -37,78 +39,49 @@ from acsoe.platform.paths import RuntimePaths, ensure_runtime_directories
 _SHUTDOWN_POLL_S = 0.25
 
 
-class Orchestrator(Protocol):
-    """Structural match for ``core/orchestrator.py``'s orchestrator.
-
-    Declared as a Protocol so this module can be tested against a stand-in and so
-    the daemon does not import ``core`` at module import time. ``core/`` is the
-    authority on the shape.
-    """
-
-    def tick(self) -> dict[str, Any]: ...
-
-
 @dataclass(frozen=True)
 class Clients:
     """The three clients an engine may use, per engine contract rule 4.
 
-    Phase 0 registers no engine, so nothing dereferences these. They are named
-    rather than omitted because the orchestrator's constructor takes them and
-    because an empty slot with a name is easier to fill than an argument that
-    was never there.
+    Satisfies the ``Clients`` Protocol in ``core/contracts.py``: exactly three
+    members, named ``kraken``, ``store`` and ``recorder``.
+
+    Phase 0 registers no engine, so nothing dereferences these and all three are
+    ``None``. The orchestrator's command reader ``getattr``s its way to the store
+    and skips the read when it is absent, which is why an empty set of clients
+    ticks rather than crashes. They are named rather than omitted because an
+    empty slot with a name is easier to fill than an argument that was never
+    there — engines 1 and 2 arrive in Phase 2 and the store client is B's.
     """
 
-    kraken: object | None = None
-    store: object | None = None
-    recorder: object | None = None
-
-
-class OrchestratorUnavailableError(RuntimeError):
-    """`core/orchestrator.py` or `bootstrap.py` is not built yet."""
+    kraken: Any = None
+    store: Any = None
+    recorder: Any = None
 
 
 def build_orchestrator(config: Config, clock: Clock, clients: Clients) -> Orchestrator:
-    """Import and construct the orchestrator.
+    """Construct the orchestrator over the chains ``bootstrap.py`` assembles.
 
-    Imported here rather than at module scope so that ``acsoe --help`` and
-    ``acsoe research`` work before ``core/`` exists, and so a missing orchestrator
-    is a clear message rather than an ImportError traceback from a subcommand
-    that never needed it.
+    The chains come from ``build_chains()`` rather than being composed here.
+    ``bootstrap.py`` is lead-owned and is the single place a registration
+    happens; a CLI that built its own ``Chains`` would be a second registry, and
+    two registries drift.
     """
-    try:
-        from acsoe import bootstrap
-        from acsoe.core import orchestrator as orchestrator_module
-    except ImportError as exc:  # pragma: no cover - exercised once core/ lands
-        raise OrchestratorUnavailableError(
-            "the orchestrator is not built yet: src/acsoe/core/orchestrator.py and "
-            "src/acsoe/bootstrap.py are lead-owned Phase 0 deliverables (specs 04 and 05). "
-            "The daemon will not invent a tick loop of its own."
-        ) from exc
-
-    # `bootstrap.py` owns how the chains are assembled. Prefer its builder; fall
-    # back to composing the three module-level registries if it exposes only
-    # those. Either way the assembly stays in the lead's file, not in this one.
-    builder = getattr(bootstrap, "build_chains", None)
-    if callable(builder):
-        chains: Any = builder()
-    else:
-        chains = bootstrap.Chains(
-            guard=bootstrap.GUARD_CHAIN,
-            opportunity=bootstrap.OPPORTUNITY_CHAIN,
-            manage=bootstrap.MANAGE_CHAIN,
-        )
-
-    built: Any = orchestrator_module.Orchestrator(
+    return Orchestrator(
         config=config,
         clock=clock,
         clients=clients,
-        chains=chains,
+        chains=build_chains(),
+        logger=get_logger("acsoe.orchestrator"),
     )
-    return built
 
 
 def _install_signal_handlers(stop: threading.Event) -> None:
-    def handle(signum: int, _frame: FrameType | None) -> None:
+    def handle(_signum: int, _frame: FrameType | None) -> None:
+        # Neither argument is used: the handler's whole job is to flip the flag
+        # the loop checks between ticks. Both carry a leading underscore because
+        # `signal.signal` calls the handler positionally with exactly two
+        # arguments, so the signature is fixed and cannot be narrowed.
         stop.set()
 
     for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
@@ -151,17 +124,21 @@ def run_loop(
     completed = 0
     while not stop.is_set():
         try:
-            orchestrator.tick()
+            state = orchestrator.tick()
         except Exception:
-            # The orchestrator converts an engine failure into ERROR itself. An
-            # exception escaping it is a defect in the loop's own wiring, so it
-            # is logged with its traceback and the daemon stops rather than
-            # spinning on a broken tick every minute forever.
-            log.exception("tick_failed")
+            # The orchestrator converts an engine failure into ERROR itself, so
+            # an exception escaping it is a defect in the loop's own wiring
+            # rather than in an engine. Logged with its traceback, and the daemon
+            # stops rather than spinning on a broken tick every minute forever.
+            log.exception("tick_failed", cycle_id=orchestrator.cycle_id)
             raise
         finally:
+            # Belt and braces: anything inside the tick that bound a cycle_id
+            # must not leave it bound across the sleep, where a line would claim
+            # to belong to a tick that has already finished.
             clear_cycle()
         completed += 1
+        log.debug("tick_completed", cycle_id=state["cycle_id"], mode=state["system"]["mode"])
         if max_ticks and completed >= max_ticks:
             break
         _sleep_until_next_tick(stop, tick_seconds)
@@ -174,6 +151,10 @@ def run(args: argparse.Namespace) -> int:
     try:
         config = load_config(config_path)
     except ConfigError as exc:
+        # Refusing to start against a config carrying an unset OPERATOR REQUIRED
+        # key is correct, not a bug. Printed to stderr and returned as a distinct
+        # exit code so a supervisor can tell "operator has not configured this"
+        # from "the daemon crashed".
         print(f"acsoe engine: refusing to start.\n{exc}", file=sys.stderr)
         return 2
 
@@ -186,19 +167,11 @@ def run(args: argparse.Namespace) -> int:
     )
     log = get_logger("acsoe.engine")
 
-    clients = Clients()
-    try:
-        orchestrator = build_orchestrator(config, SystemClock(), clients)
-    except OrchestratorUnavailableError as exc:
-        log.error("orchestrator_unavailable", detail=str(exc))
-        print(f"acsoe engine: {exc}", file=sys.stderr)
-        return 3
+    orchestrator = build_orchestrator(config, SystemClock(), Clients())
 
     # `run_id` is minted by the orchestrator, which is also what writes the
-    # `runs` row. Bind whatever it exposes so every line carries it.
-    run_id = getattr(orchestrator, "run_id", None)
-    if isinstance(run_id, str):
-        bind_run(run_id)
+    # `runs` row. Bind it so every line the loop emits carries it.
+    bind_run(orchestrator.run_id)
 
     stop = threading.Event()
     _install_signal_handlers(stop)

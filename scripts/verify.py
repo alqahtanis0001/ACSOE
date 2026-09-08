@@ -25,6 +25,7 @@ import argparse
 import contextlib
 import importlib
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -138,7 +139,7 @@ def run_criterion(criterion: Criterion, context: VerifyContext) -> Outcome:
     """Run one criterion. A criterion that raises is a FAIL, never a crash."""
     try:
         return criterion.check(context)
-    except Exception as exc:  # noqa: BLE001 - deliberate: one bad check must not stop the run
+    except Exception as exc:  # deliberate: one bad check must not stop the run
         detail = f"{type(exc).__name__}: {exc}".replace("\n", " ")
         return failed(f"criterion raised - {detail[:400]}")
 
@@ -223,10 +224,12 @@ def module_attr(module: ModuleType, attr: str) -> tuple[Any, str]:
 
 _CONFIG_MISSING = object()
 
-# Confirmed with the lead. All four live under `safety` in config/default.yaml.
-# Three of them are written as null and marked OPERATOR REQUIRED; the error-rate
-# window is a real value because architecture-context.md fixes it at the
-# trailing hour.
+# Confirmed with the lead. All five live under `safety` in config/default.yaml.
+# Four of them were written as null and marked OPERATOR REQUIRED until the
+# operator supplied values on 2026-09-08; the error-rate window was always a real
+# value because architecture-context.md fixes it at the trailing hour. The
+# OPERATOR REQUIRED path in `required_thresholds` stays: it is what a *future*
+# unset key reports through, and it simply no longer fires on these five.
 KEY_MAX_DATA_BLOCKS = "safety.max_consecutive_data_blocks"
 KEY_MAX_DRAWDOWN = "safety.max_drawdown_pct"
 KEY_MAX_LOSSES = "safety.max_consecutive_losses"
@@ -614,41 +617,43 @@ def _table_names(db_path: Path) -> set[str]:
 
 
 def check_db_migrates_from_empty(ctx: VerifyContext) -> Outcome:
-    with root_import_path(ctx.root):
-        with tempfile.TemporaryDirectory(prefix="acsoe-verify-db-") as tmp:
-            db_path = Path(tmp) / "acsoe.sqlite"
-            module, early = _apply_migrations(ctx, db_path)
-            if early is not None:
-                return early
-            if not db_path.is_file():
-                return failed("apply_migrations created no database file")
+    with (
+        root_import_path(ctx.root),
+        tempfile.TemporaryDirectory(prefix="acsoe-verify-db-") as tmp,
+    ):
+        db_path = Path(tmp) / "acsoe.sqlite"
+        module, early = _apply_migrations(ctx, db_path)
+        if early is not None:
+            return early
+        if not db_path.is_file():
+            return failed("apply_migrations created no database file")
 
-            tables = _table_names(db_path)
-            bookkeeping = getattr(module, "BOOKKEEPING_TABLE", "schema_migrations")
-            missing = sorted(DOCUMENTED_TABLES - tables)
-            if missing:
-                return failed("tables missing after migration: " + ", ".join(missing))
+        tables = _table_names(db_path)
+        bookkeeping = getattr(module, "BOOKKEEPING_TABLE", "schema_migrations")
+        missing = sorted(DOCUMENTED_TABLES - tables)
+        if missing:
+            return failed("tables missing after migration: " + ", ".join(missing))
 
-            declared = getattr(module, "EXPECTED_TABLES", None)
-            if declared is not None and set(declared) != DOCUMENTED_TABLES:
-                only_declared = sorted(set(declared) - DOCUMENTED_TABLES)
-                only_documented = sorted(DOCUMENTED_TABLES - set(declared))
-                return failed(
-                    "EXPECTED_TABLES disagrees with the storage model in "
-                    "architecture-context.md: declared-only="
-                    + str(only_declared)
-                    + " documented-only="
-                    + str(only_documented)
-                )
-
-            extras = sorted(tables - DOCUMENTED_TABLES - {bookkeeping})
-            note = "; extra tables: " + ", ".join(extras) if extras else ""
-            return passed(
-                "fresh database migrated to all "
-                + str(len(DOCUMENTED_TABLES))
-                + " documented tables"
-                + note
+        declared = getattr(module, "EXPECTED_TABLES", None)
+        if declared is not None and set(declared) != DOCUMENTED_TABLES:
+            only_declared = sorted(set(declared) - DOCUMENTED_TABLES)
+            only_documented = sorted(DOCUMENTED_TABLES - set(declared))
+            return failed(
+                "EXPECTED_TABLES disagrees with the storage model in "
+                "architecture-context.md: declared-only="
+                + str(only_declared)
+                + " documented-only="
+                + str(only_documented)
             )
+
+        extras = sorted(tables - DOCUMENTED_TABLES - {bookkeeping})
+        note = "; extra tables: " + ", ".join(extras) if extras else ""
+        return passed(
+            "fresh database migrated to all "
+            + str(len(DOCUMENTED_TABLES))
+            + " documented tables"
+            + note
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -737,6 +742,42 @@ def _count(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> 
     return int(conn.execute(sql, params).fetchone()[0])
 
 
+def _seed_threshold_kwargs(
+    seed_mod: ModuleType, seed_fn: Any, values: Mapping[str, Any]
+) -> tuple[dict[str, Any], Outcome | None]:
+    """Build the `thresholds=` argument `seed_database` scales its fixtures against.
+
+    Spec 13 makes the seed's thresholds **injected, not read from config**, so the
+    caller is the one that has to hand it the real numbers. Seeding with the module
+    defaults and then asserting against `config/default.yaml` is the exact defect
+    spec 13 warns about: a fixture pinned to a constant stops overshooting the moment
+    the operator raises a limit, and the criterion accuses the seed of a bug the
+    criterion caused. A fabricated minimal subject whose `seed_database` takes no
+    `thresholds` parameter is seeded as-is.
+    """
+    try:
+        parameters = inspect.signature(seed_fn).parameters
+    except (TypeError, ValueError):
+        return {}, None
+    if "thresholds" not in parameters:
+        return {}, None
+    cls = getattr(seed_mod, "SeedThresholds", None)
+    if cls is None:
+        return {}, failed(
+            "seed_database takes a `thresholds` argument but the module exposes no "
+            "SeedThresholds to build it from"
+        )
+    try:
+        return {"thresholds": cls(**values)}, None
+    except TypeError as exc:
+        return {}, failed(
+            "SeedThresholds does not accept the configured safety keys ("
+            + ", ".join(sorted(values))
+            + "): "
+            + str(exc)
+        )
+
+
 def check_seed_fixtures_present(ctx: VerifyContext) -> Outcome:
     config, problem = load_config(ctx.root)
     if config is None:
@@ -762,9 +803,23 @@ def check_seed_fixtures_present(ctx: VerifyContext) -> Outcome:
         if seed_fn is None:
             return pending(missing)
 
+        seed_kwargs, mismatch = _seed_threshold_kwargs(
+            seed_mod,
+            seed_fn,
+            {
+                "max_consecutive_data_blocks": max_blocks,
+                "max_drawdown_pct": max_drawdown,
+                "max_consecutive_losses": max_losses,
+                "max_errors_in_window": max_errors,
+                "error_rate_window_s": window_s,
+            },
+        )
+        if mismatch is not None:
+            return mismatch
+
         with tempfile.TemporaryDirectory(prefix="acsoe-verify-seed-") as tmp:
             db_path = Path(tmp) / "acsoe.sqlite"
-            fixtures = seed_fn(db_path)
+            fixtures = seed_fn(db_path, **seed_kwargs)
             if not db_path.is_file():
                 return failed("seed_database created no database file")
 
@@ -861,6 +916,14 @@ def check_seed_fixtures_present(ctx: VerifyContext) -> Outcome:
             + "; the database holds "
             + str(losing_streak)
         )
+    declared_errors = getattr(getattr(fixtures, "error_blocks", None), "count", None)
+    if declared_errors is not None and int(declared_errors) != errors:
+        problems.append(
+            "SeedFixtures declares "
+            + str(declared_errors)
+            + " ERROR block records in the window; the database holds "
+            + str(errors)
+        )
 
     if problems:
         return failed("; ".join(problems))
@@ -880,6 +943,8 @@ def check_seed_fixtures_present(ctx: VerifyContext) -> Outcome:
         + ", losing streak "
         + str(losing_streak)
         + ", "
+        + str(errors)
+        + " ERROR blocks in the window, "
         + str(trades)
         + " trades / "
         + str(rejections)
@@ -1053,7 +1118,7 @@ def _interpreter_with_toolchain(root: Path) -> tuple[str | None, list[str]]:
     last_missing: list[str] = ["pytest", "mypy", "ruff"]
     for candidate in candidates:
         try:
-            done = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            done = subprocess.run(  # fixed argv, never a shell
                 [candidate, "-c", probe], capture_output=True, text=True, timeout=120
             )
         except (OSError, subprocess.SubprocessError):
@@ -1090,7 +1155,7 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
     failures: list[str] = []
     for name, args in TOOLCHAIN:
         try:
-            done = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            done = subprocess.run(  # fixed argv, never a shell
                 [interpreter, *args],
                 cwd=ctx.root,
                 capture_output=True,
@@ -1167,7 +1232,7 @@ def parse_engine_registry(root: Path) -> dict[str, RegistryRow]:
     return rows
 
 
-def _registered_engines() -> tuple[list[Any], list[str], "Outcome | None"]:
+def _registered_engines() -> tuple[list[Any], list[str], Outcome | None]:
     """Every engine reachable from the registries, runtime and offline.
 
     The offline chain is deliberately unreachable from `bootstrap.py` - that is
@@ -1212,9 +1277,11 @@ def check_is_gate_matches_registry(ctx: VerifyContext) -> Outcome:
 
         if blocking is not None:
             return blocking
-        if not engines:
-            detail = "; ".join(notes) if notes else "the registries are empty"
-            return pending("no engine is registered yet (" + detail + ")")
+        if notes:
+            # A registry *source* is missing - the module, a chain symbol, or the
+            # offline builder. That is a subject that does not exist yet, which is
+            # what PENDING means.
+            return pending("no engine registry to read yet (" + "; ".join(notes) + ")")
 
         problems: list[str] = []
         for engine in engines:
@@ -1246,16 +1313,27 @@ def check_is_gate_matches_registry(ctx: VerifyContext) -> Outcome:
                 )
 
     if problems:
-        return failed("; ".join(problems))
+        return failed(
+            str(len(engines))
+            + " engines registered; "
+            + str(len(problems))
+            + " mismatches: "
+            + "; ".join(problems)
+        )
+
+    # Zero engines against zero rows is a **satisfied** assertion, not an absent
+    # one: every registry source was read and nothing disagreed. Phase 0 registers
+    # no engines by design, so reporting PENDING here would make Phase 0
+    # structurally impossible to close - a phase is green only when nothing is
+    # PENDING. The lead ruled this a vacuous PASS on 2026-09-08.
+    #
+    # The engine count in the message is not decoration; it is the guard against a
+    # vacuous pass being read as a real one. A reader sees exactly how much
+    # assurance this criterion is offering, and a `0` in a phase where engines were
+    # supposed to be registered is itself the bug worth seeing.
     gates = sum(1 for e in engines if bool(getattr(e, "is_gate", False)))
-    suffix = "; " + "; ".join(notes) if notes else ""
-    return passed(
-        str(len(engines))
-        + " registered engine(s) match the registry table ("
-        + str(gates)
-        + " gates)"
-        + suffix
-    )
+    tail = "" if not engines else " (" + str(gates) + " gates, matched against the registry table)"
+    return passed(str(len(engines)) + " engines registered; 0 mismatches" + tail)
 
 
 # --------------------------------------------------------------------------- #
@@ -1299,7 +1377,7 @@ def format_report(
     else:
         lines.append("(no criteria registered for this phase)")
 
-    counts = {r: 0 for r in Result}
+    counts = dict.fromkeys(Result, 0)
     for _, outcome in results:
         counts[outcome.result] += 1
     lines.append("")
