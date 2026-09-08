@@ -64,8 +64,8 @@ class BaseEngine(ABC):
 ```python
 state["system"] = {          # persistent — carried across ticks by the orchestrator
     "mode": "idle",          # idle | running | frozen
-    "close_intent": False,   # set by close_all, cleared by engine 22 after acting
-}
+    "close_intent": False,   # set by the command reader; cleared by the orchestrator
+}                            #   only after the manage chain reports the close finished
 state["cycle_id"] = ...      # fresh each tick, minted by the orchestrator
 ```
 
@@ -73,26 +73,28 @@ Everything else — every engine's output key, `trading_blocked_by`, `block_reas
 
 `run_id` lives only on `context.run_id`. It is minted once per daemon process by the orchestrator and is not duplicated into `state`.
 
+**At startup `mode` is always `idle`.** It is never restored from the store. A daemon that crashed while trading comes back not trading — the manage chain still runs, so open positions stay watched, but nothing new is opened until the operator activates again. Any command row that was claimed but never consumed is re-applied first; see the command table in `architecture-context.md`.
+
 ### The three runtime chains
 
-Every tick runs the ingest and manage chains. The opportunity chain runs only when the system is `running`.
+Every tick runs the guard and manage chains. The opportunity chain runs only when the system is `running` and nothing has already blocked.
 
 ```
 # 0. Read commands. Sets state["system"]["mode"] and close_intent.
 consume_commands()
 
-# 1. INGEST — every tick, every mode. Never stops.
-for engine in INGEST_CHAIN:                    # exactly: 1, 2, 3, 4
+# 1. GUARD — every tick, every mode. Never breaks early.
+for engine in GUARD_CHAIN:                     # exactly: 1, 2, 3, 4, 17
     result = run(engine)
     state[engine.name] = result.data
-    if result.blocks_trading:                  # data_guard says the data is bad
-        state["trading_blocked_by"] = engine.name
+    if result.blocks_trading and "trading_blocked_by" not in state:
+        state["trading_blocked_by"] = engine.name    # first blocker wins
         state["block_reason"] = result.reason
-        # ingestion continues; only the opportunity chain is skipped
+        # the chain still finishes; only the opportunity chain is skipped
 
-# 2. OPPORTUNITY — only if running and ingest did not block. May stop early.
+# 2. OPPORTUNITY — only if running and nothing blocked. May stop early.
 if state["system"]["mode"] == "running" and "trading_blocked_by" not in state:
-    for engine in OPPORTUNITY_CHAIN:           # 5, 6, 7, 12, 13, 8, 9, 10, 11, 14, 15, 16, 17, 18
+    for engine in OPPORTUNITY_CHAIN:           # 5, 6, 7, 12, 13, 8, 9, 10, 11, 14, 15, 16, 18
         result = run(engine)
         state[engine.name] = result.data
         if result.blocks_trading:
@@ -106,21 +108,41 @@ if state["system"]["mode"] == "running" and "trading_blocked_by" not in state:
 for engine in MANAGE_CHAIN:                    # exactly: 21, 22, 19
     result = run(engine)
     state[engine.name] = result.data
+
+# 4. Clear close_intent only once the close actually finished.
+if close_intent_set and entry_orders_cancelled and positions_closed:
+    state["system"]["close_intent"] = False
+    mark_command_consumed()
 ```
 
-**Why ingestion is its own chain.** Freeze must stop trading without stopping data collection, because order-book and spread history can never be recovered. Engines 1 to 4 therefore run in every mode including `frozen` and `idle`. Only the opportunity chain is switched off by freeze.
+**Why the guard chain never stops.** Freeze must stop trading without stopping data collection, because order-book and spread history can never be recovered. Engines 1 to 4 therefore run in every mode including `frozen` and `idle`. The chain also never breaks on a block: a bad-data block from `data_guard` must not stop `safety` from evaluating, so every guard engine runs every tick and only the first blocker is recorded.
+
+**Why `safety` is a guard and not a judgement.** Engine 17 asks an account-level question — how far is equity down, how many losses in a row, how many errors this hour. That question has nothing to do with the candidate under consideration, and it must be answered on ticks where there is no candidate at all. Placed at the end of the opportunity chain it would run only when every other gate had already passed: on roughly fourteen ticks in fifteen that chain stops at `feature` because no bar closed, and on the remainder any earlier gate blocking stops it sooner. An account bleeding while every candidate is rejected by the cost gate would never trip the breaker. In the guard chain it runs on every tick in every mode, which is the only placement that makes it a circuit breaker rather than a formality.
 
 **Why manage is its own chain.** The loop ticks every minute but a candidate is only born when a 15-minute bar closes, so the opportunity chain stops early on roughly fourteen ticks out of fifteen. If position management sat in it, an open trade would go unwatched for fourteen minutes at a time and its stop would never fire. `position_manager`, `exit` and `memory` therefore run on every tick no matter what.
 
-**How the safety engine freezes the system.** Engine 17 cannot write `state["system"]` — only the orchestrator may. Instead it writes a `freeze` or `close_all` row to the **commands table** through `context.clients.store`, the same channel the console uses. Its `BLOCK` stops the current cycle; the command row makes the freeze persist, because the orchestrator consumes it at the top of the next tick. Every such row is an audit record of exactly when and why the system stopped itself.
+**What stops the opportunity chain on a non-bar tick.** Engine 3 `market_sensor` owns the decision-bar clock. It publishes `state["market_sensor"]["bar_closed"]` — true only on the tick where a 15-minute candle completed — together with that bar's close timestamp. Engine 5 `feature`, first in the opportunity chain, returns `PASS` when `bar_closed` is false, and the chain stops there. No other engine may infer the bar boundary for itself, and the orchestrator does not know about bars at all: cadence is a property of the candle stream, not of `core/`.
 
-**How close_all works.** The command reader sets `state["system"]["close_intent"] = True`. Engine 22 `exit`, running in the manage chain the same tick, closes every open position as a taker and clears the flag. Mode is then `frozen`. `frozen` alone means "stop opening, keep managing"; `frozen` plus `close_intent` means "liquidate now". They are distinguishable.
+**How the safety engine freezes the system.** Engine 17 cannot write `state["system"]` — only the orchestrator may. Instead it writes a `freeze` or `close_all` row to the **commands table** through `context.clients.store`, the same channel the console uses. Its `BLOCK` suppresses the opportunity chain for the current tick; the command row makes the freeze persist, because the orchestrator consumes it at the top of the next tick. Every such row is an audit record of exactly when and why the system stopped itself.
+
+Because it now runs every tick, `safety` must be idempotent about what it emits. It writes a command row only when that row would change the system's state: `freeze` only while the mode is `running`, and `close_all` only when positions are open and `close_intent` is not already set. When the condition persists and the state already reflects it, `safety` still evaluates and still records its assessment in its own `data` for the console and the log, but emits nothing. Without this rule a sustained drawdown would append a freeze row every sixty seconds forever.
+
+**How close_all works.** The command reader sets `state["system"]["close_intent"] = True` and the mode to `frozen`. Two engines act on it in the manage chain, in that order:
+
+- Engine 21 `position_manager` cancels every resting entry order. A post-only limit still sitting on the book is not a position, and leaving one live after an emergency stop lets exposure re-open minutes later. It reports `state["position_manager"]["entry_orders_cancelled"]`, true only when none remain.
+- Engine 22 `exit` closes every open position as a taker. It reports `state["exit"]["positions_closed"]`, true only when none remain.
+
+The **orchestrator**, not either engine, clears `close_intent`, and only when both flags are true. If a cancel or a close failed this tick, the intent survives into the next tick and the manage chain retries. That is what makes the kill switch converge rather than fire once and hope.
+
+`frozen` alone means "stop opening, keep managing". `frozen` plus `close_intent` means "liquidate now". They are distinguishable, and the second is not finished until both engines say it is.
 
 **The offline chain.** Engine 20 `tournament` and engine 23 `backtest` run in `OFFLINE_CHAIN`, invoked only by `acsoe research`. That chain is **assembled in `cli/research.py`, never in `bootstrap.py`**, so the live loop path never imports from `research/` and architecture invariant 5 holds. `bootstrap.py` builds only the three runtime chains.
 
+`scripts/verify.py` sits outside both sides of that boundary and may import either. That is what lets its `is_gate` assertion cover engines 20 and 23 as well as the registered ones.
+
 A blocked candidate that never reaches storage is lost research data, and an unwatched position is lost money. Do not "simplify" the orchestrator into a single loop.
 
-If an engine in any chain is not yet registered — as in Phase 0, where none exist — the orchestrator skips it and logs at debug level. An empty chain is valid.
+If an engine in any chain is not yet registered — as in Phase 0, where none exist — the orchestrator skips it and logs at debug level. An empty chain is valid. The `close_intent` step treats a missing `position_manager` or `exit` result as "not finished", so an unregistered manage chain can never silently discard a pending close.
 
 ## Fixed engine order
 
@@ -128,10 +150,11 @@ The registry order is non-negotiable. The stage column refers to the runtime loo
 
 | # | Name | Gate | Chain | Runtime stage |
 |---|---|---|---|---|
-| 1 | `exchange` | | **ingest** | 1 |
-| 2 | `market_data_recorder` | | **ingest** | 1 |
-| 3 | `market_sensor` | | **ingest** | 1 |
-| 4 | `data_guard` | **Y** | **ingest** | 1 |
+| 1 | `exchange` | | **guard** | 1 |
+| 2 | `market_data_recorder` | | **guard** | 1 |
+| 3 | `market_sensor` | | **guard** | 1 |
+| 4 | `data_guard` | **Y** | **guard** | 1 |
+| 17 | `safety` | **Y** | **guard** | 1 |
 | 5 | `feature` | | opportunity | 2 |
 | 6 | `macro_context` | | opportunity | 2 |
 | 7 | `scout` | **Y** | opportunity | 2 |
@@ -144,7 +167,6 @@ The registry order is non-negotiable. The stage column refers to the runtime loo
 | 14 | `adaptive_router` | | opportunity | 3 |
 | 15 | `skeptic` | **Y** | opportunity | 3 |
 | 16 | `decision` | | opportunity | 3 |
-| 17 | `safety` | **Y** | opportunity | 3 |
 | 18 | `execution` | | opportunity | 4 |
 | 21 | `position_manager` | | **manage** | 4 |
 | 22 | `exit` | | **manage** | 4 |
@@ -154,7 +176,7 @@ The registry order is non-negotiable. The stage column refers to the runtime loo
 
 Engine 23 `backtest` lives in `research/` and is registered only in `OFFLINE_CHAIN`, which `cli/research.py` assembles. It never appears in `bootstrap.py`.
 
-Note that 12 and 13 execute before 8 and 9. The numbers are identifiers, not execution order.
+Note that 12 and 13 execute before 8 and 9, and that 17 executes before 5. The numbers are identifiers, not execution order.
 
 Engine 6 is named `macro_context`, not `context`, so that it never reads ambiguously against the `context/` documentation directory.
 
@@ -179,5 +201,17 @@ Each engine's `data` payload is typed in its own `contracts.py`. Orchestrator-le
 - `state["trading_blocked_by"]`, `state["block_reason"]` — set on block, fresh per tick.
 
 `run_id` is `context.run_id`, nowhere else.
+
+### Cross-chain keys the contract fixes
+
+Most of an engine's `data` is its own business, typed in its own `contracts.py`. Three fields are different: another chain depends on them, they cross an ownership boundary, and the orchestrator reads them. They are fixed here and may not be renamed without the lead.
+
+| Key | Written by | Read by | Meaning |
+|---|---|---|---|
+| `state["market_sensor"]["bar_closed"]` | 3 `market_sensor` (A) | 5 `feature` (C) | A 15-minute decision bar closed on this tick |
+| `state["position_manager"]["entry_orders_cancelled"]` | 21 `position_manager` (B) | orchestrator (Lead) | No resting entry order remains |
+| `state["exit"]["positions_closed"]` | 22 `exit` (B) | orchestrator (Lead) | No open position remains |
+
+The last two are only meaningful while `close_intent` is set. Absent or false always means "not finished", never "finished" — the same fail-closed default the gates use.
 
 **The orchestrator holds the `Clock`.** It is constructed by the CLI, passed to the orchestrator, and used once per tick to stamp `context.now`. No engine ever sees it.

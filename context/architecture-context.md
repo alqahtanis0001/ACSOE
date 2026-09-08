@@ -71,10 +71,12 @@ Every engine lives in its own directory. Never collapse engine logic into a shar
 
 | Stage | Engines | Runs |
 |---|---|---|
-| 1. Ingestion and gatekeeping | 1, 2, 3, 4 | Every tick |
+| 1. Ingestion and gatekeeping | 1, 2, 3, 4, 17 | Every tick, every mode |
 | 2. Screening | 5, 6, 7 | On each closed 15-minute bar |
-| 3. Judgement | 8–17 | On the candidate only |
+| 3. Judgement | 8–16 | On the candidate only |
 | 4. Execution, management, learning | 18 on a new trade; 21, 22, 19 every tick | 18 with a candidate; manage chain always |
+
+Engine 17 `safety` is stage 1, not stage 3. It is a gatekeeper on the account, not a judgement about a candidate, so it runs in the guard chain on every tick in every mode. See `engine-contracts.md`.
 
 Engine 23 runs offline and is never invoked by the live loop.
 
@@ -134,16 +136,29 @@ The console writes rows to a `commands` table; the daemon reads them. Semantics:
 | Command | Effect |
 |---|---|
 | `activate` | Mode goes `idle` to `running`. The opportunity chain begins running. |
-| `freeze` | Mode goes to `frozen`. The opportunity chain stops. **The ingest chain keeps recording and the manage chain keeps managing open positions.** Freeze never stops data collection. |
-| `close_all` | Sets `close_intent`; engine 22 exits every open position as a taker within the same tick and clears it. Mode goes to `frozen`. |
+| `freeze` | Mode goes to `frozen`. The opportunity chain stops. **The guard chain keeps recording and keeps running `safety`, and the manage chain keeps managing open positions.** Freeze never stops data collection. |
+| `close_all` | Mode goes to `frozen` and `close_intent` is set. In the same tick engine 21 cancels every **resting entry order** and engine 22 exits every **open position** as a taker. The orchestrator clears the intent only when both report done, and retries next tick if not. |
 
 **The kill switch is `close_all`. There is no fourth mechanism.** `freeze` stops new trades and keeps managing what is open; `close_all` is the emergency stop that ends exposure. Phase 8 verifies `close_all`, not something separate.
 
-The command reader in `core/` writes `state["system"]` — the only persistent region of state — and engine 22 `exit` acts on `close_intent` within the same tick. The reader belongs to the lead; the closing belongs to B.
+The command reader in `core/` is the only writer of `state["system"]`, the one persistent region of state. Engines act on what it sets but never write it back: engine 21 cancels resting entry orders and engine 22 closes positions, each reporting completion in its own `data`, and the orchestrator clears `close_intent` on their behalf. The reader belongs to the lead; the cancelling and closing belong to B.
 
-**Engine 17 `safety` uses this same table.** It cannot write `state["system"]`, so when it must freeze the system it writes a `freeze` or `close_all` command row through the store client. The orchestrator consumes it at the top of the next tick. The console and the safety engine are the two writers; the orchestrator is the one reader.
+**Engine 17 `safety` uses this same table.** It cannot write `state["system"]`, so when it must freeze the system it writes a `freeze` or `close_all` command row through the store client. The orchestrator consumes it at the top of the next tick. The console and the safety engine are the two writers; the orchestrator is the one reader. Because `safety` runs every tick it only emits a row that would actually change the state — the idempotency rule is in `engine-contracts.md`.
 
-The daemon reads pending commands **at the top of every tick**, before the ingest chain, in the orchestrator. That reader lives in `core/` and is the lead's. Each command is marked consumed with its timestamp so it never fires twice, and every consumption is logged as an audit row.
+The daemon reads pending commands **at the top of every tick**, before the guard chain, in the orchestrator. That reader lives in `core/` and is the lead's.
+
+**Consumption is two-phase, so a crash cannot swallow a kill switch.** Each row carries `claimed_at` and `consumed_at`:
+
+1. The reader stamps `claimed_at` and applies the effect to `state["system"]`.
+2. `consumed_at` is stamped only when the effect is complete — immediately for `activate` and `freeze`, which are pure mode changes, and for `close_all` only when every resting order is cancelled and every position closed.
+
+A row with `claimed_at` set and `consumed_at` null is an interrupted command. On startup the reader re-applies every such row before the first tick. Without this, a daemon killed between reading `close_all` and finishing the liquidation would restart with the command already marked done, the in-memory `close_intent` gone, and positions still open — the one failure the kill switch exists to prevent.
+
+`claimed_at` also gives idempotency: a row that is already claimed is never applied twice within a run.
+
+**Mode is never restored from the store.** A daemon always starts `idle` and only reaches `running` through an `activate` command. A crashed daemon therefore comes back not trading, with the manage chain still watching whatever is open. Re-applying unconsumed commands happens first, so an interrupted `close_all` still completes even though the mode reverted to `idle`.
+
+Every claim and every consumption is logged as an audit row.
 
 An unrecognised command is ignored and logged as a warning. It never blocks the loop.
 
@@ -162,6 +177,6 @@ The same engine code runs in all three modes. Mode differences live only in the 
 2. Engines never call the network directly; they use injected clients.
 3. Engines never read the clock; they use `context.now`.
 4. Engines never import each other. Communication is through `state` only.
-5. Research code never imports from the live loop path, and the live loop never imports from `research/`.
+5. Research code never imports from the live loop path, and the live loop never imports from `research/`. This constrains `src/acsoe/` only. `scripts/verify.py` is neither — it is allowed to import both, which is how it checks the offline chain.
 6. Anything slower than the loop tick belongs offline, not in an engine.
 7. Credentials exist only in the environment.

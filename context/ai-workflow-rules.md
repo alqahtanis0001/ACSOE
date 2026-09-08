@@ -30,6 +30,23 @@ A criterion that only passes on the machine that produced it is a broken criteri
 
 Phase 0 has no preflight — there is no phase −1.
 
+## Retired vocabulary
+
+Every audit of these documents has found the same class of defect: a decision that reached three files and not the fourth, leaving an agent to follow the stale copy in good faith. It is not caught by reading, because each file is self-consistent. It is caught by grep.
+
+`scripts/verify.py` therefore carries a `docs_vocabulary` criterion in **every** phase. It scans `AGENTS.md`, `README.md` and `context/*.md` — excluding `context/progress-tracker.md`, which is the historical record and is meant to contain retired terms — and FAILs if any of these appear outside `~~strikethrough~~` and outside the table itself, which necessarily names them:
+
+| Retired term | Superseded by |
+|---|---|
+| `two-chain` | three runtime chains: guard, opportunity, manage |
+| `chain 1`, `chain 2`, `always chain` | the chains have names; use them |
+| `INGEST_CHAIN` | `GUARD_CHAIN` |
+| `state["system_mode"]` | `state["system"]["mode"]` |
+| `paper.starting_balance` (singular) | `paper.starting_balances`, a per-currency map |
+| `24 bars` | 48 bars |
+
+When the lead retires a term, adding it to this table is part of the same change. A rename that does not update this table is an incomplete rename.
+
 ## The feature-spec format
 
 Every spec in `feature-specs/` uses exactly this shape. The lead does not invent a variant.
@@ -60,15 +77,15 @@ Nine phases, in order. **A phase is done when `python scripts/verify.py --phase 
 
 | Phase | Scope | Verified by |
 |---|---|---|
-| **0 — Structure** | `scripts/verify.py` first. Then package skeleton, `core/` contracts and two-chain orchestrator, `platform/` config, logging and injected clock, all three CLI entrypoints (`acsoe research` as a stub that reports no offline engines registered until Phase 4), `config/default.yaml`, SQLite schema and migrations, store client, seed data generator, fake Kraken client, test harness, `scripts/record.py` | Orchestrator runs an empty registry cleanly; a fresh database migrates from empty; seed generator produces a queryable database of realistic trades and rejections; `tests/fixtures/record_sample.jsonl` parses and validates against the recorder schema; `pytest`, `mypy --strict`, `ruff` all green |
+| **0 — Structure** | `scripts/verify.py` first. Then package skeleton, `core/` contracts and three-chain orchestrator, `platform/` config, logging and injected clock, all three CLI entrypoints (`acsoe research` as a stub that reports no offline engines registered until Phase 4), `config/default.yaml`, SQLite schema and migrations, store client, seed data generator, fake Kraken client, test harness, `scripts/record.py` | Orchestrator runs an empty registry cleanly; a fresh database migrates from empty; seed generator produces a queryable database of realistic trades and rejections; `tests/fixtures/record_sample.jsonl` parses and validates against the recorder schema; the `docs_vocabulary` check finds no retired term outside the tracker; `pytest`, `mypy --strict`, `ruff` all green |
 | **1 — Interface** | The full console against seeded data: status band, positions, cycle feed, history, research views, WebSocket updates, three commands | Console starts and renders every screen from the seeded database; WebSocket pushes an update within twice `console.poll_interval_ms` of a database change; Activate, Freeze and Close-all each write a correct command row; live-mode frame renders amber and paper does not; no raw hex outside the token block; tabular figures on every numeric column; keyboard focus visible; `prefers-reduced-motion` respected |
 | **2 — Data spine** | Engines 1, 2, 3, 4; historical OHLCVT loader; recorder engine supersedes `scripts/record.py` | `tests/fixtures/recording_report.json` shows a continuous span of at least 24 hours with every break accounted for, and `--live` confirms the real recording in `data/raw/` matches it; built 15m candles match a committed Kraken OHLC fixture for three pairs, every OHLC field within one `tick_size` for that pair as reported by `AssetPairs`, and volume within 0.1%; data guard blocks on injected stale, negative-spread and missing-candle data; historical loader ingests one pair's full archive and reports gap statistics; console shows live data replacing seeds |
-| **3 — Economics** | Engines 7, 10, 11, 17. Zero ML | Cost engine computes net edge from the fee tier returned by the fake Kraken client rather than a constant, and blocks below hurdle; risk engine rejects a sub-`ordermin` position rather than rounding up; universe filter yields different pair counts at $10 and $5,000 balances; safety engine freezes on injected drawdown; each has a block test and a pass test |
+| **3 — Economics** | Engines 7, 10, 11, 17. Zero ML | Cost engine computes net edge from the fee tier returned by the fake Kraken client rather than a constant, and blocks below hurdle; risk engine rejects a sub-`ordermin` position rather than rounding up; universe filter yields different pair counts at $10 and $5,000 balances; safety engine freezes on injected drawdown **on a tick where the opportunity chain never runs**, proving the breaker is not gated behind the other gates, and re-emits no command while the condition persists; each has a block test and a pass test |
 | **4 — Memory and replay** | Engine 19 real implementation; Engine 23 replay and triple-barrier labelling | `tests/fixtures/labelled_sample.parquet` holds a labelled slice replayed from the historical CSVs, and `--live` replays the full six months; a committed fixture of 20 hand-verified labels is asserted against by the labeller; purged walk-forward splitter produces folds with no label-window overlap across boundaries; rejections persist and survive a restart; console history reads real rows |
 | **5 — Models** | Engines 5, 6, 8, 12, 13, 15, plus the DI inside `engines/prediction/` | Predictor trains and produces calibrated probabilities; DI fitted on the predictor's training set with a rolling percentile threshold; skeptic trains only on predictor BUY rows; full walk-forward with weekly retraining completes and reports out-of-sample metrics |
 | **6 — Decision and execution** | Engines 9, 14, 16, 18, 21, 22; fill simulator | One complete paper trade end to end through all four gates: post-only entry, simulated fill, minute-by-minute watch, exit on each of target, stop and timeout, all logged; an unfilled entry cancels and abandons without chasing; console shows the position live |
 | **7 — Evaluation** | Engine 20, attribution, deflated metric, promotion gate | Three-month paper backtest emits an alpha-versus-benchmark report from the full equity curve including cash periods; promotion gate rejects a model whose edge does not survive the trial haircut; research screens render the leaderboard and SHAP view |
-| **8 — Live readiness** | `platform/live_guard.py` (A), `close_all` end-to-end (Lead's reader plus B's exit engine), soak test | All three live switches proven individually required; kill switch halts a running loop within one tick and closes nothing it should not; `tests/fixtures/soak_digest.json` summarises a run of at least 7 continuous days in paper with zero unhandled exceptions, and `--live` checks the real log in `logs/`; no secret appears in any log, artefact, or committed file |
+| **8 — Live readiness** | `platform/live_guard.py` (A), `close_all` end-to-end (Lead's reader plus B's exit engine), soak test | All three live switches proven individually required; kill switch halts a running loop within one tick, cancels every resting entry order and closes every position, and closes nothing it should not; a daemon killed part-way through a `close_all` finishes the liquidation on restart rather than coming back with the command marked consumed and positions still open; `tests/fixtures/soak_digest.json` summarises a run of at least 7 continuous days in paper with zero unhandled exceptions, and `--live` checks the real log in `logs/`; no secret appears in any log, artefact, or committed file |
 
 ## Scoping
 

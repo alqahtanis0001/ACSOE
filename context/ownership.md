@@ -19,7 +19,7 @@ Not every phase needs all three. Phase 1 is almost entirely C; Phase 3 is almost
 
 | Agent | Task |
 |---|---|
-| **Lead** | `core/`: `BaseEngine`, `EngineContext`, `EngineResult`, `EngineStatus`, `State`, the two-chain orchestrator, the empty `bootstrap.py` registry, and `config/default.yaml` with every threshold named |
+| **Lead** | `core/`: `BaseEngine`, `EngineContext`, `EngineResult`, `EngineStatus`, `State`, the three-chain orchestrator (guard, opportunity, manage) including the two-phase command reader, the empty `bootstrap.py` registry, and `config/default.yaml` with every threshold named |
 | **A** | Package skeleton, `pyproject.toml`, and `src/acsoe/platform/`: config loader and validation, `structlog` setup, the injected clock. Plus `acsoe engine` and `acsoe console` CLI entrypoints and `scripts/record.py` |
 | **B** | SQLite schema and migrations, the store client, and the seed generator producing realistic fake trades, rejections, positions and leaderboard rows |
 | **C** | `scripts/verify.py` **first**, then the test harness, the fake Kraken client with recorded fixtures, and shared pytest fixtures. Verify must exist before A and B can report anything complete |
@@ -73,6 +73,9 @@ Agree the contract first, mock it, build against the mock.
 | Raw ticks, pair rules, fee tier | A | B, C | `clients/kraken/contracts.py` |
 | Raw JSONL recording | A | — | `clients/recorder/contracts.py` |
 | Command table: Activate, Freeze, Close all | C writes, Lead reads | — | `clients/store/contracts.py` |
+| Safety self-freeze rows on that same table | B writes, Lead reads | — | `clients/store/contracts.py` |
+| Decision-bar tick (`bar_closed`) | A | C | `engines/market_sensor/contracts.py` |
+| Close-all completion flags | B | Lead | `engines/position_manager/contracts.py`, `engines/exit/contracts.py` |
 | Offline chain invocation | A owns `acsoe research`; C owns engines 20 and 23 | — | `cli/research.py` |
 | 15-minute candles | A | C | `engines/market_sensor/contracts.py` |
 | Store read and write | B | A, C | `clients/store/contracts.py` |

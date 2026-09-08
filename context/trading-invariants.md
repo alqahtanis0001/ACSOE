@@ -97,6 +97,7 @@ All Kraken quote currencies are scanned, but:
 
 - Entry is always a **post-only limit** order (`oflags=post`). If it would cross the book, Kraken cancels it — that is the intended behaviour.
 - If an entry order is unfilled after the configured window, cancel it and abandon the candidate. **Never chase with a market order.**
+- A `close_all` cancels every resting entry order immediately, regardless of that window, before positions are closed. An uncancelled post-only limit is not a position, so it survives a liquidation and can fill minutes later — re-opening exposure after the emergency stop was pulled. The kill switch is not complete until the book is clear of both.
 - Exits on target may be maker. Exits on stop must be immediate and may be taker.
 - Every order carries a `userref` for idempotency. Never place an order without checking whether that `userref` already exists.
 

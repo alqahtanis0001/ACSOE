@@ -78,6 +78,13 @@ These terms have precise meanings in this codebase. Do not substitute your own.
 
 **Phase** — a build phase, 0 to 8, from `ai-workflow-rules.md`. What the operator means by "start phase N".
 
+**Chain** — one of the four ordered engine lists in the registry. Never numbered; always named.
+
+- **Guard chain** — 1, 2, 3, 4, 17. Every tick, every mode, never breaks early. Data in, and the account-level circuit breaker.
+- **Opportunity chain** — 5, 6, 7, 12, 13, 8, 9, 10, 11, 14, 15, 16, 18. Only when the mode is `running` and nothing has blocked. Stops at the first block or PASS.
+- **Manage chain** — 21, 22, 19. Every tick, every mode. Watches positions, exits them, records everything.
+- **Offline chain** — 20, 23. Only via `acsoe research`. Never touched by the daemon.
+
 **Stage** — a step in the runtime loop, 1 to 4, from `architecture-context.md`. Never used to mean a build phase.
 
 **Script** — the build log. Each agent writes `docs/build-log/phase-N/<agent>.md`; the lead consolidates into `docs/build-log/phase-N.md` at phase close. When the operator says "update the progress tracker and script", this is the script.

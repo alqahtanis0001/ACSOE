@@ -8,7 +8,7 @@
 
 ## Current Goal
 
-`scripts/verify.py` first. Then the package skeleton, `core/` contracts and two-chain orchestrator, `platform/` config, clock, logging and live guard, CLI entrypoints, `config/default.yaml`, SQLite schema and migrations, store client, seed generator, fake Kraken client, test harness, and `scripts/record.py`. No engines yet.
+`scripts/verify.py` first. Then the package skeleton, `core/` contracts and three-chain orchestrator, `platform/` config, clock, logging and live guard, CLI entrypoints, `config/default.yaml`, SQLite schema and migrations, store client, seed generator, fake Kraken client, test harness, and `scripts/record.py`. No engines yet.
 
 ## Phase Status
 
@@ -75,7 +75,7 @@ Four onboarding audits, in order. Later sections override earlier ones where the
 The lead's onboarding audit found 25 issues. These were resolved by the operator:
 
 - `core/` holds contracts and the orchestrator only. Config, clock and logging moved to `platform/`, owned by A.
-- The orchestrator has three runtime chains: ingest (1–4, every tick, every mode), opportunity (5–18, only when running), manage (21, 22, 19, every tick, every mode). Engines 20 and 23 run in an offline chain via `acsoe research`. Without this split, positions were never watched, and freeze would have stopped the recorder.
+- ~~The orchestrator has three runtime chains: ingest (1–4), opportunity (5–18), manage (21, 22, 19).~~ **Superseded by the fifth audit** — the first chain is the *guard* chain and carries engine 17 as well: 1, 2, 3, 4, 17. The opportunity chain is 5–16 plus 18. Engines 20 and 23 still run in an offline chain via `acsoe research`. Without this split, positions were never watched, and freeze would have stopped the recorder.
 - `scripts/verify.py` is sequenced first in Phase 0 and reports PASS, FAIL or PENDING, so criteria can exist before the code they judge.
 - Every criterion runs offline against a recorded artefact. `--live` is opt-in and never required for a phase to be green.
 - Each agent owns `tests/` mirroring its own source paths, and its own `docs/build-log/phase-N/<agent>.md`.
@@ -109,7 +109,7 @@ The lead's second audit found 22 issues, most of them decisions that had reached
 - C owns `tests/` root, `conftest.py` and `tests/fixtures/`. A creates `data/` and `logs/`.
 - "Within one tick" means one `tick_size` from `AssetPairs`.
 - `console.poll_interval_ms` must be under a quarter of `console.stale_after_ms`, enforced by config validation.
-- The eight non-ML engines are enumerated: 1, 2, 3, 4, 10, 11, 16, 17.
+- ~~The eight non-ML engines are enumerated: 1, 2, 3, 4, 10, 11, 16, 17.~~ **Superseded by the third audit** — scout is deterministic, so there are nine and engine 7 is among them.
 - `.claude/settings.local.json` and `logs/` restored to `.gitignore`.
 
 ### After the third audit
@@ -128,7 +128,7 @@ The lead's second audit found 22 issues, most of them decisions that had reached
 
 ### After the fourth audit
 
-- **Freeze no longer stops the recorder.** Engines 1–4 are now their own ingest chain that runs in every mode. Only the opportunity chain (5–18) is switched off by freeze. Order-book history is never lost to a freeze.
+- **Freeze no longer stops the recorder.** ~~Engines 1–4 are now their own ingest chain.~~ **Renamed by the fifth audit** — it is the guard chain, 1, 2, 3, 4, 17. It runs in every mode; only the opportunity chain is switched off by freeze. Order-book history is never lost to a freeze.
 - **The safety engine freezes via the commands table.** It cannot write `state["system"]`, so it writes a `freeze` or `close_all` row through the store, which the orchestrator consumes next tick. Same channel as the console, and every stop is an audit row.
 - **State is fresh every tick.** The only persistent region is `state["system"]` — `mode` and `close_intent` — carried by the orchestrator. Manage-chain engines read prior decisions from the store, never from stale state keys.
 - `close_intent` is the kill switch's data path. `frozen` alone means stop opening; `frozen` plus `close_intent` means liquidate now.
@@ -138,6 +138,21 @@ The lead's second audit found 22 issues, most of them decisions that had reached
 - Anomaly is a data-quality gate (unsupervised, over market data) and stays protected. Skeptic is a learned opinion about the trade and stays excused. The distinction is now stated.
 - `acsoe research` ships in Phase 0 as a stub.
 - The stray empty code fence in `engine-contracts.md` is removed.
+
+### After the fifth audit
+
+The fifth audit found nine issues. Four of them were one question wearing four hats — what runs unconditionally, and who may write the persistent state — so they were resolved together rather than patched one at a time.
+
+- **Engine 17 `safety` moved from the opportunity chain to the guard chain.** It was second to last in a chain that stops at the first block or PASS, so the circuit breaker only ever ran on ticks where every other gate had already passed. An account in drawdown whose candidates were all being rejected by the cost gate would never have tripped it. The guard chain is now 1, 2, 3, 4, 17, runs every tick in every mode, and never breaks early — a bad-data block must not stop safety from evaluating. Safety is stage 1 gatekeeping, not stage 3 judgement.
+- **The guard chain records the first blocker, not the last.** Two guards can block on one tick; the reason `memory` logs is the first one.
+- **Safety is idempotent about what it emits.** It runs every tick now, so it writes a command row only when that row would change the state: `freeze` only while running, `close_all` only when positions are open and no intent is already set. Otherwise a sustained drawdown would append a freeze row every sixty seconds forever.
+- **`close_all` cancels resting entry orders as well as closing positions.** A post-only limit still on the book is not a position and survived the old definition, so the emergency stop could leave an order that filled minutes later and re-opened exposure. Engine 21 cancels, engine 22 closes.
+- **The orchestrator clears `close_intent`, not engine 22.** The old wording had an engine writing `state["system"]`, which rule 2 and the state-keys section both forbid. Engines now report `entry_orders_cancelled` and `positions_closed` in their own `data`; the orchestrator clears the intent only when both are true, so a failed cancel or close retries next tick instead of being lost.
+- **Command consumption is two-phase.** `claimed_at` when read, `consumed_at` when the effect completes. A daemon killed part-way through a liquidation used to restart with the command marked done, the in-memory intent gone and positions still open. Unconsumed rows are now re-applied at startup.
+- **Mode always starts `idle` and is never restored from the store.** A crashed daemon comes back not trading, with the manage chain still watching what is open.
+- **Engine 3 `market_sensor` owns the decision-bar clock.** It publishes `bar_closed`; engine 5 `feature` returns PASS when it is false. Nothing previously named which engine stopped the chain on a non-bar tick, which is the mechanism the entire cadence rests on.
+- **`scripts/verify.py` may import both the live path and `research/`.** It is neither, which is what lets its `is_gate` assertion cover engines 20 and 23.
+- **A `docs_vocabulary` criterion runs in every phase.** Every audit so far has found a decision that reached three files and not the fourth; each file stays self-consistent, so reading does not catch it and grep does. Retiring a term now includes adding it to the table in `ai-workflow-rules.md`.
 
 ## Architecture Decisions
 
