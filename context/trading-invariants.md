@@ -56,7 +56,7 @@ No confidence score, probability, ensemble weight, or router decision may skip, 
 
 **Engine 7 `scout` is deterministic and is protected.** Its universe filter is arithmetic over `ordermin`, `costmin`, tick size, live spread and balance, and its candidate ranking is a deterministic score over features. It contains no model, so nothing may override it.
 
-Gate 15 `skeptic` is the one gate that *is* a model, and is deliberately absent from that list — "a model must not override it" is meaningless for a model. It can only ever veto, never approve, so it cannot make the system more willing to trade. It remains fail-closed under rule 3.
+Gate 13 `anomaly` and gate 15 `skeptic` are both machine-learned, and they are treated differently on purpose. Anomaly is unsupervised outlier detection over *market data* — velocity, volume, spread — and its output is a threshold on a distance. It judges whether the market is broken, not whether this trade is good, so it is a data-quality gate like `data_guard` and is protected. Skeptic is supervised meta-labelling over the *predictor's own calls* — a learned opinion about this specific trade. That is what makes it a model in the sense rule 4 means, and why it is excused from the list: "a model must not override it" is meaningless for a model. Both can only veto, never approve. Both remain fail-closed under rule 3.
 
 ## 5. A trade must clear the live cost hurdle
 

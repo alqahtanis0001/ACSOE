@@ -74,7 +74,7 @@ Every engine lives in its own directory. Never collapse engine logic into a shar
 | 1. Ingestion and gatekeeping | 1, 2, 3, 4 | Every tick |
 | 2. Screening | 5, 6, 7 | On each closed 15-minute bar |
 | 3. Judgement | 8–17 | On the candidate only |
-| 4. Execution, management, learning | 18 on a new trade; 21, 22, 19 every tick | 18 with a candidate, chain 2 always |
+| 4. Execution, management, learning | 18 on a new trade; 21, 22, 19 every tick | 18 with a candidate; manage chain always |
 
 Engine 23 runs offline and is never invoked by the live loop.
 
@@ -133,15 +133,17 @@ The console writes rows to a `commands` table; the daemon reads them. Semantics:
 
 | Command | Effect |
 |---|---|
-| `activate` | State goes `idle` to `running`. The loop begins ticking. |
-| `freeze` | State goes to `frozen`. Chain 1 stops entirely; chain 2 keeps running so open positions are still managed. |
-| `close_all` | Every open position exits immediately as a taker, then state goes to `frozen`. |
+| `activate` | Mode goes `idle` to `running`. The opportunity chain begins running. |
+| `freeze` | Mode goes to `frozen`. The opportunity chain stops. **The ingest chain keeps recording and the manage chain keeps managing open positions.** Freeze never stops data collection. |
+| `close_all` | Sets `close_intent`; engine 22 exits every open position as a taker within the same tick and clears it. Mode goes to `frozen`. |
 
 **The kill switch is `close_all`. There is no fourth mechanism.** `freeze` stops new trades and keeps managing what is open; `close_all` is the emergency stop that ends exposure. Phase 8 verifies `close_all`, not something separate.
 
-The command reader in `core/` sets `state["system_mode"]` and, for `close_all`, writes a close intent that engine 22 `exit` acts on within the same tick. The reader belongs to the lead; the closing belongs to B.
+The command reader in `core/` writes `state["system"]` — the only persistent region of state — and engine 22 `exit` acts on `close_intent` within the same tick. The reader belongs to the lead; the closing belongs to B.
 
-The daemon reads pending commands **at the top of every tick**, before chain 1, in the orchestrator. That reader lives in `core/` and is the lead's. Each command is marked consumed with its timestamp so it never fires twice, and every consumption is logged as an audit row.
+**Engine 17 `safety` uses this same table.** It cannot write `state["system"]`, so when it must freeze the system it writes a `freeze` or `close_all` command row through the store client. The orchestrator consumes it at the top of the next tick. The console and the safety engine are the two writers; the orchestrator is the one reader.
+
+The daemon reads pending commands **at the top of every tick**, before the ingest chain, in the orchestrator. That reader lives in `core/` and is the lead's. Each command is marked consumed with its timestamp so it never fires twice, and every consumption is logged as an audit row.
 
 An unrecognised command is ignored and logged as a warning. It never blocks the loop.
 

@@ -28,7 +28,9 @@ Not every phase needs all three. Phase 1 is almost entirely C; Phase 3 is almost
 
 ## Paths nobody was assigned
 
-**Tests.** C owns the `tests/` root scaffolding, `tests/conftest.py`, `tests/fixtures/` and `tests/harness/`. Beyond that, each agent owns `tests/` mirroring the source paths it owns. If you own `engines/cost/`, you own `tests/engines/test_cost.py`. C owns `tests/harness/` and the shared fixtures. Nobody may write a test for another agent's code.
+**Tests.** C owns the `tests/` root scaffolding, `tests/conftest.py`, the *structure* of `tests/fixtures/`, the shared fixtures, and `tests/harness/`. Beyond that, each agent owns `tests/` mirroring the source paths it owns.
+
+**Evidence fixtures.** Each agent deposits the committed evidence for its own criteria under `tests/fixtures/`: A owns `record_sample.jsonl`, `recording_report.json` and `soak_digest.json`; C owns `labelled_sample.parquet`. Depositing an evidence file you produced is not writing in C's lane. If you own `engines/cost/`, you own `tests/engines/test_cost.py`. C owns `tests/harness/` and the shared fixtures. Nobody may write a test for another agent's code.
 
 **Build log.** Each agent writes `docs/build-log/phase-N/<agent>.md`. The lead consolidates them into `docs/build-log/phase-N.md` at phase close. Three agents appending to one file has the same concurrent-write hazard as the tracker, and is solved the same way.
 

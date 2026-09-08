@@ -42,9 +42,6 @@ class BaseEngine(ABC):
 
 `is_gate` is not decorative. `scripts/verify.py` asserts that every engine's `is_gate` matches the Gate column of the registry table below, which catches a gate registered as an ordinary engine — a failure that would otherwise be silent and expensive.
 
-```python
-```
-
 `State = dict[str, Any]`, keyed by engine name, defined in `core/contracts.py`. An engine reads other engines' outputs through `state["<engine_name>"]` and writes only its own key.
 
 ## Rules
@@ -60,37 +57,70 @@ class BaseEngine(ABC):
 
 ## Orchestrator behaviour
 
-The registry has **two chains**, and every tick runs both.
+### State lifetime
+
+`state` is a **fresh dict every tick**. Nothing in it survives to the next tick except one region:
+
+```python
+state["system"] = {          # persistent — carried across ticks by the orchestrator
+    "mode": "idle",          # idle | running | frozen
+    "close_intent": False,   # set by close_all, cleared by engine 22 after acting
+}
+state["cycle_id"] = ...      # fresh each tick, minted by the orchestrator
+```
+
+Everything else — every engine's output key, `trading_blocked_by`, `block_reason` — is gone at the end of the tick. An engine in the manage chain that needs last cycle's decision reads it from the store, never from `state`, because on fourteen ticks out of fifteen the opportunity chain did not run and those keys do not exist.
+
+`run_id` lives only on `context.run_id`. It is minted once per daemon process by the orchestrator and is not duplicated into `state`.
+
+### The three runtime chains
+
+Every tick runs the ingest and manage chains. The opportunity chain runs only when the system is `running`.
 
 ```
-# CHAIN 1 — opportunity. May stop early.
-for engine in OPPORTUNITY_CHAIN:
-    result = run(engine)                       # exceptions -> ERROR
+# 0. Read commands. Sets state["system"]["mode"] and close_intent.
+consume_commands()
+
+# 1. INGEST — every tick, every mode. Never stops.
+for engine in INGEST_CHAIN:                    # exactly: 1, 2, 3, 4
+    result = run(engine)
     state[engine.name] = result.data
-    if result.blocks_trading:
+    if result.blocks_trading:                  # data_guard says the data is bad
         state["trading_blocked_by"] = engine.name
         state["block_reason"] = result.reason
-        break
-    if result.status is PASS:
-        break                                  # no candidate this cycle
+        # ingestion continues; only the opportunity chain is skipped
 
-# CHAIN 2 — always. Runs every tick regardless of what chain 1 did.
-for engine in ALWAYS_CHAIN:                    # exactly: 21, 22, 19
+# 2. OPPORTUNITY — only if running and ingest did not block. May stop early.
+if state["system"]["mode"] == "running" and "trading_blocked_by" not in state:
+    for engine in OPPORTUNITY_CHAIN:           # 5, 6, 7, 12, 13, 8, 9, 10, 11, 14, 15, 16, 17, 18
+        result = run(engine)
+        state[engine.name] = result.data
+        if result.blocks_trading:
+            state["trading_blocked_by"] = engine.name
+            state["block_reason"] = result.reason
+            break
+        if result.status is PASS:
+            break                              # no candidate this cycle
+
+# 3. MANAGE — every tick, every mode. Never stops.
+for engine in MANAGE_CHAIN:                    # exactly: 21, 22, 19
     result = run(engine)
     state[engine.name] = result.data
 ```
 
-**Chain 2 is exactly three engines: 21, 22, 19. Nothing else.**
+**Why ingestion is its own chain.** Freeze must stop trading without stopping data collection, because order-book and spread history can never be recovered. Engines 1 to 4 therefore run in every mode including `frozen` and `idle`. Only the opportunity chain is switched off by freeze.
 
-The loop ticks every minute but a new candidate is only born when a 15-minute bar closes, so chain 1 stops early on roughly fourteen ticks out of fifteen. If position management sat in chain 1, an open trade would go unwatched for fourteen minutes at a time and its stop would never fire. Chain 2 exists so `position_manager`, `exit` and `memory` run on every single tick no matter what.
+**Why manage is its own chain.** The loop ticks every minute but a candidate is only born when a 15-minute bar closes, so the opportunity chain stops early on roughly fourteen ticks out of fifteen. If position management sat in it, an open trade would go unwatched for fourteen minutes at a time and its stop would never fire. `position_manager`, `exit` and `memory` therefore run on every tick no matter what.
 
-**Engine 20 `tournament` is in neither runtime chain.** It scores realised outcomes, which only change when a trade closes, so recomputing a leaderboard every sixty seconds would be waste.
+**How the safety engine freezes the system.** Engine 17 cannot write `state["system"]` — only the orchestrator may. Instead it writes a `freeze` or `close_all` row to the **commands table** through `context.clients.store`, the same channel the console uses. Its `BLOCK` stops the current cycle; the command row makes the freeze persist, because the orchestrator consumes it at the top of the next tick. Every such row is an audit record of exactly when and why the system stopped itself.
 
-It runs in a third chain, `OFFLINE_CHAIN`, invoked by the `acsoe research` CLI command — never by the daemon loop. That command builds an `EngineContext` in `replay` mode and runs the offline chain in order. Engine 23 `backtest` runs there too. The CLI lives in `cli/` and belongs to A; the engines in it belong to C.
+**How close_all works.** The command reader sets `state["system"]["close_intent"] = True`. Engine 22 `exit`, running in the manage chain the same tick, closes every open position as a taker and clears the flag. Mode is then `frozen`. `frozen` alone means "stop opening, keep managing"; `frozen` plus `close_intent` means "liquidate now". They are distinguishable.
+
+**The offline chain.** Engine 20 `tournament` and engine 23 `backtest` run in `OFFLINE_CHAIN`, invoked only by `acsoe research`. That chain is **assembled in `cli/research.py`, never in `bootstrap.py`**, so the live loop path never imports from `research/` and architecture invariant 5 holds. `bootstrap.py` builds only the three runtime chains.
 
 A blocked candidate that never reaches storage is lost research data, and an unwatched position is lost money. Do not "simplify" the orchestrator into a single loop.
 
-If an engine in chain 2 is not yet registered — as in Phase 0, where none exist — the orchestrator skips it and logs at debug level. An empty chain is valid.
+If an engine in any chain is not yet registered — as in Phase 0, where none exist — the orchestrator skips it and logs at debug level. An empty chain is valid.
 
 ## Fixed engine order
 
@@ -98,10 +128,10 @@ The registry order is non-negotiable. The stage column refers to the runtime loo
 
 | # | Name | Gate | Chain | Runtime stage |
 |---|---|---|---|---|
-| 1 | `exchange` | | opportunity | 1 |
-| 2 | `market_data_recorder` | | opportunity | 1 |
-| 3 | `market_sensor` | | opportunity | 1 |
-| 4 | `data_guard` | **Y** | opportunity | 1 |
+| 1 | `exchange` | | **ingest** | 1 |
+| 2 | `market_data_recorder` | | **ingest** | 1 |
+| 3 | `market_sensor` | | **ingest** | 1 |
+| 4 | `data_guard` | **Y** | **ingest** | 1 |
 | 5 | `feature` | | opportunity | 2 |
 | 6 | `macro_context` | | opportunity | 2 |
 | 7 | `scout` | **Y** | opportunity | 2 |
@@ -116,12 +146,13 @@ The registry order is non-negotiable. The stage column refers to the runtime loo
 | 16 | `decision` | | opportunity | 3 |
 | 17 | `safety` | **Y** | opportunity | 3 |
 | 18 | `execution` | | opportunity | 4 |
-| 21 | `position_manager` | | **chain 2** | 4 |
-| 22 | `exit` | | **chain 2** | 4 |
-| 19 | `memory` | | **chain 2** | 4 |
-| 20 | `tournament` | | **offline chain** | — |
+| 21 | `position_manager` | | **manage** | 4 |
+| 22 | `exit` | | **manage** | 4 |
+| 19 | `memory` | | **manage** | 4 |
+| 20 | `tournament` | | **offline** | — |
+| 23 | `backtest` | | **offline** | — |
 
-Engine 23 (`backtest`) lives in `research/` and is never registered.
+Engine 23 `backtest` lives in `research/` and is registered only in `OFFLINE_CHAIN`, which `cli/research.py` assembles. It never appears in `bootstrap.py`.
 
 Note that 12 and 13 execute before 8 and 9. The numbers are identifiers, not execution order.
 
@@ -143,12 +174,10 @@ The README is not optional. It is how the next agent understands the engine with
 
 Each engine's `data` payload is typed in its own `contracts.py`. Orchestrator-level keys:
 
-- `state["system_mode"]` — `idle`, `running` or `frozen`. Set by the command reader at the top of every tick, before chain 1. Any engine may read it; only the orchestrator writes it.
-- `state["trading_blocked_by"]` — engine name, set on block
-- `state["block_reason"]` — the reason string
-- `state["cycle_id"]` — unique per loop iteration, joins logs, decisions and SHAP rows
-- `state["run_id"]` — unique per daemon process, names `models/<run_id>/`
+- `state["system"]` — the only persistent region. `mode` and `close_intent`. Written only by the orchestrator's command reader; readable by any engine.
+- `state["cycle_id"]` — fresh per tick, minted by the orchestrator, joins logs, decisions and SHAP rows.
+- `state["trading_blocked_by"]`, `state["block_reason"]` — set on block, fresh per tick.
 
-**The orchestrator mints both ids.** `run_id` once at startup, `cycle_id` once per tick. Nothing else generates them.
+`run_id` is `context.run_id`, nowhere else.
 
-**The orchestrator holds the `Clock`.** It is constructed by the CLI, passed to the orchestrator, and used once per tick to stamp `context.now`. No other component holds it, and no engine ever sees it — engines see only the already-stamped `context.now`.
+**The orchestrator holds the `Clock`.** It is constructed by the CLI, passed to the orchestrator, and used once per tick to stamp `context.now`. No engine ever sees it.

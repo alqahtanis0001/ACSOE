@@ -66,12 +66,16 @@ Settled with evidence. Do not relitigate. Changing one requires the operator, no
 
 - None. Add here rather than guessing.
 
-## Decisions taken after the Phase 0 audit
+## Decision history
+
+Four onboarding audits, in order. Later sections override earlier ones where they conflict; superseded lines are struck through. The current design is always `engine-contracts.md` and `architecture-context.md` — this section is the record of how it got there.
+
+### After the first audit
 
 The lead's onboarding audit found 25 issues. These were resolved by the operator:
 
 - `core/` holds contracts and the orchestrator only. Config, clock and logging moved to `platform/`, owned by A.
-- The orchestrator has two chains. The opportunity chain may stop early; the always chain — exactly 21, 22, 19 — runs every tick, while 20 runs offline. Without this, positions were never watched.
+- The orchestrator has three runtime chains: ingest (1–4, every tick, every mode), opportunity (5–18, only when running), manage (21, 22, 19, every tick, every mode). Engines 20 and 23 run in an offline chain via `acsoe research`. Without this split, positions were never watched, and freeze would have stopped the recorder.
 - `scripts/verify.py` is sequenced first in Phase 0 and reports PASS, FAIL or PENDING, so criteria can exist before the code they judge.
 - Every criterion runs offline against a recorded artefact. `--live` is opt-in and never required for a phase to be green.
 - Each agent owns `tests/` mirroring its own source paths, and its own `docs/build-log/phase-N/<agent>.md`.
@@ -87,13 +91,13 @@ The lead's onboarding audit found 25 issues. These were resolved by the operator
 - `config/LIVE_CONFIRMED` is compared against `context.now` in UTC.
 - The lead authors `config/default.yaml`.
 
-## Decisions taken after the second audit
+### After the second audit
 
 The lead's second audit found 22 issues, most of them decisions that had reached some files and not others. Resolved:
 
 - `code-standards.md` corrected — config, clock and logging are in `platform/`, not `core/`.
 - `core/` imports nothing. `Config`, `Clock` and `Clients` are Protocols declared in `core/contracts.py` and implemented in `platform/` and `clients/`.
-- Chain 2 is exactly three engines: 21, 22, 19. Engine 20 `tournament` is in neither chain — it runs offline after a trade closes, because a leaderboard does not change every sixty seconds.
+- ~~Chain 2 is exactly three engines: 21, 22, 19.~~ **Superseded by the fourth audit** — there are now three runtime chains; see below. Engine 20 still runs offline.
 - Paper-mode fallbacks are stated once, in a table, scoped to mode. Live mode always blocks. Fee falls back to tier 1; balance falls back to `paper.starting_balances`, a per-currency map; pair rules and spread have no fallback and block the pair.
 - `clients/recorder/` exists and belongs to A.
 - Per-task done is **no FAIL**. PENDING is expected mid-phase and only reaches zero at phase close.
@@ -108,19 +112,32 @@ The lead's second audit found 22 issues, most of them decisions that had reached
 - The eight non-ML engines are enumerated: 1, 2, 3, 4, 10, 11, 16, 17.
 - `.claude/settings.local.json` and `logs/` restored to `.gitignore`.
 
-## Decisions taken after the third audit
+### After the third audit
 
 - `.gitignore` gained `!tests/fixtures/**`. Without it `*.jsonl` and `*.parquet` silently swallowed every committed fixture, and the entire fresh-clone verification strategy failed without an error message.
 - The four phase criteria that depended on gitignored directories now name committed fixtures: `record_sample.jsonl`, `recording_report.json`, `labelled_sample.parquet`, `soak_digest.json`. The real runs moved behind `--live`.
 - Engine 20 has a caller. A third `OFFLINE_CHAIN` is invoked by `acsoe research`, never by the daemon. Engine 23 runs there too.
 - **Scout is deterministic.** Design question resolved: engine 7 contains no model — the universe filter is arithmetic and the ranking is a fixed score. It is therefore protected by invariant 4, and the non-ML count is nine, not eight. Engine 15 `skeptic` is the only model gate, and it can only veto.
-- `state["system_mode"]` — `idle`, `running`, `frozen` — is now an orchestrator key. Without it the kill switch had no channel.
+- ~~`state["system_mode"]` is now an orchestrator key.~~ **Superseded by the fourth audit** — the persistent key is `state["system"]`, holding `mode` and `close_intent`.
 - **The kill switch is `close_all`.** No fourth mechanism. Freeze stops new trades and keeps managing open ones; close_all ends exposure.
 - The orchestrator mints `run_id` and `cycle_id`, and holds the `Clock`. Engines see only `context.now`.
 - `paper.starting_balances` is a currency-to-amount map, not a scalar. One number cannot satisfy the per-quote-currency invariants.
 - Creating a directory is not owning the runtime data written into it. Rule 1 governs source files.
 - `console.poll_interval_ms` default dropped to 500 so the Phase 1 criterion is achievable; the criterion is now twice the poll interval.
 - `is_gate` is asserted by `verify.py` against the registry table, so a mis-registered gate fails loudly.
+
+### After the fourth audit
+
+- **Freeze no longer stops the recorder.** Engines 1–4 are now their own ingest chain that runs in every mode. Only the opportunity chain (5–18) is switched off by freeze. Order-book history is never lost to a freeze.
+- **The safety engine freezes via the commands table.** It cannot write `state["system"]`, so it writes a `freeze` or `close_all` row through the store, which the orchestrator consumes next tick. Same channel as the console, and every stop is an audit row.
+- **State is fresh every tick.** The only persistent region is `state["system"]` — `mode` and `close_intent` — carried by the orchestrator. Manage-chain engines read prior decisions from the store, never from stale state keys.
+- `close_intent` is the kill switch's data path. `frozen` alone means stop opening; `frozen` plus `close_intent` means liquidate now.
+- `run_id` lives only on `context.run_id`. The duplicate state key is gone.
+- Engine 23 is registered in `OFFLINE_CHAIN` only, which `cli/research.py` assembles. `bootstrap.py` never imports from `research/`, so invariant 5 holds.
+- Each agent deposits its own evidence fixtures under `tests/fixtures/`; C owns the structure and shared fixtures.
+- Anomaly is a data-quality gate (unsupervised, over market data) and stays protected. Skeptic is a learned opinion about the trade and stays excused. The distinction is now stated.
+- `acsoe research` ships in Phase 0 as a stub.
+- The stray empty code fence in `engine-contracts.md` is removed.
 
 ## Architecture Decisions
 
