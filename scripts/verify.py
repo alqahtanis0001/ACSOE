@@ -1092,11 +1092,100 @@ def check_record_sample_valid(ctx: VerifyContext) -> Outcome:
 # toolchain_green - spec 01
 # --------------------------------------------------------------------------- #
 
+# Third element is the highest exit code the tool produces *itself*. pytest
+# documents 0-5 (`pytest.ExitCode`); mypy and ruff use 0 for clean, 1 for findings
+# and 2 for a usage or internal error. A returncode above that range was not chosen
+# by the tool at all - the process died before it could return one.
 TOOLCHAIN = (
-    ("pytest", ["-m", "pytest", "tests/", "-q"]),
-    ("mypy", ["-m", "mypy", "--strict", "src/"]),
-    ("ruff", ["-m", "ruff", "check", "src/"]),
+    ("pytest", ["-m", "pytest", "tests/", "-q"], 5),
+    ("mypy", ["-m", "mypy", "--strict", "src/"], 2),
+    ("ruff", ["-m", "ruff", "check", "src/"], 2),
 )
+
+# Windows reports a fatal fault as an NTSTATUS in the returncode. Named here so the
+# criterion's one line is readable without going to look 3221225477 up.
+NTSTATUS_NAMES = {
+    0xC0000005: "ACCESS_VIOLATION",
+    0xC000001D: "ILLEGAL_INSTRUCTION",
+    0xC0000374: "HEAP_CORRUPTION",
+    0xC00000FD: "STACK_OVERFLOW",
+    0xC0000409: "STACK_BUFFER_OVERRUN",
+}
+
+_SUMMARY_DURATION = re.compile(r"\bin \d+(\.\d+)?s\b")
+_SUMMARY_COUNT = re.compile(r"\b\d+ (passed|failed|error|errors|skipped|xfailed|xpassed)\b")
+_SUMMARY_BAD = re.compile(r"\b\d+ (failed|error|errors)\b")
+
+
+def pytest_summary_line(output: str) -> str | None:
+    """pytest's final counts line, e.g. `519 passed, 1 error in 13.37s`.
+
+    Read from the end, because the same words appear in the progress output above
+    it. Returned so that a crash can be described against what the run had already
+    managed to report before it died.
+    """
+    for raw in reversed(output.strip().splitlines()):
+        line = raw.strip().strip("=").strip()
+        if _SUMMARY_DURATION.search(line) and _SUMMARY_COUNT.search(line):
+            return line
+    return None
+
+
+def exit_status(returncode: int) -> str:
+    """A returncode in the form the operator can actually look up."""
+    if returncode < 0:
+        return "fatal signal " + str(-returncode)
+    if returncode > 0xFFFF:
+        name = NTSTATUS_NAMES.get(returncode)
+        return (
+            str(returncode)
+            + " (0x"
+            + format(returncode, "08X")
+            + ("" if name is None else " " + name)
+            + ")"
+        )
+    return "exit " + str(returncode)
+
+
+def describe_exit(name: str, returncode: int, output: str, tool_max_exit: int) -> str:
+    """One toolchain failure, in words that separate a verdict from a death.
+
+    A tool exiting inside its own documented range has *reported* something, and the
+    tail of its output says what. A returncode outside that range is the process
+    dying: an NTSTATUS on Windows, `-N` for fatal signal N on POSIX.
+
+    That distinction is the entire point of this function. A process that crashes
+    *after* printing its summary is indistinguishable from a failing suite when all
+    you have is a returncode - which is how a memory fault gets filed as a flaky
+    test and re-run until it goes green instead of being fixed.
+    """
+    lines = output.strip().splitlines()
+    tail = " | ".join(t.strip() for t in lines[-3:]) if lines else "(no output)"
+    if 0 <= returncode <= tool_max_exit:
+        return name + " exit " + str(returncode) + ": " + tail
+
+    crashed = (
+        name
+        + " CRASHED: the process died with "
+        + exit_status(returncode)
+        + ", which is outside the 0-"
+        + str(tool_max_exit)
+        + " range "
+        + name
+        + " returns"
+    )
+    summary = pytest_summary_line(output) if name == "pytest" else None
+    if summary is None:
+        return crashed + ". Last output: " + tail
+    if _SUMMARY_BAD.search(summary):
+        return crashed + ", after reporting `" + summary + "`"
+    return (
+        crashed
+        + ", after reporting `"
+        + summary
+        + "` - every test passed and the process then died, so this is NOT a test "
+        + "failure and re-running until it goes green hides it"
+    )
 
 
 def _interpreter_with_toolchain(root: Path) -> tuple[str | None, list[str]]:
@@ -1155,7 +1244,8 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
     env = dict(os.environ)
     env[RECURSION_GUARD_ENV] = "1"
     failures: list[str] = []
-    for name, args in TOOLCHAIN:
+    crashed = False
+    for name, args, tool_max_exit in TOOLCHAIN:
         try:
             done = subprocess.run(  # fixed argv, never a shell
                 [interpreter, *args],
@@ -1169,14 +1259,16 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
             failures.append(name + " timed out after " + str(SUBPROCESS_TIMEOUT_S) + "s")
             continue
         if done.returncode != 0:
-            tail = (done.stdout + done.stderr).strip().splitlines()[-3:]
-            failures.append(
-                name + " exit " + str(done.returncode) + ": " + " | ".join(t.strip() for t in tail)
-            )
+            output = (done.stdout or "") + (done.stderr or "")
+            if not (0 <= done.returncode <= tool_max_exit):
+                crashed = True
+            failures.append(describe_exit(name, done.returncode, output, tool_max_exit))
 
     label = Path(interpreter).name
     if failures:
-        return failed("; ".join(failures))
+        # The prefix is deliberate: the criterion prints one line, and a crash has to
+        # be visible in it without opening anything.
+        return failed(("CRASH - " if crashed else "") + "; ".join(failures))
     return passed("pytest, mypy --strict and ruff all green (" + label + ")")
 
 

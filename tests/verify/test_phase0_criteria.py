@@ -589,6 +589,64 @@ def test_toolchain_does_not_recurse_into_itself(
     assert "subprocess" in outcome.message
 
 
+# A returncode alone cannot tell "the suite failed" from "the suite passed and the
+# process then died". The four below assert that distinction. The second case is the
+# one that matters: it is indistinguishable from a flaky test through a returncode,
+# and a memory fault filed as a flaky test gets re-run until it goes green.
+
+
+def test_summary_line_is_read_from_the_end_of_the_output(verify_module: ModuleType) -> None:
+    """The counts words also appear in the progress output above the summary."""
+    assert verify_module.pytest_summary_line("520 passed in 12.68s") == "520 passed in 12.68s"
+    assert (
+        verify_module.pytest_summary_line("....\n=== 1 failed, 519 passed in 13.0s ===")
+        == "1 failed, 519 passed in 13.0s"
+    )
+    assert verify_module.pytest_summary_line("Windows fatal exception") is None
+
+
+def test_a_crash_after_every_test_passed_is_reported_as_a_crash(
+    verify_module: ModuleType,
+) -> None:
+    """The insidious case, and the reason this code exists.
+
+    pytest printed `520 passed` and the process then died of a memory fault. Through
+    a returncode alone that reads as a failing suite, so the message has to say both
+    that it crashed and that the tests had already passed - otherwise the next
+    person re-runs it, sees green, and the fault stays in the tree.
+    """
+    message = verify_module.describe_exit(
+        "pytest", 3221225477, ".....\n520 passed in 12.68s\nWindows fatal exception", 5
+    )
+    assert "CRASHED" in message
+    assert "0xC0000005 ACCESS_VIOLATION" in message
+    assert "520 passed in 12.68s" in message
+    assert "NOT a test failure" in message
+
+
+def test_an_ordinary_failing_suite_is_not_described_as_a_crash(
+    verify_module: ModuleType,
+) -> None:
+    """The other direction. Exit 1 is a verdict pytest chose, and must read as one."""
+    message = verify_module.describe_exit(
+        "pytest", 1, "FAILED tests/x.py::test_y\n1 failed, 519 passed in 13.0s", 5
+    )
+    assert "CRASHED" not in message
+    assert message.startswith("pytest exit 1: ")
+
+
+def test_a_crash_is_recognised_per_tool_by_that_tools_own_exit_range(
+    verify_module: ModuleType,
+) -> None:
+    """mypy and ruff return 0, 1 or 2; pytest returns 0 through 5. Above a tool's own
+    range the value was not chosen by the tool - the process died before it could."""
+    assert "CRASHED" not in verify_module.describe_exit("mypy", 2, "usage error", 2)
+    assert "CRASHED" in verify_module.describe_exit("mypy", 3221226356, "", 2)
+    assert "fatal signal 11" in verify_module.describe_exit("ruff", -11, "", 2)
+    # pytest's own range stays a verdict, including the codes that are not 0 or 1.
+    assert "CRASHED" not in verify_module.describe_exit("pytest", 5, "no tests ran", 5)
+
+
 # --------------------------------------------------------------------------- #
 # is_gate_matches_registry
 # --------------------------------------------------------------------------- #
