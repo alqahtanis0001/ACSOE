@@ -50,7 +50,7 @@
 
 ## Logging
 
-- `structlog`, JSON output, one event per line.
+- `structlog`, JSON output, one event per line, written to `logs/` with daily rotation. `logs/` is gitignored — never commit a log.
 - Every log line inside the loop carries `cycle_id` and `run_id`.
 - Log the decision, not the narration. `gate_blocked engine=cost net_edge=-0.0021` beats "checking if the trade is profitable".
 - **Never log an API key, a signature, or a nonce.** Redact at the client layer, not at the call site.
@@ -66,7 +66,7 @@
 
 ## Verification
 
-Four commands. All four must be green before any task is reported complete.
+Four commands. All four must be green before any task is reported complete. For `verify.py` mid-phase, green means **no FAIL** — PENDING is expected until phase close.
 
 ```
 pytest tests/ -q
@@ -86,7 +86,8 @@ python scripts/verify.py --phase N
 
 ## File organisation
 
-- `src/acsoe/core/` — contracts, orchestrator, config, clock, logging
+- `src/acsoe/core/` — contracts and the orchestrator only. No dependencies on anything else in the package.
+- `src/acsoe/platform/` — config, clock, logging, and the live-mode guard
 - `src/acsoe/engines/<name>/` — one engine, three files
 - `src/acsoe/clients/` — everything that talks to the outside world
 - `src/acsoe/research/` — offline labelling, training, walk-forward

@@ -61,7 +61,7 @@ These are not stylistic. Misread numbers cost money.
 2. Percentages are always explicitly signed: `+0.62%`, `−1.50%`. Never bare.
 3. **Colour is never the only signal.** The sign carries the meaning; colour reinforces it. A red-green colourblind operator must lose nothing.
 4. Money renders to the quote currency's own precision from `AssetPairs`, never more digits than the exchange itself uses.
-5. Any figure older than two loop ticks renders at 50% opacity with its age shown beside it. Stale data must look stale.
+5. Any figure older than `console.stale_after_ms` renders at 50% opacity with its age shown beside it. Stale data must look stale.
 6. Use a proper minus sign (−, U+2212) in numeric output, not a hyphen. Hyphens break tabular alignment.
 
 ## Layout
@@ -117,7 +117,9 @@ The page is read-only except for three commands — Activate, Freeze, Close all 
 
 ## How the console learns about changes
 
-The daemon and the console are separate processes sharing SQLite. The console polls a monotonically increasing `updated_at` watermark at `console.poll_interval_ms` from config — never a hardcoded number — and pushes over the WebSocket only when the watermark moves. No triggers, no file watching, no polling from the browser.
+The daemon and the console are separate processes sharing SQLite. The console polls a monotonically increasing `updated_at` watermark at `console.poll_interval_ms` from config — never a hardcoded number — and pushes over the WebSocket only when the watermark moves.
+
+`console.poll_interval_ms` defaults to 1000 and **must always be well below `console.stale_after_ms`** (default 120000, two loop ticks). Config validation rejects a poll interval above a quarter of the stale threshold. Without that rule a slow poll would fade the entire screen to half opacity permanently. No triggers, no file watching, no polling from the browser.
 
 The port is `console.port` in config. The README's `127.0.0.1:8765` is the default value, not a second source of truth.
 

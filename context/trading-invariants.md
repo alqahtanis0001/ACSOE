@@ -6,7 +6,9 @@ These rules protect real money. They outrank tests, deadlines, convenience, and 
 
 ## 1. Live trading requires three independent switches
 
-All three must be true, or the system runs in paper mode:
+Implemented in `platform/live_guard.py`, owned by Agent A, and called once at startup and again whenever mode is read. All three conditions must be true, or the system runs in paper mode.
+
+They are three independent *conditions*, not three read paths — reading all three through the config layer is correct and does not violate the environment-variable rule.
 
 1. Environment variable `ACSOE_LIVE=1`
 2. Config field `mode: live`
@@ -16,20 +18,35 @@ The default in every config file, every test fixture, and every example is `pape
 
 ## 2. Nothing is hardcoded that the exchange can tell us
 
-| Value | Source | On fetch failure |
-|---|---|---|
-| Maker and taker fee | `POST /0/private/TradeVolume` | Block trading |
-| `ordermin`, `costmin`, tick size, decimals | `GET /0/public/AssetPairs` | Block that pair |
-| Balances | `POST /0/private/Balance` | Block trading |
+| Value | Source |
+|---|---|
+| Maker and taker fee | `POST /0/private/TradeVolume` |
+| `ordermin`, `costmin`, tick size, decimals | `GET /0/public/AssetPairs` |
+| Balances | `POST /0/private/Balance` |
+| Spread | Live order book |
 
-**In paper mode**, a failed fee or balance fetch does not block. Fall back to **tier 1** — the worst tier — and log that the fallback occurred on every affected decision. Never fall back to a better tier, and never apply this exception in live mode. This exists so a fresh clone with an empty `.env` can still run the pipeline and generate research data.
-| Spread | Live order book | Block that pair |
+There is no hardcoded fee, minimum, tick size or precision anywhere in the codebase. A cache stale beyond its TTL counts as a failed fetch.
 
-There is no default fee. There is no fallback minimum. A stale cache beyond its TTL is a fetch failure. Blocking is always the correct response to not knowing a cost.
+### What a failed fetch does, by mode
+
+**In live mode, a failed fetch always blocks.** Blocking is the correct response to not knowing a cost. There is no exception, and nothing below applies.
+
+**In paper mode**, so that a fresh clone with an empty `.env` can still run the pipeline and generate research data:
+
+| Failed fetch | Paper-mode fallback |
+|---|---|
+| Fee tier | Assume **tier 1**, the worst tier |
+| Balance | Use `paper.starting_balance` from config, adjusted by simulated fills |
+| Pair rules | Block that pair. No fallback — a wrong `ordermin` produces invalid orders |
+| Spread | Block that pair. No fallback — an assumed spread invalidates the cost gate |
+
+Every decision affected by a fallback records which fallback fired. A fallback is never optimistic: it may only make the system less willing to trade.
+
+This is the only exception in this document. Where any other rule here says a failed fetch blocks, it means live mode, and this section is what governs paper.
 
 ## 3. Every gate is fail-closed
 
-A gate that errors blocks. A gate that cannot reach its data blocks. A gate that returns an unparseable result blocks. Absence of a "no" is never a "yes".
+A gate that errors blocks. A gate that cannot reach its data blocks, subject only to the paper-mode fallbacks in rule 2. A gate that returns an unparseable result blocks. Absence of a "no" is never a "yes".
 
 Gate engines: 4 (data guard), 7 (scout), 10 (cost), 11 (risk), 13 (anomaly), 15 (skeptic), 17 (safety).
 

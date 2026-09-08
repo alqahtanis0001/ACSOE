@@ -58,7 +58,7 @@ ruff check src/
 python scripts/verify.py --phase N
 ```
 
-If any fail, fix them. Do not hand back failing work and do not report a task complete on the task list until these are green.
+For a single task, the bar is **no FAIL**. PENDING criteria are expected until the phase is finished. If anything FAILs, fix it. Do not hand back failing work and do not report a task complete on the task list until these are green.
 
 For any gate engine, you must also have written one test proving it blocks and one proving it passes. A gate with only a happy-path test is incomplete.
 
@@ -67,7 +67,7 @@ For any gate engine, you must also have written one test proving it blocks and o
 Before marking a task complete:
 
 - `context/progress/<agent>.md` — what you built, what is in progress, what blocked you, any open questions.
-- `docs/build-log/phase-N.md` — append your entries per `context/script-rules.md`. Every non-trivial bug and its fix goes here. This is dissertation material and it cannot be reconstructed later.
+- `docs/build-log/phase-N/<agent>.md` — append your entries per `context/script-rules.md`. Every non-trivial bug and its fix goes here. This is dissertation material and it cannot be reconstructed later.
 
 ### 6. Lead: review
 

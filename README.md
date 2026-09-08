@@ -29,10 +29,14 @@ AGENTS.md            entry point for coding agents — read this first
 context/             the specification: invariants, contracts, standards, workflow
 feature-specs/       numbered implementation units
 docs/build-log/      what broke and how it was fixed, per phase
-src/acsoe/           the system
+src/acsoe/           the system: core/, platform/, clients/, engines/, research/, console/, cli/
+tests/               harness, fixtures, and per-agent test files
 scripts/             verify.py (executable phase gates), record.py (day-one recorder)
 db/migrations/       SQLite schema
 config/              default.yaml, paper mode
+data/                recordings, candles, database — gitignored
+models/              trained artefacts — gitignored
+logs/                structlog JSON output — gitignored
 ```
 
 ## Setup

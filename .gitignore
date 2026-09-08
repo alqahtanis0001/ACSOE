@@ -36,3 +36,9 @@ build/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Agent config — project settings.json IS committed, local overrides are not
+.claude/settings.local.json
+
+# Logs
+logs/

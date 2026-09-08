@@ -10,7 +10,7 @@ This is a Master's dissertation project. Its value is the rigour of the rejectio
 
 **Reject first; execute only with verified net edge.**
 
-Most of the system exists to say no. Eight of the twenty-three engines contain no machine learning at all — the components that protect capital are auditable arithmetic, not models anyone has to trust.
+Most of the system exists to say no. Eight of the twenty-three engines contain no machine learning at all — 1 `exchange`, 2 `market_data_recorder`, 3 `market_sensor`, 4 `data_guard`, 10 `cost`, 11 `risk`, 16 `decision` and 17 `safety`. The components that protect capital are auditable arithmetic, not models anyone has to trust.
 
 ## What makes it different from a retail bot
 

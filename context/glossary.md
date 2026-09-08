@@ -78,7 +78,7 @@ These terms have precise meanings in this codebase. Do not substitute your own.
 
 **Stage** — a step in the runtime loop, 1 to 4, from `architecture-context.md`. Never used to mean a build phase.
 
-**Script** — the build log at `docs/build-log/phase-N.md`. When the operator says "update the progress tracker and script", this is the script.
+**Script** — the build log. Each agent writes `docs/build-log/phase-N/<agent>.md`; the lead consolidates into `docs/build-log/phase-N.md` at phase close. When the operator says "update the progress tracker and script", this is the script.
 
 **Execution offset bandit** — not an engine. A small pooled selector inside `engines/execution/` that learns how far below market to place a post-only limit, bucketed by spread tier, with its state in the store.
 

@@ -71,7 +71,7 @@ Settled with evidence. Do not relitigate. Changing one requires the operator, no
 The lead's onboarding audit found 25 issues. These were resolved by the operator:
 
 - `core/` holds contracts and the orchestrator only. Config, clock and logging moved to `platform/`, owned by A.
-- The orchestrator has two chains. The opportunity chain may stop early; the always chain (21, 22, 19, 20) runs every tick. Without this, positions were never watched.
+- The orchestrator has two chains. The opportunity chain may stop early; the always chain — exactly 21, 22, 19 — runs every tick, while 20 runs offline. Without this, positions were never watched.
 - `scripts/verify.py` is sequenced first in Phase 0 and reports PASS, FAIL or PENDING, so criteria can exist before the code they judge.
 - Every criterion runs offline against a recorded artefact. `--live` is opt-in and never required for a phase to be green.
 - Each agent owns `tests/` mirroring its own source paths, and its own `docs/build-log/phase-N/<agent>.md`.
@@ -86,6 +86,27 @@ The lead's onboarding audit found 25 issues. These were resolved by the operator
 - Paper mode falls back to tier 1 on a failed fee fetch and logs it. Live mode still blocks.
 - `config/LIVE_CONFIRMED` is compared against `context.now` in UTC.
 - The lead authors `config/default.yaml`.
+
+## Decisions taken after the second audit
+
+The lead's second audit found 22 issues, most of them decisions that had reached some files and not others. Resolved:
+
+- `code-standards.md` corrected — config, clock and logging are in `platform/`, not `core/`.
+- `core/` imports nothing. `Config`, `Clock` and `Clients` are Protocols declared in `core/contracts.py` and implemented in `platform/` and `clients/`.
+- Chain 2 is exactly three engines: 21, 22, 19. Engine 20 `tournament` is in neither chain — it runs offline after a trade closes, because a leaderboard does not change every sixty seconds.
+- Paper-mode fallbacks are stated once, in a table, scoped to mode. Live mode always blocks. Fee falls back to tier 1; balance falls back to `paper.starting_balance`; pair rules and spread have no fallback and block the pair.
+- `clients/recorder/` exists and belongs to A.
+- Per-task done is **no FAIL**. PENDING is expected mid-phase and only reaches zero at phase close.
+- Every criterion must pass on a fresh clone. Evidence lives in committed fixtures under `tests/fixtures/`, never in gitignored `data/`. `--live` verifies the real run and is never required for green.
+- `logs/` exists, belongs to A, and is gitignored.
+- The command table has defined semantics and a reader: the orchestrator, in `core/`, at the top of every tick, marking each command consumed.
+- The three-switch live check is `platform/live_guard.py`, A's. Three conditions, not three read paths.
+- `feature-specs/` has a mandatory template, so Scope Limits is a defined section.
+- C owns `tests/` root, `conftest.py` and `tests/fixtures/`. A creates `data/` and `logs/`.
+- "Within one tick" means one `tick_size` from `AssetPairs`.
+- `console.poll_interval_ms` must be under a quarter of `console.stale_after_ms`, enforced by config validation.
+- The eight non-ML engines are enumerated: 1, 2, 3, 4, 10, 11, 16, 17.
+- `.claude/settings.local.json` and `logs/` restored to `.gitignore`.
 
 ## Architecture Decisions
 

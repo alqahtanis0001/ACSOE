@@ -17,7 +17,7 @@ class EngineContext:
     mode: Literal["paper", "live", "replay"]
     run_id: str
     now: datetime               # UTC, injected. Engines never read the clock.
-    config: Config
+    config: Config             # a Protocol declared in core/, implemented in platform/
     clients: Clients            # kraken, store, recorder — injected, never constructed
 
 
@@ -70,12 +70,16 @@ for engine in OPPORTUNITY_CHAIN:
         break                                  # no candidate this cycle
 
 # CHAIN 2 — always. Runs every tick regardless of what chain 1 did.
-for engine in ALWAYS_CHAIN:                    # 21, 22, then 19
+for engine in ALWAYS_CHAIN:                    # exactly: 21, 22, 19
     result = run(engine)
     state[engine.name] = result.data
 ```
 
-**Why two chains.** The loop ticks every minute but a new candidate is only born when a 15-minute bar closes, so chain 1 stops early on roughly fourteen ticks out of fifteen. If position management sat in chain 1, an open trade would go unwatched for fourteen minutes at a time and its stop would never fire. Chain 2 exists so `position_manager` (21), `exit` (22) and `memory` (19) run on every single tick no matter what.
+**Chain 2 is exactly three engines: 21, 22, 19. Nothing else.**
+
+The loop ticks every minute but a new candidate is only born when a 15-minute bar closes, so chain 1 stops early on roughly fourteen ticks out of fifteen. If position management sat in chain 1, an open trade would go unwatched for fourteen minutes at a time and its stop would never fire. Chain 2 exists so `position_manager`, `exit` and `memory` run on every single tick no matter what.
+
+**Engine 20 `tournament` is not in either chain.** It scores realised outcomes, which only change when a trade closes, so recomputing a leaderboard every sixty seconds would be waste. It runs offline, invoked after a trade closes and during the research loop.
 
 A blocked candidate that never reaches storage is lost research data, and an unwatched position is lost money. Do not "simplify" the orchestrator into a single loop.
 
@@ -105,10 +109,10 @@ The registry order is non-negotiable. The stage column refers to the runtime loo
 | 16 | `decision` | | opportunity | 3 |
 | 17 | `safety` | **Y** | opportunity | 3 |
 | 18 | `execution` | | opportunity | 4 |
-| 21 | `position_manager` | | **always** | 4 |
-| 22 | `exit` | | **always** | 4 |
-| 19 | `memory` | | **always** | 4 |
-| 20 | `tournament` | | **always** | 4 |
+| 21 | `position_manager` | | **chain 2** | 4 |
+| 22 | `exit` | | **chain 2** | 4 |
+| 19 | `memory` | | **chain 2** | 4 |
+| 20 | `tournament` | | offline | — |
 
 Engine 23 (`backtest`) lives in `research/` and is never registered.
 

@@ -27,7 +27,7 @@ Target OS is Windows. Any path handling must use `pathlib`, never string concate
 ```
 src/acsoe/
   core/                 contracts, orchestrator only                     [LEAD ONLY]
-  platform/             config, clock, logging, DI-free infrastructure    [AGENT A]
+  platform/             config, clock, logging, live_guard                [AGENT A]
   bootstrap.py          engine registry and wiring                       [LEAD ONLY]
   engines/
     <engine_name>/
@@ -35,8 +35,9 @@ src/acsoe/
       contracts.py      pydantic models for this engine's output
       README.md         what it does, inputs, outputs, gate behaviour
   clients/
-    kraken/             REST client, WebSocket client, rate limiter
-    store/              SQLite and Parquet access
+    kraken/             REST client, WebSocket client, rate limiter   [AGENT A]
+    store/              SQLite and Parquet access                     [AGENT B]
+    recorder/           append-only raw JSONL writer                  [AGENT A]
   research/             offline only: labelling, training, walk-forward
   console/              FastAPI app, static assets
   cli/                  acsoe engine, acsoe console entrypoints
@@ -45,8 +46,11 @@ scripts/
   record.py             standalone day-one recorder, no framework deps
 db/
   migrations/           SQLite schema, forward-only
+logs/                   structlog JSON output, rotated daily          [AGENT A]
 docs/
-  build-log/            one file per phase, written by agents as they work
+  build-log/
+    phase-N/            one file per agent, written as they work
+    phase-N.md          the lead's consolidation at phase close
 config/
   default.yaml          paper mode, all thresholds
 data/
@@ -70,7 +74,7 @@ Every engine lives in its own directory. Never collapse engine logic into a shar
 | 1. Ingestion and gatekeeping | 1, 2, 3, 4 | Every tick |
 | 2. Screening | 5, 6, 7 | On each closed 15-minute bar |
 | 3. Judgement | 8–17 | On the candidate only |
-| 4. Execution, management, learning | 18, 21, 22, 19, 20 | On the position |
+| 4. Execution, management, learning | 18 on a new trade; 21, 22, 19 every tick | 18 with a candidate, chain 2 always |
 
 Engine 23 runs offline and is never invoked by the live loop.
 
@@ -79,7 +83,7 @@ Engine 23 runs offline and is never invoked by the live loop.
 Three distinct concepts. Do not conflate them.
 
 - **Decision bar: 15 minutes.** Features and labels are computed on closed 15-minute candles. New candidates are only born when a bar closes.
-- **Holding horizon: 2 to 12 hours.** Target +3%, stop −1.5%, timeout after 24 bars.
+- **Holding horizon: 2 to 12 hours.** Target +3%, stop −1.5%, timeout after 48 bars.
 - **Loop tick: 1 minute.** Manages open positions and entry orders. Never generates new signals.
 
 ## Data sources
@@ -97,7 +101,7 @@ Two properties that must be handled explicitly:
 
 Kraken WebSocket v2, recorded append-only to `data/raw/`.
 
-**Order book and spread data can only be gathered going forward and can never be recovered retroactively.** The recorder must run continuously from Phase 1 onward, regardless of what else is being built.
+**Order book and spread data can only be gathered going forward and can never be recovered retroactively.** `scripts/record.py` ships in Phase 0 and must run continuously from the day Phase 0 closes, regardless of what else is being built.
 
 ### The consequence
 
@@ -123,6 +127,20 @@ The SQLite schema and a seed generator producing realistic fake rows are built i
 
 `scripts/record.py` is a standalone Phase 0 deliverable with no dependency on the engine framework. It exists because order-book and spread history cannot be recovered retroactively, so recording must start on day one rather than waiting for Phase 2. Engines 1 and 2 supersede it.
 
+## The command table
+
+The console writes rows to a `commands` table; the daemon reads them. Semantics:
+
+| Command | Effect |
+|---|---|
+| `activate` | State goes `idle` to `running`. The loop begins ticking. |
+| `freeze` | State goes to `frozen`. Chain 1 stops entirely; chain 2 keeps running so open positions are still managed. |
+| `close_all` | Every open position exits immediately as a taker, then state goes to `frozen`. |
+
+The daemon reads pending commands **at the top of every tick**, before chain 1, in the orchestrator. That reader lives in `core/` and is the lead's. Each command is marked consumed with its timestamp so it never fires twice, and every consumption is logged as an audit row.
+
+An unrecognised command is ignored and logged as a warning. It never blocks the loop.
+
 ## Modes
 
 - **paper** — default. Full pipeline runs, orders go to the fill simulator, no exchange mutation.
@@ -133,7 +151,7 @@ The same engine code runs in all three modes. Mode differences live only in the 
 
 ## Invariants
 
-0. `core/` holds contracts and the orchestrator and nothing else. Config, clock and logging live in `platform/` so that `core/` has no dependencies and Agent A can own the infrastructure without touching lead-only paths.
+0. `core/` holds contracts and the orchestrator and nothing else, and **imports nothing from the rest of the package**. `core/contracts.py` declares `Config`, `Clock` and `Clients` as `typing.Protocol`s; `platform/` and `clients/` provide the concrete implementations. That is what makes the lead-versus-A boundary work: the lead owns the shape, A owns the implementation, and neither writes in the other's directory.
 1. Engines are stateless across cycles. All state lives in the `state` dict or the store.
 2. Engines never call the network directly; they use injected clients.
 3. Engines never read the clock; they use `context.now`.
