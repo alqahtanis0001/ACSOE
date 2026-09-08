@@ -59,7 +59,7 @@ When the lead retires a term, adding it to this table is part of the same change
 So when a change introduces or alters a rule, the lead still does this by hand, before the phase closes:
 
 1. Name the file that has authority over the rule — `trading-invariants.md` for anything touching money, gates or modes; `engine-contracts.md` for the engine interface and the chains; `architecture-context.md` for layout, storage and the command table. Write the rule *there* first.
-2. Grep for the claim the new rule contradicts, not for the new rule. A new exception means some file somewhere currently says "always" or "never" or "the only". Those words are the search.
+2. Grep for the claim the new rule contradicts, not for the new rule. A new exception means some file somewhere currently says "always" or "never" or "the only". Those words are the search. **Grep `AGENTS.md` and `README.md`, not just `context/`.** Twice now a rule has landed in the context files and missed the entry point — the file every agent reads first, before any of the documents the rule was written into.
 3. Have every other mention point at the authority file rather than restate it. Restatements are what drift.
 
 ## The feature-spec format
