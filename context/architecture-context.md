@@ -116,10 +116,29 @@ Engine 9 (order book) and the spread component of Engine 10 cannot be backtested
 | Raw market recordings | JSONL in `data/raw/` | Append-only, daily rotation, compacted to Parquet |
 | Built candles, feature snapshots | Parquet in `data/derived/` | Rebuildable from raw |
 | Trades, rejections, runs, leaderboard | SQLite | Small, relational, queried constantly |
+| Block records | SQLite, table `block_records` | One row per **tick** on which trading was blocked. Not a column on `rejections` — see below |
 | Trained models | Files in `models/` | Versioned by training run id, never overwritten |
 | SHAP explanations | Parquet, joined by decision id | One row per decision |
 
 Never put large arrays in SQLite. Never put relational records in Parquet.
+
+### Why `block_records` is its own table
+
+A rejection is one *candidate* refused, with its reason and its SHAP row. A block record is one *tick* on which trading was blocked, and most blocked ticks never had a candidate at all — `data_guard` blocks before the opportunity chain has run. Folding blocks into `rejections` would mean writing candidate-less rejection rows, inflating the counterfactual dataset that is the point of the whole exercise: anyone counting refused trades would be counting feed outages too.
+
+They join on `cycle_id`. A blocked tick that *did* have a candidate produces one row in each.
+
+Engine 17 `safety` derives its outage count from this table, so the columns are fixed:
+
+| Column | Purpose |
+|---|---|
+| `cycle_id` | The tick. Joins to `rejections`, logs and SHAP rows |
+| `run_id` | The daemon process |
+| `ts` | `context.now`, UTC, microseconds since epoch |
+| `blocked_by` | Engine name, from `state["trading_blocked_by"]` |
+| `block_reason` | The reason string, from `state["block_reason"]` |
+
+**Order by `ts`, never by `cycle_id`.** `cycle_id` is minted per tick within a run and restarts with the process, so ordering a cross-restart sequence by it silently interleaves two runs. The outage counter has to survive a restart, which is precisely the case that would break.
 
 ## Build order
 

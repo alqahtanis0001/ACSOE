@@ -25,7 +25,14 @@ The default in every config file, every test fixture, and every example is `pape
 | Balances | `POST /0/private/Balance` |
 | Spread | Live order book |
 
-There is no hardcoded fee, minimum, tick size or precision anywhere in the codebase. A cache stale beyond its TTL counts as a failed fetch.
+There is no hardcoded fee, minimum, tick size or precision anywhere in the codebase.
+
+**A cache stale beyond its TTL counts as a failed fetch, and is retained anyway.** Those are two rules sharing a word, and collapsing them into one breaks the kill switch:
+
+- *For trading*, a stale value does not exist. It may never price a hurdle, size a position, or satisfy a gate. That is all "counts as a failed fetch" means.
+- *For an emergency liquidation*, it is the last thing the system knows, and knowing it beats being stuck. `clients/kraken/` **retains the last successful value of every row in the table above**, with the timestamp it was fetched, and never discards it on a failure. Only rule 14 may read it.
+
+Discarding on failure would make rule 14 unimplementable at exactly the moment it is needed, so retention is a requirement on Agent A's client, not an optimisation.
 
 ### What a failed fetch does, by mode
 
@@ -99,6 +106,7 @@ All Kraken quote currencies are scanned, but:
 
 - Entry is always a **post-only limit** order (`oflags=post`). If it would cross the book, Kraken cancels it — that is the intended behaviour.
 - If an entry order is unfilled after the configured window, cancel it and abandon the candidate. **Never chase with a market order.**
+- That cancellation still happens while the manage chain is holding on a `data_guard` block. It is a decision about elapsed time, not about price: it reads `context.now`, needs no market data, and reduces exposure. The hold suppresses **exits**, never this.
 - A `close_all` cancels every resting entry order immediately, regardless of that window, before positions are closed. An uncancelled post-only limit is not a position, so it survives a liquidation and can fill minutes later — re-opening exposure after the emergency stop was pulled. The kill switch is not complete until the book is clear of both.
 - Exits on target may be maker. Exits on stop must be immediate and may be taker.
 - Every order carries a `userref` for idempotency. Never place an order without checking whether that `userref` already exists.
@@ -130,7 +138,18 @@ API keys come from the environment only. Never logged, never committed, never wr
 
 Everything else in this document makes the system less willing to act. This rule is the single place where the system is made *more* willing to act, and it exists because **unknown exposure is worse than a bad fill**.
 
-When `close_intent` is set — by an operator pressing Close all, or by engine 17 `safety` — the liquidation proceeds regardless of:
+### When it fires
+
+`close_intent` is set in exactly two ways: an operator presses Close all, or engine 17 `safety` escalates. `safety` escalates on either of two account-level conditions:
+
+- **Its configured drawdown and loss-streak limits** are breached.
+- **A sustained data outage.** Once `data_guard` has blocked more than `safety.max_consecutive_data_blocks` consecutive ticks — default **15** — `safety` writes `close_all`. The manage chain holds exits while the guard is rejecting data, and a hold that never ends is a position carried indefinitely on data nobody trusts. Fifteen one-minute ticks is one full decision bar: long enough that a websocket reconnect never liquidates the account, short enough that nothing is carried through a second bar.
+
+`safety` escalates when there are **open positions or resting entry orders**. A resting post-only buy is exposure that has not happened yet; left on the book through a blackout it can open a position into a market the system has already declared untrustworthy.
+
+### What it overrides
+
+When `close_intent` is set the liquidation proceeds regardless of:
 
 - **A `data_guard` block.** The manage chain normally holds when the guard rejects the tick's data, placing no target, stop or timeout exit. A liquidation is not held. The system stops reasoning about price quality and gets flat.
 - **A failed fetch, in any mode.** This is the case that matters most and is the easiest to miss: a feed outage is what triggers the escalation, and the same outage is likely failing the balance and order-book fetches. If rule 2's live-mode block applied here, `close_all` would be blocked by the exact condition it exists to answer. During a liquidation, engines 21 and 22 may use the last known good balances and the cached `AssetPairs` metadata **past its TTL**. This is the only place in the system where a stale cache is acceptable.
@@ -141,5 +160,3 @@ Constraints that still hold during a liquidation:
 - Every order still carries a `userref` and is still checked for idempotency. A liquidation that double-sells is not a liquidation.
 - The override applies only to exiting. It never permits an entry, and it never relaxes a gate for a new position.
 - Every fetch failure tolerated under this rule is recorded on the resulting trade, exactly as a paper-mode fallback is, so the fill is never mistaken for one priced on good data.
-
-This rule is why `project-overview.md` says gates are overridden in exactly one direction, and why `engine-contracts.md` does not restate the reasoning: it lives here.

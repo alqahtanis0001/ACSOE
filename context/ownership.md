@@ -21,7 +21,7 @@ Not every phase needs all three. Phase 1 is almost entirely C; Phase 3 is almost
 |---|---|
 | **Lead** | `core/`: `BaseEngine`, `EngineContext`, `EngineResult`, `EngineStatus`, `State`, the three-chain orchestrator (guard, opportunity, manage) including the two-phase command reader, the empty `bootstrap.py` registry, and `config/default.yaml` with every threshold named |
 | **A** | Package skeleton, `pyproject.toml`, and `src/acsoe/platform/`: config loader and validation, `structlog` setup, the injected clock. Plus all three CLI entrypoints — `acsoe engine`, `acsoe console`, and `acsoe research` as a stub that reports no offline engines registered until Phase 4 — and `scripts/record.py` |
-| **B** | SQLite schema and migrations, the store client, and the seed generator producing realistic fake trades, rejections, positions and leaderboard rows |
+| **B** | SQLite schema and migrations — including `commands` with `claimed_at`/`consumed_at` and `block_records` — the store client, and the seed generator producing realistic fake trades, rejections, positions, leaderboard rows **and block records, including a run of consecutive `data_guard` blocks long enough for Phase 3 to test the outage escalation against** |
 | **C** | `scripts/verify.py` **first**, then the test harness, the fake Kraken client with recorded fixtures, and shared pytest fixtures. Verify must exist before A and B can report anything complete |
 
 `scripts/record.py` is deliberately in Phase 0 and deliberately dumb: a standalone WebSocket-to-JSONL recorder with no dependency on the engine framework. Order-book and spread history cannot be recovered retroactively, so it starts collecting on day one and is superseded by Engines 1 and 2 in Phase 2.
@@ -77,7 +77,9 @@ Agree the contract first, mock it, build against the mock.
 | Decision-bar tick (`bar_closed`) | A | C | `engines/market_sensor/contracts.py` |
 | Close-all completion flags | B | Lead | `engines/position_manager/contracts.py`, `engines/exit/contracts.py` |
 | Manage-chain hold (`hold_reason`) | B | C (19 `memory`, console) | `engines/position_manager/contracts.py` |
-| Per-tick block record, and the outage count derived from it | C (19 `memory`) writes, B (17 `safety`) reads | — | `clients/store/contracts.py` |
+| Per-tick block record, and the outage count derived from it | C (19 `memory`) writes, B (17 `safety`) reads | — | `db/migrations/`, `clients/store/contracts.py` |
+| Last-known-good exchange values, retained for emergency liquidation only | A (`clients/kraken/`) | B (21 `position_manager`, 22 `exit`) | `clients/kraken/contracts.py` |
+| Run record, written at startup, read for restart detection | Lead (orchestrator) | C (console) | `clients/store/contracts.py` |
 | Offline chain invocation | A owns `acsoe research`; C owns engines 20 and 23 | — | `cli/research.py` |
 | 15-minute candles | A | C | `engines/market_sensor/contracts.py` |
 | Store read and write | B | A, C | `clients/store/contracts.py` |

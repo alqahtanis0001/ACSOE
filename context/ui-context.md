@@ -98,7 +98,7 @@ Stillness becomes information. This is the single most-viewed screen state in th
 
 A daemon always starts `idle` and never restores its mode, so a crash at 3am leaves a system that is up, watching its open positions, and not trading. That is the safe behaviour, but it is silent: the status band would read `Idle`, which is also what it reads before the operator has ever pressed Activate.
 
-When the daemon's `run_id` has changed since the console last saw one and the mode is `idle`, the State field reads `Idle — restarted, not trading`, and it keeps reading that until the operator activates or freezes. Text only, no colour: amber is reserved for live mode, and the sign has to carry the meaning anyway.
+The comparison is made **server-side in SQLite**, not from anything the console remembers: the console is a separate process with no memory across its own restarts. It reads the current `run_id` and the `run_id` of the previous row in the `runs` table. When those differ and the mode is `idle`, the State field reads `Idle — restarted, not trading`, and keeps reading it until the operator activates or freezes. Text only, no colour: amber is reserved for live mode, and the sign has to carry the meaning anyway.
 
 The two states are not the same event and must not look the same. One is a system waiting to be started; the other is a system that stopped on its own.
 
