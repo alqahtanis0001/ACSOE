@@ -32,7 +32,7 @@ Not every phase needs all three. Phase 1 is almost entirely C; Phase 3 is almost
 
 **Build log.** Each agent writes `docs/build-log/phase-N/<agent>.md`. The lead consolidates them into `docs/build-log/phase-N.md` at phase close. Three agents appending to one file has the same concurrent-write hazard as the tracker, and is solved the same way.
 
-**Directories.** A creates and owns `data/`, `logs/` and their subdirectories, as part of `platform/` startup.
+**Directories.** A creates `data/`, `logs/` and their subdirectories at startup, and owns that creation code. **Creating a directory is not owning the runtime data written into it.** B's store writes `data/db/` and `data/derived/`; C's snapshots write `data/derived/`; every engine writes `logs/`. Rule 1 governs source files, not runtime output.
 
 **Config.** The lead authors `config/default.yaml`. A owns the loader in `platform/`. A may request a config key; only the lead adds one.
 
@@ -71,6 +71,7 @@ Agree the contract first, mock it, build against the mock.
 | Raw ticks, pair rules, fee tier | A | B, C | `clients/kraken/contracts.py` |
 | Raw JSONL recording | A | — | `clients/recorder/contracts.py` |
 | Command table: Activate, Freeze, Close all | C writes, Lead reads | — | `clients/store/contracts.py` |
+| Offline chain invocation | A owns `acsoe research`; C owns engines 20 and 23 | — | `cli/research.py` |
 | 15-minute candles | A | C | `engines/market_sensor/contracts.py` |
 | Store read and write | B | A, C | `clients/store/contracts.py` |
 | Database schema | B | C | `db/migrations/` |

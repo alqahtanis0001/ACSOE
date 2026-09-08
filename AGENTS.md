@@ -6,7 +6,7 @@ Kraken changed its fee tiers, minimum order sizes, and API shapes recently. Any 
 
 - Fees come from `POST /0/private/TradeVolume` at runtime. Never a constant.
 - Order minimums come from `GET /0/public/AssetPairs` at runtime. Never a constant.
-- If a value cannot be fetched, the correct behaviour is to **block the trade**, not to fall back on a default.
+- In live mode, if a value cannot be fetched, the correct behaviour is to **block the trade**, never to fall back on a default. Paper mode has narrow, explicit fallbacks — see rule 2 of `context/trading-invariants.md`, which is the only place they are defined.
 
 <!-- END:kraken-agent-rules -->
 

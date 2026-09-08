@@ -36,7 +36,7 @@ There is no hardcoded fee, minimum, tick size or precision anywhere in the codeb
 | Failed fetch | Paper-mode fallback |
 |---|---|
 | Fee tier | Assume **tier 1**, the worst tier |
-| Balance | Use `paper.starting_balance` from config, adjusted by simulated fills |
+| Balance | Use `paper.starting_balances`, a **currency to amount map** in config, adjusted by simulated fills |
 | Pair rules | Block that pair. No fallback — a wrong `ordermin` produces invalid orders |
 | Spread | Block that pair. No fallback — an assumed spread invalidates the cost gate |
 
@@ -52,9 +52,11 @@ Gate engines: 4 (data guard), 7 (scout), 10 (cost), 11 (risk), 13 (anomaly), 15 
 
 ## 4. No model output may bypass a gate
 
-No confidence score, probability, ensemble weight, or router decision may skip, soften, or override engines 4, 10, 11, 13, or 17. A model may only ever make the system *less* willing to trade, never more.
+No confidence score, probability, ensemble weight, or router decision may skip, soften, or override engines 4, 7, 10, 11, 13, or 17. A model may only ever make the system *less* willing to trade, never more.
 
-Gates 7 (scout) and 15 (skeptic) are deliberately absent from that list: they are themselves model-driven, so "a model must not override them" is meaningless. They remain fail-closed under rule 3 like every other gate.
+**Engine 7 `scout` is deterministic and is protected.** Its universe filter is arithmetic over `ordermin`, `costmin`, tick size, live spread and balance, and its candidate ranking is a deterministic score over features. It contains no model, so nothing may override it.
+
+Gate 15 `skeptic` is the one gate that *is* a model, and is deliberately absent from that list — "a model must not override it" is meaningless for a model. It can only ever veto, never approve, so it cannot make the system more willing to trade. It remains fail-closed under rule 3.
 
 ## 5. A trade must clear the live cost hurdle
 

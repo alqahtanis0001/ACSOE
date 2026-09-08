@@ -40,7 +40,7 @@ src/acsoe/
     recorder/           append-only raw JSONL writer                  [AGENT A]
   research/             offline only: labelling, training, walk-forward
   console/              FastAPI app, static assets
-  cli/                  acsoe engine, acsoe console entrypoints
+  cli/                  acsoe engine, acsoe console, acsoe research entrypoints
 scripts/
   verify.py             executable phase exit criteria
   record.py             standalone day-one recorder, no framework deps
@@ -136,6 +136,10 @@ The console writes rows to a `commands` table; the daemon reads them. Semantics:
 | `activate` | State goes `idle` to `running`. The loop begins ticking. |
 | `freeze` | State goes to `frozen`. Chain 1 stops entirely; chain 2 keeps running so open positions are still managed. |
 | `close_all` | Every open position exits immediately as a taker, then state goes to `frozen`. |
+
+**The kill switch is `close_all`. There is no fourth mechanism.** `freeze` stops new trades and keeps managing what is open; `close_all` is the emergency stop that ends exposure. Phase 8 verifies `close_all`, not something separate.
+
+The command reader in `core/` sets `state["system_mode"]` and, for `close_all`, writes a close intent that engine 22 `exit` acts on within the same tick. The reader belongs to the lead; the closing belongs to B.
 
 The daemon reads pending commands **at the top of every tick**, before chain 1, in the orchestrator. That reader lives in `core/` and is the lead's. Each command is marked consumed with its timestamp so it never fires twice, and every consumption is logged as an audit row.
 

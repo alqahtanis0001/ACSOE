@@ -119,7 +119,7 @@ The page is read-only except for three commands — Activate, Freeze, Close all 
 
 The daemon and the console are separate processes sharing SQLite. The console polls a monotonically increasing `updated_at` watermark at `console.poll_interval_ms` from config — never a hardcoded number — and pushes over the WebSocket only when the watermark moves.
 
-`console.poll_interval_ms` defaults to 1000 and **must always be well below `console.stale_after_ms`** (default 120000, two loop ticks). Config validation rejects a poll interval above a quarter of the stale threshold. Without that rule a slow poll would fade the entire screen to half opacity permanently. No triggers, no file watching, no polling from the browser.
+`console.poll_interval_ms` defaults to 500 and **must always be well below `console.stale_after_ms`** (default 120000, two loop ticks). Config validation rejects a poll interval above a quarter of the stale threshold. Without that rule a slow poll would fade the entire screen to half opacity permanently. No triggers, no file watching, no polling from the browser.
 
 The port is `console.port` in config. The README's `127.0.0.1:8765` is the default value, not a second source of truth.
 

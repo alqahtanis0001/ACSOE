@@ -31,6 +31,7 @@ Full path list in `context/ownership.md`.
 - If phase `N-1` is not marked green, **refuse and say why.** Do not start a phase on an unfinished foundation.
 - If `N` is already green, report that and ask whether the operator wants a re-verify.
 - Run `python scripts/verify.py --phase N-1` to confirm the tracker is telling the truth. Trust the command, not the note.
+- **Phase 0 has no preflight.** There is no phase −1. Skip this whole step and go to planning.
 
 ### 2. Lead: plan
 
@@ -84,7 +85,7 @@ Run, and paste the real output:
 python scripts/verify.py --phase N
 ```
 
-Every criterion must pass. A partial pass is a failed phase. Send failures back to their owning teammate; do not patch another agent's code yourself.
+At phase close the bar is every criterion PASS and zero PENDING. Mid-phase the bar is only no FAIL — PENDING is expected while work is outstanding, and is not a failure. Send FAILs back to their owning teammate; do not patch another agent's code yourself.
 
 ### 8. Lead: merge and report
 

@@ -8,7 +8,7 @@
 
 ## Current Goal
 
-Package skeleton, `core/` contracts, orchestrator, config, logging, injected clock, CLI, SQLite schema and migrations, store client, seed generator, fake Kraken client, test harness, `scripts/verify.py`, and `scripts/record.py`. No engines yet.
+`scripts/verify.py` first. Then the package skeleton, `core/` contracts and two-chain orchestrator, `platform/` config, clock, logging and live guard, CLI entrypoints, `config/default.yaml`, SQLite schema and migrations, store client, seed generator, fake Kraken client, test harness, and `scripts/record.py`. No engines yet.
 
 ## Phase Status
 
@@ -94,7 +94,7 @@ The lead's second audit found 22 issues, most of them decisions that had reached
 - `code-standards.md` corrected — config, clock and logging are in `platform/`, not `core/`.
 - `core/` imports nothing. `Config`, `Clock` and `Clients` are Protocols declared in `core/contracts.py` and implemented in `platform/` and `clients/`.
 - Chain 2 is exactly three engines: 21, 22, 19. Engine 20 `tournament` is in neither chain — it runs offline after a trade closes, because a leaderboard does not change every sixty seconds.
-- Paper-mode fallbacks are stated once, in a table, scoped to mode. Live mode always blocks. Fee falls back to tier 1; balance falls back to `paper.starting_balance`; pair rules and spread have no fallback and block the pair.
+- Paper-mode fallbacks are stated once, in a table, scoped to mode. Live mode always blocks. Fee falls back to tier 1; balance falls back to `paper.starting_balances`, a per-currency map; pair rules and spread have no fallback and block the pair.
 - `clients/recorder/` exists and belongs to A.
 - Per-task done is **no FAIL**. PENDING is expected mid-phase and only reaches zero at phase close.
 - Every criterion must pass on a fresh clone. Evidence lives in committed fixtures under `tests/fixtures/`, never in gitignored `data/`. `--live` verifies the real run and is never required for green.
@@ -107,6 +107,20 @@ The lead's second audit found 22 issues, most of them decisions that had reached
 - `console.poll_interval_ms` must be under a quarter of `console.stale_after_ms`, enforced by config validation.
 - The eight non-ML engines are enumerated: 1, 2, 3, 4, 10, 11, 16, 17.
 - `.claude/settings.local.json` and `logs/` restored to `.gitignore`.
+
+## Decisions taken after the third audit
+
+- `.gitignore` gained `!tests/fixtures/**`. Without it `*.jsonl` and `*.parquet` silently swallowed every committed fixture, and the entire fresh-clone verification strategy failed without an error message.
+- The four phase criteria that depended on gitignored directories now name committed fixtures: `record_sample.jsonl`, `recording_report.json`, `labelled_sample.parquet`, `soak_digest.json`. The real runs moved behind `--live`.
+- Engine 20 has a caller. A third `OFFLINE_CHAIN` is invoked by `acsoe research`, never by the daemon. Engine 23 runs there too.
+- **Scout is deterministic.** Design question resolved: engine 7 contains no model — the universe filter is arithmetic and the ranking is a fixed score. It is therefore protected by invariant 4, and the non-ML count is nine, not eight. Engine 15 `skeptic` is the only model gate, and it can only veto.
+- `state["system_mode"]` — `idle`, `running`, `frozen` — is now an orchestrator key. Without it the kill switch had no channel.
+- **The kill switch is `close_all`.** No fourth mechanism. Freeze stops new trades and keeps managing open ones; close_all ends exposure.
+- The orchestrator mints `run_id` and `cycle_id`, and holds the `Clock`. Engines see only `context.now`.
+- `paper.starting_balances` is a currency-to-amount map, not a scalar. One number cannot satisfy the per-quote-currency invariants.
+- Creating a directory is not owning the runtime data written into it. Rule 1 governs source files.
+- `console.poll_interval_ms` default dropped to 500 so the Phase 1 criterion is achievable; the criterion is now twice the poll interval.
+- `is_gate` is asserted by `verify.py` against the registry table, so a mis-registered gate fails loudly.
 
 ## Architecture Decisions
 

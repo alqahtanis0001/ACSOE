@@ -40,6 +40,11 @@ class BaseEngine(ABC):
         ...
 ```
 
+`is_gate` is not decorative. `scripts/verify.py` asserts that every engine's `is_gate` matches the Gate column of the registry table below, which catches a gate registered as an ordinary engine — a failure that would otherwise be silent and expensive.
+
+```python
+```
+
 `State = dict[str, Any]`, keyed by engine name, defined in `core/contracts.py`. An engine reads other engines' outputs through `state["<engine_name>"]` and writes only its own key.
 
 ## Rules
@@ -79,7 +84,9 @@ for engine in ALWAYS_CHAIN:                    # exactly: 21, 22, 19
 
 The loop ticks every minute but a new candidate is only born when a 15-minute bar closes, so chain 1 stops early on roughly fourteen ticks out of fifteen. If position management sat in chain 1, an open trade would go unwatched for fourteen minutes at a time and its stop would never fire. Chain 2 exists so `position_manager`, `exit` and `memory` run on every single tick no matter what.
 
-**Engine 20 `tournament` is not in either chain.** It scores realised outcomes, which only change when a trade closes, so recomputing a leaderboard every sixty seconds would be waste. It runs offline, invoked after a trade closes and during the research loop.
+**Engine 20 `tournament` is in neither runtime chain.** It scores realised outcomes, which only change when a trade closes, so recomputing a leaderboard every sixty seconds would be waste.
+
+It runs in a third chain, `OFFLINE_CHAIN`, invoked by the `acsoe research` CLI command — never by the daemon loop. That command builds an `EngineContext` in `replay` mode and runs the offline chain in order. Engine 23 `backtest` runs there too. The CLI lives in `cli/` and belongs to A; the engines in it belong to C.
 
 A blocked candidate that never reaches storage is lost research data, and an unwatched position is lost money. Do not "simplify" the orchestrator into a single loop.
 
@@ -112,7 +119,7 @@ The registry order is non-negotiable. The stage column refers to the runtime loo
 | 21 | `position_manager` | | **chain 2** | 4 |
 | 22 | `exit` | | **chain 2** | 4 |
 | 19 | `memory` | | **chain 2** | 4 |
-| 20 | `tournament` | | offline | — |
+| 20 | `tournament` | | **offline chain** | — |
 
 Engine 23 (`backtest`) lives in `research/` and is never registered.
 
@@ -136,6 +143,12 @@ The README is not optional. It is how the next agent understands the engine with
 
 Each engine's `data` payload is typed in its own `contracts.py`. Orchestrator-level keys:
 
+- `state["system_mode"]` — `idle`, `running` or `frozen`. Set by the command reader at the top of every tick, before chain 1. Any engine may read it; only the orchestrator writes it.
 - `state["trading_blocked_by"]` — engine name, set on block
 - `state["block_reason"]` — the reason string
-- `state["cycle_id"]` — unique per loop iteration, used to join logs, decisions, and SHAP rows
+- `state["cycle_id"]` — unique per loop iteration, joins logs, decisions and SHAP rows
+- `state["run_id"]` — unique per daemon process, names `models/<run_id>/`
+
+**The orchestrator mints both ids.** `run_id` once at startup, `cycle_id` once per tick. Nothing else generates them.
+
+**The orchestrator holds the `Clock`.** It is constructed by the CLI, passed to the orchestrator, and used once per tick to stamp `context.now`. No other component holds it, and no engine ever sees it — engines see only the already-stamped `context.now`.

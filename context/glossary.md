@@ -72,6 +72,8 @@ These terms have precise meanings in this codebase. Do not substitute your own.
 
 **Buy-and-hold** — the benchmark. Doing nothing. The thing this system has to beat to justify existing.
 
+**Scout** — engine 7. Deterministic, no model. Builds the tradable universe from live pair rules and balance, then ranks what is left by a fixed score. The one candidate it emits goes to the judgement chain.
+
 ## Words that are easy to confuse
 
 **Phase** — a build phase, 0 to 8, from `ai-workflow-rules.md`. What the operator means by "start phase N".

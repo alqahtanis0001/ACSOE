@@ -16,6 +16,10 @@ data/db/
 *.parquet
 *.jsonl
 
+# ...but verify.py's evidence MUST be committable. This negation is load-bearing:
+# without it every offline criterion silently fails the fresh-clone rule.
+!tests/fixtures/**
+
 # Trained artefacts
 models/
 
