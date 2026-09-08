@@ -1,1 +1,90 @@
-"""SQLite and Parquet access. Owned by Agent B."""
+"""SQLite and Parquet access. Owned by Agent B.
+
+The public surface of the store seam named in `context/ownership.md`. Import from here
+rather than from the submodules, so the seam stays one name.
+"""
+
+from acsoe.clients.store.client import DATA_GUARD_ENGINE, StoreClient, StoreError
+from acsoe.clients.store.connection import close_connection, open_connection
+from acsoe.clients.store.contracts import (
+    BlockRecordRow,
+    BlockStatus,
+    CommandName,
+    CommandRow,
+    CommandSource,
+    DataGuardOutage,
+    EquitySnapshotRow,
+    LeaderboardRow,
+    Money,
+    OrderIntent,
+    OrderRow,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    PositionRow,
+    PositionStatus,
+    RejectionRow,
+    RunMode,
+    RunRow,
+    TradeOutcome,
+    TradeRow,
+    from_micros,
+    to_micros,
+)
+from acsoe.clients.store.migrations import (
+    ALL_TABLES,
+    BOOKKEEPING_TABLE,
+    EXPECTED_INDEXES,
+    EXPECTED_TABLES,
+    MigrationError,
+    MigrationIntegrityError,
+    apply_migrations,
+    default_migrations_dir,
+    discover_migrations,
+    schema_objects,
+)
+from acsoe.clients.store.parquet import TIMESTAMP_TYPE, ParquetError, ParquetStore
+
+__all__ = [
+    "ALL_TABLES",
+    "BOOKKEEPING_TABLE",
+    "DATA_GUARD_ENGINE",
+    "EXPECTED_INDEXES",
+    "EXPECTED_TABLES",
+    "TIMESTAMP_TYPE",
+    "BlockRecordRow",
+    "BlockStatus",
+    "CommandName",
+    "CommandRow",
+    "CommandSource",
+    "DataGuardOutage",
+    "EquitySnapshotRow",
+    "LeaderboardRow",
+    "MigrationError",
+    "MigrationIntegrityError",
+    "Money",
+    "OrderIntent",
+    "OrderRow",
+    "OrderSide",
+    "OrderStatus",
+    "OrderType",
+    "ParquetError",
+    "ParquetStore",
+    "PositionRow",
+    "PositionStatus",
+    "RejectionRow",
+    "RunMode",
+    "RunRow",
+    "StoreClient",
+    "StoreError",
+    "TradeOutcome",
+    "TradeRow",
+    "apply_migrations",
+    "close_connection",
+    "default_migrations_dir",
+    "discover_migrations",
+    "from_micros",
+    "open_connection",
+    "schema_objects",
+    "to_micros",
+]

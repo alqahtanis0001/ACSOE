@@ -23,10 +23,17 @@ engine 19, which is Phase 4.
    - an `equity_snapshots` series containing a drawdown past the configured limit;
    - a trailing run of losing `trades` past the loss-streak limit;
    - `block_records` rows with `status = 'ERROR'` inside the error-rate window.
-4. Expose each fixture by name so a Phase 3 test asks for "the outage run" rather than
+4. Thresholds are **injected**, not read from config — the seed takes a `SeedThresholds`
+   value so a Phase 3 test can pass whatever the config actually says. Generate each fixture
+   as a **multiple** of the injected threshold rather than a fixed number: a drawdown of twice
+   the limit, a losing streak of the limit plus three, an outage run of the block limit plus
+   three. A fixture pinned to a constant silently stops overshooting the moment the operator
+   sets a larger limit, and Phase 3 then fails for a reason that has nothing to do with the
+   code under test.
+5. Expose each fixture by name so a Phase 3 test asks for "the outage run" rather than
    rediscovering it by query.
-5. Rejection reasons are written for the operator, not the log — the console renders them.
-6. Add `tests/clients/store/test_seed.py` asserting every one of the six fixtures is present
+6. Rejection reasons are written for the operator, not the log — the console renders them.
+7. Add `tests/clients/store/test_seed.py` asserting every one of the six fixtures is present
    and past its threshold, and that seeding twice with the same seed produces the same database.
 
 ## Scope Limits

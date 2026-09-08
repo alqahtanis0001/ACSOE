@@ -5,7 +5,7 @@ This interface is fixed. Changing anything in this file requires the lead. Do no
 ## The interface
 
 ```python
-class EngineStatus(str, Enum):
+class EngineStatus(StrEnum):
     OK = "OK"        # ran, produced output, pipeline continues
     PASS = "PASS"    # nothing to do this cycle; not an error
     BLOCK = "BLOCK"  # halt the pipeline for this cycle
@@ -39,6 +39,14 @@ class BaseEngine(ABC):
     def process(self, context: EngineContext, state: State) -> EngineResult:
         ...
 ```
+
+`EngineStatus` is a `StrEnum`, not `(str, Enum)`. The difference is not stylistic: with
+`(str, Enum)`, `str(EngineStatus.ERROR)` and any f-string interpolation of it produce
+`"EngineStatus.ERROR"` rather than `"ERROR"`. That value reaches `block_records.status`, which
+engine 17 `safety` queries for `status = 'ERROR'` to compute its error rate — so the footgun sits
+directly under the circuit breaker, and it fails silently, writing a plausible-looking string
+that simply never matches. `StrEnum` has been in the standard library since 3.11, already this
+project's floor.
 
 `is_gate` is not decorative. `scripts/verify.py` asserts that every engine's `is_gate` matches the Gate column of the registry table below, which catches a gate registered as an ordinary engine — a failure that would otherwise be silent and expensive.
 
@@ -225,7 +233,7 @@ The README is not optional. It is how the next agent understands the engine with
 Each engine's `data` payload is typed in its own `contracts.py`. Orchestrator-level keys:
 
 - `state["system"]` — the only persistent region. `mode` and `close_intent`. **Written only by the orchestrator**, in exactly two places: the command reader sets `mode` and `close_intent` at step 0, and step 4 clears `close_intent` once the manage chain reports the close finished. No engine writes it; any engine may read it.
-- `state["cycle_id"]` — fresh per tick, minted by the orchestrator, joins logs, decisions and SHAP rows.
+- `state["cycle_id"]` — an integer, fresh per tick, minted by the orchestrator, restarting at 1 each run. It joins logs, decisions and SHAP rows **together with `context.run_id`**: on its own it is ambiguous across runs.
 - `state["trading_blocked_by"]`, `state["block_reason"]` — the **primary** blocker: the first engine to block this tick, and what gates the opportunity chain. Fresh per tick.
 - `state["guard_blockers"]` — every guard engine that blocked this tick, in chain order, each with its reason and status. The guard chain never breaks early, so there can be more than one. Engine 19 writes one `block_records` row per entry, `is_primary` on the first. An empty list on an unblocked tick, never absent.
 

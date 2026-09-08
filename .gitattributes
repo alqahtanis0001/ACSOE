@@ -1,0 +1,31 @@
+# Line endings.
+#
+# Git for Windows ships with core.autocrlf=true in the SYSTEM gitconfig, so on a
+# fresh clone every text file is checked out with CRLF whether anyone asked for
+# it or not. That is fine for prose and fatal for evidence.
+#
+# ai-workflow-rules.md: "A criterion that only passes on the machine that
+# produced it is a broken criterion." Every committed-fixture criterion in this
+# project compares bytes that git would otherwise rewrite between commit and
+# clone. Found by Agent A while staging record_sample.jsonl in Phase 0.
+
+# Normalise text in the repository and check it out as LF everywhere, so the
+# working tree matches the blob on every platform.
+* text=auto eol=lf
+
+# Evidence fixtures are read byte for byte by scripts/verify.py. Never let a
+# line-ending conversion near one.
+tests/fixtures/**   -text
+
+# Belt and braces for the formats that carry evidence, wherever they appear.
+# Parquet and SQLite are the dangerous ones: git's text/binary detection is a
+# heuristic, and when it guesses wrong it rewrites 0x0A bytes inside the payload.
+# That does not fail loudly — it fails weeks later, on someone else's machine,
+# as a fixture that will not parse.
+*.parquet           binary
+*.sqlite            binary
+*.sqlite-journal    binary
+*.jsonl             -text
+
+# Keep this file itself stable.
+.gitattributes      text eol=lf

@@ -73,7 +73,7 @@ Settled with evidence. Do not relitigate. Changing one requires the operator, no
 
 ## Open Questions
 
-**Eight config values are trading behaviour that no context file specifies, and the lead may not invent them.** They are written into `config/default.yaml` as `null` and marked OPERATOR REQUIRED; the loader refuses to start while any is null, naming the key. Phase 0 does not need the values — no engine reads them until Phase 3 — but Phase 3 cannot start without them.
+**Nine config values are trading behaviour that no context file specifies, and the lead may not invent them.** They are written into `config/default.yaml` as `null` and marked OPERATOR REQUIRED; the loader refuses to start while any is null, naming the key. Phase 0 does not need the values — no engine reads them until Phase 3 — but Phase 3 cannot start without them.
 
 | Key | Named in | Why it cannot be guessed |
 |---|---|---|
@@ -85,7 +85,7 @@ Settled with evidence. Do not relitigate. Changing one requires the operator, no
 | `paper.starting_balances` | invariant 2 | A currency-to-amount map. Determines which pairs are executable at all in paper mode. |
 | `safety.max_drawdown_pct` | invariant 14 | "Its configured drawdown limits." The point at which the system liquidates itself. |
 | `safety.max_consecutive_losses` | invariant 14 | Same sentence, same absence. |
-| `safety.error_rate_window_s` + `max_errors_in_window` | engine-contracts | The error rate that trips the breaker needs both a window and a count. |
+| `safety.max_errors_in_window` | engine-contracts | How many errors in the trailing hour trip the breaker. The window itself is specified as 3600s and is set. |
 
 A guessed default for any of these is a silent decision about real money wearing the costume of a sane-looking number. The operator sets them.
 

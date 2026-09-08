@@ -48,9 +48,11 @@ safety:                          # Engine 17, the circuit breaker. Guard chain, 
   max_drawdown_pct: null            # OPERATOR REQUIRED — invariant 14 says "its configured
                                     # drawdown limits" and never gives a number.
   max_consecutive_losses: null      # OPERATOR REQUIRED — same sentence, same problem.
-  error_rate_window_s: null         # OPERATOR REQUIRED — the window over which engine
-  max_errors_in_window: null        # OPERATOR REQUIRED — errors are counted, and the count
-                                    # that trips the breaker.
+  error_rate_window_s: 3600         # architecture-context.md specifies "the trailing hour"
+                                    # for the error rate, so this one is specified, not
+                                    # operator-required. B caught that it was wrongly null.
+  max_errors_in_window: null        # OPERATOR REQUIRED — how many errors in that hour trip
+                                    # the breaker. The window is specified; the count is not.
 
 trading:
   hurdle_multiple: null          # OPERATOR REQUIRED — invariant 5 is

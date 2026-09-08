@@ -136,13 +136,15 @@ Engine 17 `safety` derives its outage count from this table, so the columns are 
 
 | Column | Purpose |
 |---|---|
-| `cycle_id` | The tick. Joins to `rejections`, logs and SHAP rows |
+| `cycle_id` | Integer, minted per tick and restarting at 1 each run |
 | `run_id` | The daemon process |
 | `ts` | `context.now`, UTC, microseconds since epoch |
 | `blocked_by` | Engine name |
 | `block_reason` | The reason string |
 | `is_primary` | True for the blocker that set `state["trading_blocked_by"]` — the first one. False for a co-occurring blocker on the same tick |
 | `status` | `BLOCK` or `ERROR`. `safety`'s error rate counts the `ERROR` rows in the trailing hour |
+
+**A tick is identified by `(run_id, cycle_id)`, never by `cycle_id` alone.** `cycle_id` is an integer that restarts at 1 with each process, so it is unique only within a run. Every join to `rejections`, to logs and to SHAP rows uses both columns, and every uniqueness constraint that means "once per tick" is scoped to the pair. A constraint on `cycle_id` alone would reject a database holding two runs — which is the normal case, and is exactly what the Phase 0 seed contains.
 
 **Order by `ts`, never by `cycle_id`.** `cycle_id` is minted per tick within a run and restarts with the process, so ordering a cross-restart sequence by it silently interleaves two runs. The outage counter has to survive a restart, which is precisely the case that would break.
 

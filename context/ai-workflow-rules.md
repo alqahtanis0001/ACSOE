@@ -34,19 +34,36 @@ Phase 0 has no preflight — there is no phase −1.
 
 Every audit of these documents has found the same class of defect: a decision that reached three files and not the fourth, leaving an agent to follow the stale copy in good faith. It is not caught by reading, because each file is self-consistent. It is caught by grep.
 
-`scripts/verify.py` therefore carries a `docs_vocabulary` criterion in **every** phase. It scans `AGENTS.md`, `README.md` and `context/*.md`, and FAILs if any of these appear outside `~~strikethrough~~` and outside the table itself, which necessarily names them.
+`scripts/verify.py` therefore carries a `docs_vocabulary` criterion in **every** phase. It scans `AGENTS.md`, `README.md` and `context/*.md`, and FAILs if any of these appear outside `~~strikethrough~~` and outside the two excluded regions below.
 
-The **only** excluded region is the `## Decision history` section of `context/progress-tracker.md` — the record of superseded decisions, which is *meant* to name retired terms. Everything else in the tracker (Current Goal, Locked Decisions, Architecture Decisions, Known Risks) is current-state text and is scanned like any other file. Excluding the whole tracker is how a stale claim about the memory engine survived three audits inside a section labelled Architecture Decisions.
+**Two regions are excluded, for one reason: a section whose job is to catalogue superseded things necessarily names them.** The exclusion is always the smallest section that does that job, ending at the next `## ` heading — never a whole file.
 
-| Retired term | Superseded by |
-|---|---|
-| `two-chain` | three runtime chains: guard, opportunity, manage |
-| `chain 1`, `chain 2`, `always chain` | the chains have names; use them |
-| `INGEST_CHAIN` | `GUARD_CHAIN` |
-| `state["system_mode"]` | `state["system"]["mode"]` |
-| `paper.starting_balance` (singular) | `paper.starting_balances`, a per-currency map |
-| `24 bars` | 48 bars |
-| `eight` used as a count of the engines without ML | nine — `scout` is deterministic |
+The first is this `## Retired vocabulary` section. It defines the terms, so it names them in the table and in any prose explaining the table, including a quotation of the historical defect a row exists to catch. A quotation of a defect is the one thing that will always look exactly like the defect. **This exclusion holds only while this section stays short and wholly about the check** — if current-state material ever accumulates here, re-narrow it, because a blanket exclusion over mixed content is precisely how a stale claim survived three audits inside the tracker.
+
+The second is the `## Decision history` section of `context/progress-tracker.md` — the record of superseded decisions, which is *meant* to name retired terms. Everything else in the tracker (Current Goal, Locked Decisions, Architecture Decisions, Known Risks) is current-state text and is scanned like any other file. Excluding the whole tracker is how a stale claim about the memory engine survived three audits inside a section labelled Architecture Decisions.
+
+| Retired term | Only a hit when the same line also contains | Superseded by |
+|---|---|---|
+| `two-chain` | — | three runtime chains: guard, opportunity, manage |
+| `chain 1`, `chain 2`, `always chain` | — | the chains have names; use them |
+| `INGEST_CHAIN` | — | `GUARD_CHAIN` |
+| `state["system_mode"]` | — | `state["system"]["mode"]` |
+| `paper.starting_balance` (singular) | — | `paper.starting_balances`, a per-currency map |
+| `24 bars` | — | 48 bars |
+| `eight` | `machine learning`, `non-ML`, or `engines` | nine — `scout` is deterministic |
+
+The middle column exists because some retired terms are ordinary English words. `eight` is only
+wrong when it counts engines; it is perfectly good in any other sentence, and a bare-token match
+would make the word unusable across every document. A qualifier is **data in this table, not a
+special case in the checker** — any future row may carry one or leave it blank.
+
+The qualifier is a same-line co-occurrence and nothing cleverer. That is deliberate: it catches
+the actual historical defect ("Twenty-three engines run in a fixed order… Eight contain no
+machine learning at all" — both cues on the line), and it needs no semantics the checker has to
+infer. It will miss a sentence that straddles two lines. That residual gap is the manual
+procedure's job, not the checker's, and the sixth audit already recorded why: a bare count is
+not a distinctive token, and a check that only catches renamed identifiers misses corrected
+facts.
 
 When the lead retires a term, adding it to this table is part of the same change. A rename that does not update this table is an incomplete rename.
 

@@ -14,16 +14,25 @@ instead of being found by the next audit.
    0 to 8.
 2. Parse the retired-term table out of `context/ai-workflow-rules.md` rather than hardcoding
    the terms, so adding a row to that table is all it takes to extend the check.
-3. Scan `AGENTS.md`, `README.md` and `context/*.md`.
-4. Ignore text inside `~~strikethrough~~`, and ignore the retired-term table itself, which
+3. The table has **three** columns: the term, an optional same-line qualifier, and what
+   superseded it. A row whose qualifier column is `—` matches the bare term. A row that names
+   qualifiers is a hit only when the matched line also contains one of them. Parse the
+   qualifier from the table like everything else — a term-specific rule in code is a hardcode
+   wearing a disguise, which is what the Scope Limits already forbid.
+4. Scan `AGENTS.md`, `README.md` and `context/*.md`.
+5. Ignore text inside `~~strikethrough~~`, and ignore the retired-term table itself, which
    necessarily names every term.
-5. Ignore exactly one region: the `## Decision history` section of
-   `context/progress-tracker.md`, ending at the next `## ` heading. Every other part of the
-   tracker — Current Goal, Locked Decisions, Architecture Decisions, Known Risks — is
-   current-state text and is scanned like any other file.
-6. FAIL with file, line number and the matched term for each hit. PASS with a count of files
+6. Ignore exactly two regions, each ending at the next `## ` heading: the
+   `## Retired vocabulary` section of `context/ai-workflow-rules.md`, and the
+   `## Decision history` section of `context/progress-tracker.md`. Both are sections whose job
+   is to catalogue superseded things, so both necessarily name them — the first in its table
+   and in the prose explaining it, including a quotation of the defect a row exists to catch.
+   Exclude the section, not the file: every other part of the tracker (Current Goal, Locked
+   Decisions, Architecture Decisions, Known Risks) and of the workflow file is current-state
+   text and is scanned like any other.
+7. FAIL with file, line number and the matched term for each hit. PASS with a count of files
    scanned when there are none.
-7. Add `tests/verify/test_docs_vocabulary.py` with a **negative test**: plant a retired term
+8. Add `tests/verify/test_docs_vocabulary.py` with a **negative test**: plant a retired term
    in a current-state section of a fixture tracker and assert FAIL; plant one in the decision
    history and assert it stays quiet. A check that has never been shown to fail is not a check.
 

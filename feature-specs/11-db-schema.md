@@ -17,8 +17,13 @@ console renders and every table engine 17 `safety` reads.
    command name and its audit fields.
 4. `block_records` carries `cycle_id`, `run_id`, `ts`, `blocked_by`, `block_reason`,
    `is_primary` and `status` — one row per guard blocker per tick.
-5. **Exactly one row per `cycle_id` may carry `is_primary`, enforced by the database.** Add a
-   partial unique index on `(cycle_id)` where `is_primary` is true. Two primaries on one tick
+5. **Exactly one row per tick may carry `is_primary`, enforced by the database.** A tick is
+   `(run_id, cycle_id)`, not `cycle_id` alone — `cycle_id` restarts with the process — so the
+   partial unique index is on `(run_id, cycle_id)` where `is_primary` is true. Scoping it to
+   `cycle_id` alone would reject the two-run outage seed that spec 13 mandates, and the seed
+   *must* reuse `cycle_id` values across its two runs: if the runs did not overlap, ordering by
+   `cycle_id` would give the same answer as ordering by `ts` and the Phase 3 criterion that
+   exists to prove the difference would prove nothing. Two primaries on one tick
    would mean two engines each claiming to be the one that gated the opportunity chain, and
    the audit trail could no longer say which block stopped the pipeline. A second insert must
    fail loudly at the database, not be resolved by whichever write happened to land last. Add
