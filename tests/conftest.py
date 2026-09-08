@@ -110,8 +110,11 @@ def fixed_now() -> Any:
 def paper_config() -> MappingConfig:
     """`config/default.yaml`, parsed, with `mode: paper` asserted.
 
-    Its OPERATOR REQUIRED nulls are left as nulls. A test needing a threshold
-    passes it explicitly rather than inheriting an invented one.
+    No key is null any more: the operator supplied all nine OPERATOR REQUIRED
+    values on 2026-09-08, so the parsed config carries a real value everywhere.
+    A test needing a threshold still passes it explicitly rather than reading it
+    from here, so the test pins the value it asserts against and does not drift
+    when the operator retunes the file.
     """
     if not (REPO_ROOT / "config" / "default.yaml").is_file():
         pytest.skip("config/default.yaml does not exist yet")

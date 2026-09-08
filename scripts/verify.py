@@ -225,11 +225,13 @@ def module_attr(module: ModuleType, attr: str) -> tuple[Any, str]:
 _CONFIG_MISSING = object()
 
 # Confirmed with the lead. All five live under `safety` in config/default.yaml.
-# Four of them were written as null and marked OPERATOR REQUIRED until the
-# operator supplied values on 2026-09-08; the error-rate window was always a real
-# value because architecture-context.md fixes it at the trailing hour. The
-# OPERATOR REQUIRED path in `required_thresholds` stays: it is what a *future*
-# unset key reports through, and it simply no longer fires on these five.
+# Three of them - the drawdown limit, the losing-streak limit and the error count -
+# were written as null and marked OPERATOR REQUIRED until the operator supplied
+# values on 2026-09-08. The other two were always real values: invariant 14 fixes
+# the data-block limit at one decision bar, and architecture-context.md fixes the
+# error-rate window at the trailing hour. The OPERATOR REQUIRED path in
+# `required_thresholds` stays: it is what a *future* unset key reports through,
+# and it simply no longer fires on these five.
 KEY_MAX_DATA_BLOCKS = "safety.max_consecutive_data_blocks"
 KEY_MAX_DRAWDOWN = "safety.max_drawdown_pct"
 KEY_MAX_LOSSES = "safety.max_consecutive_losses"
