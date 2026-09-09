@@ -70,8 +70,9 @@ That gap is called the **spread**.
 
 ```mermaid
 flowchart TB
-    subgraph book["The order book for one pair, at one instant"]
+    subgraph book[" "]
       direction TB
+      bt["THE ORDER BOOK FOR ONE PAIR, AT ONE INSTANT"]
       a3["ASK  $100.30  —  8 units for sale"]
       a2["ASK  $100.20  —  3 units for sale"]
       a1["ASK  $100.10  —  5 units for sale   (best ask)"]
@@ -79,7 +80,7 @@ flowchart TB
       b1["BID  $100.00  —  4 units wanted     (best bid)"]
       b2["BID   $99.90  —  6 units wanted"]
       b3["BID   $99.80  — 11 units wanted"]
-      a3 --- a2 --- a1 --- gapline --- b1 --- b2 --- b3
+      bt --- a3 --- a2 --- a1 --- gapline --- b1 --- b2 --- b3
     end
 
     you(["You want to buy"])
@@ -91,12 +92,14 @@ flowchart TB
     taker -.->|"crosses the spread, removes an offer"| a1
     maker -.->|"joins the queue, adds an offer"| b1
 
+    classDef ttl fill:#ffffff,stroke:#ffffff,color:#333333
     classDef ask fill:#fde2e2,stroke:#c33,color:#111
     classDef bid fill:#dff0d8,stroke:#3a3,color:#111
     classDef mid fill:#ffffff,stroke:#999999,color:#555555
     class a1,a2,a3 ask
     class b1,b2,b3 bid
     class gapline mid
+    class bt ttl
 ```
 
 *The book is two queues of standing offers with a gap between them. To buy immediately you must

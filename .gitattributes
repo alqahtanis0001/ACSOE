@@ -27,5 +27,10 @@ tests/fixtures/**   -text
 *.sqlite-journal    binary
 *.jsonl             -text
 
+# Office and PDF containers are zip archives: a single rewritten 0x0A byte
+# makes them unopenable, and the failure surfaces on the recipient's machine.
+*.docx              binary
+*.pdf               binary
+
 # Keep this file itself stable.
 .gitattributes      text eol=lf
