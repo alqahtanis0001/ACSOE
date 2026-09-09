@@ -377,6 +377,46 @@ Anything touching `core/`, `bootstrap.py`, the engine registry, an invariant, a 
 
 Paste the real output of your last run. Never report a task complete without it.
 
+### Phase 2, after spec 29 (2026-09-09)
+
+```
+$ .venv/Scripts/python.exe -m pytest tests/ -q
+1060 passed in 45.19s
+
+$ .venv/Scripts/python.exe -m mypy --strict src/
+Success: no issues found in 68 source files
+
+$ .venv/Scripts/python.exe -m ruff check src/
+All checks passed!
+
+$ .venv/Scripts/python.exe scripts/verify.py --phase 2
+PASS    docs_vocabulary                 14 files scanned, 9 retired terms, no hit
+PASS    toolchain_green                 pytest, mypy --strict and ruff all green (python.exe)
+PASS    commands_round_trip             real StoreClient through the real reader: ...
+PENDING recording_span_continuous       tests/fixtures/recording_report.json does not exist yet (spec 27) ...
+PASS    candles_match_kraken_ohlc       3 pairs, 9 bar(s): every OHLC field within one tick_size as AssetPairs reports it, volume within 0.1%
+PENDING data_guard_blocks_bad_data      engine 4 needs the config key `data_guard.max_data_age_s`, which config/default.yaml does not carry ...
+PASS    historical_loader_reports_gaps  3 gaps of 1/2/4 bars reported exactly, over 41 rows, and no timestamp in the output was absent from the input
+PENDING console_shows_live_rows         no Phase 2 engine is registered in bootstrap.py yet (specs 26-29) ...
+PASS    console_reads_persisted_mode    a real daemon applied activate then freeze through the real store ...
+
+9 criteria: 6 PASS, 0 FAIL, 3 PENDING
+Phase 2 is not green: 3 PENDING. Mid-phase the bar is no FAIL, so this is expected.
+```
+
+Three PENDING, and none of them is code of mine that is missing:
+
+1. `recording_span_continuous` - wall-clock time. See Blocked On.
+2. `data_guard_blocks_bad_data` - the operator's `data_guard.max_data_age_s`.
+3. `console_shows_live_rows` - `bootstrap.py` registration, which is the lead's and is
+   held until C repoints `orchestrator_empty_registry` at a `Chains()` the criterion
+   controls rather than at the live `bootstrap.GUARD_CHAIN`. My rehearsal is what found
+   that: registering the four engines would have taken **Phase 0** red, because that
+   criterion's body asserts no guard blocked while its name claims to be testing an
+   empty registry, and those only coincide while nothing is registered.
+
+### Phase 0 close, kept for the record
+
 ```
 $ .venv/Scripts/python.exe -m pytest tests/ -q
 430 passed in 8.75s

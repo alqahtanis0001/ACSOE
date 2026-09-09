@@ -12,7 +12,9 @@ turns into a block. A strict parser would throw away the irreplaceable half.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -287,3 +289,116 @@ async def test_every_subscription_is_sent_on_every_connect() -> None:
     await client._run()
     assert len(socket.sent) == 1
     assert json.loads(socket.sent[0])["params"]["symbol"] == ["BTC/USD", "ETH/USD"]
+
+
+# --------------------------------------------------------------------------- #
+# The thread
+# --------------------------------------------------------------------------- #
+
+
+class _BlockingSocket:
+    """Connects, then delivers nothing until it is told to stop.
+
+    The shape a real socket has on a quiet market, and the one that would hang a
+    shutdown if `stop()` did not reach the loop thread.
+    """
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.opened = threading.Event()
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+        self.opened.set()
+
+    async def recv(self) -> str:
+        await asyncio.Event().wait()  # never returns
+        raise AssertionError("unreachable")  # pragma: no cover
+
+
+class _BlockingConnect:
+    def __init__(self, socket: _BlockingSocket) -> None:
+        self._socket = socket
+
+    def __call__(self, url: str, **kwargs: Any) -> _BlockingConnect:
+        return self
+
+    async def __aenter__(self) -> _BlockingSocket:
+        return self._socket
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+
+def test_start_and_stop_are_idempotent_and_the_thread_actually_exits() -> None:
+    """The one part of this client that owns an OS resource.
+
+    A `stop()` that did not reach the loop thread would leave a daemon thread parked
+    on `recv()` forever — which in a test suite looks like a hang with no traceback,
+    and in the daemon looks like a process that will not shut down.
+    """
+    socket = _BlockingSocket()
+    client = KrakenWebSocketClient(
+        clock=StillClock(),
+        pairs=["BTC/USD"],
+        connect=_BlockingConnect(socket),
+        jitter=lambda: 0.0,
+        backoff_initial_s=0.001,
+    )
+
+    client.start()
+    client.start()  # idempotent: no second thread
+    assert socket.opened.wait(timeout=5.0), "the stream never opened its subscription"
+    assert client.connected is True
+
+    thread = client._thread
+    assert thread is not None
+
+    client.stop(timeout_s=5.0)
+    assert thread.is_alive() is False
+    assert client.connected is False
+
+    client.stop(timeout_s=1.0)  # idempotent
+
+
+def test_stop_before_start_is_harmless() -> None:
+    client = KrakenWebSocketClient(
+        clock=StillClock(), pairs=["BTC/USD"], connect=lambda *a, **k: None
+    )
+    client.stop(timeout_s=1.0)
+    assert client.connected is False
+
+
+def test_an_unexpected_error_becomes_a_recorded_gap_rather_than_a_dead_thread() -> None:
+    """The failure the whole recording exists to prevent.
+
+    This loop runs on a background thread with no caller to raise into, so an uncaught
+    error kills the recorder silently — and a dead recorder is indistinguishable from a
+    quiet market. It reconnects, and the break is written into `gaps` carrying the
+    exception's type, so engine 2 appends it to the archive like any disconnect.
+    """
+    clock = SteppingClock(step_s=1.0)
+    client = KrakenWebSocketClient(
+        clock=clock,
+        pairs=["BTC/USD"],
+        connect=lambda *a, **k: None,
+        jitter=lambda: 0.0,
+        backoff_initial_s=0.001,
+        backoff_max_s=0.001,
+    )
+    connector = FakeConnect(
+        [
+            FakeSocket([], ValueError("a parse defect, not an outage"), client),
+            FakeSocket([trade_frame("BTC/USD", "1", "1", "2026-03-01T12:00:01Z")], None, client),
+        ]
+    )
+    client._connect = connector
+
+    await_run = client._run()
+    asyncio.run(await_run)
+
+    assert connector.opened == 2, "the stream gave up instead of reconnecting"
+    gaps = client.gaps
+    assert len(gaps) == 1
+    assert "unexpected ValueError" in gaps[0]["cause"]
+    assert "a parse defect" in gaps[0]["cause"]

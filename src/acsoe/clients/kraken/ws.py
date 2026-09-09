@@ -126,6 +126,11 @@ def _ts_exchange_of(payload: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _iso(moment: datetime) -> str:
+    """ISO-8601 UTC ending in `Z`, the form the recording schema requires."""
+    return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
 def _parse_ts(value: Any, fallback: datetime) -> datetime:
     text = _text(value)
     if text is None:
@@ -200,6 +205,7 @@ class KrakenWebSocketClient:
         self._trades: deque[TradeTick] = deque(maxlen=max_buffered_trades)
         self._quotes: dict[str, QuoteTick] = {}
         self._gaps: list[dict[str, Any]] = []
+        self._undrained_gaps: list[dict[str, Any]] = []
         self._dropped_frames = 0
         self._unparsed = 0
         self._connected = False
@@ -254,6 +260,33 @@ class KrakenWebSocketClient:
             self._trades.clear()
         return trades
 
+    def recent_trades(self) -> tuple[TradeTick, ...]:
+        """The buffered trades **without** clearing them, oldest first.
+
+        A rolling window rather than a queue, because engine 3 has to rebuild the same
+        15-minute bar on each of the fifteen ticks that bar spans, and an engine is
+        stateless across cycles — so the window has to live in the client, which is
+        injected and long-lived, exactly as the frame buffer does.
+
+        Bounded by ``max_buffered_trades``, so it is a window by *count* rather than by
+        time. A longer history belongs in `data/derived/` through the replay path, not
+        in a live buffer.
+        """
+        with self._lock:
+            return tuple(self._trades)
+
+    def drain_gaps(self) -> tuple[Mapping[str, Any], ...]:
+        """Every break recorded since the last call, and clear them.
+
+        Drained rather than read so engine 2 stays stateless across cycles: it never
+        has to remember which breaks it has already written into the archive.
+        `gaps` remains available as the accumulated view the digest reads.
+        """
+        with self._lock:
+            drained = tuple(dict(gap) for gap in self._undrained_gaps)
+            self._undrained_gaps.clear()
+        return drained
+
     def latest_quote(self, pair: str) -> QuoteTick | None:
         with self._lock:
             return self._quotes.get(pair)
@@ -296,6 +329,7 @@ class KrakenWebSocketClient:
             channel=_channel_of(payload),
             pair=_pair_of(payload),
             ts_exchange=_ts_exchange_of(payload),
+            ts_recv=_iso(self._clock.now()),
             payload=payload,
         )
         trades = self._extract_trades(payload, frame.channel)
@@ -356,13 +390,19 @@ class KrakenWebSocketClient:
 
     # -- gaps ------------------------------------------------------------- #
 
+    def _append_gap_locked(self, gap: dict[str, Any]) -> None:
+        """One place a break is recorded, so nothing can be added to the accumulated
+        view without also reaching engine 2's drain."""
+        self._gaps.append(gap)
+        self._undrained_gaps.append(gap)
+
     def _note_gap_locked(self, cause: str) -> None:
-        moment = self._clock.now()
-        self._gaps.append(
+        moment = _iso(self._clock.now())
+        self._append_gap_locked(
             {
                 "cause": cause,
-                "started_at": moment.isoformat().replace("+00:00", "Z"),
-                "ended_at": moment.isoformat().replace("+00:00", "Z"),
+                "started_at": moment,
+                "ended_at": moment,
                 "gap_ms": 0,
             }
         )
@@ -379,11 +419,11 @@ class KrakenWebSocketClient:
             return
         ended = self._clock.now()
         with self._lock:
-            self._gaps.append(
+            self._append_gap_locked(
                 {
                     "cause": self._disconnect_reason or "unknown",
-                    "started_at": started.isoformat().replace("+00:00", "Z"),
-                    "ended_at": ended.isoformat().replace("+00:00", "Z"),
+                    "started_at": _iso(started),
+                    "ended_at": _iso(ended),
                     "gap_ms": int((ended - started).total_seconds() * 1000),
                     "attempt": self._attempt,
                 }
@@ -402,15 +442,41 @@ class KrakenWebSocketClient:
             try:
                 await self._session()
             except _TRANSPORT_ERRORS as exc:
-                self._attempt += 1
-                if self._disconnected_at is None:
-                    self._disconnected_at = self._clock.now()
-                    self._disconnect_reason = f"{type(exc).__name__}: {exc}"
-                with self._lock:
-                    self._connected = False
-                delay = min(self._backoff, self._backoff_max_s) * (0.5 + self._jitter())
-                await self._wait(delay)
-                self._backoff = min(self._backoff * BACKOFF_FACTOR, self._backoff_max_s)
+                self._note_disconnect(f"{type(exc).__name__}: {exc}")
+                await self._back_off()
+            except Exception as exc:
+                # **Not a swallowed exception.** This runs on a background thread with
+                # no caller to raise into: an uncaught error here kills the recorder
+                # silently, and a dead recorder is indistinguishable from a quiet
+                # market — which is the single failure the whole recording exists to
+                # make impossible.
+                #
+                # So it is written down where it cannot be missed. The break becomes a
+                # `gap` in the archive, carrying the exception's type and message as
+                # its cause, and engine 2 appends it to `data/raw/` on the next tick
+                # exactly like a disconnect. That is a more durable record than a log
+                # line, and `unparsed_frames` and `dropped_frames` are visible in
+                # `state` beside it.
+                #
+                # It reconnects rather than stopping, on the same backoff, because a
+                # recorder that gives up loses data it can never recover — and if the
+                # fault is permanent the backoff reaches its ceiling and the archive
+                # fills with identically-caused gaps, which says so plainly.
+                self._note_disconnect(f"unexpected {type(exc).__name__}: {exc}")
+                await self._back_off()
+
+    def _note_disconnect(self, reason: str) -> None:
+        self._attempt += 1
+        if self._disconnected_at is None:
+            self._disconnected_at = self._clock.now()
+            self._disconnect_reason = reason
+        with self._lock:
+            self._connected = False
+
+    async def _back_off(self) -> None:
+        delay = min(self._backoff, self._backoff_max_s) * (0.5 + self._jitter())
+        await self._wait(delay)
+        self._backoff = min(self._backoff * BACKOFF_FACTOR, self._backoff_max_s)
 
     async def _wait(self, delay: float) -> None:
         event = self._async_stop

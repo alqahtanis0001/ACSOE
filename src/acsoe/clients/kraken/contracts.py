@@ -415,11 +415,17 @@ class RawFrame(_Snapshot):
     of it is not a mutation — the payload still goes to disk as it arrived — and a
     frame that names more than one symbol gets ``pair=None`` rather than a guess,
     exactly as ``scripts/record.py`` does.
+
+    ``ts_recv`` is stamped by the stream at the moment the frame was read, from the
+    injected clock. It cannot be stamped by engine 2 instead: the engine sees the
+    frame up to a minute later, and a receive time that was really a drain time turns
+    a latency measurement into a measurement of the loop tick.
     """
 
     channel: str
     pair: str | None
     ts_exchange: str | None
+    ts_recv: str
     payload: dict[str, Any]
 
 
@@ -612,8 +618,30 @@ class MarketStreamProtocol(Protocol):
         """Every frame buffered since the last call, oldest first."""
         ...
 
+    def drain_gaps(self) -> tuple[Mapping[str, Any], ...]:
+        """Every break recorded since the last call, oldest first.
+
+        Drained rather than read, so engine 2 stays stateless across cycles
+        (architecture invariant 1) and does not have to remember which breaks it has
+        already written into the archive.
+        """
+        ...
+
     def drain_trades(self) -> tuple[TradeTick, ...]:
-        """Every executed trade buffered since the last call, oldest first."""
+        """Every executed trade buffered since the last call, oldest first.
+
+        Consuming. Nothing in the live loop uses it — engine 3 wants a window, not a
+        queue — but a consumer that genuinely processes each trade once needs one.
+        """
+        ...
+
+    def recent_trades(self) -> tuple[TradeTick, ...]:
+        """The buffered trades **without** clearing them, oldest first.
+
+        What engine 3 reads. It has to rebuild the same 15-minute bar on each of the
+        fifteen ticks that bar spans, and an engine is stateless across cycles, so the
+        window lives here rather than in the engine.
+        """
         ...
 
     def latest_quote(self, pair: str) -> QuoteTick | None:

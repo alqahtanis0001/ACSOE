@@ -586,3 +586,73 @@ completes**: `config.get` raises, the orchestrator converts it to `ERROR` with
 `blocks_trading=True`, and engines 1 to 3 have already reported. So registering engine 4
 before the operator supplies the key degrades the loop to "blocked" rather than breaking
 it — which is the fail-closed outcome, and is asserted rather than assumed.
+
+### The Windows file-handle teardown ERROR: hardened, not fixed, and the difference matters
+
+**Agent:** A · **Task:** Phase 2 housekeeping · **Date:** 2026-09-09
+
+**What happened.** B saw `tests/cli/test_entrypoints.py::test_console_refuses_an_unset_operator_key`
+produce a teardown **ERROR** — not a FAILED — on one run, and it did not reproduce. The
+fixture's own docstring already predicted the class of fault: `configure_logging()`
+replaces the root logger's handlers process-wide, and a `TimedRotatingFileHandler` left
+open holds a file inside a directory pytest is about to remove, which on Windows is an
+error rather than a warning.
+
+**Why it could not have been that test.** I could not reproduce it either, and reading
+the code says why: `_isolated_runtime` is **autouse** in that module and already closed
+every root handler on teardown, and the test in question returns 2 from the config
+refusal *before* `configure_logging()` is ever called. So nothing in that module opened
+a handle and nothing in that module failed to close one.
+
+**What it probably was.** A handler leaked by a test in **another** module points at
+*that* module's `tmp_path`, survives into this one, and is still open whenever pytest
+gets round to collecting the older directory. The error then lands on whichever test
+happens to be running when the collection happens — which is exactly the shape of the
+observation: seen once, here, unreproducible, and with no local cause.
+
+**Fix.** `_release_log_handlers()` is now called **before** the yield as well as after.
+Releasing on entry means this module cannot be the place a stranger's handle comes due.
+
+**Why this is filed as hardening rather than a fix, deliberately.** It does not stop
+another module leaking a handler; it stops that leak being charged to this one. Claiming
+it fixed a fault I could not reproduce would be worse than saying what it actually does.
+If the ERROR reappears somewhere else, the same treatment belongs in whichever module
+opens the handle — and the search should start with modules that call
+`configure_logging()` without an autouse teardown, not with the module that reports it.
+
+### A background thread that would have died silently
+
+**Agent:** A · **Task:** Phase 2 hardening · **Date:** 2026-09-09
+
+**What happened.** Reviewing `ws.py` after spec 29, not because anything failed:
+`_run` caught only `_TRANSPORT_ERRORS` — `OSError` and `WebSocketException`. Anything
+else escaping `_session` would end the coroutine, end `asyncio.run`, and end the thread.
+
+**Why that is worse than an ordinary uncaught exception.** There is no caller to raise
+into. The thread is a daemon, the traceback goes nowhere anybody looks, and the process
+carries on perfectly happily with `connected` false and no frames arriving. **A dead
+recorder is indistinguishable from a quiet market** — which is the single failure the
+entire recording apparatus exists to make impossible, and the reason the digest reports a
+tiling rather than a gap count. Every candidate cause is real: a pydantic
+`ValidationError` from a frame shape nobody predicted, a `RecursionError` on a pathological
+payload, a `MemoryError`.
+
+**Fix.** `_run` now also catches `Exception`, records the break as a **gap** carrying
+`unexpected <ExceptionType>: <message>` as its cause, and reconnects on the same backoff.
+Engine 2 appends that gap to `data/raw/` on the next tick exactly like a disconnect.
+
+**Why that is not a swallowed exception, which is the obvious objection.**
+`code-standards.md` forbids `except Exception` without re-raising *or logging with the
+traceback*. This does the durable equivalent of the second: the failure reaches the
+append-only archive, where it outlives the process, rather than a log line that
+`logs/` rotates away in fourteen days. It reconnects rather than stopping because a
+recorder that gives up loses data nothing can recover; and if the fault is permanent the
+backoff climbs to its 60-second ceiling and the archive fills with identically-caused
+gaps, which says so about as plainly as anything could.
+
+**Also added while there.** `test_start_and_stop_are_idempotent_and_the_thread_actually_exits`
+drives the real thread against a socket that connects and then delivers nothing — the
+shape a real socket has on a quiet market, and the one that would hang shutdown if
+`stop()` did not reach the loop thread through `call_soon_threadsafe`. The thread
+lifecycle was the only part of this client with no coverage at all, which is a poor place
+for that to be true.

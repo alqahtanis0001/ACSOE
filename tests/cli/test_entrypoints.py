@@ -156,13 +156,33 @@ def _isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterat
     failure rather than a warning.
     """
     monkeypatch.chdir(tmp_path)
+    _release_log_handlers()
     yield
+    _release_log_handlers()
+    structlog.reset_defaults()
+
+
+def _release_log_handlers() -> None:
+    """Close and detach every root handler. Called **before and after** each test.
+
+    After, because `configure_logging()` replaces the root logger's handlers
+    process-wide and a `TimedRotatingFileHandler` left open holds a file inside a
+    directory pytest is about to remove — which on Windows is an error, not a warning.
+
+    Before, because that is the half this fixture originally lacked and the half that
+    explains the symptom. A handler leaked by a test in **another** module points at
+    *that* module's `tmp_path`, survives into this one, and is still open whenever
+    pytest gets round to collecting the older directory. The failure then lands as a
+    teardown ERROR on whichever test happened to be running, which is why it was seen
+    once here and did not reproduce: nothing in this module caused it and nothing in
+    this module could reliably provoke it. Releasing on entry means this module cannot
+    be the place a stranger's handle comes due.
+    """
     logging.shutdown()
     root = logging.getLogger()
     for handler in list(root.handlers):
         root.removeHandler(handler)
         handler.close()
-    structlog.reset_defaults()
 
 
 def load(path: Path) -> Config:
