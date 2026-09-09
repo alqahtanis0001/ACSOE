@@ -8,8 +8,10 @@ Never edit the tracker directly.
 **Phase 2. Claimed: specs 25, 26, 27, 28, 29, 30**, in that order, per
 `feature-specs/PHASE-2-TASKS.md` and ownership rule 5.
 
-- **Spec 25 — Kraken REST and WebSocket clients: COMPLETE.** Four checks below.
-- Specs 26 to 30: not started.
+- **Spec 25 — Kraken REST and WebSocket clients: COMPLETE.**
+- **Spec 26 — engine 1 `exchange`: COMPLETE**, pending only the lead's `bootstrap.py`
+  registration, which is batched with 27 to 29 by instruction.
+- Specs 27 to 30: not started.
 
 Phase 0 (below) is closed and green; it is kept for the record.
 
@@ -143,9 +145,42 @@ waited on the implementation.
    a zero spread. A *crossed* book is reported faithfully — `spread` may be negative —
    because engine 4 has to see it.
 
+## Phase 2 — spec 26, what was built
+
+`src/acsoe/engines/exchange/` — `engine.py`, `contracts.py`, `README.md`,
+`__init__.py`. 17 tests in `tests/engines/test_exchange.py`. Plus
+`src/acsoe/platform/aio.py`, the one place a synchronous engine runs an async client
+call.
+
+**The decision worth reading is that engine 1 never blocks, not even when all three
+fetches fail.** It is the one a later reader is most likely to "correct", so the
+reasoning is in the module docstring and the README as well as here: a block would be
+a fifth gate nobody registered; engine 1 runs first, so it would set
+`state["trading_blocked_by"] = "exchange"` and mask the real blocker on the same tick,
+making `block_records.is_primary` wrong as well; and because a `data_guard` block is
+what makes the manage chain hold exits, a block here would give engine 1 a say in
+whether an open position gets managed. Every gate that needs a value it did not get
+blocks on its own — invariant 3 — so reporting the absence honestly is enough.
+
+Three other things:
+
+- **The three calls run concurrently with `return_exceptions=True`**, so one outage
+  does not become three blanks. A consumer has to know exactly which value it is
+  missing, because invariant 2's paper fallback differs per value.
+- **No fallback is applied here, at all.** `fee_tier` is `null` when `TradeVolume`
+  failed and is never "assume tier 1". Supplying one would erase the record invariant 2
+  requires the consumer to keep, and would be a hardcoded fee besides.
+- **`retained` publishes ages, never values.** For trading a stale value does not
+  exist; only rule 14 may use one, and engines 21 and 22 read it from the client in
+  Phase 6. A test asserts no `ordermin` and no balance string appears anywhere in the
+  published `retained` payload.
+
+An exception that is *not* exchange-shaped is re-raised rather than recorded — contract
+rule 7 — and there is a test for that too.
+
 ## In Progress
 
-- **Spec 26 `exchange`, next.** Nothing written yet.
+- **Spec 27 `market_data_recorder`, next.**
 
 ## Blocked On
 
