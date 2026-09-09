@@ -139,7 +139,13 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
         "console_focus_and_reduced_motion",
         "console_restart_banner",
     }
-    for phase in range(2, verify_module.MAX_PHASE + 1):
+    # Phase 2 carries one criterion already, registered by the lead at the phase
+    # opening rather than by a spec: `commands_round_trip` judges the command-reader
+    # defect found at the Phase 1 close, which existed before any Phase 2 work began.
+    assert {c.name for c in verify_module._REGISTRY[2]} == every_phase | {
+        "commands_round_trip",
+    }
+    for phase in range(3, verify_module.MAX_PHASE + 1):
         assert {c.name for c in verify_module._REGISTRY[phase]} == every_phase
 
 

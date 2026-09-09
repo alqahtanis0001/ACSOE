@@ -38,6 +38,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
@@ -2562,6 +2563,236 @@ def check_console_restart_banner(ctx: VerifyContext) -> Outcome:
 
 
 # --------------------------------------------------------------------------- #
+# commands_round_trip - Phase 2, written by the lead
+# --------------------------------------------------------------------------- #
+#
+# The criterion that would have caught the Phase 1 defect.
+#
+# `Orchestrator._consume_commands` looked up `store.claim_pending_commands`, which
+# `StoreClient` has never had. The `getattr` returned None, the reader logged one debug
+# line and returned, and a daemon wired to the real store ignored every Activate, Freeze
+# and Close-all ever written - the kill switch was inert. Phase 0 reported green anyway,
+# because the only implementations of that shape were a test double in
+# `tests/core/test_orchestrator.py` and an adapter in `tests/console/test_commands.py`.
+#
+# **A seam exercised only through a double is not tested; the double is.** So this
+# criterion refuses every double: it migrates a real database, writes real rows through
+# the real `StoreClient`, and hands that same client to the real `Orchestrator`. The only
+# fabricated objects are a config and a clock, neither of which is part of the seam.
+
+
+class _RoundTripConfig:
+    """The `Config` Protocol, and nothing more. Not part of the seam under test."""
+
+    @property
+    def mode(self) -> str:
+        return "paper"
+
+    def get(self, dotted_key: str, /) -> Any:
+        raise KeyError(dotted_key)
+
+
+class _RoundTripClock:
+    """Monotonic, injected. `now()` advances so `claimed_at` and `consumed_at` differ."""
+
+    def __init__(self) -> None:
+        self._t = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
+
+    def now(self) -> datetime:
+        self._t += timedelta(seconds=1)
+        return self._t
+
+
+class _RoundTripClients:
+    def __init__(self, store: Any) -> None:
+        self._store = store
+
+    @property
+    def kraken(self) -> Any:
+        return object()
+
+    @property
+    def store(self) -> Any:
+        return self._store
+
+    @property
+    def recorder(self) -> Any:
+        return object()
+
+
+class _DoneEngine:
+    """A manage-chain stand-in reporting one completion flag.
+
+    Engines 21 and 22 are Phase 6. `close_all` cannot reach phase two of its
+    consumption without something reporting done, so this reports it - and it is
+    deliberately the *only* stand-in here. It stands in for an engine that does not
+    exist yet, never for the store or the reader, which both exist and are the seam.
+    """
+
+    is_gate = False
+
+    def __init__(self, name: str, number: int, field: str) -> None:
+        self.name = name
+        self.number = number
+        self._field = field
+
+    def process(self, context: Any, state: Any) -> Any:
+        from acsoe.core.contracts import EngineResult, EngineStatus
+
+        return EngineResult(
+            engine=self.name,
+            status=EngineStatus.OK,
+            blocks_trading=False,
+            reason=None,
+            data={self._field: True},
+            duration_ms=0.1,
+        )
+
+
+def _append_command(store: Any, contracts: ModuleType, name: str, stamp: int) -> int:
+    row = contracts.CommandRow(
+        command=name,
+        source=contracts.CommandSource.CONSOLE,
+        created_at=stamp,
+        updated_at=stamp,
+    )
+    return int(store.append_command(row))
+
+
+def _command_row(db_path: Path, command_id: int) -> sqlite3.Row:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM commands WHERE id = ?", (command_id,)).fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def check_commands_round_trip(ctx: VerifyContext) -> Outcome:
+    with (
+        root_import_path(ctx.root),
+        tempfile.TemporaryDirectory(prefix="acsoe-verify-cmds-") as tmp,
+    ):
+        db_path = Path(tmp) / "acsoe.sqlite"
+        _, early = _apply_migrations(ctx, db_path)
+        if early is not None:
+            return early
+
+        client_mod, problem = try_import("acsoe.clients.store.client")
+        if client_mod is None:
+            return problem or pending("acsoe.clients.store.client does not exist yet")
+        contracts_mod, problem = try_import("acsoe.clients.store.contracts")
+        if contracts_mod is None:
+            return problem or pending("acsoe.clients.store.contracts does not exist yet")
+        orch_mod, problem = try_import("acsoe.core.orchestrator")
+        if orch_mod is None:
+            return problem or pending("acsoe.core.orchestrator does not exist yet")
+        core_mod, problem = try_import("acsoe.core.contracts")
+        if core_mod is None:
+            return problem or pending("acsoe.core.contracts does not exist yet")
+
+        store_cls, missing = module_attr(client_mod, "StoreClient")
+        if store_cls is None:
+            return pending(missing)
+        orch_cls, missing = module_attr(orch_mod, "Orchestrator")
+        if orch_cls is None:
+            return pending(missing)
+        chains_cls, missing = module_attr(core_mod, "Chains")
+        if chains_cls is None:
+            return pending(missing)
+
+        clock = _RoundTripClock()
+        stamp = 1_788_000_000_000_000
+
+        # -- activate and freeze: applied and consumed on the claiming tick ----
+        for name, expected_mode in (("activate", "running"), ("freeze", "frozen")):
+            with store_cls(db_path) as store:
+                command_id = _append_command(store, contracts_mod, name, stamp)
+                orchestrator = orch_cls(
+                    config=_RoundTripConfig(),
+                    clock=clock,
+                    clients=_RoundTripClients(store),
+                    chains=chains_cls(),
+                )
+                orchestrator.tick()
+                mode = orchestrator.system["mode"]
+            if mode != expected_mode:
+                return failed(
+                    f"the real store and the real reader disagree: `{name}` left mode "
+                    f"{mode!r}, expected {expected_mode!r}. The reader is not reading "
+                    "the store."
+                )
+            row = _command_row(db_path, command_id)
+            if row["claimed_at"] is None:
+                return failed(f"`{name}` was applied but its row was never claimed")
+            if row["consumed_at"] is None:
+                return failed(
+                    f"`{name}` is a pure mode change and must be consumed on the same "
+                    "tick; consumed_at is still null"
+                )
+            stamp += 1
+
+        # -- close_all: claimed now, consumed only when both engines report done --
+        with store_cls(db_path) as store:
+            close_id = _append_command(store, contracts_mod, "close_all", stamp)
+            orchestrator = orch_cls(
+                config=_RoundTripConfig(),
+                clock=clock,
+                clients=_RoundTripClients(store),
+                chains=chains_cls(),
+            )
+            orchestrator.tick()
+            intent = orchestrator.system["close_intent"]
+            mode = orchestrator.system["mode"]
+        if not intent or mode != "frozen":
+            return failed(
+                f"`close_all` left mode={mode!r} close_intent={intent!r}; expected "
+                "'frozen' and True"
+            )
+        row = _command_row(db_path, close_id)
+        if row["claimed_at"] is None:
+            return failed("`close_all` was applied but its row was never claimed")
+        if row["consumed_at"] is not None:
+            return failed(
+                "`close_all` was consumed on the claiming tick. Two-phase consumption "
+                "exists so a daemon killed mid-liquidation re-applies the command "
+                "instead of coming back with it marked done and positions still open."
+            )
+
+        # -- the interrupted row is re-applied by a *new* orchestrator, then finished --
+        with store_cls(db_path) as store:
+            restarted = orch_cls(
+                config=_RoundTripConfig(),
+                clock=clock,
+                clients=_RoundTripClients(store),
+                chains=chains_cls(
+                    manage=(
+                        _DoneEngine("position_manager", 21, "entry_orders_cancelled"),
+                        _DoneEngine("exit", 22, "positions_closed"),
+                    )
+                ),
+            )
+            restarted.tick()
+            replayed_intent = restarted.system["close_intent"]
+        row = _command_row(db_path, close_id)
+        if row["consumed_at"] is None:
+            return failed(
+                "a restarted daemon did not finish the interrupted `close_all`: the row "
+                "is still claimed and unconsumed after both engines reported done. This "
+                "is the failure the kill switch exists to prevent."
+            )
+        if replayed_intent:
+            return failed("`close_intent` was not cleared after both engines reported done")
+
+        return passed(
+            "real StoreClient through the real reader: activate and freeze applied and "
+            "consumed on the claiming tick, close_all claimed but not consumed, and an "
+            "interrupted close_all re-applied on restart and consumed only once done"
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Registration
 # --------------------------------------------------------------------------- #
 
@@ -2589,6 +2820,10 @@ register(0, Criterion("record_sample_valid", check_record_sample_valid))
 # separate decision the operator deliberately did not take here.
 register_every_phase(Criterion("toolchain_green", check_toolchain_green))
 register(0, Criterion("is_gate_matches_registry", check_is_gate_matches_registry))
+
+# Phase 2. Registered by the lead at the phase opening, ahead of every engine spec,
+# because it judges a defect that already exists rather than work still to come.
+register(2, Criterion("commands_round_trip", check_commands_round_trip))
 
 # Phase 1 only - the console. Spec 16, registered before the console it judges so
 # that specs 17 to 24 have a gate to build against from the first commit. Every

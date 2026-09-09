@@ -43,20 +43,67 @@ class _Config:
 
 
 class _Store:
+    """A double shaped like the **real** `StoreClient`, method for method.
+
+    It used to expose `claim_pending_commands` and a `mark_close_all_consumed`, neither
+    of which `StoreClient` has ever had. The orchestrator reached for both through
+    `getattr`, found them here and nowhere else, and every test passed while a daemon
+    wired to the real store ignored every command ever written. That is the whole
+    lesson of the Phase 1 close: a seam exercised only through a double is not tested,
+    the double is. The four methods below are the four the store really exposes, with
+    the real signatures and the real `claimed_at IS NULL` semantics.
+
+    The definitive guard against this recurring is `commands_round_trip` in
+    `scripts/verify.py`, which drives the genuine `StoreClient` and never sees this
+    class. This double now exists for the cases that criterion cannot reach cheaply —
+    a store that is missing a method, a row with no id.
+    """
+
     def __init__(self, commands: list[dict[str, Any]] | None = None) -> None:
-        self._pending = list(commands or [])
+        self._rows: list[dict[str, Any]] = []
+        for index, command in enumerate(commands or [], start=1):
+            row = dict(command)
+            row.setdefault("id", index)
+            row.setdefault("claimed_at", None)
+            row.setdefault("consumed_at", None)
+            self._rows.append(row)
         self.consumed: list[str] = []
-        self.close_all_consumed = 0
 
-    def claim_pending_commands(self, *, run_id: str, now: dt.datetime) -> list[dict[str, Any]]:
-        claimed, self._pending = self._pending, []
-        return claimed
+    # -- reads ---------------------------------------------------------------
 
-    def mark_command_consumed(self, command: dict[str, Any], *, now: dt.datetime) -> None:
-        self.consumed.append(command["command"])
+    def pending_commands(self) -> list[dict[str, Any]]:
+        """Never-claimed rows, oldest first — `claimed_at IS NULL`."""
+        return [r for r in self._rows if r["claimed_at"] is None]
 
-    def mark_close_all_consumed(self, *, run_id: str, now: dt.datetime) -> None:
-        self.close_all_consumed += 1
+    def claimed_unconsumed_commands(self) -> list[dict[str, Any]]:
+        """Interrupted rows: claimed by some run, never completed."""
+        return [
+            r for r in self._rows if r["claimed_at"] is not None and r["consumed_at"] is None
+        ]
+
+    # -- writes --------------------------------------------------------------
+
+    def claim_command(self, command_id: int, *, claimed_at: int, run_id: str) -> bool:
+        """Returns False if the row was already claimed. That guard is the idempotency."""
+        for row in self._rows:
+            if row["id"] == command_id and row["claimed_at"] is None:
+                row["claimed_at"] = claimed_at
+                row["claimed_by_run_id"] = run_id
+                return True
+        return False
+
+    def mark_command_consumed(self, command_id: int, *, consumed_at: int) -> bool:
+        for row in self._rows:
+            if row["id"] == command_id and row["consumed_at"] is None:
+                row["consumed_at"] = consumed_at
+                self.consumed.append(str(row["command"]))
+                return True
+        return False
+
+    # -- helpers for assertions ----------------------------------------------
+
+    def row(self, command_id: int) -> dict[str, Any]:
+        return next(r for r in self._rows if r["id"] == command_id)
 
 
 class _Clients:
@@ -271,7 +318,7 @@ def test_close_intent_survives_when_a_flag_is_missing() -> None:
     orchestrator = _orch(Chains(), store)
     orchestrator.tick()
     assert orchestrator.system["close_intent"] is True
-    assert store.close_all_consumed == 0
+    assert store.consumed == [], "an unfinished close_all must stay unconsumed"
 
 
 def test_close_intent_survives_when_only_one_engine_reports_done() -> None:
@@ -281,7 +328,7 @@ def test_close_intent_survives_when_only_one_engine_reports_done() -> None:
     orchestrator = _orch(Chains(manage=(pm, ex)), store)
     orchestrator.tick()
     assert orchestrator.system["close_intent"] is True, "a failed close must retry next tick"
-    assert store.close_all_consumed == 0
+    assert store.consumed == [], "an unfinished close_all must stay unconsumed"
 
 
 def test_close_intent_clears_only_when_both_report_done() -> None:
@@ -291,7 +338,10 @@ def test_close_intent_clears_only_when_both_report_done() -> None:
     orchestrator = _orch(Chains(manage=(pm, ex)), store)
     orchestrator.tick()
     assert orchestrator.system["close_intent"] is False
-    assert store.close_all_consumed == 1
+    assert store.consumed == ["close_all"]
+    assert store.row(1)["consumed_at"] is not None, (
+        "phase two of the two-phase consumption stamps the real row, not a counter"
+    )
 
 
 def test_close_all_is_not_marked_consumed_on_the_claiming_tick() -> None:
@@ -311,11 +361,85 @@ def test_pure_mode_changes_are_consumed_immediately(command: str, mode: str) -> 
 
 
 def test_an_unrecognised_command_is_ignored_and_never_blocks_the_loop() -> None:
+    """Ignored, and *consumed* — because ignoring is a decision, and it is complete.
+
+    `architecture-context.md` says an unrecognised command is ignored and logged and
+    never blocks the loop. It says nothing about consumption, and leaving it unconsumed
+    is the trap: `pending_commands` filters on `claimed_at IS NULL`, so the row would be
+    claimed on this tick, never appear as pending again, and sit claimed-and-unconsumed
+    forever — which is exactly the shape the startup replay looks for. Every restart for
+    the life of the database would re-apply it. Consuming it is what stops a typo
+    becoming a permanent fixture of every boot.
+    """
     store = _Store([{"command": "self_destruct"}, {"command": "activate"}])
     orchestrator = _orch(Chains(), store)
     orchestrator.tick()
     assert orchestrator.system["mode"] == "running"
-    assert store.consumed == ["activate"]
+    assert store.consumed == ["self_destruct", "activate"]
+    assert store.claimed_unconsumed_commands() == [], (
+        "an ignored command must not be left for the startup replay to find"
+    )
+
+
+# ------------------------------------------------------- startup re-application
+
+
+def _interrupted(command: str) -> _Store:
+    """A row a previous process claimed and never finished."""
+    return _Store([{"command": command, "claimed_at": 1, "claimed_by_run_id": "run-earlier"}])
+
+
+def test_an_interrupted_close_all_is_re_applied_before_the_first_tick() -> None:
+    """The failure the kill switch exists to prevent.
+
+    A daemon killed between reading `close_all` and finishing the liquidation must not
+    come back with the command marked done and positions still open. Mode is still never
+    restored — it starts idle and this replays the *command*, which is what drags the
+    intent back.
+    """
+    store = _interrupted("close_all")
+    orchestrator = _orch(Chains(), store)
+    orchestrator.tick()
+    assert orchestrator.system["close_intent"] is True
+    assert orchestrator.system["mode"] == "frozen"
+    assert store.consumed == [], "it is not finished, so it is not consumed"
+
+
+def test_the_startup_replay_runs_once_and_not_every_tick() -> None:
+    """Re-applying on every tick would make a completed close_all immortal."""
+    store = _interrupted("close_all")
+    pm = _Spy("position_manager", 21, data={"entry_orders_cancelled": True})
+    ex = _Spy("exit", 22, data={"positions_closed": True})
+    orchestrator = _orch(Chains(manage=(pm, ex)), store)
+
+    orchestrator.tick()
+    assert orchestrator.system["close_intent"] is False
+    assert store.consumed == ["close_all"]
+
+    orchestrator.tick()
+    assert orchestrator.system["close_intent"] is False, (
+        "a finished close_all must not be resurrected by a second replay"
+    )
+
+
+def test_an_interrupted_mode_change_is_re_applied_and_then_consumed() -> None:
+    store = _interrupted("freeze")
+    orchestrator = _orch(Chains(), store)
+    orchestrator.tick()
+    assert orchestrator.system["mode"] == "frozen"
+    assert store.consumed == ["freeze"]
+
+
+def test_a_store_without_the_interrupted_reader_still_ticks() -> None:
+    """Tolerance, not silence: the tick completes and the gap is logged."""
+
+    class _Partial(_Store):
+        claimed_unconsumed_commands = None  # type: ignore[assignment]
+
+    store = _Partial([{"command": "activate"}])
+    orchestrator = _orch(Chains(), store)
+    orchestrator.tick()
+    assert orchestrator.system["mode"] == "running", "the pending read still works"
 
 
 def test_mode_always_starts_idle() -> None:

@@ -20,6 +20,7 @@ Changing chain semantics requires the lead. The three properties most likely to 
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from acsoe.core.contracts import (
@@ -38,6 +39,24 @@ if TYPE_CHECKING:
     from acsoe.core.contracts import BaseEngine
 
 __all__ = ["Orchestrator"]
+
+_MICROSECONDS_PER_SECOND = 1_000_000
+
+
+def _to_micros(moment: datetime) -> int:
+    """Microseconds since the epoch, UTC.
+
+    Duplicated deliberately rather than imported from ``clients/store/contracts.py``.
+    Invariant 0 says ``core/`` imports nothing from the rest of the package, and that
+    boundary is worth more than six lines of reuse: it is what lets the lead own the
+    shape while Agent A and Agent B own the implementations. The store's ``to_micros``
+    raises on a naive datetime; here the ``Clock`` Protocol already promises
+    timezone-aware UTC, and ``astimezone`` on a naive value would silently assume local
+    time, so a naive datetime is a defect worth failing on rather than converting.
+    """
+    if moment.tzinfo is None:
+        raise ValueError("timestamps must be timezone-aware; naive datetimes are a defect")
+    return int(moment.astimezone(UTC).timestamp() * _MICROSECONDS_PER_SECOND)
 
 
 class Orchestrator:
@@ -68,6 +87,14 @@ class Orchestrator:
         # never restored from the store: a daemon that crashed while trading comes back
         # not trading, with the manage chain still watching whatever is open.
         self._system: dict[str, Any] = {"mode": "idle", "close_intent": False}
+
+        # The `commands` row id of an accepted `close_all`, held until both manage-chain
+        # engines report the liquidation finished. Two-phase consumption is what stops a
+        # crash swallowing a kill switch, so the id has to outlive the tick that read it.
+        self._pending_close_all_id: int | None = None
+
+        # Interrupted commands are re-applied once, before the first tick's own read.
+        self._startup_replayed = False
 
     # ------------------------------------------------------------------ properties
 
@@ -168,36 +195,135 @@ class Orchestrator:
         ``close_all`` it is deferred to step 4, so a daemon killed mid-liquidation
         re-applies the command on restart instead of coming back with it marked done and
         positions still open.
+
+        Composed from the four reads and writes ``StoreClient`` actually exposes —
+        ``claimed_unconsumed_commands``, ``pending_commands``, ``claim_command`` and
+        ``mark_command_consumed`` — rather than from a single compound method. Until the
+        Phase 1 close this looked up ``store.claim_pending_commands``, which the store
+        has never had: the ``getattr`` returned ``None``, this method logged one debug
+        line and returned, and **a daemon wired to the real store ignored every command
+        ever written.** It passed every gate because the only implementations of that
+        shape were test doubles. A seam exercised solely through a double is not tested;
+        the double is.
         """
-        store = getattr(self._clients, "store", None)
-        claim = getattr(store, "claim_pending_commands", None)
-        if claim is None:
-            self._log("commands_skipped", reason="store exposes no command reader")
+        store = self._store()
+        if store is None:
+            self._log("commands_skipped", reason="no store client")
             return
 
-        for command in claim(run_id=self._run_id, now=self._clock.now()):
-            name = getattr(command, "command", None) or command["command"]
-            if name == "activate":
-                self._system["mode"] = "running"
-            elif name == "freeze":
-                self._system["mode"] = "frozen"
-            elif name == "close_all":
-                self._system["mode"] = "frozen"
-                self._system["close_intent"] = True
-            else:
-                # Never blocks the loop. A CHECK constraint on the column would have made
-                # this path unreachable and untestable, which is why there isn't one.
-                self._log("command_unrecognised", command=str(name))
-                continue
-            self._log("command_applied", command=str(name), mode=self._system["mode"])
-            if name != "close_all":
-                self._mark_consumed(command)
+        # Interrupted commands come first, before this run reads anything of its own.
+        if not self._startup_replayed:
+            self._replay_interrupted_commands(store)
+            self._startup_replayed = True
 
-    def _mark_consumed(self, command: Any) -> None:
-        store = getattr(self._clients, "store", None)
+        pending = getattr(store, "pending_commands", None)
+        claim = getattr(store, "claim_command", None)
+        if pending is None or claim is None:
+            self._log(
+                "commands_skipped",
+                reason="store exposes no command reader",
+                has_pending_commands=pending is not None,
+                has_claim_command=claim is not None,
+            )
+            return
+
+        stamp = _to_micros(self._clock.now())
+        for row in pending():
+            command_id = self._command_id(row)
+            if command_id is None:
+                self._log("command_without_id", command=str(self._command_name(row)))
+                continue
+            # `claim_command` guards on `claimed_at IS NULL`, so a row already claimed
+            # returns False and is never applied twice within a run.
+            if not claim(command_id, claimed_at=stamp, run_id=self._run_id):
+                self._log("command_already_claimed", command_id=command_id)
+                continue
+            self._apply_command(store, row, command_id, stamp)
+
+    def _replay_interrupted_commands(self, store: Any) -> None:
+        """Re-apply every row claimed by an earlier process that never completed.
+
+        ``architecture-context.md`` names the exact failure this prevents: a daemon
+        killed between reading ``close_all`` and finishing the liquidation restarts with
+        the command marked done, the in-memory intent gone, and positions still open —
+        the one failure the kill switch exists to prevent. Mode is still never restored
+        from the store; this replays *commands*, and an interrupted ``close_all``
+        therefore completes even though the mode reverted to idle.
+
+        The rows are already claimed, so they are not claimed again. That is what makes
+        this idempotent across repeated restarts.
+        """
+        read = getattr(store, "claimed_unconsumed_commands", None)
+        if read is None:
+            self._log("startup_replay_skipped", reason="store exposes no interrupted-command reader")
+            return
+
+        stamp = _to_micros(self._clock.now())
+        replayed = 0
+        for row in read():
+            command_id = self._command_id(row)
+            if command_id is None:
+                continue
+            self._apply_command(store, row, command_id, stamp)
+            replayed += 1
+        if replayed:
+            self._log("startup_replay", commands=replayed)
+
+    def _apply_command(self, store: Any, row: Any, command_id: int, stamp: int) -> None:
+        """Apply one already-claimed command and consume it if the effect is complete."""
+        name = self._command_name(row)
+        if name == "activate":
+            self._system["mode"] = "running"
+        elif name == "freeze":
+            self._system["mode"] = "frozen"
+        elif name == "close_all":
+            self._system["mode"] = "frozen"
+            self._system["close_intent"] = True
+            self._pending_close_all_id = command_id
+        else:
+            # Never blocks the loop. A CHECK constraint on the column would have made
+            # this path unreachable and untestable, which is why there isn't one.
+            #
+            # It *is* consumed, though. `pending_commands` filters on an unclaimed row,
+            # so an unrecognised command that stayed unconsumed would sit claimed and
+            # unconsumed forever and be re-applied by the startup replay on every
+            # restart for the life of the database. "Ignored" is a decision, and a
+            # decision is complete the moment it is taken.
+            self._log("command_unrecognised", command=str(name))
+            self._consume(store, command_id, stamp)
+            return
+
+        self._log("command_applied", command=str(name), mode=self._system["mode"])
+        # `activate` and `freeze` are pure mode changes and are complete now.
+        # `close_all` is consumed in step 4, and only once both engines report done.
+        if name != "close_all":
+            self._consume(store, command_id, stamp)
+
+    def _store(self) -> Any:
+        return getattr(self._clients, "store", None)
+
+    @staticmethod
+    def _command_name(row: Any) -> Any:
+        """The command word, from a pydantic row or a plain mapping."""
+        if isinstance(row, dict):
+            return row.get("command")
+        return getattr(row, "command", None)
+
+    @staticmethod
+    def _command_id(row: Any) -> int | None:
+        value = row.get("id") if isinstance(row, dict) else getattr(row, "id", None)
+        return None if value is None else int(value)
+
+    def _consume(self, store: Any, command_id: int, stamp: int) -> None:
         mark = getattr(store, "mark_command_consumed", None)
-        if mark is not None:
-            mark(command, now=self._clock.now())
+        if mark is None:
+            self._log(
+                "command_not_consumed",
+                command_id=command_id,
+                reason="store exposes no mark_command_consumed",
+            )
+            return
+        mark(command_id, consumed_at=stamp)
 
     # ---------------------------------------------------------------- step 1: guard
 
@@ -276,10 +402,16 @@ class Orchestrator:
         if cancelled and closed:
             self._system["close_intent"] = False
             self._log("close_all_complete")
-            store = getattr(self._clients, "store", None)
-            mark = getattr(store, "mark_close_all_consumed", None)
-            if mark is not None:
-                mark(run_id=self._run_id, now=self._clock.now())
+            # Phase two of the two-phase consumption, and the only place it happens for
+            # `close_all`. This called `store.mark_close_all_consumed` until the Phase 1
+            # close — another method the store has never had, so the row stayed claimed
+            # and unconsumed after a *successful* liquidation and was re-applied by the
+            # startup replay on the next restart, closing an account that was already
+            # flat. The id is the one carried from the tick that accepted the command.
+            store = self._store()
+            if store is not None and self._pending_close_all_id is not None:
+                self._consume(store, self._pending_close_all_id, _to_micros(self._clock.now()))
+            self._pending_close_all_id = None
         else:
             self._log("close_all_pending", cancelled=cancelled, closed=closed)
 

@@ -15,11 +15,14 @@ The console's only write path, and most of what is asserted here is what it must
   exercised.
 
 The interesting one is the round trip: a row written here is claimed and consumed
-by the **real** command reader in `src/acsoe/core/orchestrator.py`, not by a mock
-of it. What sits between them is a thin adapter, because `StoreClient` does not
-expose `claim_pending_commands` — see the open question in
-`context/progress/c-interface.md`. The adapter is the store side of the seam; the
-reader under test is the orchestrator's own code.
+by the **real** command reader in `src/acsoe/core/orchestrator.py`, with nothing
+between them but SQLite. It went through a renaming adapter until the Phase 2
+opening, because the orchestrator reached for a `claim_pending_commands` that
+`StoreClient` has never had — raised here as an open question rather than papered
+over by editing B's file. The lead fixed the reader to compose from the four
+methods the store actually exposes, so the adapter is gone and the real
+`StoreClient` is passed straight in. That is the stronger test: an adapter is a
+place a mismatch can hide.
 """
 
 from __future__ import annotations
@@ -333,35 +336,6 @@ async def test_the_watermark_moves_when_a_command_is_written(
 # --------------------------------------------------------------------------- #
 
 
-class _StoreAdapter:
-    """The store shape `Orchestrator._consume_commands` reaches for.
-
-    `StoreClient` exposes `pending_commands`, `claim_command` and
-    `mark_command_consumed`, and the orchestrator calls `claim_pending_commands`
-    and a differently-shaped `mark_command_consumed`. That mismatch is a real gap
-    on B's surface, recorded as an open question rather than papered over by
-    editing B's file; this adapter is the seam, and it does nothing but rename.
-
-    **The reader under test is the orchestrator's own code**, not this. Every
-    decision — which row to claim, what effect to apply, when to stamp
-    `consumed_at`, and that `close_all` defers it — happens in `core/`.
-    """
-
-    def __init__(self, store: StoreClient) -> None:
-        self._store = store
-
-    def claim_pending_commands(self, *, run_id: str, now: dt.datetime) -> list[Any]:
-        claimed = []
-        for row in self._store.pending_commands():
-            assert row.id is not None
-            if self._store.claim_command(row.id, claimed_at=to_micros(now), run_id=run_id):
-                claimed.append(row)
-        return claimed
-
-    def mark_command_consumed(self, command: Any, *, now: dt.datetime) -> None:
-        self._store.mark_command_consumed(command.id, consumed_at=to_micros(now))
-
-
 class _Clients:
     def __init__(self, store: Any) -> None:
         self._store = store
@@ -419,7 +393,7 @@ async def test_a_console_row_is_claimed_and_applied_by_the_real_reader(
         orchestrator = Orchestrator(
             config=_StubConfig(),
             clock=fixed_clock,
-            clients=_Clients(_StoreAdapter(store)),
+            clients=_Clients(store),
         )
         orchestrator.tick()
 
@@ -451,12 +425,11 @@ async def test_a_claimed_row_is_never_applied_twice_within_a_run(
         app.state.command_writer.close()
 
     with StoreClient(migrated_db) as store:
-        adapter = _StoreAdapter(store)
         orchestrator = Orchestrator(
-            config=_StubConfig(), clock=fixed_clock, clients=_Clients(adapter)
+            config=_StubConfig(), clock=fixed_clock, clients=_Clients(store)
         )
         orchestrator.tick()
-        assert adapter.claim_pending_commands(run_id="second", now=fixed_clock.now()) == []
+        assert store.pending_commands() == (), "the row is claimed and no longer pending"
         orchestrator.tick()
         assert orchestrator.system["mode"] == "running"
 
