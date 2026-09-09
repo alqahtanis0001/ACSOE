@@ -124,6 +124,12 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     "market_data_stale": "Market data is older than the guard allows",
     "negative_spread": "The order book is crossed",
     "missing_candle": "A decision bar has no candle",
+    # Deliberately not folded into `market_data_stale`. "Older than the guard
+    # allows" is a *false sentence* when nothing has arrived at all, and it sends
+    # the operator after a lagging feed when the fault is an absent one — a slow
+    # socket and a stream that never connected have different causes and different
+    # fixes. A's finding, and the prose is what settled it.
+    "no_market_data": "No market data has arrived",
 }
 
 #: What a row with neither prose nor a mapped code shows. A statement of absence,

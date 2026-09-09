@@ -18,8 +18,9 @@ Never edit the tracker directly.
   reports PASS.
 - **Spec 30 - historical OHLCVT loader: COMPLETE.** `historical_loader_reports_gaps`
   now reports PASS.
-- **Spec 29 `data_guard`: next.** Deliberately sequenced last - landing it before C's
-  criterion fixes would have turned a PENDING into a FAIL, and a FAIL is a stop.
+- **Spec 29 - engine 4 `data_guard`: CODE COMPLETE.** `data_guard_blocks_bad_data`
+  reports PENDING naming `data_guard.max_data_age_s`, which the operator has not
+  supplied. Nothing else about it is outstanding.
 
 Phase 0 (below) is closed and green; it is kept for the record.
 
@@ -266,19 +267,42 @@ Two other things worth carrying forward:
 - No archive exists in `data/historical/` on this machine, so the `--live` half and the
   committed digest wait on the operator downloading one. No criterion depends on it.
 
+## Phase 2 - spec 29, what was built
+
+`src/acsoe/engines/data_guard/` - `engine.py`, `contracts.py`, `README.md`. 21 tests in
+`tests/engines/test_data_guard.py`, plus 7 in `tests/engines/test_guard_chain_rehearsal.py`.
+
+- **Six tests carry it: a block and a pass for each of the three named conditions.**
+  Each bad scenario differs from `clean` in exactly one respect, asserted by its own
+  test - a fixture that was stale *and* crossed would let a gate that only checked
+  staleness pass the negative-spread case.
+- **A fourth reason code, `no_market_data`**, for the fail-closed case invariant 3
+  requires. Not folded into `market_data_stale` because the prose would be a false
+  sentence: there is a difference between a feed that is behind and no feed at all.
+  Agreed with C before landing, and a test derives the code list from the engine's own
+  constants so it cannot decay.
+- **Blocking on a hole in the candle series does not contradict the loader refusing to
+  invent one.** The loader governs labelling, the gate governs trading, and fail-closed
+  points the opposite way in each. Stated in three places because the obvious fix for
+  either half breaks the other.
+- **`data_guard.max_data_age_s` raises when absent** and no placeholder is written.
+- The 'a second guard still runs on a blocked tick' test drives the **real**
+  `Orchestrator` rather than asserting it about the engine in isolation: an engine
+  cannot prove a property of the chain it sits in.
+
 ## In Progress
 
-- **Spec 29 `data_guard`, last.** C has fixed `_guard_context` and made an unset
-  `data_guard.max_data_age_s` report PENDING naming the key rather than FAIL, so
-  landing engine 4 no longer turns a PENDING into a FAIL.
-- Spec 27's fixture stays outstanding until the recording span reaches 24 hours. At
-  13:52Z the span was 21h51m; crossover is about 16:01Z.
+- **Nothing.** All six specs are code complete.
 
 ## Blocked On
 
-- Nothing. Two config keys are with the operator (below) and neither blocks: I will
-  reference them with `config.get(...)` and let the `KeyError` stand until they land,
-  which is the correct fail-closed behaviour and is testable as such.
+- **Spec 27's fixture: wall-clock time.** The span reaches 24 hours at about
+  2026-09-09T16:01Z provided `scripts/record.py` keeps running. Nothing in code can
+  shorten it, and `scripts/recording_report.py` refuses to write a short digest.
+- **Spec 29's criterion: the operator's `data_guard.max_data_age_s`.** PENDING, not
+  FAIL, and correctly so.
+- **`bootstrap.py` registration for engines 1 to 4:** batched and sent to the lead
+  after the four survived two real orchestrator ticks against the fake client.
 
 ## Open Questions
 

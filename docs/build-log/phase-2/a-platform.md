@@ -482,3 +482,107 @@ asserted nothing a fresh clone does not already enforce.
 
 **Cost.** Three of the loader's tests are about what the loader must *not* do, which
 reads oddly next to the ones about what it does. That is the correct ratio here.
+
+### A shared fixture that three tests quietly rewrote for each other
+
+**Agent:** A · **Task:** spec 29 · **Date:** 2026-09-09
+
+**What happened.** `test_each_bad_scenario_differs_from_clean_in_exactly_one_respect`
+failed with `('stale', ['missing_bars', 'quotes'])` — the `stale` fixture had somehow
+acquired a missing bar. It had not been written that way.
+
+**Why.** `BAD_DATA_SCENARIOS` is a module-level mapping of nested dicts, and my test
+helper did `dict(BAD_DATA_SCENARIOS[name])` — a **shallow** copy. The outer dict is new;
+`state["market_sensor"]` is the *same object* as the fixture's. An earlier test set
+`state["market_sensor"]["missing_bars"]` to exercise a multi-finding tick, and from that
+point on every test in the file, and every consumer of the module, saw a `stale` fixture
+that was also missing a candle. The failure surfaced three tests away from the cause and
+blamed the fixture rather than the test that had rewritten it.
+
+**Fix.** `bad_data_state(name)` in `engines/data_guard/contracts.py` returns a
+`copy.deepcopy`, and every test that intends to modify a scenario goes through it.
+
+**Consequence, and the reason this is worth an entry.** `scripts/verify.py` does the
+same shallow copy — `dict(scenarios[key])` — and is **correct today** only because the
+engine does not mutate what it is handed. That is a property of the current
+implementation, not of the interface, so it is exactly the kind of thing that stops being
+true without anyone noticing. C has been told; the deep-copy factory is documented as
+the way to take a scenario you intend to change; and the assertion that each bad scenario
+differs from `clean` in exactly one respect is what caught it and stays.
+
+The fixture-sharing itself is right and I would do it again: the fixtures live in the
+engine's own contracts module so that a criterion and a test suite cannot drift from the
+engine's idea of `state["market_sensor"]`. Sharing the *shape* is the point; sharing
+mutable *instances* was the mistake.
+
+### A fourth reason code, and why it is not just "stale"
+
+**Agent:** A · **Task:** spec 29 · **Date:** 2026-09-09
+
+**What happened.** The spec names three block conditions. Engine 4 emits four, and the
+extra one is `no_market_data`.
+
+**Why.** Invariant 3 says a gate that cannot reach its data blocks, so the empty case
+needs a verdict whether or not the spec enumerates it — and it is not hypothetical: C's
+fake Kraken client is REST-only, so on the real tree `market_sensor` publishes no quotes
+and this is the code that fires.
+
+I tried folding it into `market_data_stale` first, and the **prose** is what stopped me.
+"Market data is older than the guard allows" is a false sentence when there is none, and
+it would send an operator looking for a lagging feed rather than an absent one. Those
+have different causes and different fixes.
+
+**Fix.** A distinct code, agreed with C before landing rather than after — C's own
+standing request, and the right order: `REASON_PROSE` is C's surface, and a code missing
+from it renders as "No reason was recorded." **silently, with no error anywhere.**
+
+**Consequence.** `test_every_reason_code_exists_in_the_consoles_prose_map` derives the
+list from this engine's own constants rather than repeating it, so adding a fifth code
+without telling C fails in A's own suite instead of going quiet on the console.
+
+### Decision: the gate blocks on a hole in the candle series, and the loader still must not fill one
+
+**Agent:** A · **Date:** 2026-09-09
+
+**Options.** Treat a missing candle as a data fault and block, or treat it as the quiet
+market it is and pass — which is what `architecture-context.md` says about the *archive*.
+
+**Chose.** Block, and write down at length why that is not a contradiction.
+
+**Because.** The two rules are about different acts. `architecture-context.md` and spec
+30 govern **labelling**: a missing candle means no trades occurred, so inventing one
+fabricates a barrier touch and poisons a label. Engine 4 governs **trading**: acting on a
+series with a hole in it risks money on a price nobody observed. Fail-closed points in
+opposite directions for the two, and both directions are the cautious one.
+
+**Cost.** It reads like a contradiction on first encounter, and the obvious "fix" for
+either half breaks the other. So it is stated three times — next to the constant in
+`contracts.py`, in the engine README, and in a test whose name is the claim — and C
+carried it into the comment above the reason codes as well.
+
+### The registration rehearsal, run before asking for it
+
+**Agent:** A · **Task:** specs 26-29 · **Date:** 2026-09-09
+
+**What happened.** The lead deferred `bootstrap.py` registration until the tree was
+globally green, on the grounds that registering `data_guard` as a real gate changes what
+`orchestrator_empty_registry` — a **Phase 0** criterion — exercises on every tick.
+
+**Fix.** `tests/engines/test_guard_chain_rehearsal.py` drives the **real** `Orchestrator`
+over all four engines against C's fake client, twice, before the request is sent. Two
+ticks rather than one on purpose: `state` is fresh every tick except `state["system"]`,
+and an engine that quietly depended on something surviving would pass a single-tick test
+and fail the second.
+
+**What it found, which is worth knowing before registration rather than after.** Against
+the fake client the guard chain **blocks every tick**, with
+`state["data_guard"]["reason_code"] == "no_market_data"` — the fake is REST-only, so
+there are no quotes. That is correct, and it completes the tick rather than raising,
+which is the thing that matters: C's `console_shows_live_rows` turns an exception during
+a tick into a FAIL naming it.
+
+And with `data_guard.max_data_age_s` still absent from the config, the tick **still
+completes**: `config.get` raises, the orchestrator converts it to `ERROR` with
+`blocks_trading=True`, and engines 1 to 3 have already reported. So registering engine 4
+before the operator supplies the key degrades the loop to "blocked" rather than breaking
+it — which is the fail-closed outcome, and is asserted rather than assumed.
