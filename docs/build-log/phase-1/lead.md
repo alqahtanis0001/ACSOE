@@ -80,6 +80,73 @@ design a view for data that arrives in Phase 5.
 verified now, so building one would have meant a criterion that could not honestly pass. The
 empty state is the verifiable option as well as the truthful one.
 
+### Decision: the status band stays silent about Running and Frozen until Phase 2
+
+**Agent:** Lead · **Task:** spec 19, checkpoint after spec 18 · **Date:** 2026-09-09
+
+**What happened.** C reported at the checkpoint that the console has no way to tell a running
+daemon from a frozen one. The status band's State field has four possible readings and the
+console can produce two of them.
+
+**Why.** Mode lives only in `state["system"]["mode"]`, in the daemon's memory. It is never
+restored from the store — a daemon always starts `idle` and only reaches `running` through an
+`activate` command — and `runs.mode` is paper/live/replay, a different axis entirely. Nothing the
+console can read distinguishes the two states. C rendered the two idle readings and stopped
+rather than guess, which was right.
+
+**Options.** Derive the mode from the `commands` table, scoped by `claimed_by_run_id`, since the
+orchestrator stamps that on every row it applies; persist the mode from `core/`'s command reader
+so the console reads it as a fact; or defer the two readings and ship the idle ones.
+
+**Chose.** Defer to Phase 2, and fix the approach now: the command reader persists the mode. The
+operator ruled.
+
+**Because.** I had initially recommended deriving it from `commands`, and C argued me off it. The
+derivation reconstructs a mode from a command history, so it is only ever as correct as the
+assumption that every mode transition leaves a claimed row — and a transition that leaves none
+makes the band **confidently wrong** rather than silent. For the one element whose stated job is
+to answer *is this safe* in under two seconds, that is the wrong failure mode. It also needed a
+new read in B's directory and an index on `claimed_by_run_id`, which nothing currently indexes.
+Persisting the mode is correct by construction, adds no inference, and fails only by going stale
+— and the console already has staleness machinery. Deferring costs nothing in Phase 1 because no
+daemon runs at all: the console renders the Phase 0 seed, and neither state can occur, so a band
+that shows only the idle readings is honest rather than incomplete.
+
+**Cost.** Phase 2 inherits a debt that is not optional — it is the phase where a daemon first
+runs, and a band reading `Idle` over a running system is actively wrong. It needs a column from B
+and the write from the lead, so it is a two-agent Phase 2 planning item. Recorded in three places
+so it cannot be forgotten: the authority text in `ui-context.md`, a seam row in `ownership.md`
+naming both producers and the phase, and a Next Up entry in the tracker. Spec 19 also carries a
+test asserting the field never renders `Running` or `Frozen` this phase, so the deferral is
+enforced by the suite rather than remembered by a person.
+
+### A unique key made a specified state unbuildable
+
+**Agent:** Lead · **Task:** spec 16 · **Date:** 2026-09-09
+
+**What happened.** Spec 16 asked `console_restart_banner` to assert plain `Idle` "when the two
+`run_id`s match", and `ui-context.md` described the same check as comparing "the current `run_id`
+and the `run_id` of the previous row". C found while building it that no database can ever reach
+that state: `db/migrations/0001_initial.sql` declares `run_id TEXT NOT NULL UNIQUE`.
+
+**Why.** Both documents described a *value* comparison. The schema only permits a *presence*
+test — two rows always differ, and the only run without a predecessor is the first one ever. The
+two states an operator actually meets are a system waiting to be started and a system that
+stopped on its own, which is exactly what `ui-context.md` says in prose one paragraph later. The
+prose was right and the mechanism was wrong, in both files, and they agreed with each other,
+which is why reading them did not catch it.
+
+**Fix.** Corrected `ui-context.md`'s `## Restart is visible` section first, as the authority for
+the rule, then spec 16 and spec 19 to match, in one change. Each now states the presence test and
+says why the value comparison is impossible, so the next reader does not re-derive it. C's
+implementation already did the right thing and needed no change.
+
+**Consequence.** This is the defect class `docs_vocabulary` explicitly cannot catch — a rule that
+is self-consistent across every file and simply wrong. No retired token exists to grep for. It
+was caught by someone trying to build the negative half of a test, which is an argument for
+requiring both halves rather than only the happy path, and the same argument the operator made
+about spec 20's ordering test at approval.
+
 ### Operator additions at approval: four tests that can fail
 
 **Agent:** Lead · **Date:** 2026-09-09

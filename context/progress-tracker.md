@@ -51,17 +51,17 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 
 | Spec | Title | Owner | State |
 |---|---|---|---|
-| 16 | Phase 1 criteria in `verify.py` | C | Assigned |
-| 17 | Console read layer and database wiring | C | Assigned |
-| 18 | Design tokens, stylesheet and page shell | C | Assigned |
-| 19 | Status band and open positions | C | Not started — behind the checkpoint |
-| 20 | Cycle feed and the empty state | C | Not started — behind the checkpoint |
-| 21 | History screen | C | Not started — behind the checkpoint |
-| 22 | Research views | C | Not started — behind the checkpoint |
-| 23 | WebSocket watermark push | C | Not started — behind the checkpoint |
-| 24 | Activate, Freeze and Close all | C | Not started — behind the checkpoint |
+| 16 | Phase 1 criteria in `verify.py` | C | **Done**, verified |
+| 17 | Console read layer and database wiring | C | **Done**, verified |
+| 18 | Design tokens, stylesheet and page shell | C | **Done**, verified |
+| 19 | Status band and open positions | C | Released |
+| 20 | Cycle feed and the empty state | C | Released |
+| 21 | History screen | C | Released |
+| 22 | Research views | C | Released |
+| 23 | WebSocket watermark push | C | Released |
+| 24 | Activate, Freeze and Close all | C | Released |
 
-**Operator checkpoint after spec 18.** C stops when the shell and tokens land and reports before starting 19. The operator wants to see the foundation before six more specs are built on it.
+**Operator checkpoint after spec 18 — held and cleared 2026-09-09.** The gate read 5 PASS, 0 FAIL, 4 PENDING, the four PENDING being exactly the criteria whose subjects are specs 19 to 24. The lead re-verified independently after an IDE crash killed C's session mid-phase: 641 tests pass, `mypy --strict src/` and `ruff check src/` clean, the console serves its page with zero third-party requests, and both stylesheets serve locally. Specs 19 to 24 released after the operator ruled on the three questions below.
 
 **Ordering.** 16 first: `--phase 1` reported `1 criteria: 1 PASS` and called the phase green against an empty tree, because `docs_vocabulary` was the only criterion registered. A gate asserts nothing until its criteria exist. Then 17 (the read layer every screen renders) and 18 (the shell every screen styles); then 19 to 22 as sibling screens; then 23 and 24 over finished screens.
 
@@ -72,12 +72,20 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 3. **Spec 19's staleness reads the injected clock**, never wall time, or the test is a race.
 4. **Spec 17's read-only connection is proven by attempting a write**, not by trusting the `mode=ro` in the URI.
 
+**Three questions C raised at the checkpoint, all ruled on by the operator 2026-09-09.** C stopped on all three rather than guessing, and reached across into nobody's directory.
+
+1. **`runs.run_id` is UNIQUE, so the "two `run_id`s match" state cannot exist.** Spec 16 and `ui-context.md` both described a *value* comparison where the schema only permits a *presence* test: two rows always differ, and the only run without a predecessor is the first ever. The lead's defect in the lead's own files. Corrected in `ui-context.md` (`## Restart is visible`, the authority for the rule), spec 16 and spec 19, all in the same change. No behaviour changed — C had already implemented the presence rule.
+2. **The console cannot tell Running from Frozen. Deferred to Phase 2, and the approach is fixed.** Mode lives only in `state["system"]["mode"]` in the daemon's memory; `runs.mode` is paper/live/replay, a different axis. In Phase 1 this is honest rather than incomplete — no daemon runs, so neither state can occur. It stops being honest in Phase 2. **Deriving the mode from the trail of claimed `commands` rows was considered and rejected:** it is inference, and a transition leaving no claimed row makes the band confidently wrong, which for the element answering *is this safe* is worse than silence. Phase 2 instead has the command reader in `core/` — already the single writer of the mode — persist it, so the console reads it as a fact. Seam row added to `ownership.md`; spec 19 carries a test asserting the field never renders `Running` or `Frozen` this phase, so the deferral is enforced rather than remembered.
+3. **The cycle feed full-scans `block_records`.** A clock-anchored window returns nothing against a seed whose timestamps are fixed constants, so C reads the full `ts` range and orders and limits in Python — correct against seeded and live data both. Fine while the table is a seed; **not fine once engine 19 `memory` writes a row per guard per tick in Phase 4.** A most-recent-N read on B's surface replaces it, and it must land before Phase 4.
+
 **A and B have no Phase 1 work, and no filler was invented.** Checked before the phase opened: A's `cli/console.py`, `ConsoleConfig` and `platform/paths.py` already provide everything the console entry point needs, and every store read the console requires already exists on `StoreClient`. Phase 1 consumes B's Phase 0 surface, which is why the console is built against the seeded schema at all. Spec 17 keeps `create_app(config)` call-compatible so a phase with no A in it needs no A change.
 
 ## Next Up
 
-- **The rest of Phase 1** — specs 19 to 24, released after the operator reviews the shell.
+- **The rest of Phase 1** — specs 19 to 24, released 2026-09-09.
 - **Phase 2 — Data spine** once Phase 1's gate is green: engines 1, 2, 3 and 4, the historical OHLCVT loader, and the recorder engine superseding `scripts/record.py`.
+- **Phase 2 carries a debt from Phase 1, and it is not optional.** The status band must gain its `Running` and `Frozen` readings in Phase 2, because Phase 2 is where a daemon first runs and a band reading `Idle` over a running system is actively wrong. The approach is already decided: the command reader in `core/` persists the mode it already owns, and the console reads it as a fact rather than inferring it. It needs a column from B and the write from the lead, so it is a Phase 2 planning item for two agents, not a C task. See the `## Restart is visible` section of `ui-context.md` and the seam row in `ownership.md`.
+- **Before Phase 4:** replace the cycle feed's full scan of `block_records` with a most-recent-N read on B's store surface. Harmless while the table holds a seed; engine 19 `memory` starts writing a row per guard per tick in Phase 4, which is when it stops being harmless.
 - **Deferred from Phase 0, deliberately:** widening `TOOLCHAIN` beyond `src/`. `mypy --strict scripts/` reports 2 errors in `verify.py` and `ruff check tests/` reports 2 violations, none reachable by the gate that implements them. Changing what the gate asserts belongs at a phase boundary.
 - **A's standing instruction:** `scripts/record.py` should be left running from now on. Order-book and spread history cannot be recovered retroactively, and Phase 2's `recording_report.json` criterion needs a continuous span of at least 24 hours.
 
@@ -326,6 +334,8 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
 - **Every Kraken pair is a lot of pairs.** Develop against a config-limited subset; the universe filter handles the rest at runtime.
 - **Building the interface before the backend risks guessing at data shapes.** Mitigated by fixing the schema in Phase 0 and seeding it. If a later phase needs a schema change, it goes through the lead and the console is updated in the same change.
 - **An intermittent native memory fault in the seed write path.** Roughly 20% of full-suite runs die rather than reporting a verdict, always inside `seed.py` → `write_trade` / `write_position` → pydantic `model_dump`, with three different Windows fault statuses. **Not root-caused**; pyarrow, `pytest-asyncio`, test ordering, `root_import_path` and the pydantic-core version were each ruled out by test, and the one experiment that would have separated software from silicon was overridden by the power plan. Hardware is suspected and is out of scope. Mitigated by a crash-aware retry in `toolchain_green`: a crash is retried once and named in the PASS, a verdict is never retried, and a second crash FAILs. This is a closed question, not an open one — see `docs/build-log/phase-0.md`. It re-opens if the fault appears on other hardware, appears outside the seed write path, or starts failing the retry.
+
+  **Observed once in Phase 1, 2026-09-09, and the retry did not save it.** A `--phase 0` run mid-phase reported `6 PASS, 1 FAIL, 0 PENDING`. The lead did not capture which criterion failed before re-running — a mistake, and the reason this entry is thinner than it should be. Three immediately subsequent runs all reported 7 PASS. `toolchain_green` is the only Phase 0 criterion that runs subprocesses and the only one with a known flake, so it is almost certainly the one, which means two consecutive crashes and a retry that did not hold. Separately, the first `--phase 1` run of that session emitted a pydantic serializer warning — `Expected timedelta`, given a micros int for `updated_at` — which did not reproduce across five later runs and which points at `model_dump`, the same call this fault has always died inside. **On the entry's own terms — "starts failing the retry" — this re-opens the question.** It does not block Phase 1: the bar mid-phase is no FAIL on `--phase N`, `--phase 1` has been clean throughout, and the fault has never been reproduced on demand. It does mean the mitigation is not sufficient on its own, and that a second occurrence should be captured in full rather than re-run. **Capture the failing criterion's message before re-running.**
 
 ## Session Notes
 
