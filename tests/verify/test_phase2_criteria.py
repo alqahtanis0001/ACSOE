@@ -872,24 +872,31 @@ def test_an_unset_operator_threshold_is_pending_and_names_the_key(
 ) -> None:
     """A gate whose threshold the operator has not supplied is an unbuilt subject.
 
-    `data_guard.max_data_age_s` is still with the operator, and A is right to let
-    the `KeyError` stand rather than substitute a placeholder - an engine silently
+    A `KeyError` from a threshold nobody has set is right - an engine silently
     receiving `None` for a threshold is the failure this project refuses. But a
     *configured* data guard does not exist yet, which is what PENDING means, and
     reporting it as FAIL would make the criterion lie about whose problem it is.
     Under the commit-at-every-boundary rule a FAIL also blocks every other agent's
     finished work, which is the practical half of the same argument.
+
+    The key named here is deliberately one `config/default.yaml` does not carry, and
+    is **not** `data_guard.max_data_age_s`. It was, until the operator supplied 120 on
+    2026-09-09 - at which point this test went red, because it asserted "an unset
+    threshold" while being held to whatever the shipped file happened to contain. That
+    is the decayed-assertion shape this phase found six times over. The companion test
+    below covers the other branch: a key that *is* in the file and still raises is a
+    FAIL, because that is an engine asking for something in a shape it did not expect.
     """
     fabricate_guard(tree_with_harness)
     fabricate_package(
         tree_with_harness,
         {"acsoe.engines.data_guard.engine": UNSET_KEY_ENGINE.format(
-            key="data_guard.max_data_age_s"
+            key="data_guard.a_threshold_no_config_carries"
         )},
     )
     outcome = run(verify_module, "data_guard_blocks_bad_data", tree_with_harness)
     assert_pending(outcome, verify_module)
-    assert "data_guard.max_data_age_s" in outcome.message
+    assert "data_guard.a_threshold_no_config_carries" in outcome.message
 
 
 def test_a_key_that_is_configured_and_still_raises_is_a_failure(

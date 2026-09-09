@@ -60,6 +60,10 @@ OPERATOR_REQUIRED_KEYS: tuple[str, ...] = (
     "trading.entry_unfilled_window_s",
     "trading.base_reporting_currency",
     "paper.starting_balances",
+    # Tenth, supplied 2026-09-09. Engine 4's staleness threshold: the whole
+    # judgement of the first real gate, which is why the lead would not invent it
+    # and the engine raised rather than defaulting until the operator set it.
+    "data_guard.max_data_age_s",
 )
 
 #: `safety.error_rate_window_s` is the near miss: it lives beside three keys that
@@ -269,11 +273,11 @@ def test_the_starting_balance_is_quoted_in_yaml_and_keeps_its_cents() -> None:
     assert str(balances["USD"]) == "5000.00"
 
 
-def test_the_file_marks_exactly_these_nine_keys_as_the_operator_s() -> None:
+def test_the_file_marks_exactly_these_ten_keys_as_the_operator_s() -> None:
     """The shipped file still agrees with this file about which keys are the
     operator's.
 
-    While the nine were null, `Config.load(DEFAULT_YAML)` raising was itself the
+    While the first nine were null, `Config.load(DEFAULT_YAML)` raising was itself the
     check: a tenth key would have appeared in the refusal message and the tests
     would have said so. With zero nulls that signal is gone in one direction —
     the lead can now add a tenth *and supply it*, and nothing would notice. The

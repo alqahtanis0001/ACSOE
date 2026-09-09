@@ -99,6 +99,10 @@ OPERATOR_REQUIRED_KEYS: tuple[str, ...] = (
     "trading.entry_unfilled_window_s",
     "trading.base_reporting_currency",
     "paper.starting_balances",
+    # Tenth, supplied 2026-09-09. Engine 4's staleness threshold: the whole
+    # judgement of the first real gate, which is why the lead would not invent it
+    # and the engine raised rather than defaulting until the operator set it.
+    "data_guard.max_data_age_s",
 )
 
 #: Specified by `architecture-context.md` as the trailing hour, so it was never

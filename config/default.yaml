@@ -96,6 +96,14 @@ kraken:                          # Client tuning. Requested by A, spec 25.
                                  # trip, short enough that a hung socket cannot outlive the
                                  # one-minute loop tick.
 
+data_guard:                      # Engine 4, the first real gate. Requested by A, spec 29.
+  max_data_age_s: 120            # Operator-chosen 2026-09-09. The staleness threshold: market
+                                 # data older than this blocks the tick. Two loop ticks at
+                                 # loop_tick_s 60, so a single missed tick is tolerated and a
+                                 # second consecutive one is not. Distinct from
+                                 # console.stale_after_ms, which is a rendering rule about
+                                 # fading a figure and decides nothing about trading.
+
 market_sensor:                   # Engine 3. Requested by A, spec 28.
   published_bars: 200            # How many recent closed 15m candles reach `state` each tick.
                                  # A PLUMBING BOUND, NOT A TRADING THRESHOLD — no gate reads

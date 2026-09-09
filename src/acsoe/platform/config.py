@@ -278,6 +278,23 @@ class MarketSensorConfig(_Section):
     published_bars: int = Field(gt=0)
 
 
+class DataGuardConfig(_Section):
+    """Engine 4's staleness threshold. **A trading threshold, operator-chosen.**
+
+    Market data older than ``max_data_age_s`` blocks the tick. It is the whole judgement
+    of the first real gate in the system, which is why the lead would not invent it and
+    the engine raised rather than defaulting until the operator supplied a value on
+    2026-09-09.
+
+    Deliberately **not** ``console.stale_after_ms``. That one is a rendering rule about
+    fading a figure to half opacity and decides nothing about trading; this one decides
+    whether the system is allowed to act on what it can see. Two keys, two axes, and
+    collapsing them would let a display preference gate a trade.
+    """
+
+    max_data_age_s: int = Field(gt=0)
+
+
 class BacktestConfig(_Section):
     training_window_days: int = Field(gt=0)
     retrain_interval_days: int = Field(gt=0)
@@ -314,6 +331,7 @@ class Config(BaseModel):
     paper: PaperConfig
     kraken: KrakenConfig
     market_sensor: MarketSensorConfig
+    data_guard: DataGuardConfig
     backtest: BacktestConfig
     seeds: SeedsConfig
 

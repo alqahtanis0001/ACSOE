@@ -128,9 +128,21 @@ def test_a_missing_threshold_raises_rather_than_defaulting(
 
     A placeholder here would be inventing the one number this gate exists to apply,
     and `data_guard.max_data_age_s` is trading behaviour only the operator may set.
+
+    The config is built here with the key **removed**, rather than relying on
+    `config/default.yaml` not carrying it. It did not until 2026-09-09, when the
+    operator supplied 120 and this test went red — the assertion said "a missing
+    threshold" while being held to whatever the shipped file happened to contain, which
+    is the decayed-assertion shape this phase found six times. The property is worth
+    keeping permanently: an absent threshold must raise rather than default, whatever
+    the shipped config says today.
     """
+    stripped = MappingConfig(
+        {k: v for k, v in engine_context.config.as_dict().items() if k != "data_guard"}
+    )
+    context = dataclasses.replace(engine_context, config=stripped)
     with pytest.raises(KeyError, match="data_guard"):
-        run(engine, engine_context, "clean")
+        run(engine, context, "clean")
 
 
 # --------------------------------------------------------------------------- #

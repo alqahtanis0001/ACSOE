@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from tests.harness.doubles import MappingConfig
 
 from acsoe.core.contracts import Chains, EngineStatus
 from acsoe.core.orchestrator import Orchestrator
@@ -24,7 +25,6 @@ from acsoe.engines.data_guard.engine import DataGuardEngine
 from acsoe.engines.exchange.engine import ExchangeEngine
 from acsoe.engines.market_data_recorder.engine import MarketDataRecorderEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
-from tests.harness.doubles import MappingConfig
 
 #: The guard chain in registry order: 1, 2, 3, 4. Engine 17 `safety` is B's and is
 #: Phase 3, so it is absent here and its slot is the lead's to fill.
@@ -122,8 +122,18 @@ def test_an_unset_threshold_becomes_ERROR_and_the_tick_still_completes(
     `config.get` raises, the orchestrator converts it to ERROR with
     `blocks_trading=True`, and the tick finishes — so registering engine 4 before the
     key lands degrades the loop to "blocked" rather than breaking it.
+
+    The key is stripped here rather than assumed absent from `config/default.yaml`. The
+    operator supplied `data_guard.max_data_age_s = 120` on 2026-09-09 and this test went
+    red, because it named "an unset threshold" while being held to the shipped file — the
+    decayed-assertion shape found six times this phase. The property survives the key
+    landing: an engine that raises must still leave the tick complete and recorded, which
+    is contract rule 7 and is what stops one bad engine taking the loop down.
     """
-    state = build(paper_config, fixed_clock, fake_clients).tick()
+    stripped = MappingConfig(
+        {k: v for k, v in paper_config.as_dict().items() if k != "data_guard"}
+    )
+    state = build(stripped, fixed_clock, fake_clients).tick()
 
     assert state["trading_blocked_by"] == "data_guard"
     assert state["guard_blockers"][0]["status"] == EngineStatus.ERROR
