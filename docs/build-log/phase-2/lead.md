@@ -6,6 +6,60 @@ Minimum headings per entry: What happened, Why, Fix.
 
 ## Entries
 
+### Decision: Phase 2 waits a day rather than closing on a half-empty archive
+
+**Agent:** Lead · **Date:** 2026-09-09 · **Decided by:** the operator
+
+**What happened.** A dry-ran `scripts/recording_report.py` against the real archive before
+depositing the fixture, and found that the span would satisfy `recording_span_continuous` at
+about 16:01Z while being **10.93 hours recorded out of 22.16, with 11.24 hours missing** across
+eight accounted breaks.
+
+**Why it would have passed.** The Phase 2 row asks for "a continuous span of at least 24 hours
+with every break accounted for". The criterion enforces the accounting rigorously — exact tiling,
+a non-empty `cause` on every gap — and enforces continuity **not at all**: it measures start-to-end
+elapsed time, which makes the word *continuous* do no work. A 24-hour span with nothing missing
+and a 24-hour span with eleven hours missing tile identically and pass identically.
+
+That is the fifth instance this phase of **a check whose output looks like the claim while the
+claim is not true**, after the mypy abort, `ignore_errors` on the workspace removal, the
+`b'"gap"'` payload match and the fabricated `EngineContext`. It is the first that is a defect in a
+spec the lead wrote rather than in an implementation, which is worth stating plainly: the pattern
+is not something the teammates keep doing.
+
+**Options.** Deposit as the criterion allows and close today; wait for the denser 09-09 span;
+restart cleanly and take the report 24 hours later; or deposit now and add a recorded-fraction
+floor.
+
+**Chose.** The clean 24-hour run. The operator ruled.
+
+**Because.** The current archive carries the duplicate-recorder boundary from 13:19:34 *and* a
+self-inflicted disk outage at 13:06:37, in the phase whose entire subject is the data spine.
+Closing on it would be the weak PASS this project has refused five times in one phase. The fourth
+option was rejected for a specific reason worth keeping: a floor set now would have to sit below
+today's 49% to let this artefact through, which sets the bar at the number we happened to get
+rather than at one anybody would choose.
+
+**Cost.** Phase 2 cannot close today. Everything else in it is finished and waiting, which is an
+uncomfortable state and an honest one. A restarted the recorder as a single process on a disk with
+room, and the 24 hours runs from that moment.
+
+**The row that made the case better than the argument did.** The recorder recorded its own death:
+
+```
+09-09 13:06:37 -> 13:06:39   disconnect: OSError: [Errno 28] No space left on device
+```
+
+The disk incident, timestamped to the second, from an independent source, corroborating B's
+report exactly — including that the 736s and 1258s silences either side are processes dying and
+being restarted. The one failure mode the whole recording apparatus exists to make impossible is a
+break that goes unrecorded, and it caught its own. That is the strongest evidence in the phase
+that the tiling requirement earns its keep, and it argues for keeping the requirement while fixing
+what sits beside it.
+
+**Still open:** a floor on `recorded_fraction`. Better asked once a genuinely clean 24 hours gives
+a principled number to set it at. `recorded_fraction` itself is now reported either way.
+
 ### The command reader was broken in three places, not one
 
 **Agent:** Lead · **Task:** first task of Phase 2, before any engine work · **Date:** 2026-09-09
