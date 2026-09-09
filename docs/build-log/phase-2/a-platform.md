@@ -387,3 +387,98 @@ and saying it without evidence would be worse than saying nothing.
 **Fix.** None. Flagged to the lead. The lesson is procedural and was already in the
 brief: **capture the head of the output, not the tail.** The tail of one of these is
 always `runpy` frames and says nothing at all.
+
+### The loader's pydantic boundary, and exactly what it does not cover
+
+**Agent:** A · **Task:** spec 30 · **Date:** 2026-09-09
+
+**What happened.** `research/historical.py` is the second module in `src/` to import
+`polars`, which is the point at which the mypy compromise recorded above stops being
+comfortable. That compromise was acceptable because `engines/market_sensor/candles.py`
+re-validates every value it emits through a pydantic `Candle`; a loader that returned a
+dataframe would have no such boundary.
+
+**Fix.** `load_archive` returns an `ArchiveReport` — a frozen pydantic model — and every
+number a caller acts on is a validated field on it: `gap_count`, `row_count`,
+`timestamps`, `duration_buckets`, `largest_gap_bars`, `missing_bars`,
+`duplicate_timestamps`, `out_of_order_rows`. So the same property holds for both polars
+users.
+
+**What it does not cover, stated rather than implied.** **The dataframe itself is
+unvalidated.** `to_frame` builds a `pl.DataFrame` and `load_archive` writes it to Parquet
+when asked, and nothing type-checks that call chain while polars is `Any` to mypy. The
+guarantee is "every value the loader *reports* is validated", not "the loader is
+type-checked". A reader who takes the pydantic boundary as covering the frame would be
+wrong.
+
+**Money never goes through polars' parser at all.** The CSV is read with `csv.reader` and
+the money columns become `Decimal` in Python before polars ever sees them, so an exact
+value cannot be lost to a float on the way in. polars does the columnar work afterwards,
+on values that are already exact. That is a stronger property than reading the CSV with
+polars and casting, and it is the reason the reader is `csv` rather than
+`pl.read_csv`.
+
+### Measured: `numpy<2.3` restores full type checking, and nothing objects
+
+**Agent:** A · **Task:** spec 30 · **Date:** 2026-09-09
+
+**What happened.** The lead asked for a measured answer rather than a third hypothetical
+about the mypy compromise. Tested without touching the shared virtualenv — other agents
+run against it — by installing numpy 2.2.6 into a scratch directory and prepending it to
+`PYTHONPATH`.
+
+**Result, with the `numpy`/`polars` override in `pyproject.toml` disabled entirely:**
+
+    mypy --strict src/   -> Success: no issues found in 65 source files
+    pytest tests/ -q     -> 1029 passed in 45.57s
+
+And polars typing is genuinely live rather than merely silent, which is the part worth
+proving separately — a scratch file calling a method that does not exist:
+
+    error: "DataFrame" has no attribute "sort_bogus"  [attr-defined]
+
+Under the current arrangement that call type-checks clean, because polars is `Any`.
+
+**Why the proof needed its own step.** "mypy passes" is exactly what the broken state
+produced too. A configuration that stops checking and a configuration that finds nothing
+wrong print the same line, which is the failure this phase has now hit four times in four
+different places. The only way to tell them apart is to hand the checker something it
+ought to reject.
+
+**Not committed.** The finding went to the lead with the other two options; the version
+ceiling is a dependency decision and not A's to take alone.
+
+### Spec 30's fabricated archives, and the assertion that matters
+
+**Agent:** A · **Date:** 2026-09-09
+
+**Options.** Assert the loader's gap statistics, or also assert the output's timestamps
+against the input's.
+
+**Chose.** Both, as separate tests, and the second one is the one to keep if either has
+to go.
+
+**Because.** A loader that counts gaps correctly **and** emits filled rows passes every
+gap assertion. It reports three gaps of 1, 2 and 4 bars, buckets them correctly, names
+the largest — and quietly hands Phase 4 a continuous series containing candles at prices
+that never traded. The triple-barrier labeller then walks forward from a decision bar,
+touches a barrier that never existed, and produces a label the model learns from. Nothing
+raises, nothing looks wrong, and every chart looks tidier than the truth.
+
+`test_no_timestamp_in_the_output_was_absent_from_the_input` is the only assertion in the
+file that catches it, and `test_the_series_is_left_discontinuous_on_purpose` states the
+same thing positively: after loading an archive with a hole, consecutive output
+timestamps are **not** all one interval apart, and that is correct.
+
+**Also worth recording: a test I wrote badly and rewrote.** The first version of
+"the loader offers no way to fill a gap" scanned the module's *text* for `interpolate`,
+`forward_fill` and friends. It failed immediately — because the module's docstring says
+"interpolate" repeatedly, on purpose, since saying so is most of that docstring's job. A
+text scan would have forced the prose to stop saying the thing it exists to say. It now
+walks the module's AST and looks for those names as *identifiers*, which is what was
+meant. A second test in the same file was circular in the same way — it scanned its own
+source for a string it itself contained — and was deleted rather than patched, because it
+asserted nothing a fresh clone does not already enforce.
+
+**Cost.** Three of the loader's tests are about what the loader must *not* do, which
+reads oddly next to the ones about what it does. That is the correct ratio here.

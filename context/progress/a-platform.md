@@ -16,7 +16,10 @@ Never edit the tracker directly.
   blocked on wall-clock time, not on code. Detail below. **Do not treat 27 as done.**
 - **Spec 28 - engine 3 `market_sensor`: COMPLETE.** `candles_match_kraken_ohlc` now
   reports PASS.
-- Specs 29 and 30: not started.
+- **Spec 30 - historical OHLCVT loader: COMPLETE.** `historical_loader_reports_gaps`
+  now reports PASS.
+- **Spec 29 `data_guard`: next.** Deliberately sequenced last - landing it before C's
+  criterion fixes would have turned a PENDING into a FAIL, and a FAIL is a stop.
 
 Phase 0 (below) is closed and green; it is kept for the record.
 
@@ -240,10 +243,36 @@ Two other things worth carrying forward:
 - **`spread_pct` is `(ask - bid) / mid`** and may be negative; a pair with no quote is
   absent rather than present with a zero spread.
 
+## Phase 2 - spec 30, what was built
+
+`src/acsoe/research/historical.py` and 25 tests in `tests/research/test_historical.py`.
+
+- **`gap_count` counts runs, not missing bars.** Three holes of 1, 2 and 4 bars are
+  three gaps and seven missing bars; reporting seven is the signature of a loader that
+  lost the distinction, which is what the criterion's differently-sized holes catch.
+- **Nothing is ever invented, and the tests assert that separately from the gap count.**
+  A loader that counts gaps correctly *and* emits filled rows passes every gap
+  assertion and still hands Phase 4 candles at prices that never traded. There is no
+  parameter that fills a hole and the module contains no fill, resample or interpolate
+  call - asserted on the AST, because the docstring says the word deliberately.
+- **Money never passes through a numeric parser.** The CSV is read with `csv.reader`
+  and the money columns become `Decimal` in Python before polars sees them.
+- **The report is a frozen pydantic model**, so the 'every value it emits is
+  re-validated' property that makes the mypy compromise tolerable holds for this
+  module too. **The dataframe itself stays unvalidated** - stated in the build log
+  rather than implied.
+- **Parquet is written only when `derived_dir` is given**, so merely reading an archive
+  has no side effect on disk. A phase criterion calls this.
+- No archive exists in `data/historical/` on this machine, so the `--live` half and the
+  committed digest wait on the operator downloading one. No criterion depends on it.
+
 ## In Progress
 
-- **Spec 29 `data_guard`, next.** Spec 27's fixture stays outstanding until the recording
-  span reaches 24 hours (about 2026-09-09T16:01Z).
+- **Spec 29 `data_guard`, last.** C has fixed `_guard_context` and made an unset
+  `data_guard.max_data_age_s` report PENDING naming the key rather than FAIL, so
+  landing engine 4 no longer turns a PENDING into a FAIL.
+- Spec 27's fixture stays outstanding until the recording span reaches 24 hours. At
+  13:52Z the span was 21h51m; crossover is about 16:01Z.
 
 ## Blocked On
 

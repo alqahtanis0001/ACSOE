@@ -19,11 +19,11 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from tests.harness.fake_kraken import FakeKrakenClient, KrakenUnavailableError
 
 from acsoe.core.contracts import EngineStatus
 from acsoe.engines.exchange.contracts import STATE_KEY
 from acsoe.engines.exchange.engine import ExchangeEngine
-from tests.harness.fake_kraken import FakeKrakenClient, KrakenUnavailableError
 
 
 @pytest.fixture

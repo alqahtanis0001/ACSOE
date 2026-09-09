@@ -13,6 +13,7 @@ and an implicit silence left by a recorder that was not running at all.
 
 from __future__ import annotations
 
+import itertools
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -80,7 +81,7 @@ def assert_tiles(report: dict[str, Any]) -> None:
     assert pieces, "an empty tiling accounts for nothing"
     assert pieces[0][0] == int(report["span"]["start"])
     assert pieces[-1][1] == int(report["span"]["end"])
-    for (_, end, _), (start, _, _) in zip(pieces, pieces[1:], strict=False):
+    for (_, end, _), (start, _, _) in itertools.pairwise(pieces):
         assert start == end, "a hole in the tiling is a break nobody accounted for"
 
 
