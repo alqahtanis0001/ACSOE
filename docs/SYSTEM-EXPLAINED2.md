@@ -1,9 +1,9 @@
 # How ACSOE picks a coin, and every engine that gets it there
 
 *A companion to [SYSTEM-EXPLAINED.md](SYSTEM-EXPLAINED.md). That document explains why the system
-exists. This one answers three practical questions: what happens when you press Activate, how one
-coin gets chosen out of everything Kraken lists, and what each of the twenty-three engines does.
-No prior knowledge assumed.*
+exists. This one answers three practical questions — what happens when you press Activate, how one
+coin gets chosen out of everything Kraken lists, and what each of the twenty-three engines does —
+and then puts the whole thing on one page in section 5. No prior knowledge assumed.*
 
 ---
 
@@ -190,7 +190,10 @@ never tradable.
 
 ---
 
-## 4. The whole system as one picture
+## 4. One minute, in one picture
+
+This is the operating cycle on its own — what happens between one tick and the next. Section 5
+widens the lens to the whole system, including where the data came from and how the system learns.
 
 ```mermaid
 flowchart TB
@@ -277,7 +280,176 @@ are never part of the live loop and are run by hand.*
 
 ---
 
-## 5. A worked minute
+## 5. The whole system on one page, A to Z
+
+Section 4 showed one minute. This shows the entire life of the system: where the data comes from,
+every engine it passes through, what gets written down, how the system learns from what it wrote,
+and how that learning comes back round. Read it straight down.
+
+The colours carry meaning. **Blue** is data arriving from outside. **Amber** is a gate — something
+that can stop the system. **Red** is a refusal, **green** the one path to a purchase. **Purple**
+marks the six things that are not standard practice, keyed ★​1 to ★​6 and explained underneath.
+
+```mermaid
+flowchart TB
+
+    subgraph SRC["A · WHAT THE LIVE SYSTEM READS, EVERY MINUTE"]
+        s1["KRAKEN LIVE FEED<br/>order book, quotes, trades<br/>arriving continuously"]
+        s2["KRAKEN ACCOUNT API<br/>balances, YOUR live fee tier,<br/>every pair's own minimums"]
+        s1 ~~~ s2
+    end
+
+    SRC --> GUARD
+
+    subgraph GUARD["B · EVERY MINUTE — GUARD: every mode, never stops early"]
+        g1["1 exchange<br/>balances, live fees,<br/>pair rules"]
+        g2["2 market_data_recorder<br/>every message,<br/>append-only"]
+        g3["3 market_sensor<br/>15-min candles,<br/>live bid and ask"]
+        g4["4 data_guard — GATE<br/>stale? incomplete?<br/>crossed book?"]
+        g5["17 safety — GATE<br/>drawdown, losses,<br/>errors, outage"]
+        g1 --> g2 --> g3 --> g4 --> g5
+    end
+
+    GUARD --> qb{"did either<br/>gate refuse?"}
+    qb -- "yes" --> blocked["NO NEW TRADES THIS MINUTE<br/>recording continues, positions<br/>watched, the reason written down"]
+    qb -- "no" --> qbar{"running, and did a<br/>15-min bar just close?"}
+    qbar -- "no — 14 min in 15" --> MANAGE
+    qbar -- "yes" --> OPP1
+
+    subgraph OPP1["C · FIND ONE CANDIDATE — hundreds of pairs down to exactly one"]
+        o1["5 feature<br/>this bar's numbers"]
+        o2["6 macro_context<br/>BTC and ETH:<br/>the weather"]
+        o3["7 scout — GATE<br/>affordable universe,<br/>ranked, ONE"]
+        o1 --> o2 --> o3
+    end
+
+    OPP1 --> OPP2
+
+    subgraph OPP2["D · IS THIS MARKET FIT TO TRADE AT ALL?"]
+        o4["12 regime<br/>trending, choppy<br/>or violent?"]
+        o5["13 anomaly — GATE<br/>is the market<br/>itself broken?"]
+        o6["8 prediction<br/>which of 3 barriers first?<br/>refuses on the unfamiliar"]
+        o7["9 order_book<br/>real depth,<br/>estimated slippage"]
+        o4 --> o5 --> o6 --> o7
+    end
+
+    OPP2 --> OPP3
+
+    subgraph OPP3["E · DOES IT SURVIVE THE ECONOMICS? — where most candidates die"]
+        o8["★2 · 10 cost — GATE<br/>MOVE vs LIVE FEES + LIVE SPREAD<br/>+ SLIPPAGE, WITH MARGIN.<br/>Stricter while your account is small."]
+        o9["11 risk — GATE<br/>size it, or<br/>refuse it"]
+        o10["14 adaptive_router<br/>whose opinion<br/>fits today?"]
+        o11["15 skeptic — GATE<br/>a model that can<br/>only say no"]
+        o12["16 decision<br/>record the call<br/>and why"]
+        o13["18 execution<br/>post-only<br/>limit buy"]
+        o8 --> o9 --> o10 --> o11 --> o12 --> o13
+    end
+
+    OPP3 --> qg{"did any of the<br/>four gates refuse?"}
+    qg -- "yes" --> refused["REFUSED<br/>which gate, which reason,<br/>what the model saw"]
+    qg -- "no" --> bought["BOUGHT<br/>post-only limit on the book,<br/>abandoned if unfilled in 5 min"]
+    refused --> MANAGE
+    bought --> MANAGE
+    blocked --> MANAGE
+
+    subgraph MANAGE["F · EVERY MINUTE — MANAGE: every mode, never stops"]
+        m1["21 position_manager<br/>watch positions,<br/>cancel stale orders"]
+        m2["22 exit<br/>close on target,<br/>stop or timeout"]
+        m3["19 memory<br/>the single writer<br/>of the record"]
+        m1 --> m2 --> m3
+    end
+
+    MANAGE --> STORE
+
+    subgraph STORE["G · WHAT GETS WRITTEN DOWN — and never edited afterwards"]
+        d1["TRADES<br/>every fill,<br/>every exit"]
+        d2["★3 · REJECTIONS<br/>every refusal + its reason:<br/>the roads not taken"]
+        d3["EQUITY CURVE<br/>including the<br/>cash periods"]
+        d4["★1 · THE RAW MARKET ARCHIVE<br/>spread and depth, written every minute,<br/>the one input money cannot buy back"]
+        d1 ~~~ d2 ~~~ d3 ~~~ d4
+    end
+
+    STORE --> OFF
+
+    subgraph OFF["H · LEARNING, OFFLINE — never part of the live loop"]
+        f0["KRAKEN HISTORY ARCHIVE<br/>years of 15-min candles,<br/>but NO book, NO spread"]
+        f1["★4 · 23 backtest<br/>replays history through<br/>THESE SAME ENGINES"]
+        f2["labelling + walk-forward<br/>retrained weekly, exactly<br/>as the live system does"]
+        f3["★5 · 20 tournament<br/>skill AFTER the market is<br/>subtracted, haircut for<br/>every model tried"]
+        f0 --> f1 --> f2 --> f3
+    end
+
+    OFF --> PROM["★5 · PROMOTED MODEL — THE LOOP CLOSES HERE<br/>only a model whose skill survived BOTH the market being<br/>subtracted AND a penalty for every model tried is promoted.<br/>Engine 8 uses it on the next closed bar, back at band D."]
+
+    classDef gate fill:#fdf0d0,stroke:#b8860b,color:#111
+    classDef no fill:#f6c9c5,stroke:#b23,color:#111
+    classDef yes fill:#c9e7ca,stroke:#2b7,color:#111
+    classDef src fill:#e8eef7,stroke:#3667a6,color:#111
+    classDef star fill:#e6dcf5,stroke:#6b46a8,color:#111
+    class g4,g5,o3,o5,o9,o11 gate
+    class blocked,refused no
+    class bought yes
+    class s1,s2,f0 src
+    class d2,d4,PROM,o8,f1,f3 star
+```
+
+*The whole system. Eight bands, A to H, and the only way through is downward. Band B and band F run
+every single minute in every mode — including while frozen — which is why a system that is refusing
+to trade is still recording, still watching its positions, and still writing things down. Bands C
+to E run only when a 15-minute bar has closed, and stop at the first objection. Band G is what
+survives the minute, band H is what is learned from it much later. Note the two dead ends on the
+right and left: the overwhelming majority of minutes end there, and that is the system working.
+The cost gate in band E is drawn purple rather than amber because it is both a gate and the
+central contribution; the other six gates stay amber.*
+
+### What the stars mean — and why any of this is new
+
+**★​1 · The raw market archive.** Kraken publishes years of price history but no bid, no ask, no
+spread, no order-book depth. Those exist only in the moment; nobody stores them and nobody sells
+them. So the system has recorded them itself, continuously, since before it could trade. **A
+professional desk does not have this problem** — it has a market-data subscription that has been
+running for years — so nobody has ever built the equivalent for an individual. Without it, the
+cost model in ★​2 cannot be tested against history at all.
+
+**★​2 · A cost gate with live inputs and an adaptive bar.** Most retail tools ignore trading costs.
+Backtesting platforms almost universally simulate a fill at the *mid-price* — the midpoint between
+the best buyer and the best seller, a price at which nobody can actually trade. This system fetches
+your real fee tier before every decision, measures the real spread, estimates real slippage from
+real book depth, and refuses the trade unless the expected move beats all of it with margin to
+spare. Because the bar is computed from your live fee tier, **the system is automatically stricter
+while your account is small and relaxes as your fees improve.** That is not a setting anyone tuned.
+
+**★​3 · A record of the trades it did not take.** Every system records its trades. This one records
+every refusal, with the gate that stopped it, the reason, and what the model was looking at. Over
+time that becomes a dataset of roads not taken — the only way to ever answer *was it right to say
+no?* Without it, a system that refuses everything and a system that refuses correctly look
+identical.
+
+**★​4 · One set of engines, not two.** The backtest replays history through the very same engines
+the live system runs. The usual arrangement is a research codebase and a trading codebase that are
+meant to agree, and quietly stop agreeing. Here a backtest and a live run cannot silently disagree,
+because there is only one implementation to disagree with.
+
+**★​5 · Promotion on skill, after two subtractions.** If Bitcoin rose 20% and your account rose 8%,
+you did not make 8% through skill — the market made it and your decisions cost you 12%. A model is
+promoted only if its performance survives subtracting that market movement, **and** a further
+penalty for how many models were tried, because the best of twenty attempts is usually the
+luckiest rather than the best. The benchmark is doing nothing at all.
+
+**★​6 · Nothing clever can overrule the arithmetic.** Every amber box is the same idea repeated: a
+gate fails closed. If it errors it blocks, if it cannot reach its data it blocks, and the absence
+of a "no" is never read as a "yes". Nine of the twenty-three engines contain no machine learning
+whatsoever, and those nine are precisely the ones holding the money. A model in this system can
+only ever make it *less* willing to trade, never more.
+
+None of the six is individually unprecedented. **The contribution is that all six hold at the same
+time, in a system one person can run on one machine** — at exactly the account size where trading
+costs stop being a detail and become the entire problem, and where, until now, nobody had the data
+to say so honestly.
+
+---
+
+## 6. A worked minute
 
 Concrete, using the current settings, on a $5,000 account.
 
@@ -304,7 +476,7 @@ only way anyone can ever go back and ask whether saying no was right.
 
 ---
 
-## 6. What is running today
+## 7. What is running today
 
 Because this is a live project and the document should not overstate it: engines **1, 2, 3 and 4**
 are built and running — the data spine and the first real gate. Engines **10 `cost`, 11 `risk`
