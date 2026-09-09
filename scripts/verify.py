@@ -3365,15 +3365,27 @@ def check_data_guard_blocks_bad_data(ctx: VerifyContext) -> Outcome:
         if doubles is None:
             return problem or pending("test doubles unavailable")
         try:
-            engine = engine_cls(doubles.config) if _takes_config(engine_cls) else engine_cls()
-            context = _guard_context(doubles)
+            context, early = _guard_context(doubles)
             if context is None:
-                return pending("acsoe.core.contracts.EngineContext does not exist yet")
+                return early or pending("acsoe.core.contracts.EngineContext does not exist yet")
+            try:
+                engine = engine_cls(doubles.config) if _takes_config(engine_cls) else engine_cls()
+            except KeyError as exc:
+                unset = _unset_config_key(ctx.root, exc)
+                if unset is None:
+                    raise
+                return pending(_unset_key_message(unset))
 
             reasons: dict[str, str] = {}
             for key in GUARD_BLOCK_SCENARIOS:
                 state = dict(scenarios[key])
-                result = engine.process(context, state)
+                try:
+                    result = engine.process(context, state)
+                except KeyError as exc:
+                    unset = _unset_config_key(ctx.root, exc)
+                    if unset is None:
+                        raise
+                    return pending(_unset_key_message(unset))
                 if not getattr(result, "blocks_trading", False):
                     return failed(
                         f"injected {key.replace('_', ' ')} data did not block. A gate that "
@@ -3405,6 +3417,16 @@ def check_data_guard_blocks_bad_data(ctx: VerifyContext) -> Outcome:
     )
 
 
+def _unset_key_message(dotted: str) -> str:
+    return (
+        "engine 4 needs the config key `"
+        + dotted
+        + "`, which config/default.yaml does not carry. Only the lead adds a key, and "
+        "refusing to run without a threshold is the correct fail-closed behaviour rather "
+        "than a defect in the engine or in this gate."
+    )
+
+
 def _takes_config(engine_cls: Any) -> bool:
     try:
         parameters = inspect.signature(engine_cls).parameters
@@ -3413,21 +3435,88 @@ def _takes_config(engine_cls: Any) -> bool:
     return bool(parameters)
 
 
-def _guard_context(doubles: Any) -> Any:
+def _context_values(doubles: Any) -> dict[str, Any]:
+    """What this script can supply for an `EngineContext` field, by name.
+
+    The context is built by *asking the dataclass what it takes* rather than by
+    passing a fixed argument list. `core/contracts.py` is the lead's and its shape
+    is not mine to remember: an earlier version of this helper passed `cycle_id=1`,
+    which is not a field - a tick is identified by `(run_id, cycle_id)` and the
+    `cycle_id` half lives in `state`, not on the context - and omitted `mode`,
+    which is required. That call raises `TypeError` and never returns a context. It
+    was invisible only because `try_import` returned first while engine 4 did not
+    exist, and A caught it by reading before landing the module that would have
+    turned a PENDING into a red gate for everyone.
+
+    Introspection rather than a corrected argument list, because a corrected list
+    is the same defect one edit later. A field the lead adds that this cannot
+    supply is reported by name instead of raising.
+    """
+    return {
+        "mode": doubles.config.mode,
+        "run_id": "verify-data-guard",
+        "now": doubles.clock.now(),
+        "config": doubles.config,
+        "clients": doubles.clients,
+    }
+
+
+def _guard_context(doubles: Any) -> tuple[Any, Outcome | None]:
     """An `EngineContext` for one tick, built from the shared doubles."""
     core_mod, problem = try_import("acsoe.core.contracts")
-    if core_mod is None or problem is not None:
-        return None
-    context_cls = getattr(core_mod, "EngineContext", None)
+    if core_mod is None:
+        return None, problem or pending("acsoe.core.contracts does not exist yet")
+    context_cls, missing = module_attr(core_mod, "EngineContext")
     if context_cls is None:
+        return None, pending(missing)
+    try:
+        parameters = inspect.signature(context_cls).parameters
+    except (TypeError, ValueError):
+        return None, failed("acsoe.core.contracts.EngineContext has no readable signature")
+
+    available = _context_values(doubles)
+    unsupplied = [
+        name
+        for name, parameter in parameters.items()
+        if name not in available and parameter.default is inspect.Parameter.empty
+    ]
+    if unsupplied:
+        return None, pending(
+            "acsoe.core.contracts.EngineContext requires "
+            + ", ".join(unsupplied)
+            + ", which this criterion has no value for. Add it to `_context_values`."
+        )
+    kwargs = {name: value for name, value in available.items() if name in parameters}
+    return context_cls(**kwargs), None
+
+
+_DOTTED_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+")
+
+
+def _unset_config_key(root: Path, exc: KeyError) -> str | None:
+    """The dotted config key a `KeyError` names, if it really is absent from config.
+
+    An engine reaching for a threshold nobody has set raises `KeyError` from the
+    config layer, and that is the **correct** fail-closed behaviour - an engine
+    silently receiving `None` for a threshold is the failure this project refuses.
+    It is not a verdict about the engine, though, and reporting it as a FAIL makes
+    an unconfigured gate look like a broken one.
+
+    So the key is checked rather than assumed. Absent from `config/default.yaml`
+    entirely: PENDING, naming the key, because only the lead adds one and spec 29
+    says a key an engine needs and does not have is a request to the lead. Present
+    in the file and still raising: not this, and the criterion FAILs as it should -
+    the engine asked for something that exists, in a shape it did not expect.
+    """
+    text = str(exc.args[0]) if exc.args else ""
+    match = _DOTTED_KEY.search(text)
+    if match is None:
         return None
-    return context_cls(
-        now=doubles.clock.now(),
-        cycle_id=1,
-        run_id="verify-data-guard",
-        config=doubles.config,
-        clients=doubles.clients,
-    )
+    dotted = match.group(0)
+    config, _ = load_config(root)
+    if config is None:
+        return dotted
+    return dotted if config_get(config, dotted) is _CONFIG_MISSING else None
 
 
 # --- historical_loader_reports_gaps ---------------------------------------- #

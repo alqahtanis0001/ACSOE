@@ -375,6 +375,32 @@ PENDING console_reads_persisted_mode    the daemon left no `runs` row for its ow
 Phase 2 is not green: 6 PENDING. Mid-phase the bar is no FAIL, so this is expected.
 ```
 
+**Re-run after the spec 33 follow-ups**, on a tree carrying A's engines 1-3 and loader and the
+lead's two `core/` writes. `pytest` 1029 passed, `mypy --strict src/` clean over 65 files,
+`ruff check src/` clean, `--phase 0` 7/7 and `--phase 1` 10/10 both still green:
+
+```
+$ .venv/Scripts/python.exe scripts/verify.py --phase 2
+PASS    docs_vocabulary
+PASS    toolchain_green
+PASS    commands_round_trip
+PENDING recording_span_continuous       tests/fixtures/recording_report.json does not exist yet
+PASS    candles_match_kraken_ohlc       3 pairs, 9 bar(s): every OHLC field within one tick_size
+                                        as AssetPairs reports it, volume within 0.1%
+PENDING data_guard_blocks_bad_data      engine 4 `data_guard` does not exist yet (spec 29)
+PASS    historical_loader_reports_gaps  3 gaps of 1/2/4 bars reported exactly, over 41 rows, and
+                                        no timestamp in the output was absent from the input
+PENDING console_shows_live_rows         no Phase 2 engine is registered in bootstrap.py yet
+PASS    console_reads_persisted_mode    a real daemon applied activate then freeze through the
+                                        real store, and the band followed to `Running` then
+                                        `Frozen`
+
+9 criteria: 6 PASS, 0 FAIL, 3 PENDING
+```
+
+Three criteria have gone PENDING to PASS against their real subjects without a line of mine
+changing, which is what the two-sided proof was for.
+
 Every `<contract>` above is the full expected surface, printed in the real output and elided
 here only for width. The six PENDINGs are five of A's subjects and one of the lead's; none is
 mine. `--phase 0` and `--phase 1` both still report every criterion PASS and zero PENDING.
@@ -420,9 +446,35 @@ The suite grew from 641 to 707 in this session: 66 new tests across
 `test_commands.py`, plus the widened assertions in `test_app.py` and `test_page.py`. Two of the
 641 were failing on the tree I picked up and are fixed; see the entries in the build log.
 
+## Two properties of the Phase 2 criteria worth carrying forward
+
+Same shape as the three carried out of Phase 0: invisible from the code, and a later
+"simplification" would break the gate without saying so.
+
+- **Fabricate the subject a criterion judges; never fabricate a contract the criterion is held
+  to.** `data_guard_blocks_bad_data` passed both halves of its two-sided proof over a body that
+  could not run, because the test module had hand-written an `acsoe.core.contracts` that agreed
+  with the mistake in `_guard_context`. `use_real_core()` now copies the real `src/acsoe/core/`
+  into every fabricated tree that needs `EngineContext` or `Chains`. A two-sided proof is only
+  worth what its fabricated subject is worth.
+- **A test asserting a subject is *absent* decays silently as teammates build.**
+  `tree_with_harness` carries no `src/`, so `root_import_path` does not shadow the editable
+  install and a criterion asking for an unbuilt module finds the real one. Every "PENDING on an
+  absent subject" test now calls `shadow_real_package()`. `test_candles_are_pending_with_a_
+  fixture_and_no_builder` went red hours after it was written, with nothing of mine changed,
+  the moment A landed engine 3.
+
 ## Open Questions — Phase 2
 
-- **`console_reads_persisted_mode` is blocked on two writes in `core/`, not one.** Spec 31 gave
+- **RESOLVED, same day.** The lead landed both writes and `console_reads_persisted_mode` is
+  **PASS**: a real daemon applies activate then freeze through the real store and the band
+  follows to `Running` then `Frozen`, with no double anywhere in the seam. Spec 32's reader is
+  now proven end to end rather than only against a fabricated subject. The question is left
+  below verbatim, because the *second* half of it — the missing run record — was not in B's note
+  or in the spec, and the reasoning for why it is upstream of the mode write is the part worth
+  keeping.
+
+- **`console_reads_persisted_mode` was blocked on two writes in `core/`, not one.** Spec 31 gave
   the store `set_system_mode(run_id, mode, *, at)` and B's note to the lead names the first: the
   command reader must call it after applying each transition. There is a second, and it is
   upstream of it. **The orchestrator writes no `runs` row at all.** `ownership.md`'s seam table

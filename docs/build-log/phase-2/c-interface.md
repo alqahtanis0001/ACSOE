@@ -289,3 +289,73 @@ current state of the repository, and it decays silently as teammates build. The 
 docstring warned about exactly this for `unbuilt_tree` and I did not carry the warning across to
 `tree_with_harness`, which needed it more — it is the fixture used by the criteria that reach the
 package by import.
+
+### `data_guard_blocks_bad_data` passed both halves of its proof over a body that could not run
+
+**Agent:** C · **Task:** spec 33 follow-up (found by A, confirmed by the lead) · **Date:** 2026-09-09
+
+**What happened.** A read `_guard_context` before building engine 4 and found that it constructs
+`EngineContext(now=..., cycle_id=1, run_id=..., config=..., clients=...)`. The real
+`EngineContext` in `core/contracts.py` is `@dataclass(frozen=True, slots=True)` with exactly
+`mode`, `run_id`, `now`, `config`, `clients`. **`cycle_id` is not a field** — a tick is
+`(run_id, cycle_id)` and the cycle half lives in `state`, which I have written into my own
+progress file twice — and **`mode` is required and was absent**. The call raises `TypeError`.
+The criterion would have gone from PENDING to a red gate for everyone the moment A landed the
+module.
+
+**Why the tests did not catch it, which is the part worth reading.** Both halves of the
+two-sided proof passed. They passed because `tests/verify/test_phase2_criteria.py` **fabricated
+its own `acsoe.core.contracts`**, and the fabrication agreed with the mistake: it declared
+`cycle_id` and no `mode`. The criterion's body ran, against a contract written by the same hand
+that got the contract wrong, and proved nothing. A two-sided proof is only worth what its
+fabricated subject is worth.
+
+**Fix, and the rule that comes out of it.** `use_real_core(root)` copies the real
+`src/acsoe/core/` into the fabricated tree; nothing hand-writes `EngineContext` or `Chains` any
+more. `core/` imports nothing from the rest of the package (architecture invariant 0), so that
+copy is cheap. The rule: **fabricate the subject a criterion judges; never fabricate a contract
+the criterion is supposed to be held to.** The same change went into the daemon fabrication,
+which now takes real `Chains` and `EngineContext` and overwrites only `Orchestrator` — which is
+legitimately fabricated, because the behaviour under test is one the real orchestrator does not
+have yet.
+
+`_guard_context` no longer passes a fixed argument list either. It reads
+`inspect.signature(EngineContext).parameters` and supplies what it can from `_context_values`,
+reporting any required field it has no value for **by name** as PENDING. A corrected argument
+list is the same defect one edit later: `core/contracts.py` is the lead's and may gain a field
+at any time, and this script should say so rather than raise from inside a criterion.
+`test_a_context_field_the_criterion_cannot_supply_is_named_not_raised` is the proof, and it is
+the one place in the file that still fabricates a core contract — deliberately, because there
+the subject under test is this script's adaptability to a contract it does not own.
+
+### An unset OPERATOR REQUIRED threshold is a PENDING subject, not a FAIL
+
+**Agent:** C · **Task:** spec 33 follow-up · **Date:** 2026-09-09
+
+**What happened.** Engine 4's staleness threshold is `data_guard.max_data_age_s`, which is still
+with the operator and is not in `config/default.yaml`. A is letting the `KeyError` stand in the
+engine rather than substituting a placeholder, which is right — an engine silently receiving
+`None` for a threshold is precisely the failure this project refuses. My criterion builds its
+context from a `MappingConfig` over the committed file, so the `KeyError` surfaces inside
+`process` and the criterion read a *fail-closed* gate as a broken one.
+
+**Why PENDING.** A *configured* data guard does not exist yet, and "the thing it checks does not
+exist yet" is what PENDING means. FAIL would make the criterion lie about whose problem it is,
+and under the commit-at-every-boundary rule a FAIL blocks every other agent's finished work.
+The general shape, which the lead asked for and which I agree with: **a missing OPERATOR
+REQUIRED value is a PENDING subject.** `config/default.yaml`'s own machinery already treats an
+unset trading threshold as a refusal to start rather than as an error, and the gate should agree
+with it.
+
+**Fix, and the half that keeps it from being a hole.** `_unset_config_key` pulls the dotted key
+out of the `KeyError` and **checks** it against the parsed config. Absent from the file:
+PENDING, naming the key. Present in the file and still raising: not this, and it propagates to a
+FAIL — the engine asked for something that exists, in a shape it did not expect. Both directions
+have a test; without the second, the PENDING branch would swallow every `KeyError` and the
+criterion could never go red for a real defect.
+
+**Also.** A's three `data_guard` reason codes — `market_data_stale`, `negative_spread`,
+`missing_candle` — are in `REASON_PROSE`. A's note about `missing_candle` is carried into the
+comment there, because it reads like a contradiction and is not: the historical loader must
+never invent a missing bar, and the gate must never trade on a series with a hole in it. One is
+about labelling, the other about acting, and fail-closed points the opposite way in each.

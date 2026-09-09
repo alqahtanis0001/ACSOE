@@ -76,6 +76,39 @@ def shadow_real_package(root: Path) -> Path:
     return root
 
 
+def use_real_core(root: Path) -> Path:
+    """Copy the **real** `src/acsoe/core/` into a fabricated tree.
+
+    Never a fabricated `acsoe.core.contracts`, and this is the lesson rather than a
+    convenience. `_guard_context` built its `EngineContext` with `cycle_id=1` - not
+    a field; a tick is `(run_id, cycle_id)` and the cycle half lives in `state` -
+    and omitted the required `mode`. Both halves of the two-sided proof passed
+    anyway, because the fabricated contract this file wrote **agreed with the
+    mistake**: it declared `cycle_id` and no `mode`. The criterion's body ran and
+    proved nothing, and the defect would have surfaced only when A landed engine 4
+    and the gate went red for everyone.
+
+    `core/` imports nothing from the rest of the package (architecture invariant 0),
+    so copying that one directory is cheap and gives the criterion the same contract
+    the engines are compiled against. Fabricate a subject the criterion judges;
+    never fabricate a contract that already exists and that the criterion is
+    supposed to be held to.
+    """
+    package = root / "src" / "acsoe"
+    package.mkdir(parents=True, exist_ok=True)
+    init = package / "__init__.py"
+    if not init.exists():
+        init.write_text("", encoding="utf-8")
+    destination = package / "core"
+    if not destination.exists():
+        shutil.copytree(
+            Path(__file__).resolve().parents[2] / "src" / "acsoe" / "core",
+            destination,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+    return root
+
+
 def run(verify_module: ModuleType, check: str, root: Path) -> Any:
     """One criterion against `root`, through the runner's exception guard."""
     return verify_module.run_criterion(
@@ -442,20 +475,6 @@ def test_a_pair_absent_from_asset_pairs_is_a_fail_not_an_invented_tolerance(
 # data_guard_blocks_bad_data
 # --------------------------------------------------------------------------- #
 
-ENGINE_CONTEXT_MODULE = '''
-from dataclasses import dataclass
-from typing import Any
-
-
-@dataclass(frozen=True)
-class EngineContext:
-    now: Any
-    cycle_id: int
-    run_id: str
-    config: Any
-    clients: Any
-'''
-
 GUARD_SCENARIOS_MODULE = '''
 BAD_DATA_SCENARIOS = {
     "stale": {"market_sensor": {"age_s": 900}},
@@ -513,10 +532,10 @@ def fabricate_guard(
     reasons: dict[str, str] | None = None,
     blocks_clean: bool = False,
 ) -> None:
+    use_real_core(root)
     fabricate_package(
         root,
         {
-            "acsoe.core.contracts": ENGINE_CONTEXT_MODULE,
             "acsoe.engines.data_guard.contracts": GUARD_SCENARIOS_MODULE,
             "acsoe.engines.data_guard.engine": GUARD_ENGINE_MODULE.format(
                 is_gate=is_gate,
@@ -608,6 +627,144 @@ def test_a_data_guard_declaring_it_is_not_a_gate_is_a_fail(
     outcome = run(verify_module, "data_guard_blocks_bad_data", tree_with_harness)
     assert_fail(outcome, verify_module)
     assert "is_gate" in outcome.message
+
+
+def test_the_guard_criterion_is_held_to_the_real_engine_context(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """The regression, stated as a property rather than as a corrected argument list.
+
+    `_guard_context` passed `cycle_id=1` - not a field - and omitted the required
+    `mode`, so it raised `TypeError` and never returned a context. Both halves of
+    the two-sided proof passed anyway, because this file had fabricated an
+    `acsoe.core.contracts` that **agreed with the mistake**. The criterion's body
+    ran and proved nothing.
+
+    So this asserts the shape of the thing the fabricated tree carries: the real
+    contract, with `mode`, without `cycle_id`. A future fabrication that quietly
+    reintroduces a hand-written `EngineContext` fails here rather than in A's gate.
+    """
+    fabricate_guard(tree_with_harness)
+    contracts = tree_with_harness / "src" / "acsoe" / "core" / "contracts.py"
+    assert contracts.is_file(), "the fabricated tree must carry the real core/, not a stand-in"
+    source = contracts.read_text(encoding="utf-8")
+    assert "class EngineContext" in source
+    assert "    mode: Mode" in source
+    assert "    cycle_id" not in source
+
+    assert_pass(run(verify_module, "data_guard_blocks_bad_data", tree_with_harness), verify_module)
+
+
+CONTEXT_WITH_A_NEW_FIELD = '''
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass(frozen=True)
+class EngineContext:
+    mode: Any
+    run_id: str
+    now: Any
+    config: Any
+    clients: Any
+    tick_budget_ms: int
+'''
+
+
+def test_a_context_field_the_criterion_cannot_supply_is_named_not_raised(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """The reason `_guard_context` introspects instead of passing a fixed list.
+
+    A corrected argument list is the same defect one edit later: the lead owns
+    `core/contracts.py` and may add a required field at any time, and this script
+    would then raise `TypeError` from inside a criterion again. The context is
+    therefore built from whatever the dataclass says it takes, and a required field
+    with no value here is reported **by name** as PENDING.
+
+    This is the one place that deliberately fabricates `acsoe.core.contracts`, and
+    it does so because the subject under test is this script's adaptability to a
+    contract it does not own - not the data guard.
+    """
+    fabricate_guard(tree_with_harness)
+    fabricate_package(tree_with_harness, {"acsoe.core.contracts": CONTEXT_WITH_A_NEW_FIELD})
+    outcome = run(verify_module, "data_guard_blocks_bad_data", tree_with_harness)
+    assert_pending(outcome, verify_module)
+    assert "tick_budget_ms" in outcome.message
+
+
+UNSET_KEY_ENGINE = '''
+from dataclasses import dataclass
+
+KEY = {key!r}
+
+
+@dataclass
+class _Result:
+    engine: str
+    blocks_trading: bool
+    reason: str | None
+
+
+class DataGuard:
+    name = "data_guard"
+    number = 4
+    is_gate = True
+
+    def __init__(self, config=None):
+        self._config = config
+
+    def process(self, context, state):
+        # What `platform/config.py` raises for a threshold nobody has set. An engine
+        # that returned a default here instead would be inventing trading behaviour.
+        raise KeyError(f"config has no key {{KEY!r}}; the last segment is not present")
+'''
+
+
+def test_an_unset_operator_threshold_is_pending_and_names_the_key(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """A gate whose threshold the operator has not supplied is an unbuilt subject.
+
+    `data_guard.max_data_age_s` is still with the operator, and A is right to let
+    the `KeyError` stand rather than substitute a placeholder - an engine silently
+    receiving `None` for a threshold is the failure this project refuses. But a
+    *configured* data guard does not exist yet, which is what PENDING means, and
+    reporting it as FAIL would make the criterion lie about whose problem it is.
+    Under the commit-at-every-boundary rule a FAIL also blocks every other agent's
+    finished work, which is the practical half of the same argument.
+    """
+    fabricate_guard(tree_with_harness)
+    fabricate_package(
+        tree_with_harness,
+        {"acsoe.engines.data_guard.engine": UNSET_KEY_ENGINE.format(
+            key="data_guard.max_data_age_s"
+        )},
+    )
+    outcome = run(verify_module, "data_guard_blocks_bad_data", tree_with_harness)
+    assert_pending(outcome, verify_module)
+    assert "data_guard.max_data_age_s" in outcome.message
+
+
+def test_a_key_that_is_configured_and_still_raises_is_a_failure(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """The other side, and the one that keeps the leniency above from being a hole.
+
+    "Unset" is *checked*, never assumed. A `KeyError` naming a key the committed
+    config actually carries is not an unconfigured threshold - it is an engine
+    asking for something that exists in a shape it did not expect - and that is a
+    FAIL. Without this, the PENDING branch would swallow any `KeyError` at all and
+    the criterion could never go red for a real defect.
+    """
+    fabricate_guard(tree_with_harness)
+    fabricate_package(
+        tree_with_harness,
+        {"acsoe.engines.data_guard.engine": UNSET_KEY_ENGINE.format(key="safety.max_drawdown_pct")},
+    )
+    outcome = run(verify_module, "data_guard_blocks_bad_data", tree_with_harness)
+    assert_fail(outcome, verify_module)
+    assert "criterion raised" in outcome.message
 
 
 # --------------------------------------------------------------------------- #
@@ -899,26 +1056,6 @@ class CommandRow:
     updated_at: int
 '''
 
-DAEMON_CORE_MODULE = '''
-from dataclasses import dataclass, field
-
-
-@dataclass(frozen=True)
-class Chains:
-    guard: tuple = ()
-    opportunity: tuple = ()
-    manage: tuple = ()
-
-
-@dataclass(frozen=True)
-class EngineContext:
-    now: object = None
-    cycle_id: int = 1
-    run_id: str = ""
-    config: object = None
-    clients: object = None
-'''
-
 DAEMON_ORCHESTRATOR_MODULE = '''
 WRITES_RUN_ROW = {writes_run_row!r}
 PERSISTS_MODE = {persists_mode!r}
@@ -1050,11 +1187,11 @@ def fabricate_daemon(
     renders_mode: bool = True,
 ) -> None:
     """A whole daemon-plus-console tree: bootstrap, orchestrator, store, seed, console."""
+    use_real_core(root)
     fabricate_package(
         root,
         {
             "acsoe.bootstrap": DAEMON_BOOTSTRAP_MODULE.format(number=engine_number),
-            "acsoe.core.contracts": DAEMON_CORE_MODULE,
             "acsoe.core.orchestrator": DAEMON_ORCHESTRATOR_MODULE.format(
                 writes_run_row=writes_run_row,
                 persists_mode=persists_mode,
@@ -1323,7 +1460,7 @@ def test_the_crippled_store_really_would_have_satisfied_spec_24(
         conn.close()
 
     namespace: dict[str, Any] = {}
-    exec(CRIPPLED_STORE_MODULE, namespace)  # noqa: S102 - the fabrication under test
+    exec(CRIPPLED_STORE_MODULE, namespace)
     store = namespace["StoreClient"](db_path)
     try:
         row = type("Row", (), {"command": "activate", "source": "console"})()

@@ -110,6 +110,20 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     "dissimilarity_index": "Conditions are unlike anything in training",
     "insufficient_depth": "Order book is too thin to fill without slippage",
     "no_candidate_cleared": "Nothing cleared the gates on this bar",
+    # Engine 4 `data_guard`, requested by A on 2026-09-09. Codes fixed by A so the
+    # producer and the consumer cannot drift; prose is mine, and A's wording is kept
+    # almost verbatim because it was already right.
+    #
+    # `missing_candle` is about a hole *inside* the published series, which reads
+    # like a contradiction of `architecture-context.md` — a missing candle in the
+    # historical archive means no trades occurred and is not a data error, and spec
+    # 30 forbids the loader from inventing one. Both hold at once: the loader
+    # refuses to invent a bar, the gate refuses to act on a series with a hole in
+    # it. One is about labelling, the other about trading, and fail-closed points
+    # the opposite way in each. Engine 4's README carries the same note.
+    "market_data_stale": "Market data is older than the guard allows",
+    "negative_spread": "The order book is crossed",
+    "missing_candle": "A decision bar has no candle",
 }
 
 #: What a row with neither prose nor a mapped code shows. A statement of absence,
