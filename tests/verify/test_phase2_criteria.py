@@ -655,6 +655,152 @@ def test_the_guard_criterion_is_held_to_the_real_engine_context(
     assert_pass(run(verify_module, "data_guard_blocks_bad_data", tree_with_harness), verify_module)
 
 
+#: A scenario module whose `clean` and `missing_candle` share **one** nested region.
+#:
+#: That is not a contrived shape. The scenarios differ by one flag each, so a
+#: natural fixture builds them from a common base - and the moment two of them name
+#: the same dict object, a criterion handing that object to an engine is handing over
+#: the fixture for every scenario after it.
+SHARED_REGION_SCENARIOS_MODULE = '''
+import copy
+
+_MARKET = {"age_s": 1, "missing": False}
+
+BAD_DATA_SCENARIOS = {
+    "stale": {"market_sensor": {"age_s": 900, "missing": False}},
+    "negative_spread": {"exchange": {"bid": "101", "ask": "100"}},
+    # Both name the same object on purpose.
+    "missing_candle": {"market_sensor": _MARKET, "hole": True},
+    "clean": {"market_sensor": _MARKET, "exchange": {"bid": "100", "ask": "101"}},
+}
+
+
+def bad_data_state(name):
+    """A scenario nothing else shares. A's accessor, same contract."""
+    return copy.deepcopy(BAD_DATA_SCENARIOS[name])
+'''
+
+#: A guard that publishes into the state region it was handed, which every engine is
+#: entitled to do - `state` is how engines communicate at all. It blocks the three
+#: bad scenarios, and it refuses the clean one if it finds its own mark there, which
+#: it only can when the region it was given is the fixture rather than a copy.
+LEAKY_GUARD_MODULE = '''
+from dataclasses import dataclass
+
+MARK = "_written_by_a_previous_scenario"
+
+
+@dataclass
+class _Result:
+    engine: str
+    blocks_trading: bool
+    reason: str | None
+
+
+class DataGuard:
+    name = "data_guard"
+    number = 4
+    is_gate = True
+
+    def __init__(self, config=None):
+        self._config = config
+
+    def process(self, context, state):
+        market = state.get("market_sensor")
+        seen = isinstance(market, dict) and market.get(MARK)
+        if isinstance(market, dict):
+            market[MARK] = True
+        if isinstance(market, dict) and market.get("age_s", 0) > 60:
+            return _Result("data_guard", True, "Market data is older than the guard allows")
+        book = state.get("exchange")
+        if isinstance(book, dict) and book.get("bid", "") > book.get("ask", ""):
+            return _Result("data_guard", True, "The order book is crossed")
+        if state.get("hole"):
+            return _Result("data_guard", True, "A decision bar has no candle")
+        if seen:
+            # The clean scenario arrived carrying a mark this engine wrote while
+            # judging `missing_candle`, so the two are the same object.
+            return _Result("data_guard", True, "clean data carried a leaked mark")
+        return _Result("data_guard", False, None)
+'''
+
+
+def fabricate_leaky_guard(root: Path) -> None:
+    use_real_core(root)
+    fabricate_package(
+        root,
+        {
+            "acsoe.engines.data_guard.contracts": SHARED_REGION_SCENARIOS_MODULE,
+            "acsoe.engines.data_guard.engine": LEAKY_GUARD_MODULE,
+        },
+    )
+
+
+def test_the_criterion_hands_the_engine_a_copy_not_the_shared_fixture(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """`BAD_DATA_SCENARIOS` is a mapping of mappings, and `dict(...)` is a shallow copy.
+
+    The outer dict is copied; every nested region stays the *same object* as the
+    module-level fixture. A hit this on his own side, where a test set a nested key
+    and quietly changed the fixture for every test after it, with the failure
+    surfacing somewhere unrelated. Engines publish into `state` by design, so
+    "nothing mutates it" is a property of today's engine 4 rather than of the
+    contract.
+
+    **The leak is within one criterion run, not across runs**, and that is worth
+    stating because I first wrote this test the other way and it passed against a
+    deliberately shallow copy. `root_import_path` drops and re-imports every `acsoe`
+    module for each criterion, so a module-level fixture is rebuilt from source
+    every time and nothing a criterion writes into one can reach the next. What it
+    *can* reach is the next scenario in the same run, which is what this fabricates:
+    `clean` and `missing_candle` naming one region, and a guard that writes into it.
+    """
+    fabricate_leaky_guard(tree_with_harness)
+    assert_pass(run(verify_module, "data_guard_blocks_bad_data", tree_with_harness), verify_module)
+
+
+def test_a_shallow_copy_really_would_have_leaked(
+    verify_module: ModuleType, tree_with_harness: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The test above has to be able to fail, or it proves nothing about the copy.
+
+    Same shape as spec 17's `test_the_write_that_was_refused_really_would_have_worked`:
+    a guard that has never been shown to fire is a comment. `_guard_state` is put back
+    to the `dict(scenarios[key])` it used to be, and the clean case then arrives
+    carrying a mark the engine wrote while judging `missing_candle` - so the criterion
+    reports a gate that blocks everything, which is a real verdict about a fixture
+    defect and reads as a defect in the engine.
+    """
+    fabricate_leaky_guard(tree_with_harness)
+
+    def shallow(contracts_mod: Any, scenarios: Any, key: str) -> Any:
+        return dict(scenarios[key])
+
+    monkeypatch.setattr(verify_module, "_guard_state", shallow)
+    outcome = run(verify_module, "data_guard_blocks_bad_data", tree_with_harness)
+    assert_fail(outcome, verify_module)
+    assert "blocks everything" in outcome.message
+
+
+def test_the_criterion_prefers_a_s_deep_copy_accessor_when_it_exists(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """`bad_data_state(name)` is A's, and it is used in preference to `copy.deepcopy`.
+
+    One producer of a scenario rather than two. The fallback stays so the criterion
+    keeps working against a `contracts.py` that only exposes the mapping, but where
+    the accessor exists it is the accessor that decides what a scenario is.
+    """
+    fabricate_leaky_guard(tree_with_harness)
+    calls: list[str] = []
+    module = __import__("types").ModuleType("stub")
+    module.bad_data_state = lambda name: calls.append(name) or {"market_sensor": {"age_s": 1}}
+    scenarios = {"stale": {}, "clean": {}}
+    assert verify_module._guard_state(module, scenarios, "stale") == {"market_sensor": {"age_s": 1}}
+    assert calls == ["stale"]
+
+
 CONTEXT_WITH_A_NEW_FIELD = '''
 from dataclasses import dataclass
 from typing import Any

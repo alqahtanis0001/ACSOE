@@ -457,6 +457,11 @@ Same shape as the three carried out of Phase 0: invisible from the code, and a l
   with the mistake in `_guard_context`. `use_real_core()` now copies the real `src/acsoe/core/`
   into every fabricated tree that needs `EngineContext` or `Chains`. A two-sided proof is only
   worth what its fabricated subject is worth.
+- **`root_import_path` re-imports every `acsoe` module for each criterion**, so a module-level
+  fixture is rebuilt from source on every run. Cross-run contamination between criteria is
+  therefore impossible, and a regression test written on that assumption passes against the
+  defect it was meant to catch — mine did. The leak that *is* reachable is within one run, to
+  the next thing the criterion does.
 - **A test asserting a subject is *absent* decays silently as teammates build.**
   `tree_with_harness` carries no `src/`, so `root_import_path` does not shadow the editable
   install and a criterion asking for an unbuilt module finds the real one. Every "PENDING on an

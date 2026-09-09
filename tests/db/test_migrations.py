@@ -165,7 +165,7 @@ def test_table_and_index_sets_match_the_contract(migrated_db: Path) -> None:
         close_connection(conn)
 
     assert tables == ALL_TABLES
-    assert EXPECTED_TABLES == ALL_TABLES - {BOOKKEEPING_TABLE}
+    assert ALL_TABLES - {BOOKKEEPING_TABLE} == EXPECTED_TABLES
     assert indexes == EXPECTED_INDEXES
 
 

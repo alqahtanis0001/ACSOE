@@ -60,38 +60,59 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 
 ## In Progress
 
-**Phase 2 — Data spine.** Shared task list: `feature-specs/PHASE-2-TASKS.md`.
+**Phase 2 — Data spine.** Gates as of 2026-09-09, all re-run by the lead: **Phase 0 7/7 green, Phase 1 10/10 green, Phase 2 7 PASS, 0 FAIL, 2 PENDING.** `pytest` 1072 passed, `mypy --strict src/` clean on 68 files, `ruff check src/` clean. Shared task list: `feature-specs/PHASE-2-TASKS.md`.
 
-| Spec | Title | Owner | Phase |
+### Where each agent got to
+
+| Spec | Title | Owner | State |
 |---|---|---|---|
-| 25 | Kraken REST and WebSocket clients | A | 2 |
-| 26 | Engine 1 `exchange` | A | 2 |
-| 27 | Engine 2 `market_data_recorder` | A | 2 |
-| 28 | Engine 3 `market_sensor` | A | 2 |
-| 29 | Engine 4 `data_guard` | A | 2 |
-| 30 | Historical OHLCVT loader | A | 2 |
-| 31 | Persisted system mode | B | 2 |
-| 32 | Status band reads Running and Frozen | C | 2 |
-| 33 | Phase 2 criteria in `verify.py` | C | 2 |
-| 34 | Engine 10 `cost` | B | **3, built concurrently** |
-| 35 | Engine 11 `risk` | B | **3, built concurrently** |
-| 36 | Engine 17 `safety` | B | **3, built concurrently** |
+| 25 | Kraken REST and WebSocket clients | A | **Done** |
+| 26 | Engine 1 `exchange` | A | **Done** |
+| 27 | Engine 2 `market_data_recorder` | A | **Code done; fixture blocked on wall clock** |
+| 28 | Engine 3 `market_sensor` | A | **Done** — `candles_match_kraken_ohlc` PASS |
+| 29 | Engine 4 `data_guard` | A | **Code done; blocked on one operator config value** |
+| 30 | Historical OHLCVT loader | A | **Done** — `historical_loader_reports_gaps` PASS |
+| 31 | Persisted system mode | B | **Done** |
+| 32 | Status band reads Running and Frozen | C | **Done** — `console_reads_persisted_mode` PASS |
+| 33 | Phase 2 criteria in `verify.py` | C | **Done** — all six registered, each proved twice |
+| 34 | Engine 10 `cost` | B | **Done** (Phase 3, built concurrently) |
+| 35 | Engine 11 `risk` | B | **Done** (Phase 3, built concurrently) |
+| 36 | Engine 17 `safety` | B | **Done except `CONDITION_ACTION`**, which is one dictionary awaiting an operator ruling (Phase 3, built concurrently) |
 
-**Done before the phase opened, by the lead and not assigned: the orchestrator command reader.** It looked up a `claim_pending_commands` the store has never had, so a daemon wired to the real store ignored every command ever written. Two further breaks in the same path were found while fixing it: `mark_command_consumed` was called with the wrong signature, and `mark_close_all_consumed` did not exist either — so even a *successful* liquidation left its row claimed-and-unconsumed for the startup replay to re-run on the next boot, against an already-flat account. The startup re-application of interrupted commands is now wired and had never existed at all. `commands_round_trip` is registered for phase 2 and passes, driving the real `StoreClient` through the real `Orchestrator` with no double anywhere in the seam.
+**Lead, unassigned and done:** the `core/` command reader (three faults, not one); `commands_round_trip`; the run record at startup and the persisted-mode write; `bootstrap.py` registration of engines 1 to 4; the four config keys; and the spec set.
 
-**Phase 3's deterministic engines overlap Phase 2 deliberately.** Operator decision, 2026-09-09. Engines 10 `cost`, 11 `risk` and 17 `safety` are built by B during Phase 2, against a mocked Kraken client and the Phase 0 seed.
+**A, B and C are all idle.** B has been holding since its fourth spec. A is done with code and watching the recording clock. C is done.
 
-*The reason the overlap is safe, and the boundary it stops at:* **these three depend on the exchange only through a contract**, so B agrees the fee-tier and pair-rule shape with A against `clients/kraken/contracts.py` up front and builds against a mock of it — the same "agree, mock, continue" rule that governs every seam. And **the Phase 0 seed already carries every fixture `safety` needs**: all six of its inputs are written by engine 19 `memory`, which is Phase 4, which is exactly why B built those fixtures in Phase 0. Testing `safety` has never depended on anything later than the seed.
+### The two PENDING, neither of which is code
 
-**Engine 7 `scout` is deliberately not in the overlap.** It needs a real tradable universe computed from live pair rules and balances, so it stays in Phase 3 proper. The line is drawn at "depends on a contract" versus "depends on real data".
+1. **`recording_span_continuous`** — the clean 24-hour single-recorder run, started `2026-09-09T14:15:29Z`, complete `2026-09-10T14:15:30Z`. The next session runs one command: `python scripts/recording_report.py --write`, then re-runs the gate. It is in `context/progress/a-platform.md` under **Blocked On** with the timestamps.
+2. **`data_guard_blocks_bad_data`** — needs `data_guard.max_data_age_s`, which only the operator may set. The criterion reports PENDING naming the key, which is the correct fail-closed reading rather than a defect in the engine or the gate.
 
-**These three do not count toward Phase 2's gate, and Phase 3 stays closed** until Phase 2 is green *and* they are wired to A's real client. An engine that has only ever seen a mock is not a finished engine.
+### The criterion defect
 
-**The operator's three additions at approval**, all folded into the specs:
+**`recording_span_continuous` enforces "every break accounted for" rigorously and "a continuous span of at least 24 hours" not at all.** It measures start-to-end elapsed time, so a 24-hour span with nothing missing and a 24-hour span with eleven hours missing tile identically, carry causes identically, and pass identically. Found by A dry-running the report before depositing rather than after: the real archive would have PASSed at 10.93h recorded of a 22.16h span.
 
-1. **Spec 25** — the envelope check needs a paired positive test. A parser that raised on every response would satisfy "a 200 with a populated `error` array raises" on its own; assert that a 200 with an empty `error` array parses cleanly.
-2. **Spec 30** — the loader marks gaps and never interpolates, stated in the spec rather than left implied. A missing candle means no trades occurred, and the distinction is load-bearing for Phase 4's triple-barrier labelling: a synthesised candle at a price that never traded invents a barrier touch and produces a fabricated label. It is precisely the kind of thing an implementer fixes helpfully.
-3. **Spec 32** — the Phase 1 deferral test is deleted, and the deletion is recorded in the build log with its reason. Deleting a test to make a spec buildable is normally what this project refuses; the written trail is what separates a retired test from an inconvenient one.
+`recorded_fraction` is now reported, with `recorded_seconds` and `missing_seconds` beside it, so the weakness is visible in the artefact. **A floor on it is still open** and deliberately not set yet — a floor chosen now would have to sit below 49% to admit that archive, fixing the bar at the number we happened to get rather than one anybody would choose. Ask once a clean run gives a principled number.
+
+### The five operator rulings this phase
+
+1. **Phase 3's deterministic engines overlap Phase 2.** Engines 10, 11 and 17 built by B against a mocked client and the Phase 0 seed, because they depend on the exchange only through a contract and the seed already carries every fixture `safety` needs. Engine 7 `scout` stays in Phase 3 proper — it needs real data, not a contract. They do not count toward Phase 2's gate.
+2. **Spec 25's envelope check needs its paired positive test.** A parser that raised on every response would satisfy the negative half alone.
+3. **Spec 30 marks gaps and never interpolates**, stated in the spec rather than implied, because a synthesised candle at a price that never traded invents a barrier touch and fabricates a Phase 4 label.
+4. **Spec 32's Phase 1 deferral test is deleted and the deletion recorded** with the decision that retired it. C found the test never existed — the claim came from a docstring that was false when written.
+5. **Phase 2 waits for a clean 24-hour recording** rather than closing on a 49%-recorded archive carrying a disk outage we caused ourselves. Everything else in the phase is finished and waiting.
+
+### The pattern this phase kept producing, now six instances
+
+**A check whose output looks like the claim while the claim is not true.** `mypy --strict` returning no answer at all behind a numpy stub syntax error; `ignore_errors=True` turning "do not fail the criterion" into "say nothing"; a `b'"gap"'` payload match that would have split segments silently; a fabricated `EngineContext` that agreed with the mistake it was meant to catch; `recording_span_continuous` measuring elapsed time and calling it continuity; and assertions in three separate files holding `guard_blockers == []` while naming an empty registry.
+
+A's generalisation of the last one is the useful form: **an assertion is decayed if it would still pass when the thing it names is false.** Its sibling, already in `ai-workflow-rules.md`, is *fabricate the subject a criterion judges; never fabricate a contract it is held to.*
+
+**None of the six was caught by running the suite.** Four were caught by an agent reading source before building against it, one by making a green test go red on purpose, one by dry-running an artefact before depositing it.
+
+### Known gap, recorded not hidden
+
+`cli/engine.py` still passes `Clients()` with three `None`s, so with the engines registered **`acsoe engine` now blocks every tick** — engine 1 raises, the orchestrator converts it to `ERROR`, `data_guard` follows with its own missing-key error, and the tick completes recording both. That is contract rule 7 working, and a daemon doing nothing useful. A has pinned the current behaviour in a test so wiring the real clients turns it red and forces a deliberate rewrite. Blocked on `market_data.pairs` and `market_data.book_depth`; no criterion depends on it, because every Phase 2 criterion runs the orchestrator against the fake client rather than through the CLI.
 
 ## Next Up
 
@@ -361,6 +382,17 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
   - **It may need pytest, but that is not proven.** `seed_database` called in a loop with no pytest in the process survived **1,120 consecutive seeds with zero faults**. `test_seed.py` collects 77 tests against a function-scoped `seeded` fixture, so those 8 runs performed roughly 480 seeds for 1 fault — about 0.2% per seed. At that rate 1,120 clean seeds is worth roughly two expected faults, so the difference is **suggestive at around p ≈ 0.1 and not conclusive**. It is the cheapest open lead: if pytest's process really is required, the candidates are things `tests/conftest.py` installs — the autouse network guard's socket patching, `hypothesis`, `pytest-asyncio` — rather than the store code, and none of those can reach production.
 
   **A third site, 2026-09-09, and this one is not a native crash at all.** C's first full-suite run of its final session reported `1 failed, 640 passed` — `tests/platform/test_config.py::test_a_missing_required_key_is_refused` raising `TypeError: object of type 'ScalarEvent' has no len()` from inside pyyaml's own `parser.py:118`. That file alone then passed 82/82, and two later full-suite runs passed 641 and 707. No randomised ordering plugin is installed, so the same code ran in the same order and disagreed once. C captured the trace before re-running, as instructed; it is in `docs/build-log/phase-1/c-interface.md`. **pyyaml is pure Python**, so a parser state object being handed to `len()` is not a fault in a C extension at all — it is a wrong value appearing in ordinary interpreter state. Together with the pydantic and sqlite3 sites, that is three unrelated libraries, one of them not compiled, which is consistent with process-level memory corruption and inconsistent with a defect in any of the three.
+
+  **RE-OPENED AND WIDENED 2026-09-09. The "seed write path" in this entry's title is now wrong, and the retry does not cover the worst shape.** A escalated two further instances, neither touching SQLite or `seed.py`:
+
+  - **Inside CPython's own `ast.walk`**, during `tests/console/test_reader.py::test_no_console_module_reads_wall_time`: `todo` is a `deque` created two lines earlier and had become an `ast.Load` object — `AttributeError: 'Load' object has no attribute 'extend'`. **A local variable changed identity mid-function.** Not a test bug and not a library bug; it is interpreter state being corrupted, which is the signature this entry already describes. Passed in isolation, and C reported 1068 passing at the same moment.
+  - `pytest tests/engines/test_market_sensor.py` died with a faulthandler dump **after all 20 of its tests had passed**. That file touches no seed and no SQLite.
+
+  **The dangerous consequence, and the reason this matters more than the crash count.** The `ast.walk` instance **did not crash**. It produced an ordinary failing verdict with a non-zero exit. `toolchain_green` retries a *crash* and never retries a *verdict* — which is correct policy, and means **this shape is reported as a genuine test failure in whoever's file it lands in.** It looks exactly like another agent broke something. It landed in C's test during A's run.
+
+  **So, standing guidance until this is understood: a one-off failure in another agent's tests, which passes in isolation and which that agent did not touch, should be suspected as this fault before it is treated as their defect.** Capture the full output — head included, never a `tail` pipe — and compare against the instances above.
+
+  Nothing here is a request to chase the cause. Hardware remains suspected and out of scope by the operator's ruling. What has changed is that the entry's own scope statement is stale and the mitigation's coverage is narrower than it reads.
 
   **Consequences.** The `toolchain_green` retry is not sufficient on its own: at roughly a 20% per-run crash rate, two consecutive crashes is about 4%, which is how often a spurious FAIL should be expected. That matches what was seen. It does not block Phase 1 — the mid-phase bar is no FAIL, and `--phase 1` has been clean throughout — but it does mean a FAIL must be **captured in full before re-running**, and a spurious FAIL must never be assumed without the trace to prove it. Whether to widen the retry, quarantine the seed fixture, or chase the pytest lead is a decision for the operator at a phase boundary, not something to settle mid-phase.
 

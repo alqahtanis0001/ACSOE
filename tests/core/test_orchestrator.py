@@ -12,7 +12,6 @@ from typing import Any
 
 import pytest
 
-from acsoe.bootstrap import build_chains
 from acsoe.core.contracts import (
     BaseEngine,
     Chains,
@@ -170,8 +169,22 @@ def _orch(chains: Chains, store: _Store | None = None) -> Orchestrator:
 
 
 def test_empty_registry_ticks_cleanly() -> None:
-    """Phase 0's exit criterion. An empty chain is valid."""
-    orchestrator = _orch(build_chains())
+    """An empty chain is valid and a tick over it completes cleanly.
+
+    Constructs `Chains()` rather than calling `build_chains()`. It used to call
+    `build_chains()`, which was the same defect the Phase 0 criterion
+    `orchestrator_empty_registry` had: the assertion below says "empty registry" and
+    reading the live registry says "whatever bootstrap currently holds". Those coincided
+    until Phase 2 registered engines 1 to 4, at which point this test began asserting
+    that four real engines produce no blockers against a fake client -- which they
+    correctly do not satisfy, because `market_sensor` publishes no quotes over a
+    REST-only fake and `data_guard` blocks.
+
+    The property is worth keeping permanently: it is what stops a future orchestrator
+    quietly requiring at least one engine. It just has to be held to a registry this
+    test controls.
+    """
+    orchestrator = _orch(Chains())
     state = orchestrator.tick()
     assert state["cycle_id"] == 1
     assert state["guard_blockers"] == []
@@ -180,7 +193,7 @@ def test_empty_registry_ticks_cleanly() -> None:
 
 
 def test_cycle_id_increments_and_run_id_is_stable() -> None:
-    orchestrator = _orch(build_chains())
+    orchestrator = _orch(Chains())
     first, second = orchestrator.tick(), orchestrator.tick()
     assert (first["cycle_id"], second["cycle_id"]) == (1, 2)
     assert orchestrator.run_id  # minted once, lives only on the context

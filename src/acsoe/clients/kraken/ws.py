@@ -49,6 +49,7 @@ from websockets.asyncio.client import connect as _ws_connect
 
 from acsoe.clients.kraken.contracts import QuoteTick, RawFrame, StreamChannel, TradeTick
 from acsoe.platform.clock import Clock
+from acsoe.platform.logging import get_logger
 
 __all__ = ["KrakenWebSocketClient", "subscriptions"]
 
@@ -68,6 +69,11 @@ _TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
 BACKOFF_INITIAL_S = 1.0
 BACKOFF_MAX_S = 60.0
 BACKOFF_FACTOR = 2.0
+
+#: Consecutive sessions ended by the *same* cause before the log level goes critical.
+#: Three, because two can be coincidence on a flaky link and the backoff has reached
+#: four seconds by then — long enough that the fault is not clearing on its own.
+REPEAT_ESCALATION = 3
 
 
 def subscriptions(
@@ -218,6 +224,8 @@ class KrakenWebSocketClient:
         self._disconnect_reason: str | None = None
         self._attempt = 0
         self._backoff = backoff_initial_s
+        self._last_cause: str | None = None
+        self._repeated_cause = 0
 
     # -- lifecycle -------------------------------------------------------- #
 
@@ -442,6 +450,9 @@ class KrakenWebSocketClient:
             try:
                 await self._session()
             except _TRANSPORT_ERRORS as exc:
+                # An expected failure: the socket dropped. The gap record carries it and
+                # no traceback is warranted — a stack for "the network went away" is
+                # noise that trains a reader to skip the ones that matter.
                 self._note_disconnect(f"{type(exc).__name__}: {exc}")
                 await self._back_off()
             except Exception as exc:
@@ -461,17 +472,66 @@ class KrakenWebSocketClient:
                 # It reconnects rather than stopping, on the same backoff, because a
                 # recorder that gives up loses data it can never recover — and if the
                 # fault is permanent the backoff reaches its ceiling and the archive
-                # fills with identically-caused gaps, which says so plainly.
-                self._note_disconnect(f"unexpected {type(exc).__name__}: {exc}")
+                # fills with identically-caused gaps.
+                #
+                # **The traceback is logged as well, and the two are not the same
+                # artefact.** The gap record carries the *cause string*, which tells an
+                # operator the recorder died; `unexpected RecursionError: maximum
+                # recursion depth exceeded` tells a developer nothing about *where*. A
+                # `MemoryError` or a validation failure on an unpredicted frame shape is
+                # diagnosable from a stack and close to undiagnosable without one. So:
+                # the archive gets the durable operator-facing fact, the log gets the
+                # traceback, and neither does the other's job.
+                cause = f"unexpected {type(exc).__name__}: {exc}"
+                repeats = self._note_disconnect(cause)
+                self._log_unexpected(exc, cause, repeats)
                 await self._back_off()
 
-    def _note_disconnect(self, reason: str) -> None:
+    def _log_unexpected(self, exc: BaseException, cause: str, repeats: int) -> None:
+        """Log the traceback, escalating once the same fault keeps recurring.
+
+        A permanent fault wears the costume of a transient one: the backoff absorbs it,
+        the stream keeps reconnecting, and the only evidence is a pile of
+        identically-caused gaps in an archive nobody is reading at the time. After
+        :data:`REPEAT_ESCALATION` consecutive identical causes the level goes to
+        ``critical``, which puts it where somebody is actually looking.
+        """
+        logger = get_logger("acsoe.clients.kraken.ws")
+        event = "stream_unexpected_error"
+        fields: dict[str, Any] = {
+            "cause": cause,
+            "consecutive": repeats,
+            "attempt": self._attempt,
+            "backoff_s": self._backoff,
+            "url": self._url,
+        }
+        if repeats >= REPEAT_ESCALATION:
+            logger.critical(
+                event,
+                **fields,
+                note=(
+                    f"the same fault has ended {repeats} consecutive sessions; the "
+                    "backoff is absorbing a permanent failure"
+                ),
+                exc_info=exc,
+            )
+        else:
+            logger.error(event, **fields, exc_info=exc)
+
+    def _note_disconnect(self, reason: str) -> int:
+        """Record the break and return how many consecutive times this cause has hit."""
         self._attempt += 1
+        if reason == self._last_cause:
+            self._repeated_cause += 1
+        else:
+            self._last_cause = reason
+            self._repeated_cause = 1
         if self._disconnected_at is None:
             self._disconnected_at = self._clock.now()
             self._disconnect_reason = reason
         with self._lock:
             self._connected = False
+        return self._repeated_cause
 
     async def _back_off(self) -> None:
         delay = min(self._backoff, self._backoff_max_s) * (0.5 + self._jitter())

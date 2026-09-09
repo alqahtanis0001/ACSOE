@@ -284,6 +284,7 @@ def build_report(
     gaps = [item.as_dict() for item in (result.breaks or [])]
     recorded = sum(end - start for start, end in (result.segments or []))
     missing = sum(item.end - item.start for item in (result.breaks or []))
+    span_us = result.last - result.first
 
     return {
         "schema_version": 1,
@@ -306,5 +307,20 @@ def build_report(
             "session_markers": result.session_markers,
             "recorded_seconds": recorded / _MICROS,
             "missing_seconds": missing / _MICROS,
+            # How much of the span was actually recorded, 0.0 to 1.0.
+            #
+            # **This exists because the span alone does not say it.** A 24-hour span
+            # with eleven hours of accounted holes and a 24-hour span with none tile
+            # identically, carry causes identically, and satisfy
+            # `recording_span_continuous` identically — the criterion measures
+            # start-to-end elapsed time, which makes the word *continuous* in the phase
+            # row do no work at all. Reporting the fraction puts the weakness in the
+            # artefact rather than leaving it to a reader who divides `recorded` by
+            # `span` in their head.
+            #
+            # It is deliberately **not** a threshold. A minimum recorded fraction
+            # changes what the gate requires, and that is the operator's decision.
+            # Found 2026-09-09 on the first real archive: 22.16h span, 10.93h recorded.
+            "recorded_fraction": (recorded / (span_us or 1)),
         },
     }

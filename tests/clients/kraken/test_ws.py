@@ -14,15 +14,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import pytest
+import structlog
 
 from acsoe.clients.kraken import KrakenWebSocketClient, StreamChannel
-from acsoe.clients.kraken.ws import subscriptions
+from acsoe.clients.kraken.ws import REPEAT_ESCALATION, subscriptions
+from acsoe.platform.logging import configure_logging
 
 START = datetime(2026, 3, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -402,3 +405,115 @@ def test_an_unexpected_error_becomes_a_recorded_gap_rather_than_a_dead_thread() 
     assert len(gaps) == 1
     assert "unexpected ValueError" in gaps[0]["cause"]
     assert "a parse defect" in gaps[0]["cause"]
+
+
+def test_an_unexpected_error_logs_the_traceback_as_well_as_recording_the_gap(
+    tmp_path: Any,
+) -> None:
+    """Two artefacts, and they are not interchangeable.
+
+    The gap carries the *cause string*, which tells an operator the recorder died.
+    `unexpected RecursionError: maximum recursion depth exceeded` tells a developer
+    nothing about **where** — a stack does. So the archive gets the durable
+    operator-facing fact and the log gets the traceback.
+    """
+    log_path = configure_logging(log_dir=tmp_path / "logs", level="DEBUG")
+    try:
+        client = KrakenWebSocketClient(
+            clock=SteppingClock(step_s=1.0),
+            pairs=["BTC/USD"],
+            connect=lambda *a, **k: None,
+            jitter=lambda: 0.0,
+            backoff_initial_s=0.001,
+            backoff_max_s=0.001,
+        )
+        client._connect = FakeConnect(
+            [
+                FakeSocket([], ValueError("a parse defect"), client),
+                FakeSocket([], None, client),
+            ]
+        )
+        asyncio.run(client._run())
+        logging.getLogger().handlers[0].flush()
+        captured = log_path.read_text(encoding="utf-8")
+    finally:
+        _release_logging()
+
+    assert "stream_unexpected_error" in captured
+    assert "a parse defect" in captured
+    # The traceback, which the gap record does not carry.
+    assert "Traceback" in captured
+    assert "_session" in captured
+    assert "unexpected ValueError" in client.gaps[0]["cause"]
+
+
+def test_the_same_fault_repeating_escalates_the_log_level(tmp_path: Any) -> None:
+    """A permanent fault wears the costume of a transient one: the backoff absorbs it,
+    the stream keeps reconnecting, and the only evidence is a pile of identically-caused
+    gaps in an archive nobody is reading at the time."""
+    log_path = configure_logging(log_dir=tmp_path / "logs", level="DEBUG")
+    try:
+        client = KrakenWebSocketClient(
+            clock=SteppingClock(step_s=1.0),
+            pairs=["BTC/USD"],
+            connect=lambda *a, **k: None,
+            jitter=lambda: 0.0,
+            backoff_initial_s=0.001,
+            backoff_max_s=0.001,
+        )
+        client._connect = FakeConnect(
+            [
+                *[
+                    FakeSocket([], ValueError("the same defect every time"), client)
+                    for _ in range(REPEAT_ESCALATION)
+                ],
+                FakeSocket([], None, client),
+            ]
+        )
+        asyncio.run(client._run())
+        logging.getLogger().handlers[0].flush()
+        levels = [
+            json.loads(line)["level"]
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and "stream_unexpected_error" in line
+        ]
+    finally:
+        _release_logging()
+
+    assert levels[: REPEAT_ESCALATION - 1] == ["error"] * (REPEAT_ESCALATION - 1)
+    assert levels[REPEAT_ESCALATION - 1] == "critical"
+
+
+def test_an_ordinary_disconnect_does_not_log_a_traceback(tmp_path: Any) -> None:
+    """A stack for "the network went away" is noise, and noise trains a reader to skip
+    the ones that matter."""
+    log_path = configure_logging(log_dir=tmp_path / "logs", level="DEBUG")
+    try:
+        client = KrakenWebSocketClient(
+            clock=SteppingClock(step_s=1.0),
+            pairs=["BTC/USD"],
+            connect=lambda *a, **k: None,
+            jitter=lambda: 0.0,
+            backoff_initial_s=0.001,
+            backoff_max_s=0.001,
+        )
+        client._connect = FakeConnect(
+            [FakeSocket([], OSError("connection reset"), client), FakeSocket([], None, client)]
+        )
+        asyncio.run(client._run())
+        logging.getLogger().handlers[0].flush()
+        captured = log_path.read_text(encoding="utf-8")
+    finally:
+        _release_logging()
+
+    assert "stream_unexpected_error" not in captured
+    assert "connection reset" in client.gaps[0]["cause"]
+
+
+def _release_logging() -> None:
+    logging.shutdown()
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        handler.close()
+    structlog.reset_defaults()

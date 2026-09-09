@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import copy
 import gc
 import importlib
 import importlib.util
@@ -501,6 +502,15 @@ def _harness_doubles() -> tuple[Any, Outcome | None]:
 
 
 def check_orchestrator_empty_registry(ctx: VerifyContext) -> Outcome:
+    """A tick over an **empty** registry completes cleanly and blocks nothing.
+
+    `bootstrap` is read only for the three chain symbols - their presence and their
+    shape are the registry contract, and their absence is what makes this criterion
+    report PENDING before spec 03 lands. The tick itself runs over chains this
+    function constructs empty, so the criterion tests what its name says in every
+    phase from 0 to 8 rather than only in the phase where nothing happens to be
+    registered.
+    """
     with root_import_path(ctx.root):
         bootstrap, problem = try_import("acsoe.bootstrap")
         if bootstrap is None:
@@ -539,11 +549,29 @@ def check_orchestrator_empty_registry(ctx: VerifyContext) -> Outcome:
                 config=doubles.config,
                 clock=doubles.clock,
                 clients=doubles.clients,
-                chains=chains_cls(
-                    guard=chains["GUARD_CHAIN"],
-                    opportunity=chains["OPPORTUNITY_CHAIN"],
-                    manage=chains["MANAGE_CHAIN"],
-                ),
+                # **Explicitly empty, never `bootstrap`'s chains.** The criterion's
+                # claim is that an empty registry is valid and a tick over one
+                # completes cleanly - which is what stops a future orchestrator
+                # quietly requiring at least one engine - and the two assertions
+                # below are only true of an *empty* registry. Reading the live
+                # chains made both statements coincide while nothing was registered
+                # and diverge the moment something was: A rehearsed engines 1 to 4
+                # against the fake client and the guard chain blocks every tick with
+                # `no_market_data`, which is invariant 3 working correctly, and it
+                # would have turned this closed Phase 0 criterion red for nobody's
+                # defect. Same shape as the fabricated contract that agreed with a
+                # mistake in `_guard_context`: the criterion was held to something
+                # that happened to agree with it today.
+                #
+                # Nothing is lost. `is_gate_matches_registry` asserts the live
+                # registry against the table in `engine-contracts.md`, and
+                # `console_shows_live_rows` exercises the real chain end to end.
+                # Reading the registry here was conflating two questions.
+                #
+                # Keyword arguments rather than `chains_cls()`: the real `Chains`
+                # defaults every field to `()`, and a fabricated one in a test tree
+                # need not.
+                chains=chains_cls(guard=(), opportunity=(), manage=()),
             )
             state = orchestrator.tick()
         finally:
@@ -570,11 +598,13 @@ def check_orchestrator_empty_registry(ctx: VerifyContext) -> Outcome:
             return failed("an empty registry set trading_blocked_by")
 
         return passed(
-            "one tick completed against "
-            + str(registered)
-            + " registered engines; empty chains are valid, "
-            'state["system"]["mode"]='
+            "one tick completed over an explicitly empty registry; empty chains are "
+            'valid, state["system"]["mode"]='
             + repr(system["mode"])
+            + " (acsoe.bootstrap holds "
+            + str(registered)
+            + " registered engines, which this criterion deliberately does not tick over "
+            "- is_gate_matches_registry and console_shows_live_rows judge those)"
         )
 
 
@@ -3311,6 +3341,30 @@ DATA_GUARD_CONTRACT = (
 )
 
 
+def _guard_state(contracts_mod: ModuleType, scenarios: Mapping[str, Any], key: str) -> Any:
+    """One scenario's `state`, as a copy nothing else shares.
+
+    `BAD_DATA_SCENARIOS` is a module-level mapping of mappings, so `dict(...)` copies
+    the outer dict and leaves every nested region - `state["market_sensor"]`,
+    `state["exchange"]` - pointing at the *same object* as the fixture. Nothing here
+    mutates one today. A found it the hard way on his own side, where a test set a
+    nested key and quietly changed the fixture for every test after it, and the
+    failure surfaced somewhere unrelated.
+
+    An engine is also entitled to publish into `state` under its own name, which is
+    how engines communicate at all, so "nothing mutates it" is a property of today's
+    engine 4 rather than of the contract.
+
+    A's `bad_data_state(name)` returns a fresh deep copy and is preferred when it is
+    there; `copy.deepcopy` is the fallback, so this criterion keeps working against
+    a `contracts.py` that only exposes the mapping.
+    """
+    builder = getattr(contracts_mod, "bad_data_state", None)
+    if callable(builder):
+        return builder(key)
+    return copy.deepcopy(scenarios[key])
+
+
 def _engine_named(module: ModuleType, name: str) -> Any:
     """The `BaseEngine` subclass in `module` whose `name` is `name`."""
     for value in vars(module).values():
@@ -3378,7 +3432,7 @@ def check_data_guard_blocks_bad_data(ctx: VerifyContext) -> Outcome:
 
             reasons: dict[str, str] = {}
             for key in GUARD_BLOCK_SCENARIOS:
-                state = dict(scenarios[key])
+                state = _guard_state(contracts_mod, scenarios, key)
                 try:
                     result = engine.process(context, state)
                 except KeyError as exc:
@@ -3396,7 +3450,9 @@ def check_data_guard_blocks_bad_data(ctx: VerifyContext) -> Outcome:
                     return failed(f"the {key} block carries no reason for the operator")
                 reasons[key] = reason.strip()
 
-            clean = engine.process(context, dict(scenarios[GUARD_CLEAN_SCENARIO]))
+            clean = engine.process(
+                context, _guard_state(contracts_mod, scenarios, GUARD_CLEAN_SCENARIO)
+            )
             if getattr(clean, "blocks_trading", False):
                 return failed(
                     "clean data blocked with reason "

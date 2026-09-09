@@ -296,13 +296,66 @@ Two other things worth carrying forward:
 
 ## Blocked On
 
-- **Spec 27's fixture: wall-clock time.** The span reaches 24 hours at about
-  2026-09-09T16:01Z provided `scripts/record.py` keeps running. Nothing in code can
-  shorten it, and `scripts/recording_report.py` refuses to write a short digest.
+- **Spec 27's fixture: a clean 24-hour recording, running now.** Operator ruling
+  2026-09-09: do **not** deposit on the old archive. It was 49% recorded and contained a
+  disk outage we caused ourselves, which is contaminated evidence for the phase whose
+  subject is the data spine.
+
+  ```
+  clean run session start : 2026-09-09T14:15:29.997349Z
+  24 hours complete at    : 2026-09-10T14:15:30Z
+  disk when started       : 165G free, 83% used
+  ```
+
+  **The next session runs one command** once that moment has passed:
+
+  ```
+  .venv/Scripts/python.exe scripts/recording_report.py --write
+  .venv/Scripts/python.exe scripts/verify.py --phase 2
+  ```
+
+  `recording_report.py` **refuses to write below 24 hours** and prints the numbers
+  instead, so it cannot be run too early by accident. Check first that exactly one
+  recorder is alive — and note that Windows lists it as a **parent and a child with
+  identical command lines**, which is one recorder, not two. That confusion cost an hour
+  today; see the correction entry in the build log.
+
+  If the recorder died in the meantime, the span is broken and the 24 hours restarts.
+  `python scripts/recording_report.py` with no `--write` prints every gap and its cause,
+  which is how to tell.
 - **Spec 29's criterion: the operator's `data_guard.max_data_age_s`.** PENDING, not
   FAIL, and correctly so.
-- **`bootstrap.py` registration for engines 1 to 4:** batched and sent to the lead
-  after the four survived two real orchestrator ticks against the fake client.
+- **Nothing else.** `bootstrap.py` registration **landed**: the lead registered engines
+  1 to 4 after C repointed `orchestrator_empty_registry`, and `console_shows_live_rows`
+  is now PASS - "a tick of exchange, market_data_recorder, market_sensor, data_guard
+  wrote rows under the daemon's own run_id". The rehearsal held; registration was a
+  formality.
+
+  It did take two of my own tests with it, both decayed the same way C's criterion was:
+  `test_an_empty_registry_produces_a_valid_tick` and
+  `test_the_offline_chain_is_not_in_bootstrap` asserted things true only while the
+  registry was empty. Both repointed. Detail in the build log.
+
+## Known gap I own but have not closed
+
+- **`cli/engine.py` still passes a `Clients()` of three `None`s**, so `acsoe engine` now
+  blocks every tick: engine 1 raises on `None.asset_pairs` and engine 4 on its missing
+  config key, both converted to `ERROR`. The tick **completes** and records both, which
+  is contract rule 7 working - the daemon does nothing useful rather than dying.
+
+  Blocked on `market_data.pairs` and `market_data.book_depth`, which do not exist. REST
+  and the recorder can be wired without them; the WebSocket stream cannot subscribe
+  without a pair list, and I will not invent one. Two ways forward, and the lead has
+  both: wire what is possible and leave the stream unstarted (engines 2 and 3 then
+  report `stream_available: false` and `data_guard` blocks, which is fail-closed), or
+  have `acsoe engine` refuse to start without the keys, which matches how the config
+  layer treats every other missing value. I lean to the second.
+
+  **The current behaviour is asserted rather than left implicit** -
+  `test_a_tick_over_the_real_registry_records_errors_rather_than_raising` pins it, so
+  wiring the real clients turns that test red and forces a deliberate rewrite. No
+  criterion depends on it: every Phase 2 criterion runs the orchestrator against C's
+  fake client, not through the CLI.
 
 ## Open Questions
 

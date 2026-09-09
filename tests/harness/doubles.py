@@ -236,7 +236,7 @@ class VerifyDoubles:
             # Disarm the finalizer before removing the tree ourselves: its cleanup
             # is the thing that raised, and it runs at collection with no caller.
             with suppress(Exception):
-                self._tmp._finalizer.detach()  # noqa: SLF001 - no public disarm exists
+                self._tmp._finalizer.detach()
             shutil.rmtree(path, ignore_errors=True)
             self._tmp = None
 

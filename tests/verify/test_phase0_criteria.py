@@ -994,3 +994,116 @@ def test_no_phase_zero_criterion_reads_data_models_or_logs(repo_root: Path) -> N
             continue
         for forbidden in ('"data"', "'data'", '"models"', '"logs"'):
             assert forbidden not in stripped, line
+
+
+# --------------------------------------------------------------------------- #
+# orchestrator_empty_registry really does tick over an empty registry
+# --------------------------------------------------------------------------- #
+
+#: An orchestrator that blocks whenever any engine is in the guard chain.
+#:
+#: Not contrived. A rehearsed engines 1 to 4 against the fake Kraken client, which
+#: is REST-only, so `market_sensor` publishes no quotes and `data_guard` blocks
+#: every tick with `no_market_data` - invariant 3 working exactly as intended. This
+#: fabrication reproduces that outcome in one line.
+BLOCKING_ORCHESTRATOR = """
+from typing import Any
+
+
+class Orchestrator:
+    def __init__(self, *, config: Any, clock: Any, clients: Any, chains: Any) -> None:
+        self.chains = chains
+
+    def tick(self) -> dict[str, Any]:
+        state: dict[str, Any] = {
+            "system": {"mode": "idle", "close_intent": False},
+            "cycle_id": 1,
+            "guard_blockers": [],
+        }
+        for engine in self.chains.guard:
+            state["guard_blockers"].append(engine.name)
+            state.setdefault("trading_blocked_by", engine.name)
+        return state
+"""
+
+ONE_GUARD_ENGINE = """
+class _Engine:
+    name = "data_guard"
+    number = 4
+    is_gate = True
+
+
+GUARD_CHAIN: tuple[object, ...] = (_Engine(),)
+OPPORTUNITY_CHAIN: tuple[object, ...] = ()
+MANAGE_CHAIN: tuple[object, ...] = ()
+"""
+
+
+def test_a_registered_blocking_gate_does_not_fail_the_empty_registry_criterion(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """The criterion is named for an empty registry and must test one.
+
+    It used to build its `Chains` from the live `acsoe.bootstrap` and then assert
+    that no guard blocked and that `trading_blocked_by` was absent. Both assertions
+    are true only of an *empty* registry, and they held only because Phase 0
+    registers nothing. Registering engines 1 to 4 - which block every tick against
+    the REST-only fake client, correctly - would have turned a closed, green Phase 0
+    criterion red for nobody's defect.
+
+    Here the registry holds a gate that blocks and the orchestrator honours it. The
+    criterion must still PASS, because the claim it makes is about an empty chain,
+    and the assertions are unchanged: they run against chains the criterion builds
+    empty itself.
+    """
+    fabricate_package(
+        tree_with_harness,
+        {
+            "acsoe.bootstrap": ONE_GUARD_ENGINE,
+            "acsoe.core.contracts": CHAINS_CONTRACT,
+            "acsoe.core.orchestrator": BLOCKING_ORCHESTRATOR,
+        },
+    )
+    outcome = run(verify_module, "orchestrator_empty_registry", tree_with_harness)
+    assert outcome.result is verify_module.Result.PASS, outcome.message
+    assert "explicitly empty registry" in outcome.message
+    assert "1 registered engines" in outcome.message
+
+
+def test_the_blocking_registry_really_would_have_failed_the_old_criterion(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """The test above has to be able to fail, or it proves nothing about the change.
+
+    Same fabrication, driven through the orchestrator directly with the *live*
+    chains, which is what the criterion used to do. The blockers it produces are
+    exactly what the two `failed(...)` branches refuse - so the fabrication is a
+    real reproduction of the regression rather than a shape that could never have
+    tripped it.
+    """
+    fabricate_package(
+        tree_with_harness,
+        {
+            "acsoe.bootstrap": ONE_GUARD_ENGINE,
+            "acsoe.core.contracts": CHAINS_CONTRACT,
+            "acsoe.core.orchestrator": BLOCKING_ORCHESTRATOR,
+        },
+    )
+    with verify_module.root_import_path(tree_with_harness):
+        import acsoe.bootstrap as bootstrap
+        from acsoe.core.contracts import Chains
+        from acsoe.core.orchestrator import Orchestrator
+
+        state = Orchestrator(
+            config=None,
+            clock=None,
+            clients=None,
+            chains=Chains(
+                guard=bootstrap.GUARD_CHAIN,
+                opportunity=bootstrap.OPPORTUNITY_CHAIN,
+                manage=bootstrap.MANAGE_CHAIN,
+            ),
+        ).tick()
+
+    assert state["guard_blockers"] == ["data_guard"]
+    assert "trading_blocked_by" in state

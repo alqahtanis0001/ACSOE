@@ -57,6 +57,7 @@ from acsoe.cli import main as cli_main
 from acsoe.cli import research as research_cmd
 from acsoe.cli.console import build_app
 from acsoe.cli.engine import Clients, build_orchestrator, run_loop
+from acsoe.core.contracts import Chains
 from acsoe.core.orchestrator import Orchestrator
 from acsoe.platform.clock import FixedClock, SystemClock
 from acsoe.platform.config import Config, load_config
@@ -307,14 +308,68 @@ def test_the_loop_runs_the_requested_number_of_ticks(startable_config: Path) -> 
 
 
 def test_an_empty_registry_produces_a_valid_tick(startable_config: Path) -> None:
-    """An empty chain is a valid chain. The tick still mints a cycle and a state."""
-    orchestrator = build_orchestrator(load(startable_config), FixedClock(FIXED_NOW), Clients())
+    """An empty chain is a valid chain. The tick still mints a cycle and a state.
+
+    The registry is constructed **empty, here**, rather than taken from `bootstrap`.
+    Until engines 1 to 4 were registered those were the same thing, and this test
+    asserted "no guard blocked" while its name claimed "an empty registry ticks" - two
+    different claims that happened to coincide. The moment anything was registered the
+    assertion decayed into a statement about whatever `bootstrap` currently holds, which
+    is not a property of an empty registry at all. Same defect C found in
+    `orchestrator_empty_registry`, in my file, found the same way: by it going red for a
+    reason that had nothing to do with it.
+    """
+    orchestrator = Orchestrator(
+        config=load(startable_config),
+        clock=FixedClock(FIXED_NOW),
+        clients=Clients(),
+        chains=Chains(),
+    )
     state = orchestrator.tick()
     assert state["cycle_id"] == 1
     assert state["guard_blockers"] == []
     assert state["system"]["mode"] == "idle"
     assert state["system"]["close_intent"] is False
     assert "trading_blocked_by" not in state
+
+
+def test_the_registered_guard_chain_is_the_four_phase_2_engines(
+    startable_config: Path,
+) -> None:
+    """What `bootstrap` actually holds, asserted where it can be read as that claim."""
+    from acsoe import bootstrap
+
+    assert [engine.name for engine in bootstrap.build_chains().guard] == [
+        "exchange",
+        "market_data_recorder",
+        "market_sensor",
+        "data_guard",
+    ]
+
+
+def test_a_tick_over_the_real_registry_records_errors_rather_than_raising(
+    startable_config: Path,
+) -> None:
+    """`cli/engine.py` still passes a `Clients()` of three `None`s, so every engine that
+    reaches for a client fails - and the tick **completes anyway**, recording each
+    failure as an `ERROR` blocker.
+
+    That is contract rule 7 working, and it is the honest current state rather than
+    something to hide: the CLI's client wiring is outstanding, it needs a config key
+    that does not exist yet, and until it lands `acsoe engine` blocks every tick instead
+    of trading on nothing. Asserted rather than left implicit, so that wiring the real
+    clients turns this test red and forces it to be rewritten deliberately.
+    """
+    orchestrator = build_orchestrator(load(startable_config), FixedClock(FIXED_NOW), Clients())
+    state = orchestrator.tick()
+
+    assert state["cycle_id"] == 1
+    blockers = {blocker["engine"]: blocker["status"] for blocker in state["guard_blockers"]}
+    assert blockers["exchange"] == "ERROR"
+    assert state["trading_blocked_by"] == "exchange"
+    # Every guard engine still ran: the chain never breaks early.
+    for name in ("exchange", "market_data_recorder", "market_sensor", "data_guard"):
+        assert name in state, name
 
 
 def test_a_stop_request_is_answered_before_the_next_tick(startable_config: Path) -> None:
@@ -404,13 +459,33 @@ def test_build_offline_chain_is_importable_and_empty_in_phase_0() -> None:
 
 
 def test_the_offline_chain_is_not_in_bootstrap() -> None:
-    """Architecture invariant 5. `bootstrap.py` builds the three runtime chains only."""
+    """Architecture invariant 5. `bootstrap.py` builds the three runtime chains only.
+
+    The three `== ()` assertions this used to carry are gone. They were scaffolding that
+    read as part of the claim and were not: "the chains are empty" is a fact about
+    Phase 0, while "there is no offline chain here" is the invariant, and only the second
+    survives an engine being registered. Keeping them would have made the test go red for
+    the right reason at the wrong assertion.
+
+    In their place, the invariant asserted on the source: `bootstrap` must not import
+    from `research/`, which is where engines 20 and 23 live. `cli/research.py` assembles
+    `OFFLINE_CHAIN`, and that separation is what keeps the live loop path clear of
+    research code.
+    """
+    import ast
+
     from acsoe import bootstrap
 
     assert not hasattr(bootstrap, "OFFLINE_CHAIN")
-    assert bootstrap.build_chains().guard == ()
-    assert bootstrap.build_chains().opportunity == ()
-    assert bootstrap.build_chains().manage == ()
+
+    tree = ast.parse(Path(str(bootstrap.__file__)).read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+    assert not [name for name in imported if name.startswith("acsoe.research")]
 
 
 # --------------------------------------------------------------------------

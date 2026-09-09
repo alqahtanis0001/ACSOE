@@ -656,3 +656,199 @@ shape a real socket has on a quiet market, and the one that would hang shutdown 
 `stop()` did not reach the loop thread through `call_soon_threadsafe`. The thread
 lifecycle was the only part of this client with no coverage at all, which is a poor place
 for that to be true.
+
+### The recorder recorded its own death, and the criterion could not see the hole
+
+**Agent:** A · **Task:** spec 27 · **Date:** 2026-09-09
+
+**What happened.** A dry run of `scripts/recording_report.py` on the real archive — ten
+seconds over 5.3 million lines — before the span had reached 24 hours, so that the final
+step would hold no surprises. It held one:
+
+    span 2026-09-08T16:01:22Z -> 2026-09-09T14:11:09Z  (22.16h)
+    segments 9  gaps 8  lines 5315829
+    recorded 10.93h  missing 11.24h
+
+**Nearly half the span is missing**, across an overnight hole of ten hours when nothing
+was running, four silences of 5 to 23 minutes, and two recorded disconnects.
+
+**The row that matters most:**
+
+    09-09 13:06:37 -> 13:06:39  disconnect: OSError: [Errno 28] No space left on device
+
+**The recorder recorded its own death.** That is the disk-full incident timestamped to
+the second, from a source entirely independent of the process that reported it, and it
+corroborates B's account including the restarts either side of it. It is also the
+strongest demonstration in the phase that the gap-accounting design earns its keep: the
+one failure mode the whole apparatus exists to make impossible is a break that goes
+unrecorded, and the apparatus caught the break that killed it.
+
+**Why it was escalated rather than deposited.** The criterion would have **passed** on
+this archive at 16:01Z. `check_recording_span_continuous` requires a span of 24 hours,
+an exact tiling, and a non-empty cause on every gap — and requires **no minimum recorded
+fraction at all**. It measures start-to-end elapsed time, so 24 hours with zero missing
+and 24 hours with eleven hours missing tile identically, carry causes identically, and
+pass identically. The phase row says "a continuous span of at least 24 hours"; the
+criterion enforces the accounting rigorously and the word *continuous* not at all.
+
+That is the fifth instance this phase of the same pattern — **a check whose output looks
+like the claim while the claim is not true** — and the first that lives in a criterion
+rather than in an implementation.
+
+**Fix, as far as it is mine.** `build_report` now reports `recorded_fraction` beside
+`recorded_seconds` and `missing_seconds`, so the weakness is visible **in the artefact**
+rather than only to a reader who divides one by the other in their head. It is
+deliberately **not** a threshold: a minimum recorded fraction changes what the gate
+requires, and that is the operator's decision, not an implementer's and not the lead's.
+
+**Consequence.** Nothing was deposited. Depositing is the irreversible half, the archive
+is contaminated twice over — the duplicate-recorder boundary at 13:19:34 and a
+self-inflicted disk outage — and it is contaminated evidence for the phase whose entire
+subject is the data spine. The lead's recommendation to the operator is a clean
+single-recorder 24-hour run; the cost is that Phase 2 cannot close today, and that is why
+the operator decides it.
+
+### Correction: there were never two recorders. I was wrong, and so was the correction to me
+
+**Agent:** A · **Task:** spec 27/28 · **Date:** 2026-09-09
+
+Per rule 6 of `script-rules.md` this corrects two earlier entries with a new one rather
+than editing them. The entries "Two recorders were running at once, and the duplication
+is not uniform" and the de-duplication decision in spec 28 both rest on a premise that is
+false.
+
+**What I claimed.** Two `scripts/record.py` processes (PIDs 6968 and 46512) were running
+concurrently and appending to the same daily file, so every frame after their start time
+appeared in the archive twice. The lead then refined it: both were created at the same
+second, so the duplication began at that moment rather than running all day.
+
+**What is actually true.** They were **one recorder**. Windows `Get-CimInstance` lists a
+parent and a child with identical command lines, because the venv's `python.exe` on this
+machine re-executes the interpreter:
+
+    ProcessId : 5140   ParentProcessId : 29348   ... python.exe scripts/record.py
+    ProcessId : 2144   ParentProcessId : 5140    ... python.exe scripts/record.py
+
+The second is the *child of the first*. Starting a single clean recorder just now produced
+exactly the same pair, which is what made it obvious.
+
+**And the timestamps compounded it.** Their creation time read `9/9/2026 1:19:34 PM`,
+which is **local** — this machine is on BST, UTC+1 — so it is `12:19:34Z`, not `13:19:34Z`.
+The digest shows an unrecorded silence from `11:58:23Z` to `12:19:20Z`: that pair *is*
+the restart after that outage, not a second recorder joining a first.
+
+**How it was settled.** Not by argument. `scripts/ohlc_fixture.py` counts byte-identical
+duplicate frames, so it was run over a window either side of the supposed boundary:
+
+    2026-09-09T12:30:00Z, 2 bars -> frame duplicates dropped: 0
+    2026-09-09T05:00:00Z, 2 bars -> frame duplicates dropped: 0
+
+Zero on both sides. There is no duplication anywhere in the archive.
+
+**What survives, and what does not.** The **de-duplication is still correct code** and
+stays: frame-level rather than trade-level is the right granularity whether or not
+duplicates ever occur, and the reasoning about why trade-level would silently delete real
+volume is sound and worth keeping. What does not survive is the *claim about this
+archive*, and the inference in the spec 28 entry that a naive candle build over it would
+be doubled after 13:19. It would not. It never was.
+
+**The lesson, which is the phase's own lesson pointing at me.** I inferred a data
+corruption from a process listing, told the lead, and the lead reasoned further from my
+inference rather than back to the evidence. Two people then held a wrong belief that a
+thirty-second empirical check would have settled — and I already had the tool that settles
+it, because I had written it that morning. **The evidence pointed somewhere other than the
+cause, again, and this time I was the one pointing.** Check the artefact, not the
+process table.
+
+### The clean 24-hour run: what was done and when it finishes
+
+**Agent:** A · **Task:** spec 27 · **Date:** 2026-09-09
+
+**Why.** The operator ruled against depositing on the existing archive. It is 49%
+recorded, and it contains an outage this project caused itself — for the phase whose
+entire subject is the data spine, that is contaminated evidence.
+
+**What was done.** Both listed recorder processes were stopped and exactly one started.
+
+`taskkill` without `/F` **refused** — "This process can only be terminated forcefully" —
+so it was a hard kill, and that is worth stating plainly: `scripts/record.py` has **no
+working graceful shutdown path on Windows.** It installs SIGINT/SIGTERM handlers through
+`loop.add_signal_handler`, which raises `NotImplementedError` on the Proactor loop and is
+swallowed by a `contextlib.suppress`, so the handler is never attached and the
+`_write_session("stop")` marker in its `finally` never runs. The archive is append-only
+and every line is flushed on write, so at most a partial final line was lost — a marked
+defect, not lost data — but the absence of a `stop` marker at a kill is a property of the
+recorder nobody had written down.
+
+**The numbers, for whoever picks this up:**
+
+    clean run session start : 2026-09-09T14:15:29.997349Z
+    24 hours complete at    : 2026-09-10T14:15:30Z
+    disk before starting    : 165G free, 83% used
+    handover gap            : under the 60s silence threshold, so the digest shows none
+
+Then: `python scripts/recording_report.py --write`, and re-run `--phase 2`. The script
+refuses to write below 24 hours, so it cannot be run too early by accident.
+
+### Two more decayed assertions, in my file, of the family C had just named
+
+**Agent:** A · **Task:** specs 26-29 · **Date:** 2026-09-09
+
+**What happened.** The lead registered engines 1 to 4 in `bootstrap.py` and two tests in
+`tests/cli/test_entrypoints.py` went red — mine, and neither for a reason connected to
+what its name claimed.
+
+**Why.** Both asserted something true only while the registry was empty.
+
+`test_an_empty_registry_produces_a_valid_tick` built its orchestrator with
+`build_orchestrator(...)`, which reads `bootstrap`, and then asserted
+`state["guard_blockers"] == []`. Those are two different claims — "an empty registry
+ticks cleanly" and "nothing blocked" — that coincided only while nothing was registered.
+
+`test_the_offline_chain_is_not_in_bootstrap` asserted the real invariant, that there is
+no `OFFLINE_CHAIN` in `bootstrap`, **and then three `== ()` assertions on the chains.**
+Those were scaffolding that read as part of the claim. "The chains are empty" is a fact
+about Phase 0; "there is no offline chain here" is architecture invariant 5. Only the
+second survives an engine being registered.
+
+**Fix.** The first constructs `Chains()` explicitly and keeps every strong assertion. The
+second drops the emptiness assertions and asserts the invariant on the source instead:
+`bootstrap` imports nothing from `acsoe.research`. Two new tests were added in their
+place — one naming what `bootstrap` actually holds, and one asserting the current
+behaviour of a tick over the real registry with the CLI's placeholder clients.
+
+**Consequence, and it is the point.** C had found and named this exact defect in
+`orchestrator_empty_registry` hours earlier — a criterion whose body was held to
+"whatever `bootstrap` currently holds" while its name said "empty registry". **Neither of
+us went looking for a second instance, and there were two, in a file I had already
+touched twice that day.** A named defect is not a fixed defect until somebody greps for
+its siblings.
+
+The generalisation worth carrying: **an assertion is decayed if it would still pass when
+the thing it names is false.** `guard_blockers == []` says nothing about an empty
+registry; it says something about whichever registry it was handed. C's rule covers
+fabricating a contract a criterion is held to; this is its sibling — do not assert a
+coincidence and name it a property.
+
+### `acsoe engine` now blocks every tick, and that is written down rather than hidden
+
+**Agent:** A · **Task:** spec 09 follow-on · **Date:** 2026-09-09
+
+**What happened.** `cli/engine.py` has passed a `Clients()` of three `None`s since Phase
+0, which was correct when no engine was registered. With engines 1 to 4 registered, every
+tick now produces `AttributeError: 'NoneType' object has no attribute 'asset_pairs'` from
+engine 1 and a `ConfigKeyError` from engine 4, both converted to `ERROR` with
+`blocks_trading=True`.
+
+**Why it is not a defect in the engines.** The tick **completes** and records both
+failures, which is contract rule 7 working exactly as specified. Nothing raises out of the
+loop, the manage chain would still run, and the daemon does not die. It simply does
+nothing useful, which is the honest fail-closed outcome for a daemon wired to no clients.
+
+**Fix.** Not yet — it needs `market_data.pairs` and `market_data.book_depth`, which do
+not exist, and the WebSocket stream cannot subscribe without a pair list I refuse to
+invent. What *is* done is that the state is asserted:
+`test_a_tick_over_the_real_registry_records_errors_rather_than_raising` pins the current
+behaviour, so **wiring the real clients turns that test red** and forces it to be
+rewritten deliberately rather than quietly passing against a changed system. A test that
+documents a known gap is worth more than a comment, because a comment does not fail.

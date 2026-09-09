@@ -211,3 +211,32 @@ def test_an_empty_recording_is_an_error_rather_than_an_empty_report(tmp_path: Pa
     write(tmp_path / "kraken_v2_2026-03-01.jsonl", [])
     with pytest.raises(ValueError, match="no usable line"):
         build_report(sorted(tmp_path.glob("*.jsonl")))
+
+
+def test_the_report_says_what_fraction_of_the_span_was_actually_recorded(
+    tmp_path: Path,
+) -> None:
+    """The span alone does not say it, and that is the point.
+
+    A 24-hour span with eleven hours of accounted holes and one with none tile
+    identically and pass the criterion identically — it measures start-to-end elapsed
+    time, so the word *continuous* in the phase row does no work. The fraction puts
+    that in the artefact rather than leaving it to a reader who divides in their head.
+    """
+    lines = [*steady(60), *steady(60, origin=START + timedelta(hours=3))]
+    write(tmp_path / "kraken_v2_2026-03-01.jsonl", lines)
+    report = build_report(sorted(tmp_path.glob("*.jsonl")))
+
+    fraction = report["totals"]["recorded_fraction"]
+    assert 0.0 < fraction < 1.0
+    assert fraction == pytest.approx(
+        report["totals"]["recorded_seconds"] / report["span"]["seconds"]
+    )
+    # Two hours recorded inside a four-hour span.
+    assert fraction == pytest.approx(0.5, abs=0.02)
+
+
+def test_an_unbroken_recording_reports_a_fraction_of_one(tmp_path: Path) -> None:
+    write(tmp_path / "kraken_v2_2026-03-01.jsonl", steady(30))
+    report = build_report(sorted(tmp_path.glob("*.jsonl")))
+    assert report["totals"]["recorded_fraction"] == pytest.approx(1.0)

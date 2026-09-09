@@ -6,6 +6,73 @@ Minimum headings per entry: What happened, Why, Fix.
 
 ## Entries
 
+### Registration, and the sixth instance of the phase's pattern
+
+**Agent:** Lead · **Date:** 2026-09-09
+
+**What happened.** Engines 1 to 4 were registered in `bootstrap.py` in registry order, held back
+until A had driven all four through two real orchestrator ticks in
+`tests/engines/test_guard_chain_rehearsal.py`. `is_gate_matches_registry` went from a vacuous
+"0 engines registered" to "4 engines registered; 0 mismatches (1 gates)", and
+`console_shows_live_rows` went PENDING to PASS.
+
+**Why it was held.** A read `check_orchestrator_empty_registry` before asking for registration and
+found it reads the **live** `bootstrap.GUARD_CHAIN` while asserting `state["guard_blockers"] == []`
+— so registering would have taken a **closed, green Phase 0** red. A's rehearsal is what supplied
+the evidence: against the REST-only fake client the guard chain blocks every tick with
+`no_market_data`, correctly, because `market_sensor` publishes no quotes.
+
+**Fix.** C rebuilt the criterion to construct its own empty `Chains()`, keeping both `failed(...)`
+branches untouched, and added a test driving the same fabrication through the *live* chains to
+prove the blockers those branches refuse actually appear — without which the first test could pass
+against a shape that could never have tripped the old code.
+
+**Consequence, and it is the sixth instance.** Registration then broke three more tests holding the
+same coincidence: two in A's `tests/cli/` and one in the lead's `tests/core/`. All three asserted
+`guard_blockers == []` while their names claimed something about an *empty registry*. A's
+generalisation is the form worth keeping: **an assertion is decayed if it would still pass when the
+thing it names is false.** `guard_blockers == []` says nothing about an empty registry; it says
+something about whichever registry it was handed.
+
+The sibling rule — *fabricate the subject a criterion judges; never fabricate a contract it is held
+to* — is already in `ai-workflow-rules.md`. This one belongs beside it and is recorded here pending
+that edit.
+
+**Worth stating about the phase as a whole:** six instances of *a check whose output looks like the
+claim while the claim is not true*, and **not one was caught by running the suite.** Four were
+caught by an agent reading source before building against it, one by making a green test go red on
+purpose, one by dry-running an artefact before depositing it. Those appear to be the only three
+techniques that work on this class of defect, and all three are cheap.
+
+### Correction: there were never two recorders, and the lead amplified the error
+
+**Agent:** Lead · **Date:** 2026-09-09
+
+**What happened.** A reported two `record.py` processes appending to one archive. The lead
+"corrected" A's timeline by checking process creation times and told both A and the operator that
+the archive was single-recorded before 13:19:34Z and doubled after — which shaped a spec 28
+instruction about de-duplicating across a boundary, and a warning to the operator that a mid-file
+step would look like a market event.
+
+**Why it was wrong, twice over.** Windows lists a **parent and a child with identical command
+lines**, because this venv's `python.exe` re-executes the interpreter; starting one recorder
+produces exactly that pair. And `1:19:34 PM` was **local** on a BST machine — `12:19:34Z`, not
+`13:19:34Z` — which matches a restart after a recorded outage from `11:58:23Z` to `12:19:20Z`.
+
+**How it was settled.** Empirically, by A, running its own duplicate-frame counter either side of
+the supposed boundary: **zero duplicates at 12:30Z and zero at 05:00Z.** There is no duplication
+anywhere in the archive.
+
+**Fix.** The frame-level de-duplication stays — it is correct whether or not duplicates occur, and
+the trade-level version A rejected would have deleted real volume. What does not survive is the
+claim about *this* archive.
+
+**Consequence.** The lead reasoned forward from a teammate's inference rather than back to the
+evidence, and then relayed the result to the operator with more confidence than the underlying
+observation supported. A already had the tool that settled it, written that same morning. The
+phase's own lesson — *the evidence points somewhere other than the cause* — applied to the lead
+this time, and the check that resolved it took thirty seconds.
+
 ### Decision: Phase 2 waits a day rather than closing on a half-empty archive
 
 **Agent:** Lead · **Date:** 2026-09-09 · **Decided by:** the operator
@@ -35,6 +102,13 @@ floor.
 
 **Because.** The current archive carries the duplicate-recorder boundary from 13:19:34 *and* a
 self-inflicted disk outage at 13:06:37, in the phase whose entire subject is the data spine.
+
+> **Correction, same day, and left in place rather than edited out per rule 6:** the
+> duplicate-recorder boundary **did not exist**. See the entry above — a parent-and-child process
+> listing plus a local-versus-UTC timestamp, settled empirically at zero duplicate frames either
+> side. The decision stands on its other half: a 49%-recorded archive containing an outage we
+> caused ourselves is still the wrong evidence to close a data-spine phase on. But one of the two
+> reasons given here was false when it was given, and the operator decided partly on it.
 Closing on it would be the weak PASS this project has refused five times in one phase. The fourth
 option was rejected for a specific reason worth keeping: a floor set now would have to sit below
 today's 49% to let this artefact through, which sets the bar at the number we happened to get

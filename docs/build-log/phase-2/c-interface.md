@@ -359,3 +359,96 @@ criterion could never go red for a real defect.
 comment there, because it reads like a contradiction and is not: the historical loader must
 never invent a missing bar, and the gate must never trade on a series with a hole in it. One is
 about labelling, the other about acting, and fail-closed points the opposite way in each.
+
+### A regression test that passed against the very defect it was written to catch
+
+**Agent:** C · **Task:** spec 33 follow-up (found by A) · **Date:** 2026-09-09
+
+**What happened.** A pointed out that `check_data_guard_blocks_bad_data` did
+`dict(scenarios[key])` on `BAD_DATA_SCENARIOS`, which is a mapping *of mappings*: the outer
+dict is copied and every nested region — `state["market_sensor"]`, `state["exchange"]` — stays
+the same object as the module-level fixture. A had already been bitten by it on his own side,
+where a test set a nested key and quietly changed the fixture for every test after it, with the
+failure surfacing somewhere unrelated. Nothing in today's engine 4 mutates the region, but
+engines publish into `state` by design — it is how they communicate at all — so "nothing mutates
+it" is a property of one engine on one day, not of the contract.
+
+**Fix.** `_guard_state` prefers A's `bad_data_state(name)` accessor, which returns a fresh deep
+copy, and falls back to `copy.deepcopy` so the criterion keeps working against a `contracts.py`
+that only exposes the mapping. One producer of a scenario rather than two.
+
+**The part worth the entry.** My first regression test ran the criterion twice and asserted the
+second run still PASSed. It passed — **and it passed with `_guard_state` deliberately reverted to
+the shallow copy**, which meant it was proving nothing. The reason is a property of
+`root_import_path` I had not thought about while writing the test: it drops and re-imports every
+`acsoe` module for each criterion, so a module-level fixture is rebuilt from source on every run
+and nothing a criterion writes into one can reach the next. **Cross-run contamination is already
+impossible.** The leak that is reachable is within a single run, to the *next scenario*.
+
+So the test was rewritten to fabricate that: a scenario module where `clean` and `missing_candle`
+name one `market_sensor` region — not a contrived shape, since the four scenarios differ by a
+flag each and a natural fixture builds them from a common base — and a guard that writes into
+whatever region it is handed. Under a shallow copy the clean case arrives carrying a mark the
+engine wrote while judging `missing_candle`, and the criterion reports a gate that blocks
+everything: a real verdict, and one that reads as a defect in the engine. `test_a_shallow_copy_
+really_would_have_leaked` monkeypatches `_guard_state` back to `dict(...)` and asserts exactly
+that FAIL, so the positive test can be shown to fail.
+
+Twice in one day now: a check that produced output that looked like checking while checking
+nothing. The first was a fabricated contract that agreed with the mistake; this one was a test
+whose mechanism was already prevented by something else in the file. **The cheap defence in both
+cases is the same — make the green test go red on purpose before believing it.**
+
+**Also.** A's fourth `data_guard` code, `no_market_data`, is in `REASON_PROSE`. It is
+deliberately not folded into `market_data_stale`: "older than the guard allows" is a false
+sentence when nothing has arrived, and it sends an operator after a lagging feed when the fault
+is an absent one. A slow socket and a stream that never connected have different causes and
+different fixes.
+
+### `orchestrator_empty_registry` did not test an empty registry
+
+**Agent:** C · **Task:** spec 33 follow-up (found by A, escalated by the lead) · **Date:** 2026-09-09
+
+**What happened.** The criterion built its `Chains` from the **live**
+`acsoe.bootstrap.GUARD_CHAIN` / `OPPORTUNITY_CHAIN` / `MANAGE_CHAIN`, ticked, and then asserted
+that no guard blocked and that `trading_blocked_by` was absent. Those two assertions are true
+only of an *empty* registry. Its name, its message and its whole premise say "empty registry";
+its body said "whatever `bootstrap` currently holds". The two coincided because Phase 0
+registers nothing, and they would have stopped coinciding the moment engines 1 to 4 were
+registered.
+
+A rehearsed it rather than assuming: with all four registered against the fake Kraken client —
+which is REST-only, so `market_sensor` publishes no quotes — the guard chain blocks every tick
+with `no_market_data`, which is invariant 3 working exactly as intended. **Registering the
+engines would have turned a closed, green Phase 0 criterion red for nobody's defect.**
+
+**Fix.** The tick runs over `chains_cls(guard=(), opportunity=(), manage=())` — constructed
+empty here, never read from `bootstrap`. The two `failed(...)` branches are untouched: the
+property they defend is that an empty chain is valid and a tick over one completes cleanly,
+which is what stops a future orchestrator quietly requiring at least one engine, and it is worth
+keeping permanently. `bootstrap` is still read for the three chain symbols, because their
+presence and shape are the registry contract and their absence is what makes this criterion
+report PENDING before spec 03 — but the tick no longer depends on what is in them. Keyword
+arguments rather than `chains_cls()`, because the real `Chains` defaults every field to `()` and
+a fabricated one in a test tree need not.
+
+Nothing is lost by not reading the registry here. `is_gate_matches_registry` asserts the live
+registry against the table in `engine-contracts.md` — I checked it for the mirror-image problem
+at the lead's request and it is sound: it iterates every registered engine and compares `is_gate`
+and `number` against the parsed table, so it does real work the moment the count stops being
+zero, and its documented vacuous pass prints the count so a `0` in a phase that should have
+registered engines is visible. `console_shows_live_rows` then exercises the real chain end to
+end. Reading the live registry in this criterion was conflating two questions.
+
+**Two tests, and the second is the point.** One registers a gate that blocks and asserts the
+criterion still PASSes. The other drives the same fabrication through the orchestrator with the
+*live* chains — what the criterion used to do — and asserts the blockers the two `failed(...)`
+branches refuse actually appear, so the fabrication is a real reproduction of the regression
+rather than a shape that could never have tripped it.
+
+**Third time today.** A fabricated contract that agreed with a mistake; a regression test whose
+mechanism was already prevented by module reloading; and now a criterion held to a registry that
+happened to agree with it. All three produced output that looked like checking while checking
+nothing, and none was caught by running the suite. Two were caught by A reading the source before
+building against it, and one by making a green test go red on purpose. Those are the two things
+that work.
