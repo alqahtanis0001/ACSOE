@@ -167,3 +167,117 @@ default. `sign_request` is one function, deterministic, and tested as such.
 a key, and it is recorded as the only open question in
 `context/progress/a-platform.md`. It blocks nothing: every Phase 2 criterion runs
 offline.
+
+### The recording digest could not be deposited: the archive is 21 hours old, not 24
+
+**Agent:** A · **Task:** spec 27 · **Date:** 2026-09-09
+
+**What happened.** Spec 27's committed evidence is
+`tests/fixtures/recording_report.json`, showing a continuous span of at least 24 hours
+with every break accounted for. The real archive does not yet contain 24 hours:
+
+    kraken_v2_2026-09-08.jsonl     2.5MB  2026-09-08T16:01:22Z -> 2026-09-08T16:02:17Z
+    kraken_v2_2026-09-09.jsonl  1575.0MB  2026-09-09T02:04:19Z -> 2026-09-09T13:25:41Z
+
+Total span **21h24m**, with a ~10-hour hole between 09-08T16:02 and 09-09T02:04 where
+no recorder was running at all. The span crosses 24h at about **2026-09-09T16:01Z**,
+provided `scripts/record.py` keeps running.
+
+**Why it matters that the report was not written anyway.** The digest built from this
+archive would be entirely *truthful* — the 10-hour hole appears as a gap with a cause,
+because the digest accounts for unrecorded silence as well as for explicit `gap`
+markers — and it would still **FAIL** `recording_span_continuous`, which requires 24
+hours. That is strictly worse than the PENDING the criterion reports today. PENDING
+means "the subject does not exist yet", which is true. FAIL means "the subject exists
+and is wrong", which would not be. **Depositing early converts an accurate absence into
+an inaccurate presence.**
+
+**Fix.** None available in code, and that is the point worth recording: **the criterion
+is satisfied by wall-clock time, not by anything anyone can write.**
+`scripts/recording_report.py` refuses to write a digest whose span is under
+`--min-hours` (default 24) and prints the numbers instead, so the refusal is mechanical
+rather than a matter of somebody remembering. There is deliberately no flag that
+fabricates a span.
+
+**Consequence.** Everything else in spec 27 is finished and green; only the fixture
+waits. Regenerating it later is one command — `python scripts/recording_report.py
+--write` — rather than an archaeology exercise, which is why the script lives in
+`scripts/` rather than being a throwaway.
+
+### Two recorders were running at once, and the duplication is not uniform
+
+**Agent:** A · **Task:** spec 27 · **Date:** 2026-09-09
+
+**What happened.** Two `scripts/record.py` processes (PIDs 6968 and 46512) were
+appending to the same daily file. I first assumed the whole 1.5GB file was doubled and
+told the lead so. The lead checked the process creation times and corrected it: **both
+started at the same second, 13:19:34 on 09-09** — about an hour before I looked, not
+eleven. So everything before 13:19 is single-recorded and only the tail is doubled.
+
+**Why the correction matters more than the original observation.** A uniform 2x would
+be obvious in any volume series and easy to spot. **A discontinuity part-way through a
+file is not** — it looks like a market event. Spec 28 builds 15-minute candles from
+`trade` frames and its criterion asserts volume within 0.1% of a Kraken OHLC fixture, so
+a naive build over this archive is correct up to 13:19 and doubled after, which no
+tolerance would forgive and no eyeball would attribute to the right cause.
+
+**Fix.** De-duplication belongs in the **derived** layer, not in the archive. Invariant
+11: a recording is append-only and is never edited, backfilled or cleaned in place, so
+the duplicate lines stay on disk exactly as they arrived and the candle builder is what
+has to be idempotent over them. It also has to be correct **across the boundary** rather
+than tuned to the doubled section — a de-duplicator calibrated on the tail would corrupt
+the head.
+
+**Consequence.** Neither process was killed. They are the operator's, they are
+collecting data that cannot be recovered retroactively, and killing the wrong one loses
+an open file handle mid-line. It is with the operator. Recorded here because a future
+reader looking at that file's volume profile will otherwise spend an afternoon on it.
+
+### A fast field scan that matched the value instead of the key
+
+**Agent:** A · **Task:** spec 27 · **Date:** 2026-09-09
+
+**What happened.** The digest scans gigabytes, so it reads `ts_recv` and `kind` out of
+each line with a byte search rather than parsing the JSON. The first version searched
+for the literal `b'"ts_recv":"'`. Every test in `test_report.py` failed with "no usable
+line found in the recording": the fixtures are written with `json.dumps`, which emits
+`"ts_recv": "..."` **with a space**, while `orjson` — which the recorder uses — emits
+the compact form.
+
+**Why.** Two serialisers, one hardcoded byte pattern. The production path happened to
+match and the test path did not, which is the least useful arrangement of the two: it
+would have passed CI on real files and failed on any recording that had been through
+any other writer.
+
+**Fix.** `_string_field(raw, key)` steps past the key, the colon, any whitespace and the
+opening quote instead of matching a fixed prefix.
+
+**The mistake worth recording is the one I made while fixing it.** The first repair also
+loosened the `kind` detection from `b'"kind":"gap"'` to a bare `b'"gap"'`. That made the
+tests pass and was wrong: a Kraken frame whose *payload* merely contained the word
+"gap" would have been classified as a break in the archive, silently splitting a
+segment. Matching the key and reading its value is the only version that is not a
+guess. The first occurrence is safe because the recorder writes the seven schema keys
+before `payload`, so a same-named key nested in a frame can never be reached first.
+
+### Decision: the digest reports a tiling, not a gap count
+
+**Agent:** A · **Date:** 2026-09-09
+
+**Options.** Report an uptime percentage and a gap count, or report a `span`, a list of
+`segments` and a list of `gaps` that together account for every microsecond in the span.
+
+**Chose.** The tiling. C's criterion asks for it and it is the stronger property, so
+this is a decision to agree rather than to negotiate — but it is worth recording why it
+is stronger.
+
+**Because.** A gap count can be **right while a break sits unaccounted for**. Two
+segments with a hole between them that nobody compared produce a perfectly plausible
+count of zero. A tiling has nowhere for that to hide: if the pieces do not abut, the
+assertion fails. It also forces the digest to treat *unrecorded silence* — what a
+recorder that was not running leaves behind, writing no marker precisely because it was
+not there to write one — as a first-class gap rather than as an absence of evidence.
+
+**Cost.** The digest has to reason about both kinds of break and about their
+boundaries, which is more code than counting markers. `assert_tiles` in
+`tests/clients/recorder/test_report.py` is the assertion that makes it worth it.

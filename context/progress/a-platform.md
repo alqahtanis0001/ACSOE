@@ -11,7 +11,10 @@ Never edit the tracker directly.
 - **Spec 25 — Kraken REST and WebSocket clients: COMPLETE.**
 - **Spec 26 — engine 1 `exchange`: COMPLETE**, pending only the lead's `bootstrap.py`
   registration, which is batched with 27 to 29 by instruction.
-- Specs 27 to 30: not started.
+- **Spec 27 — engine 2 `market_data_recorder`: CODE COMPLETE, SPEC NOT COMPLETE.** The
+  committed fixture `tests/fixtures/recording_report.json` is outstanding and is
+  blocked on wall-clock time, not on code. Detail below. **Do not treat 27 as done.**
+- Specs 28 to 30: not started.
 
 Phase 0 (below) is closed and green; it is kept for the record.
 
@@ -178,9 +181,45 @@ Three other things:
 An exception that is *not* exchange-shaped is re-raised rather than recorded — contract
 rule 7 — and there is a test for that too.
 
+## Phase 2 — spec 27, what was built and what is outstanding
+
+Built and green: `src/acsoe/clients/recorder/` (`contracts.py`, `writer.py`,
+`report.py`), `src/acsoe/engines/market_data_recorder/`, and
+`scripts/recording_report.py`. 26 tests in `tests/clients/recorder/`, 13 in
+`tests/engines/test_market_data_recorder.py`.
+
+**Outstanding: `tests/fixtures/recording_report.json`.** The real archive holds
+**21h24m** — `2026-09-08T16:01:22Z` to `2026-09-09T13:25:41Z` — with a ~10-hour hole
+between 09-08T16:02 and 09-09T02:04 where no recorder was running. C's criterion needs
+24 hours. The span crosses 24h at about **2026-09-09T16:01Z** provided
+`scripts/record.py` keeps running.
+
+**A report built from this archive now would be truthful and would still FAIL**, which
+is worse than the PENDING the criterion reports. PENDING means "the subject does not
+exist yet", which is true; FAIL would mean "it exists and is wrong", which is not.
+`scripts/recording_report.py` refuses to write a digest under `--min-hours` (default
+24) so the refusal is mechanical rather than remembered, and there is deliberately no
+flag that fabricates a span. Regenerating it later is one command.
+
+Two other things worth carrying forward:
+
+- **The digest reports a tiling, not a gap count.** Segments and gaps together account
+  for every microsecond in the span. A gap count can be right while a break sits
+  unaccounted for between two segments nobody compared; a tiling has nowhere for that
+  to hide, and it forces *unrecorded silence* — what an absent recorder leaves behind,
+  writing no marker precisely because it was not there — to be a first-class gap.
+- **Two `record.py` processes ran concurrently from 13:19 on 09-09.** The lead
+  established both started at the same second, so the archive is single-recorded up to
+  13:19 and doubled after. That discontinuity is worse for spec 28 than a uniform 2x
+  would be, because a uniform factor is obvious and a mid-file step looks like a market
+  event. De-duplication belongs in the **derived** layer: invariant 11 keeps the
+  recording immutable, so the candle builder has to be idempotent over duplicates and
+  correct **across the boundary**, not tuned to the doubled section.
+
 ## In Progress
 
-- **Spec 27 `market_data_recorder`, next.**
+- **Spec 28 `market_sensor`, next.** Spec 27's fixture stays outstanding until the
+  recording span reaches 24 hours.
 
 ## Blocked On
 
