@@ -46,3 +46,7 @@ Thumbs.db
 
 # Logs
 logs/
+
+# Word and Excel leave these behind whenever a document is open. They are
+# never content, and one committed once is a merge conflict nobody can read.
+~$*
