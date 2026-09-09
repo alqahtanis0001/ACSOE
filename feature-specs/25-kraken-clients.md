@@ -19,6 +19,11 @@ phase touches a socket; they all go through this.
    `error` array**, per `AGENTS.md`: Kraken wraps everything in `{"error": [...], "result": {...}}`
    and does not use HTTP status for application errors, so a 200 with a populated `error` array is
    a failure, not a fill.
+   **The envelope needs both halves of the test.** A parser that raised on every response would
+   satisfy "a 200 with a populated `error` array raises" perfectly well and be useless. So assert
+   the positive too: a 200 with an **empty** `error` array parses cleanly and yields its `result`.
+   One test without the other proves nothing about the discrimination, which is the only thing the
+   envelope is for.
 3. Fee tier comes from `POST /0/private/TradeVolume`; order minimums, tick size and precision come
    from `GET /0/public/AssetPairs`. **Both at runtime, never a constant** — `AGENTS.md` is explicit
    that any remembered value is stale.
@@ -45,7 +50,9 @@ phase touches a socket; they all go through this.
 
 ## Check When Done
 
-- A 200 response carrying a non-empty `error` array raises `KrakenAPIError`, asserted directly.
+- **Both halves of the envelope check, as a pair:** a 200 carrying a non-empty `error` array
+  raises `KrakenAPIError`, **and** a 200 carrying an empty `error` array parses cleanly and
+  returns its `result`. Neither assertion is worth anything without the other.
 - Fee tier and pair rules are fetched, not constant: a test asserts the values come from the
   fixture payload and changes when the fixture changes.
 - The rate limiter serialises bursts without exceeding the configured budget.

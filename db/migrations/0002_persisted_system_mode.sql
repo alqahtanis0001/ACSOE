@@ -1,0 +1,66 @@
+-- 0002_persisted_system_mode.sql — spec 31.
+--
+-- Forward-only and purely additive: two nullable columns on `runs`. No existing
+-- column or table is altered, nothing is dropped, and no table is added — so the
+-- documented table set of `architecture-context.md` is unchanged and
+-- `db_migrates_from_empty` needs no lead edit.
+--
+-- WHY A COLUMN ON `runs` AND NOT A SINGLE-ROW STATE TABLE
+--
+--   Spec 31 offers both shapes and requires the value to be readable **by
+--   `run_id`**, so the console can tell *this* run's mode from a previous one's.
+--
+--   A single-row state table can only satisfy that by carrying a `run_id` column
+--   of its own and having every reader compare it — which is `runs`' identity,
+--   re-implemented with no UNIQUE constraint behind it. On `runs` the scoping is
+--   structural rather than conventional: one row per daemon process, `run_id`
+--   already UNIQUE, so a previous run's mode cannot leak into this run's read
+--   because it is physically in a different row. There is no query you can get
+--   wrong.
+--
+--   Three further consequences, all in the same direction:
+--
+--   - Lifecycle matches exactly. Mode is a property of one daemon process and
+--     `runs` is one row per daemon process. A global single-row table would hold
+--     one row for a thing whose natural cardinality is N, and would need its own
+--     answer to "whose mode is this".
+--   - `runs` is already in `StoreClient.WATERMARK_TABLES`, so persisting a mode
+--     moves the console's poll watermark for free. A new table would have to be
+--     added to that tuple, changing behaviour under every existing watermark test
+--     mid-phase.
+--   - A new table is a lead escalation (`db_migrates_from_empty` asserts the
+--     documented table set, and `architecture-context.md` carries the storage
+--     table). A column is not. Same result, no gate to reopen.
+--
+-- WHY THE COLUMN IS NOT CALLED `mode`
+--
+--   `runs.mode` already exists and holds paper/live/replay. The system mode is a
+--   different axis entirely — idle/running/frozen — and `ui-context.md` says so in
+--   as many words. Two columns called `mode` on one row is the kind of collision
+--   that reads fine and is wrong.
+--
+-- WHY `system_mode_at` IS SEPARATE FROM `updated_at`
+--
+--   `runs.updated_at` is bumped by any write to the row, so it cannot answer "how
+--   old is this mode reading" — the one question an operator asks of a status band
+--   that might be stale. Recording it costs a nullable integer; not recording it
+--   destroys the fact, and this migration is forward-only.
+--
+-- THIS VALUE IS WRITTEN FOR THE CONSOLE TO READ, NOT FOR THE DAEMON TO RESUME FROM.
+--
+--   Mode is still never restored from the store. A daemon always starts `idle` and
+--   only reaches `running` through an `activate` command; a crashed daemon comes
+--   back not trading. Nothing may read this column back into `state["system"]`.
+--   The writer is the command reader in `core/`, which is already the single
+--   writer of `state["system"]["mode"]`; the reader is the console.
+
+-- NULL means "no daemon has written a mode for this run yet", which the console
+-- renders as an idle reading. It is a distinct fact from 'idle', which means a
+-- daemon actively reported being idle, and the two are deliberately not collapsed:
+-- inferring one from the other is how a band ends up confidently wrong.
+ALTER TABLE runs ADD COLUMN system_mode TEXT
+    CHECK (system_mode IS NULL OR system_mode IN ('idle', 'running', 'frozen'));
+
+-- Microseconds since the Unix epoch, UTC, from `context.now`. Nothing in this
+-- package reads a clock.
+ALTER TABLE runs ADD COLUMN system_mode_at INTEGER;

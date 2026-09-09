@@ -71,6 +71,32 @@ class RunMode(StrEnum):
     REPLAY = "replay"
 
 
+class SystemMode(StrEnum):
+    """`state["system"]["mode"]`, persisted for the console — spec 31.
+
+    A different axis from :class:`RunMode`. `RunMode` is paper/live/replay and says
+    which world the daemon is trading in; `SystemMode` is idle/running/frozen and says
+    whether it is trading at all. `ui-context.md` is explicit that confusing the two is
+    what left the Phase 1 status band unable to render Running.
+
+    **This value is written for the console to read, never for the daemon to resume
+    from.** Mode is still never restored from the store: a daemon always starts `idle`
+    and only reaches `running` through an `activate` command, so a crashed daemon comes
+    back not trading with the manage chain still watching whatever is open. Nothing may
+    read this back into `state`.
+
+    There is no `FROZEN_CLOSING`. `frozen` plus `close_intent` is a distinguishable
+    state in `state["system"]`, but the console's status band renders exactly four
+    readings and that is not one of them, so persisting `close_intent` would be an
+    unused column and a second thing the command reader must remember to write. If a
+    reader ever needs it, it is another additive column and another migration.
+    """
+
+    IDLE = "idle"
+    RUNNING = "running"
+    FROZEN = "frozen"
+
+
 class BlockStatus(StrEnum):
     """`block_records.status`. `safety`'s error rate counts the ERROR rows."""
 
@@ -146,7 +172,22 @@ class _Row(BaseModel):
 
 
 class RunRow(_Row):
-    """One daemon process. Written by the orchestrator at startup, before the first tick."""
+    """One daemon process. Written by the orchestrator at startup, before the first tick.
+
+    **`system_mode` and `system_mode_at` are read-only on this model.** They are carried
+    here because the table carries them, so a `SELECT *` round trip validates and so a
+    caller that already has a `RunRow` need not make a second query — but
+    :meth:`StoreClient.write_run` deliberately does not write them, and
+    :meth:`StoreClient.set_system_mode` is their only writer.
+
+    That split is the point rather than an oversight. The orchestrator writes this row
+    once at startup, when no mode has been decided yet, and the command reader sets the
+    mode later on a tick of its own. If `write_run` also wrote these columns, any
+    subsequent run-row write — stamping `ended_at`, say — would carry whatever
+    `system_mode` the caller happened to have and silently overwrite the real one. One
+    column, one writer. A read-modify-write through `write_run` is therefore a no-op on
+    the mode, which is the behaviour a caller expects and not a clobber.
+    """
 
     id: int | None = None
     run_id: str
@@ -156,6 +197,30 @@ class RunRow(_Row):
     acsoe_version: str | None = None
     config_digest: str | None = None
     updated_at: Micros
+    system_mode: SystemMode | None = None
+    system_mode_at: Micros | None = None
+
+
+class SystemModeRow(_Row):
+    """The persisted system mode for one run — spec 31's seam with C's console.
+
+    Returned by :meth:`StoreClient.system_mode`. The two nulls are different facts and
+    the console must not collapse them:
+
+    - The method returns `None` when **there is no `runs` row for that `run_id`**. That
+      is a defect or a race, not a mode.
+    - It returns this model with `mode is None` when **the run exists and no daemon has
+      written a mode for it yet**. That is the ordinary case before the first command is
+      read, and the console renders an idle reading for it.
+
+    Both render as an idle reading, per spec 32 — "a missing value renders idle and
+    never raises" — but only one of them is normal, and a reader that cannot tell them
+    apart cannot log the abnormal one.
+    """
+
+    run_id: str
+    mode: SystemMode | None = None
+    at: Micros | None = None
 
 
 class CommandRow(_Row):

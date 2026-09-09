@@ -15,8 +15,15 @@ mode the daemon is actually in, read as a fact rather than inferred.
    readings. Text only, no colour — **amber stays reserved for live mode** and appears nowhere
    else in the interface.
 3. **Remove the spec 19 test asserting the field never renders `Running` or `Frozen`.** It exists
-   to enforce the deferral, the deferral is over, and leaving it would make this spec unbuildable.
-   Replace it with tests asserting all four readings.
+   to enforce the Phase 1 deferral, the operator has ended that deferral, and leaving it would
+   make this spec unbuildable. Replace it with tests asserting all four readings.
+
+   **Record the deletion in `docs/build-log/phase-2/c-interface.md`, with the reason**, before or
+   in the same change. Deleting a test to make a spec pass is normally the exact thing this
+   project refuses, so this one needs a written trail saying which decision retired it and when —
+   the operator's Phase 2 approval on 2026-09-09. A test removed silently is indistinguishable
+   from a test removed because it was inconvenient, and six months from now the build log is the
+   only thing that can tell the two apart.
 4. Restart detection is unchanged and stays a **presence** test — whether the current run has a
    previous `runs` row — because `run_id` is `UNIQUE` and two rows always differ.
 5. **Never infer the mode from the `commands` trail.** That was considered and rejected at the
@@ -41,4 +48,6 @@ mode the daemon is actually in, read as a fact rather than inferred.
 - A database with no persisted mode renders an idle reading and does not raise.
 - The restart banner still behaves per spec 19, asserted in both directions.
 - A grep proves the console still contains no path that reads the `commands` table to decide mode.
+- `docs/build-log/phase-2/c-interface.md` carries an entry naming the deleted spec 19 test, the
+  operator decision that retired it, and the date.
 - `pytest tests/ -q` · `mypy --strict src/` · `ruff check src/` · `python scripts/verify.py --phase 2`
