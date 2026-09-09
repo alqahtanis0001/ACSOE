@@ -16,6 +16,15 @@
 - `pathlib.Path` for every path. This is a Windows target; never assume `/`.
 - Prefer pure functions. Anything that touches the network, the clock, or the disk is injected, not imported.
 
+### Suppressing a lint
+
+A `noqa` is a claim that the linter is wrong *here*, and it has to be readable as one.
+
+- **Always name the rule.** `# noqa: RUF001`, never a bare `# noqa`, which silences every rule on the line including ones nobody has considered.
+- **Always give the reason on the same line**, or in a comment directly above it. "Why this rule does not apply", not "ruff complains".
+- **Never suppress a lint to make a failing check pass.** If the rule is right, fix the code. A suppression is for the case where following the rule would make the code *wrong* — and that case is rare enough to justify explaining every time.
+- The standing example is `tests/console/test_format.py`, where `U2212 = "−"` trips `RUF001` for an ambiguous unicode character. The rule is correct to flag it and would be destructive to obey: that glyph **is** the fixture for the minus-sign rule, and replacing it with an ASCII hyphen would make the test pass against the exact character it exists to reject. A lint that is right in general and wrong on one line is what `noqa` is for; a lint that is simply inconvenient is not.
+
 ## Money and numbers
 
 - **`Decimal` for prices, quantities, fees, and balances.** Never `float`. Floating-point drift in an order size is a real defect that will get an order rejected by Kraken.

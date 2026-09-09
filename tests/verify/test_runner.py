@@ -105,23 +105,31 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
 ) -> None:
     """Spec 00 scope limit: a phase's criteria belong to that phase alone.
 
-    Phase 0 is closed and its seven are frozen here. Phase 1 added the eight
-    console criteria of spec 16; phases 2 to 8 are still unwritten and carry only
-    `docs_vocabulary`, which registers everywhere. The point of asserting the
-    whole registry rather than one phase is that adding a criterion to the wrong
-    phase is silent - it would simply never run, or run a phase too early.
+    **Two criteria are exceptions and register everywhere**: `docs_vocabulary`
+    from spec 02, and `toolchain_green`, which joined it at the Phase 1 close.
+    Until then `toolchain_green` ran in phase 0 only, and `--phase 1` reported
+    `7 PASS, 0 FAIL` on a tree where `pytest` was reporting two failures - no
+    Phase 1 criterion made any claim about the suite, so a red suite was
+    invisible to the gate that defines "done". Both are asserted into every
+    phase's expected set below rather than special-cased, so a future change
+    that drops one from a phase fails here.
+
+    Phase 0's own five are frozen. Phase 1 added the eight console criteria of
+    spec 16; phases 2 to 8 are still unwritten and carry only the two that
+    register everywhere. The point of asserting the whole registry rather than
+    one phase is that adding a criterion to the wrong phase is silent - it would
+    simply never run, or run a phase too early.
     """
-    assert {c.name for c in verify_module._REGISTRY[0]} == {
-        "docs_vocabulary",
+    every_phase = {"docs_vocabulary", "toolchain_green"}
+
+    assert {c.name for c in verify_module._REGISTRY[0]} == every_phase | {
         "orchestrator_empty_registry",
         "db_migrates_from_empty",
         "seed_fixtures_present",
         "record_sample_valid",
-        "toolchain_green",
         "is_gate_matches_registry",
     }
-    assert {c.name for c in verify_module._REGISTRY[1]} == {
-        "docs_vocabulary",
+    assert {c.name for c in verify_module._REGISTRY[1]} == every_phase | {
         "console_renders_seeded_screens",
         "console_websocket_pushes_on_change",
         "console_commands_write_rows",
@@ -132,7 +140,7 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
         "console_restart_banner",
     }
     for phase in range(2, verify_module.MAX_PHASE + 1):
-        assert {c.name for c in verify_module._REGISTRY[phase]} == {"docs_vocabulary"}
+        assert {c.name for c in verify_module._REGISTRY[phase]} == every_phase
 
 
 # --------------------------------------------------------------------------- #

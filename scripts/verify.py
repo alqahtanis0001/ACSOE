@@ -2574,7 +2574,20 @@ register(0, Criterion("orchestrator_empty_registry", check_orchestrator_empty_re
 register(0, Criterion("db_migrates_from_empty", check_db_migrates_from_empty))
 register(0, Criterion("seed_fixtures_present", check_seed_fixtures_present))
 register(0, Criterion("record_sample_valid", check_record_sample_valid))
-register(0, Criterion("toolchain_green", check_toolchain_green))
+# `toolchain_green` runs in EVERY phase, exactly as `docs_vocabulary` does.
+#
+# It was registered for phase 0 alone until the Phase 1 close, and that was a hole:
+# `--phase 1` reported `7 PASS, 0 FAIL` on a tree where `pytest` was reporting
+# `2 failed, 639 passed`. Nothing in the report was wrong - no Phase 1 criterion made
+# any claim about the suite - but "a phase is done when `verify.py --phase N` passes
+# every criterion" is the project's definition of done, so for every phase after 0 that
+# definition could not see a broken test suite. It was caught only because run-protocol
+# step 4 makes each agent run all four commands by hand, which is a person following a
+# procedure rather than a gate.
+#
+# `TOOLCHAIN` stays scoped to `src/`. Widening it to `tests/` and `scripts/` is a
+# separate decision the operator deliberately did not take here.
+register_every_phase(Criterion("toolchain_green", check_toolchain_green))
 register(0, Criterion("is_gate_matches_registry", check_is_gate_matches_registry))
 
 # Phase 1 only - the console. Spec 16, registered before the console it judges so

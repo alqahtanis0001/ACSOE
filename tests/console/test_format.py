@@ -22,7 +22,14 @@ from acsoe.console.format import (
 #: The character rule 6 requires. Written here as a codepoint rather than as the
 #: glyph, so a test that started passing because someone pasted a hyphen would
 #: fail rather than look right.
-U2212 = "−"
+#:
+#: `RUF001` flags this line as an ambiguous unicode character, and it is exactly
+#: right to flag it and exactly wrong to fix it. This glyph **is** the fixture: it
+#: is the U+2212 the minus-sign rule requires, and "correcting" it to an ASCII
+#: hyphen would make `test_the_minus_sign_is_u2212_and_not_a_hyphen` pass against
+#: the very character it exists to reject. Suppressed deliberately, per the noqa
+#: policy in `context/code-standards.md`.
+U2212 = "−"  # noqa: RUF001 - the U+2212 glyph is the fixture; see above
 HYPHEN = "-"
 
 

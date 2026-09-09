@@ -98,9 +98,18 @@ def variant_app(old: str, new: str) -> str:
 
 
 def test_all_eight_criteria_are_registered_for_phase_1(verify_module: ModuleType) -> None:
+    """The eight of spec 16, plus the two that register in every phase.
+
+    `docs_vocabulary` has always run everywhere. `toolchain_green` joined it at the
+    Phase 1 close: registered for phase 0 alone, it let `--phase 1` report
+    `7 PASS, 0 FAIL` while `pytest` was reporting two failures, because no Phase 1
+    criterion made any claim about the suite. Order matters here as well as
+    membership - the report is read top to bottom, and `criteria_for` returns
+    registration order.
+    """
     to_run, _ = verify_module.criteria_for(1, False)
     names = [c.name for c in to_run]
-    assert names == ["docs_vocabulary", *PHASE1_CRITERIA]
+    assert names == ["docs_vocabulary", "toolchain_green", *PHASE1_CRITERIA]
 
 
 def test_no_phase_1_criterion_touches_a_gitignored_directory(verify_module: ModuleType) -> None:

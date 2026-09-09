@@ -15,7 +15,7 @@ so rather than being absent, because an empty file and a missing file mean diffe
 serving a fixed status band, an open-positions region, the cycle feed, history and the research
 views; a WebSocket that pushes when the store's watermark moves; and three commands that write
 rows to the `commands` table. Nine specs, 16 to 24, all by Agent C. The phase is green —
-`python scripts/verify.py --phase 1` reports 9 criteria, 9 PASS, 0 FAIL, 0 PENDING — and the
+`python scripts/verify.py --phase 1` reports 10 criteria, 10 PASS, 0 FAIL, 0 PENDING — and the
 lead re-verified independently of C's report: `pytest` 707 passed, `mypy --strict src/` clean
 across 35 source files, `ruff check src/` clean.
 
@@ -26,8 +26,9 @@ ACSOE verify - phase 1
 repo: C:\Users\saad2\Documents\GitHub\ACSOE
 
 PASS    docs_vocabulary                     14 files scanned, 9 retired terms, no hit
+PASS    toolchain_green                     pytest, mypy --strict and ruff all green (python.exe)
 PASS    console_renders_seeded_screens      all 5 screens answered over a seeded database
-PASS    console_websocket_pushes_on_change  pushed 517ms after the watermark moved, inside the 1000ms budget
+PASS    console_websocket_pushes_on_change  pushed 503ms after the watermark moved, inside the 1000ms budget
 PASS    console_commands_write_rows         one correct unclaimed row each for activate, freeze, close_all
 PASS    console_live_frame_amber            live renders a 3px var(--live) frame and paper declares no border anywhere
 PASS    console_tokens_no_raw_hex           11 hex values, all inside the src/acsoe/console/static/tokens.css token block; 12 console files scanned
@@ -35,9 +36,15 @@ PASS    console_tabular_figures             21 numeric cell(s) carry `.num`, and
 PASS    console_focus_and_reduced_motion    2 visible `:focus-visible` rule(s); the reduced-motion block drops the flash
 PASS    console_restart_banner              a changed run_id reads the restart banner; a first start reads plain `Idle`
 
-9 criteria: 9 PASS, 0 FAIL, 0 PENDING
+10 criteria: 10 PASS, 0 FAIL, 0 PENDING
 Phase 1 is green: every criterion PASS, zero PENDING.
 ```
+
+`toolchain_green` is in that list because of a decision taken at this close: it had been
+registered for phase 0 alone, which let `--phase 1` report no failures over a red suite. It now
+registers in every phase, as `docs_vocabulary` always has. The gate proved its own worth
+immediately - the change broke two of C's registration tests, and the newly-registered
+criterion is what caught them.
 
 **Headcount.** One teammate. `ownership.md` says Phase 1 is almost entirely C's and forbids
 filler work, so the lead checked whether "almost" concealed anything real before opening the
@@ -88,10 +95,14 @@ corruption looks like and is not what a library defect looks like.
   checkpoint. No placeholder chart, no chart of zeros, no sample explanations.
 - **The cycle feed's full scan of `block_records` → before Phase 4.** Harmless while the table
   holds a seed; engine 19 `memory` starts writing a row per guard per tick in Phase 4.
-- **Widening `TOOLCHAIN` beyond `src/`, and registering `toolchain_green` for every phase →
-  Phase 2 boundary, operator's call.** These interact and should be taken together, along with
-  the intermittent fault: registering the toolchain check everywhere also spreads that crash
-  across every phase's gate.
+- **Widening `TOOLCHAIN` beyond `src/` → still deferred.** The operator declined it at this
+  close, deliberately: registering `toolchain_green` everywhere was taken on its own merits, and
+  changing what the toolchain *covers* is a separate change with its own blast radius. The `noqa`
+  policy such a widening would need is now written into `code-standards.md`, so the only
+  remaining blocker is the decision.
+- **The intermittent native fault → recorded, not investigated further.** The operator closed
+  further investigation at this boundary. One consequence is now live: with `toolchain_green` in
+  every phase, that crash can surface as a FAIL on any phase's gate rather than only Phase 0.
 
 **Found and not deferred.** The `core/` command reader does not work. `orchestrator.py` looks up
 `store.claim_pending_commands`, which `StoreClient` does not have, so the lookup returns `None`
