@@ -243,6 +243,41 @@ class PaperConfig(_Section):
         return self
 
 
+class KrakenConfig(_Section):
+    """Exchange-client tuning.
+
+    **Nothing in this section is something the exchange can tell us.** No fee, no order
+    minimum, no tick size, no precision — those are fetched at runtime, every time,
+    under rule 2 of ``context/trading-invariants.md``. What is here is *our own
+    self-imposed request budget and timeout*, chosen by the lead, and it is explicitly
+    **not a claim about what Kraken permits**: a remembered published rate limit is
+    exactly the stale knowledge ``AGENTS.md`` warns about. It is deliberately
+    conservative — under the real ceiling costs latency, over it costs a ban mid-session
+    — and is flagged for revision against the documented limits before Phase 8.
+    """
+
+    rest_capacity: int = Field(gt=0)
+    """Token-bucket depth: the largest burst of REST calls permitted at once."""
+
+    rest_refill_per_s: Ratio = Field(gt=0)
+    """Sustained REST call rate, in calls per second."""
+
+    rest_timeout_s: int = Field(gt=0)
+    """HTTP timeout for one REST call."""
+
+
+class MarketSensorConfig(_Section):
+    """Engine 3 tuning.
+
+    ``published_bars`` is a **plumbing bound, not a trading threshold** — no gate reads
+    it and no money depends on it, which is why the lead may choose it and it is not
+    OPERATOR REQUIRED. It bounds how many recent closed 15-minute candles reach
+    ``state`` each tick, so ``state`` stays serialisable and the payload stays bounded.
+    """
+
+    published_bars: int = Field(gt=0)
+
+
 class BacktestConfig(_Section):
     training_window_days: int = Field(gt=0)
     retrain_interval_days: int = Field(gt=0)
@@ -277,6 +312,8 @@ class Config(BaseModel):
     safety: SafetyConfig
     trading: TradingConfig
     paper: PaperConfig
+    kraken: KrakenConfig
+    market_sensor: MarketSensorConfig
     backtest: BacktestConfig
     seeds: SeedsConfig
 

@@ -79,6 +79,32 @@ paper:
   starting_balances: {USD: "5000.00"}   # Operator-chosen 2026-09-08. Currency-to-amount
                                  # map; amounts are quoted strings, parsed as Decimal.
 
+kraken:                          # Client tuning. Requested by A, spec 25.
+                                 # NOTHING here is a value the exchange can tell us: no fee,
+                                 # no order minimum, no tick size, no precision. What is here
+                                 # is OUR OWN self-imposed request budget and timeout, chosen
+                                 # by the lead, and it is explicitly NOT a claim about what
+                                 # Kraken permits — a remembered published rate limit is
+                                 # exactly the stale knowledge AGENTS.md warns about.
+                                 # Deliberately conservative: under the real ceiling costs
+                                 # latency, over it costs a ban mid-session. Flagged for
+                                 # revision against the documented limits before Phase 8.
+  rest_capacity: 15              # Token-bucket depth for REST. The burst allowance.
+  rest_refill_per_s: 0.5         # Sustained rate: one request every two seconds, far below
+                                 # what a loop tick needs at one decision per fifteen minutes.
+  rest_timeout_s: 10             # HTTP timeout. An order of magnitude above a healthy round
+                                 # trip, short enough that a hung socket cannot outlive the
+                                 # one-minute loop tick.
+
+market_sensor:                   # Engine 3. Requested by A, spec 28.
+  published_bars: 200            # How many recent closed 15m candles reach `state` each tick.
+                                 # A PLUMBING BOUND, NOT A TRADING THRESHOLD — no gate reads
+                                 # it and no money depends on it, which is why the lead may
+                                 # choose it and it is not OPERATOR REQUIRED. 200 covers the
+                                 # 48-bar holding horizon plus the lookback a Phase 5
+                                 # indicator is likely to want, and is bounded so `state`
+                                 # stays serialisable. Raising it is a lead edit.
+
 backtest:
   training_window_days: 90       # Locked decision: rolling 90-day cap
   retrain_interval_days: 7       # Locked decision: weekly, matching the live cadence
