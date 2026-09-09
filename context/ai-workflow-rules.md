@@ -28,6 +28,20 @@ Where a criterion concerns live or long-running behaviour, it checks a small **c
 
 A criterion that only passes on the machine that produced it is a broken criterion.
 
+### Fabricate the subject a criterion judges. Never fabricate a contract it is held to.
+
+A criterion is written before the thing it judges, so both halves of its proof — PENDING on an absent subject, PASS on a fabricated one — run against something the criterion's author built. That is the point, and it has one failure mode that is invisible from either half.
+
+**If the fabricated tree also fabricates a contract the criterion depends on, the fabrication can agree with a mistake and both halves still pass.** C's `check_data_guard_blocks_bad_data` did exactly this: its helper built an `EngineContext` with a `cycle_id=` field that does not exist and no `mode=`, which raises `TypeError` — and the criterion reported PENDING and PASS regardless, because the test tree had fabricated its own `acsoe.core.contracts` whose `EngineContext` accepted the wrong call. **The criterion's body had never once executed.** It would have failed the instant A's real engine landed, which is the worst possible moment to discover it.
+
+The rule that follows:
+
+- **Fabricate the subject.** A minimal console, a stub engine, a two-row archive — whatever the criterion is judging. That is what lets a criterion exist before the code.
+- **Never fabricate the contract.** `core/contracts.py`, `clients/store/contracts.py`, a config model, an engine's `contracts.py` — import the real one. A criterion held to a fabricated contract tests the fabrication.
+- **If a criterion cannot reach its own body without a fabricated contract, that is the finding**, not an inconvenience to route around.
+
+The same reasoning is why `commands_round_trip` refuses every double and why B proved `core/`'s store calls in a fresh interpreter through a subprocess rather than `exec`: a seam exercised only through something the author also wrote is not tested — the something is.
+
 Phase 0 has no preflight — there is no phase −1.
 
 ## Retired vocabulary
