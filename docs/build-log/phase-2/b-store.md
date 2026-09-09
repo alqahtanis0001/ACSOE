@@ -200,3 +200,120 @@ its own `TemporaryDirectory` finalizer on every phase-0 run. Same Windows shape 
 SQLite file still open when the temp directory is collected — in C's script rather than in
 a test. It is noise above the report and does not change the result, but it is the same
 defect twice and it is worth one fix rather than two shrugs.
+
+### Money cannot cross `state` as a `Decimal` — the orchestrator refuses it
+
+**Agent:** B · **Task:** spec 34 · **Date:** 2026-09-09
+
+**What happened.** I started engine 10 assuming the fee tier would reach me from
+`state["exchange"]` as a `Decimal`, because everything else in this project that touches
+money is one. It cannot. `EngineResult.data` runs `_assert_json_serialisable`, whose
+scalar set is `None | str | int | float | bool`, and the orchestrator assigns
+`result.data` directly into `state[engine.name]` — so every value published by another
+engine has already been through that validator.
+
+**Why it matters more than it looks.** `Decimal` is refused loudly, which is fine. The
+hazard is that **`float` is accepted**. An engine publishing a fee as `0.0022` satisfies
+the validator, loses precision on the way, and arrives in a hurdle comparison as a number
+that is wrong in the fourth decimal — which is exactly the magnitude at which this gate
+operates. The one type that must never reach the edge calculation is the one type the
+orchestrator's check waves through.
+
+**Fix.** Money crosses `state` as an **exact decimal string**. `CostInputs` types every
+money field as `Money`, the annotated `Decimal` from `clients/store/contracts.py` whose
+`BeforeValidator` raises on a float rather than coercing it, so a float published upstream
+is refused at this engine's boundary with the field name attached. On the way out,
+`format(d, "f")` — plain notation, never scientific, which matters because these strings
+land in `rejections`' TEXT columns and `str(Decimal("1E-4"))` compares unequal to
+`"0.0001"` under any text comparison. `test_a_float_fee_is_refused_rather_than_coerced`
+and `test_the_published_payload_is_json_serialisable` pin both directions.
+
+**Consequence.** Told A directly, with the reproduction, because A's engine 1 is the
+publisher and the natural thing for A to do on hitting the validator is to cast to
+`float`, which is the one wrong answer. Verified against the real class rather than read
+off the source.
+
+### Decision: proposed state paths as `Final` constants rather than a stop-and-escalate
+
+**Agent:** B · **Task:** spec 34 · **Date:** 2026-09-09
+
+**Options.** Engine 10 needs six inputs. Spec 34 fixes exactly one location in prose —
+the fee tier arrives in `state["exchange"]` — and `engine-contracts.md` fixes four
+cross-chain keys, none of which is mine. The expected move (C's engine 8), the spread
+(A's engine 1), the slippage estimate (C's engine 9) and the candidate pair (my engine 7,
+Phase 3 proper) have no ratified key name. Either stop the unit and escalate, or build
+and flag.
+
+**Chose.** Build, with every unratified path declared as a `Final` constant in
+`engines/cost/contracts.py` under a heading that says it is a proposal, and the open
+question recorded in my progress file for the lead.
+
+**Because.** "Never guess at trading behaviour" is about behaviour, and the behaviour here
+is not guessed: the arithmetic is invariant 5, quoted verbatim at the top of the engine,
+and the third line of it is not adjustable. What is unratified is wiring — four key names
+— and stopping the whole engine over a key name would have burned the concurrency the
+operator authorised this work for. Collecting them in one place means re-pointing one is a
+single-line edit and a reviewer sees the entire uncertain surface at once, rather than
+finding `state["prediction"]["expected_move_pct"]` inlined three levels down.
+
+**Cost.** Four constants that may be renamed, and a test file that will need its fixture
+rebuilt when they are. Both are cheap; scattering the same guesses through the engine
+would not have been.
+
+### The reason codes were already fixed, by C, and nothing said so
+
+**Agent:** B · **Task:** spec 34 · **Date:** 2026-09-09
+
+**What happened.** I was about to invent `reason_code` values for the cost gate. Reading
+`console/format.py` first, C's `REASON_PROSE` table already contains
+`net_edge_below_hurdle`, `spread_wider_than_move`, `below_ordermin`, `below_costmin`,
+`insufficient_quote_balance` and `max_concurrent_positions` — every code engines 10 and 11
+need, decided in Phase 1 by the agent who owns the screen that renders them.
+
+**Why it matters.** `operator_reason` falls back to "No reason was recorded." for a code
+absent from that table. An invented code would not raise, would not fail a test, and would
+surface months later as a blank cell on the rejections screen. Nothing in either spec, in
+`ownership.md`'s seam table or in the Phase 2 task list names this as a seam.
+
+**Fix.** Engine 10 emits C's codes verbatim, and
+`test_every_reason_code_this_engine_emits_is_renderable_by_the_console` imports
+`REASON_PROSE` and asserts they are present — a test in my file, over C's data, which is
+the only place the two halves meet. The one code I did have to add,
+`cost_inputs_unavailable` for the fail-closed path, is flagged to C; until C adds it the
+console still renders correctly, because `operator_reason` prefers a stored prose reason
+over the code mapping and that path always writes prose.
+
+**Also duplicated deliberately:** `format_signed_pct`, so the blocking reason carries a
+U+2212 minus and two decimal places like every other number on the screen. Imported would
+have been tidier and would have put a FastAPI-adjacent module on the live trading path;
+the console is a separate process that reads the database, and an engine importing it
+inverts that. `test_the_local_percentage_formatter_agrees_with_the_console` compares the
+two implementations over a table of values so the copy cannot drift silently.
+
+### The cost gate is unreachable at tier 1, and the test says so on purpose
+
+**Agent:** B · **Task:** spec 34 · **Date:** 2026-09-09
+
+**What happened.** The obvious pass test — a 3% expected move, tier 1 fees — blocks. That
+is not a bug in the engine.
+
+**Why.** Invariant 5 requires `net_edge > hurdle_multiple x friction`, which rearranges to
+`expected_move > (1 + hurdle_multiple) x friction`. At the operator's `hurdle_multiple:
+1.5` that is `2.5 x friction`; tier 1 friction is around 1.25% round trip, so a candidate
+needs a move above roughly 3.125% while the target barrier is 3.0%. Nothing clears this
+gate at tier 1 with these barriers. The tracker already carries the finding; this is the
+first code that runs into it.
+
+**Fix.** The pass tests use tier 3, and
+`test_at_tier_one_nothing_clears_the_gate_and_at_tier_three_it_does` asserts the
+consequence in both directions rather than leaving it as a comment. Its docstring says
+what to conclude if it ever fails: not that the test is stale, but that `hurdle_multiple`,
+the barriers or the reference fees have moved and the tracker note needs revisiting with
+them.
+
+**One further guard.** `trading-invariants.md` calls its reference fees "for
+sanity-checking only — never for use in code", and a constant that happened to equal tier 1
+would satisfy every behavioural test above on a tier-1 fixture. So
+`test_no_reference_fee_appears_in_the_engine_source` reads the engine's own source and
+asserts none of the six reference figures is written into it. Behavioural tests cannot
+catch a constant that agrees with the fixture; only reading the source can.

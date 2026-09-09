@@ -95,6 +95,7 @@ Agree the contract first, mock it, build against the mock.
 | Feature vector | C | B | `engines/feature/contracts.py` |
 | Prediction and DI | C | B | `engines/prediction/contracts.py` |
 | Order intent | B | C | `engines/decision/contracts.py` |
+| **Rejection reason codes.** Every gate emits a `reason_code`; the console maps it to operator prose. **A code absent from the map renders "No reason was recorded." — silently, with no error anywhere.** | C (`console/format.py`, `REASON_PROSE`) | B (gates 7, 10, 11, 13, 15), and any future gate | `src/acsoe/console/format.py` |
 
 A seam not in this table probably means the split is wrong. Raise it rather than reaching across.
 

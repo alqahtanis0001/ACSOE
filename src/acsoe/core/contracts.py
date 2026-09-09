@@ -160,6 +160,18 @@ def _assert_json_serialisable(value: Any, path: str) -> None:
     pydantic wraps only ``ValueError`` and ``AssertionError`` into ``ValidationError``,
     and a caller catching ``ValidationError`` around ``EngineResult(...)`` must not have
     one of the two validators escape as a bare ``TypeError``.
+
+    **This check refuses a ``Decimal`` and accepts a ``float``, and the second half is
+    the dangerous one.** It is not a defect here — the validator cannot know which field
+    is money, and float is correct for indicators, model inputs and statistics. But an
+    engine that hits the ``Decimal`` refusal and reflexively casts to ``float`` publishes
+    a fee or an expected move that has already lost precision, and it arrives in engine
+    10's hurdle comparison wrong in the fourth decimal, which is the magnitude that gate
+    works at. **Money crosses ``state`` as an exact decimal string.** The rule lives in
+    ``context/engine-contracts.md`` rule 8 and is enforced per engine by typing money
+    fields as ``Money``, the annotated ``Decimal`` that raises on a float rather than
+    coercing it. Do not "fix" this function by widening it to accept ``Decimal``: that
+    would make ``state`` unserialisable, which is the thing rule 8 exists to prevent.
     """
     if _is_json_scalar(value):
         return

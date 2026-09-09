@@ -63,6 +63,12 @@ project's floor.
 7. Any uncaught exception is converted by the orchestrator into `ERROR` with `blocks_trading=True`. Engines should not swallow their own exceptions to avoid this.
 8. `data` must be JSON-serialisable. No numpy arrays, no dataframes, no model objects.
 
+   **Money crosses `state` as an exact decimal string, never as a `float`.** The validator in `core/contracts.py` refuses a `Decimal` — loudly, which is fine — and **accepts a `float`**, which is the dangerous half. An engine that hits the refusal and reflexively casts to `float` publishes `0.0022` where it meant `Decimal("0.0022")`, loses precision on the way through, and arrives in a hurdle comparison wrong in the fourth decimal. That is the magnitude engine 10 `cost` operates at: reference friction is ~1.25% round trip at tier 1 and ~0.65% at tier 3, and a net edge is the small difference between two larger numbers.
+
+   The validator cannot fix this, because it cannot know which field is money and float is legitimate for indicators, model inputs and statistics — that is the Phase 0 decision, `Decimal` for anything that reaches an order and float for everything else. So the rule lives here and is enforced per engine: type every money field in your `contracts.py` as `Money`, the annotated `Decimal` that raises on a float rather than coercing it, and serialise to string at the `state` boundary.
+
+   Found by B while building engine 10, before any float had reached a gate.
+
 ## Orchestrator behaviour
 
 ### State lifetime
@@ -241,7 +247,7 @@ Each engine's `data` payload is typed in its own `contracts.py`. Orchestrator-le
 
 ### Cross-chain keys the contract fixes
 
-Most of an engine's `data` is its own business, typed in its own `contracts.py`. Four fields are different: another chain depends on them, they cross an ownership boundary, or the orchestrator reads them. They are fixed here and may not be renamed without the lead.
+Most of an engine's `data` is its own business, typed in its own `contracts.py`. These fields are different: another chain depends on them, they cross an ownership boundary, or the orchestrator reads them. They are fixed here and may not be renamed without the lead.
 
 | Key | Written by | Read by | Meaning |
 |---|---|---|---|
@@ -249,6 +255,16 @@ Most of an engine's `data` is its own business, typed in its own `contracts.py`.
 | `state["position_manager"]["entry_orders_cancelled"]` | 21 `position_manager` (B) | orchestrator (Lead) | No resting entry order remains |
 | `state["exit"]["positions_closed"]` | 22 `exit` (B) | orchestrator (Lead) | No open position remains |
 | `state["position_manager"]["hold_reason"]` | 21 `position_manager` (B) | 19 `memory` (C), console | Why the manage chain placed no exit this tick; null when it did not hold |
+| `state["scout"]["pair"]` | 7 `scout` (B) | 10 `cost` (B), 11 `risk` (B) | The candidate pair this tick, or absent when none qualified |
+| `state["prediction"]["expected_move_pct"]` | 8 `prediction` (C) | 10 `cost` (B) | Expected move as an exact decimal string, before friction |
+| `state["order_book"]["estimated_slippage_pct"]` | 9 `order_book` (C) | 10 `cost` (B) | Estimated slippage as an exact decimal string |
+| `state["market_sensor"]["quotes"][pair]["spread_pct"]` | 3 `market_sensor` (A) | 4 `data_guard` (A), 10 `cost` (B) | Live top-of-book spread as an exact decimal string |
+
+**On the last four, added 2026-09-09.** B built engine 10 needing all four and could read only the fee tier's location from a spec, so it proposed paths as `Final` constants under a heading marking them unratified rather than inventing behaviour. Three are ratified as proposed. The fourth is **re-pointed**: B proposed `state["exchange"]["pairs"][pair]["spread_pct"]`, and it belongs on engine 3, not engine 1.
+
+The line is that **engine 1 `exchange` is the account engine** — balances, fee tier, pair rules — **and engine 3 `market_sensor` is the market-data engine.** Spread is market data. The deciding argument is engine 4 `data_guard`: it blocks on stale data, a negative spread and a missing candle, and all three of those are market-data faults that should arrive from one place rather than two. `market_sensor` also already runs every tick in the guard chain ahead of `data_guard`, so nothing about the cadence needs to change — `quotes` is per-tick, alongside `bar_closed`, which is per-bar.
+
+The three money fields are decimal **strings**, per rule 8. None of them may be a float.
 
 `entry_orders_cancelled` and `positions_closed` are only meaningful while `close_intent` is set; absent or false always means "not finished", never "finished" — the same fail-closed default the gates use. `hold_reason` is the opposite: it is meaningful on ordinary ticks and is null during a liquidation, because a liquidation never holds. Name these fields when you refer to them; do not point at them by position, because this table gets appended to.
 
