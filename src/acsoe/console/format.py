@@ -16,10 +16,17 @@ that section, and every function here exists because of one of its six rules:
    digit in almost every face, so a column of hyphen-negative numbers does not
    align even with tabular figures switched on.
 
-Nothing here touches ``float``. ``Decimal`` arrives, a string leaves, and the two
-are the only types in the module. A money value that passed through ``float``
-anywhere on that path would already have lost the precision the rules exist to
-protect.
+**No money value here ever touches ``float``.** ``Decimal`` arrives, a string
+leaves, and a money value that passed through ``float`` anywhere on that path
+would already have lost the precision these rules exist to protect. The single
+``float`` in the module is :func:`format_rate_pct`, which renders the
+leaderboard's *statistics* — a win rate is not money and was never a ``Decimal``.
+
+Two things here are not number rules but belong with them, because they are the
+same kind of decision: :func:`operator_reason`, which is why a code never reaches
+the screen, and :func:`format_outcome`, which is why ``target`` reads ``Target``.
+Both are copy rules from the same document, and both exist so that no screen
+decides for itself what a stored code says to a human.
 """
 
 from __future__ import annotations
@@ -140,7 +147,7 @@ def format_outcome(outcome: str) -> str:
     the console has not been taught about should read as itself, not as one of the
     four it knows.
     """
-    key = str(outcome).strip()
+    key = outcome.strip()
     return OUTCOME_WORDS.get(key.lower(), key.replace("_", " ").capitalize())
 
 
@@ -151,7 +158,7 @@ def format_clock_time(micros: int) -> str:
     the operator may not be sitting in the same zone as the machine; a feed whose
     times silently shift with the viewer's clock cannot be compared against a log.
     """
-    return from_micros(int(micros)).strftime("%H:%M:%S")
+    return from_micros(micros).strftime("%H:%M:%S")
 
 
 def format_timestamp(micros: int) -> str:
@@ -160,7 +167,7 @@ def format_timestamp(micros: int) -> str:
     History spans days, so the date is part of the value there in a way it is not
     in a feed of the current run's ticks.
     """
-    return from_micros(int(micros)).strftime("%Y-%m-%d %H:%M:%S")
+    return from_micros(micros).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def format_rate_pct(value: float | None, *, places: int = PERCENT_PLACES) -> str:
