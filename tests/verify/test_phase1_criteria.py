@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import inspect
 import re
+import shutil
 import sqlite3
 from pathlib import Path
 from types import ModuleType
@@ -506,3 +507,54 @@ def test_the_first_start_branch_really_is_a_single_run_row(
         finally:
             conn.close()
     assert [r[0] for r in rows] == ["run-b"]
+
+
+# --------------------------------------------------------------------------- #
+# The workspace is actually removed. Found the hard way.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_console_workspace_is_gone_after_the_block(verify_module: ModuleType) -> None:
+    """The check that would have caught both temp-directory leaks, and did not exist.
+
+    `console_workspace` ended in `shutil.rmtree(..., ignore_errors=True)`. That is
+    right in intent - failing to delete a throwaway database is not a verdict about
+    the console - and it made the failure invisible, so a workspace that survived
+    said nothing at all. Roughly 450MB per run accumulated across two hundred and
+    fifty runs and filled a 923GB disk; the symptom was another agent's progress
+    file being truncated to zero bytes by `OSError: [Errno 28]`.
+
+    Neither `PermissionError` handling nor `ignore_errors=True` catches that. Only
+    asking whether the directory is gone does.
+    """
+    with verify_module.console_workspace() as tmp:
+        (tmp / "acsoe.sqlite").write_bytes(b"not really a database")
+        assert tmp.exists()
+    assert not tmp.exists()
+
+
+def test_a_workspace_still_held_open_is_reported_rather_than_swallowed(
+    verify_module: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A leak that cannot be seen is the case to design for.
+
+    The visible leak - `verify.py` printing a `PermissionError` above its report on
+    every phase-0 run - was two orders of magnitude smaller than the silent one, and
+    it was fixed first precisely because it announced itself. So the surviving case
+    now prints to stderr: not into the criterion's message, which must not turn a
+    PASS into a FAIL over a directory, but somewhere a person will see it.
+    """
+    with verify_module.console_workspace() as tmp:
+        db_path = tmp / "acsoe.sqlite"
+        held = sqlite3.connect(db_path)
+        held.execute("CREATE TABLE t (id INTEGER)")
+        held.commit()
+        try:
+            assert db_path.exists()
+        finally:
+            pass
+    survived = tmp.exists()
+    held.close()
+    shutil.rmtree(tmp, ignore_errors=True)
+    if survived:
+        assert "could not delete its workspace" in capsys.readouterr().err

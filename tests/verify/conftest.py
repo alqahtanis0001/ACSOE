@@ -40,6 +40,15 @@ import pytest
 RECURSION_GUARD_ENV = "ACSOE_VERIFY_IN_TOOLCHAIN"
 
 
+#: Compiled bytecode is three quarters of `tests/` by size and is regenerated on
+#: import anyway. Copying it into every fabricated tree filled the disk during a
+#: full-suite run - `OSError: [Errno 28] No space left on device` - once the Phase 2
+#: criteria added twenty more `tree_with_harness` copies to a suite that already had
+#: dozens. It also risks a stale `.pyc` shadowing a fabricated module, which would be
+#: a much worse afternoon than a full disk.
+_NO_PYCACHE = shutil.ignore_patterns("__pycache__", "*.pyc")
+
+
 @pytest.fixture(autouse=True)
 def _pristine_recursion_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear the recursion guard so these tests see the criterion's real behaviour.
@@ -61,7 +70,7 @@ def _pristine_recursion_guard(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def bare_tree(tmp_path: Path, repo_root: Path) -> Path:
     """A checkout carrying the documents and nothing that has been built yet."""
-    shutil.copytree(repo_root / "context", tmp_path / "context")
+    shutil.copytree(repo_root / "context", tmp_path / "context", ignore=_NO_PYCACHE)
     for name in ("AGENTS.md", "README.md"):
         shutil.copy(repo_root / name, tmp_path / name)
     return tmp_path
@@ -94,7 +103,7 @@ def tree_with_harness(bare_tree: Path, repo_root: Path) -> Path:
     them means the criterion is exercised against the real harness, which is the
     thing it will actually use.
     """
-    shutil.copytree(repo_root / "tests", bare_tree / "tests")
+    shutil.copytree(repo_root / "tests", bare_tree / "tests", ignore=_NO_PYCACHE)
     shutil.copytree(repo_root / "config", bare_tree / "config")
     return bare_tree
 

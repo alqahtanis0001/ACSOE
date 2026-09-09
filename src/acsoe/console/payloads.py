@@ -116,6 +116,11 @@ def state_payload(band: StatusBand, positions: tuple[PositionView, ...]) -> dict
         "band": {
             "mode": band.mode,
             "state": band.state,
+            # The persisted idle/running/frozen value behind `state`, and whether
+            # the current run had no `runs` row at all. Two different nulls: one is
+            # ordinary, one is a defect or a race, and both render the same word.
+            "system_mode": band.system_mode,
+            "run_record_missing": band.run_record_missing,
             "restarted": band.restarted,
             "run_id": band.run_id,
             "previous_run_id": band.previous_run_id,

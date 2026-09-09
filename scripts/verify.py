@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import gc
 import importlib
 import importlib.util
 import inspect
@@ -533,17 +534,23 @@ def check_orchestrator_empty_registry(ctx: VerifyContext) -> Outcome:
             return problem or pending("test doubles unavailable")
 
         registered = sum(len(chains[s]) for s in CHAIN_SYMBOLS)
-        orchestrator = orchestrator_cls(
-            config=doubles.config,
-            clock=doubles.clock,
-            clients=doubles.clients,
-            chains=chains_cls(
-                guard=chains["GUARD_CHAIN"],
-                opportunity=chains["OPPORTUNITY_CHAIN"],
-                manage=chains["MANAGE_CHAIN"],
-            ),
-        )
-        state = orchestrator.tick()
+        try:
+            orchestrator = orchestrator_cls(
+                config=doubles.config,
+                clock=doubles.clock,
+                clients=doubles.clients,
+                chains=chains_cls(
+                    guard=chains["GUARD_CHAIN"],
+                    opportunity=chains["OPPORTUNITY_CHAIN"],
+                    manage=chains["MANAGE_CHAIN"],
+                ),
+            )
+            state = orchestrator.tick()
+        finally:
+            # The doubles hold an open SQLite connection inside a temporary
+            # directory. Unclosed, Windows refuses the removal and the finalizer
+            # prints a `PermissionError` above the report on every run.
+            doubles.close()
 
         if not isinstance(state, Mapping):
             return failed("Orchestrator.tick() returned " + type(state).__name__ + ", not a State")
@@ -1574,12 +1581,101 @@ def console_workspace() -> Iterator[Path]:
     `PermissionError` - which `run_criterion` would report as a FAIL of the
     console rather than of the temporary directory. The database is a throwaway;
     failing to delete it is not a verdict about anything.
+
+    **It is not silent, though, and that is the correction.** This used to end in
+    `shutil.rmtree(..., ignore_errors=True)`, which is the same reasoning taken one
+    step too far: not failing the criterion became not saying anything at all. A
+    connection the criteria never closed then leaked roughly 450MB per run, without
+    a word, until the disk was full. The visible leak in `tests/harness/doubles.py`
+    was two orders of magnitude smaller and was fixed first *because* it was
+    visible. See `remove_workspace`.
     """
     tmp = Path(tempfile.mkdtemp(prefix="acsoe-verify-console-"))
     try:
         yield tmp
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        remove_workspace(tmp)
+
+
+#: Every temporary directory this script makes. One prefix per helper, all under
+#: `acsoe-verify-`, so `sweep_stale_workspaces` can recognise its own leftovers and
+#: nothing else.
+WORKSPACE_PREFIX = "acsoe-verify-"
+
+
+def directory_bytes(path: Path) -> int:
+    """Total size on disk, best effort. Never raises - it is only ever a number in a
+    warning, and a warning that raises is worse than a missing figure."""
+    total = 0
+    with contextlib.suppress(OSError):
+        for entry in path.rglob("*"):
+            with contextlib.suppress(OSError):
+                if entry.is_file():
+                    total += entry.stat().st_size
+    return total
+
+
+def remove_workspace(tmp: Path) -> bool:
+    """Delete a criterion's workspace, and **say so on stderr if it survives**.
+
+    Two attempts with a `gc.collect()` between them: a connection dropped without
+    being closed is released when its object is collected, and a criterion that
+    returned early through one of two dozen `return pending(...)` paths may well
+    have left one. Whatever survives that is a real leak, and it is reported rather
+    than swallowed - with its size, because the one time this mattered the evidence
+    for what had actually consumed the disk was deleted along with the leak.
+
+    stderr, not the criterion's message. A workspace that will not delete is not a
+    verdict about the console - it must not turn a PASS into a FAIL - but it is
+    something a person has to be told, and printing above the report is exactly how
+    the smaller, visible sibling of this bug was found in the first place.
+    """
+    shutil.rmtree(tmp, ignore_errors=True)
+    if not tmp.exists():
+        return True
+    gc.collect()
+    shutil.rmtree(tmp, ignore_errors=True)
+    if not tmp.exists():
+        return True
+    size_mb = directory_bytes(tmp) / (1024 * 1024)
+    print(
+        f"warning: verify could not delete its workspace {tmp} ({size_mb:.1f} MB) - "
+        "something is still holding a file open. This is a leak, not a verdict about "
+        "any criterion.",
+        file=sys.stderr,
+    )
+    return False
+
+
+def sweep_stale_workspaces(*, report: bool = True) -> tuple[int, int]:
+    """Remove `acsoe-verify-*` leftovers from earlier runs. Returns (removed, bytes).
+
+    This process is the only one that knows those directories are safe to delete,
+    and a run that finds fifty of its own leftovers should not leave them there.
+    Best effort throughout: a directory another verify run is using right now simply
+    will not delete, and that is fine - it is swept by whichever run goes last.
+
+    Deliberately scoped to the exact prefix this script mints. It never touches
+    `pytest-of-*`, which belongs to pytest, or anything else in the temp directory.
+    """
+    root = Path(tempfile.gettempdir())
+    removed = 0
+    freed = 0
+    with contextlib.suppress(OSError):
+        for entry in sorted(root.glob(WORKSPACE_PREFIX + "*")):
+            if not entry.is_dir():
+                continue
+            size = directory_bytes(entry)
+            shutil.rmtree(entry, ignore_errors=True)
+            if not entry.exists():
+                removed += 1
+                freed += size
+    if report and removed:
+        print(
+            f"swept {removed} stale verify workspace(s), {freed / (1024 * 1024):.1f} MB",
+            file=sys.stderr,
+        )
+    return removed, freed
 
 
 def seeded_console_db(directory: Path) -> tuple[Path | None, Outcome | None]:
@@ -1649,13 +1745,28 @@ def console_app(
     return factory(config, db_path=db_path), None
 
 
+#: Every attribute on `app.state` that owns a SQLite connection.
+#:
+#: **Both of them.** The console has two by design: spec 17's read-only reader and
+#: spec 24's narrow read-write writer for the `commands` table alone. The
+#: application closes both in its lifespan shutdown - and these criteria drive the
+#: ASGI callable directly, the way they must to avoid an HTTP client, so no
+#: lifespan ever runs. Closing only the reader left the writer holding
+#: `acsoe.sqlite` open, `shutil.rmtree(ignore_errors=True)` then failed silently,
+#: and roughly 450MB of seeded database survived every console criterion on every
+#: run. Two hundred and fifty of those filled a 923GB disk.
+CONSOLE_CONNECTION_ATTRS = ("reader", "command_writer")
+
+
 def close_console(app: Any) -> None:
-    """Release whatever the application is holding the database open with."""
-    reader = getattr(getattr(app, "state", None), "reader", None)
-    closer = getattr(reader, "close", None)
-    if callable(closer):
-        with contextlib.suppress(Exception):
-            closer()
+    """Release everything the application is holding the database open with."""
+    state = getattr(app, "state", None)
+    for attr in CONSOLE_CONNECTION_ATTRS:
+        holder = getattr(state, attr, None)
+        closer = getattr(holder, "close", None)
+        if callable(closer):
+            with contextlib.suppress(Exception):
+                closer()
 
 
 # --- driving an ASGI application without an HTTP client -------------------- #
@@ -2501,6 +2612,19 @@ def _keep_only_latest_run(db_path: Path) -> int:
         conn.close()
 
 
+def _count_runs(db_path: Path) -> int:
+    """How many `runs` rows the database holds, on a connection that gets closed.
+
+    Written out rather than chained as `sqlite3.connect(...).execute(...)`, which is
+    where this criterion was leaking a handle into its own workspace.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0])
+    finally:
+        conn.close()
+
+
 def check_console_restart_banner(ctx: VerifyContext) -> Outcome:
     """`Idle - restarted, not trading` when the daemon's `run_id` has changed.
 
@@ -2525,7 +2649,7 @@ def check_console_restart_banner(ctx: VerifyContext) -> Outcome:
                 if remaining != 1:
                     return failed("could not reduce the seed to a single run row")
             else:
-                runs = sqlite3.connect(db_path).execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+                runs = _count_runs(db_path)
                 if int(runs) < 2:
                     return failed("the seed carries " + str(runs) + " run rows, expected at least 2")
 
@@ -2593,10 +2717,14 @@ class _RoundTripConfig:
 
 
 class _RoundTripClock:
-    """Monotonic, injected. `now()` advances so `claimed_at` and `consumed_at` differ."""
+    """Monotonic, injected. `now()` advances so `claimed_at` and `consumed_at` differ.
 
-    def __init__(self) -> None:
-        self._t = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
+    `start` is a parameter because a criterion that drives a daemon over a *seeded*
+    database has to run it after the seed - see `_moment_after_newest_run`.
+    """
+
+    def __init__(self, start: datetime | None = None) -> None:
+        self._t = start if start is not None else datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
 
     def now(self) -> datetime:
         self._t += timedelta(seconds=1)
@@ -2793,6 +2921,955 @@ def check_commands_round_trip(ctx: VerifyContext) -> Outcome:
 
 
 # --------------------------------------------------------------------------- #
+# Phase 2 - the data spine. Spec 33.
+# --------------------------------------------------------------------------- #
+#
+# Six criteria alongside `commands_round_trip`, which the lead registered at the
+# phase opening. All six are PENDING on the tree they were written against: engines
+# 1 to 4, the recorder digest and the historical loader are A's, and none of them
+# exists yet. That is the point. Criteria exist so they can report PENDING, and
+# PENDING is what stops an empty phase looking finished.
+#
+# The same two rules that shaped the Phase 1 criteria shape these:
+#
+# * **No criterion may read `data/`, `logs/` or `models/`.** They are gitignored, so
+#   a criterion depending on one cannot pass on a fresh clone. Everything here reads
+#   a committed fixture under `tests/fixtures/` or fabricates its subject into a
+#   temporary directory.
+# * **No criterion may need the network, a key, or a browser.** The exchange values
+#   come from the fake Kraken client over the committed `tests/fixtures/kraken/`
+#   envelopes; the console is driven through the ASGI interface.
+#
+# A third rule is specific to this phase. Several of these criteria judge code that
+# does not exist yet, so each one names the surface it expects in its PENDING line -
+# the way `CONSOLE_CONTRACT` told specs 19 to 24 what to build. **The contract is a
+# proposal to the owning agent, not a decree**; it was messaged to A when these
+# criteria were registered, and moving it is a change to this file, not a change to
+# the phase.
+
+
+def _with_contract(problem: Outcome | None, absent: str, contract: str) -> Outcome:
+    """A PENDING that always names the surface the criterion is waiting for.
+
+    `try_import` reports "module does not exist yet" and stops there, which is the
+    right message for a criterion whose subject is already agreed. It is the wrong
+    one here: five of these six criteria judge code nobody has written, and a
+    PENDING line that does not say what to build makes the owning agent come and
+    read this file. A FAIL is never rewritten - a broken environment is a broken
+    environment and the contract is beside the point.
+    """
+    if problem is not None and problem.result is Result.FAIL:
+        return problem
+    return pending(absent + " - " + contract)
+
+
+# --- recording_span_continuous --------------------------------------------- #
+
+RECORDING_REPORT = Path("tests") / "fixtures" / "recording_report.json"
+
+#: Twenty-four hours, in microseconds. `architecture-context.md` fixes microseconds
+#: since epoch as the project's timestamp unit, so that is the unit this report is
+#: read in; an ISO-8601 string is accepted too, because a digest meant to be read by
+#: a person is a reasonable place for one.
+MIN_RECORDING_SPAN_US = 24 * 60 * 60 * 1_000_000
+
+RECORDING_REPORT_CONTRACT = (
+    "expected tests/fixtures/recording_report.json: "
+    '{"span": {"start": .., "end": ..}, '
+    '"segments": [{"start": .., "end": ..}, ..], '
+    '"gaps": [{"start": .., "end": .., "cause": ".."}, ..]} '
+    "- every moment as microseconds since epoch or ISO-8601, and the segments plus "
+    "the gaps tiling the span exactly"
+)
+
+
+def _report_moment(value: Any, what: str) -> tuple[int | None, str]:
+    """One instant out of the report, in microseconds. Returns (value, problem)."""
+    if isinstance(value, bool):
+        return None, what + " is a bool, not an instant"
+    if isinstance(value, int):
+        return value, ""
+    if isinstance(value, str):
+        try:
+            moment = datetime.fromisoformat(value)
+        except ValueError:
+            return None, what + " is neither microseconds nor ISO-8601: " + repr(value)
+        if moment.tzinfo is None:
+            return None, what + " is a naive datetime; UTC only"
+        return int(moment.timestamp() * 1_000_000), ""
+    return None, what + " is not an instant: " + repr(value)
+
+
+def _report_interval(entry: Any, what: str) -> tuple[tuple[int, int] | None, str]:
+    if not isinstance(entry, Mapping):
+        return None, what + " is not an object"
+    start, problem = _report_moment(entry.get("start"), what + ".start")
+    if start is None:
+        return None, problem
+    end, problem = _report_moment(entry.get("end"), what + ".end")
+    if end is None:
+        return None, problem
+    if end <= start:
+        return None, what + " ends at or before it starts"
+    return (start, end), ""
+
+
+def check_recording_span_continuous(ctx: VerifyContext) -> Outcome:
+    """At least 24 continuous hours, with **every break accounted for**.
+
+    The accounting is the whole criterion. A report that simply shows no gaps is
+    not the same as one that accounts for them: an outage the recorder never
+    noticed leaves no gap entry and a naive check reads that as perfect uptime.
+    So the segments and the gaps are required to *tile* the span - every moment in
+    it is either recorded or is inside a break carrying a stated cause, and no
+    moment is both. A hole in the tiling is a break nobody accounted for, and it
+    is a FAIL however few gap entries the report happens to carry.
+    """
+    path = ctx.root / RECORDING_REPORT
+    if not path.is_file():
+        return pending(
+            "tests/fixtures/recording_report.json does not exist yet (spec 27) - "
+            + RECORDING_REPORT_CONTRACT
+        )
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return failed("recording_report.json is not valid JSON: " + str(exc))
+    if not isinstance(report, Mapping):
+        return failed("recording_report.json is not a JSON object")
+
+    for key in ("span", "segments", "gaps"):
+        if key not in report:
+            return pending(
+                "recording_report.json carries no `" + key + "` yet - " + RECORDING_REPORT_CONTRACT
+            )
+
+    span, problem = _report_interval(report["span"], "span")
+    if span is None:
+        return failed(problem)
+    span_start, span_end = span
+    if span_end - span_start < MIN_RECORDING_SPAN_US:
+        hours = (span_end - span_start) / 3_600_000_000
+        return failed(f"the report spans {hours:.2f}h, and the criterion asks for 24h")
+
+    segments_raw = report["segments"]
+    gaps_raw = report["gaps"]
+    if not isinstance(segments_raw, Sequence) or isinstance(segments_raw, str):
+        return failed("`segments` is not a list")
+    if not isinstance(gaps_raw, Sequence) or isinstance(gaps_raw, str):
+        return failed("`gaps` is not a list")
+    if not segments_raw:
+        return failed("the report accounts for no recorded segment at all")
+
+    intervals: list[tuple[int, int, str]] = []
+    for index, entry in enumerate(segments_raw):
+        interval, problem = _report_interval(entry, f"segments[{index}]")
+        if interval is None:
+            return failed(problem)
+        intervals.append((interval[0], interval[1], "recorded"))
+    for index, entry in enumerate(gaps_raw):
+        interval, problem = _report_interval(entry, f"gaps[{index}]")
+        if interval is None:
+            return failed(problem)
+        cause = entry.get("cause") if isinstance(entry, Mapping) else None
+        if not isinstance(cause, str) or not cause.strip():
+            return failed(
+                f"gaps[{index}] carries no `cause`. A break with no cause is an outage "
+                "mistaken for a quiet market, which is the one thing this report exists "
+                "to tell apart."
+            )
+        intervals.append((interval[0], interval[1], "gap"))
+
+    intervals.sort()
+    cursor = span_start
+    for start, end, kind in intervals:
+        if start > cursor:
+            unaccounted = (start - cursor) / 1_000_000
+            return failed(
+                f"{unaccounted:.0f}s of the span is neither a recorded segment nor an "
+                "accounted break. A report that shows no gap there is not the same as "
+                "one that accounts for it."
+            )
+        if start < cursor:
+            return failed(f"a {kind} interval overlaps the one before it")
+        cursor = end
+    if cursor < span_end:
+        trailing = (span_end - cursor) / 1_000_000
+        return failed(f"the last {trailing:.0f}s of the span is unaccounted for")
+    if cursor > span_end:
+        return failed("the segments and gaps run past the end of the declared span")
+
+    hours = (span_end - span_start) / 3_600_000_000
+    return passed(
+        f"{hours:.1f}h span tiled exactly by {len(segments_raw)} recorded segment(s) and "
+        f"{len(gaps_raw)} accounted break(s); every break carries a cause"
+    )
+
+
+# --- candles_match_kraken_ohlc --------------------------------------------- #
+
+OHLC_FIXTURE = Path("tests") / "fixtures" / "kraken" / "ohlc.json"
+
+#: Three pairs, per the phase row in `ai-workflow-rules.md`.
+OHLC_MIN_PAIRS = 3
+
+#: Volume tolerance, as the phase row states it. Prices are compared against the
+#: pair's own `tick_size` **as reported by `AssetPairs`** and never against a
+#: constant; there is deliberately no price tolerance named here.
+VOLUME_TOLERANCE = Decimal("0.001")
+
+OHLC_FIELDS = ("open", "high", "low", "close")
+
+#: Where a builder may live. A is free to put it in any of these; naming three
+#: rather than one keeps this criterion from dictating a module layout it does not
+#: own.
+CANDLE_BUILDER_MODULES = (
+    "acsoe.engines.market_sensor.candles",
+    "acsoe.engines.market_sensor.contracts",
+    "acsoe.engines.market_sensor.engine",
+)
+
+CANDLES_CONTRACT = (
+    "expected: tests/fixtures/kraken/ohlc.json as "
+    '{"interval_s": 900, "pairs": {"<PAIR>": {"trades": [..], "ohlc": '
+    '[{"ts": .., "open": .., "high": .., "low": .., "close": .., "volume": ..}, ..]}}} '
+    "for at least 3 pairs that also appear in tests/fixtures/kraken/asset_pairs.json; "
+    "and `build_candles(trades, *, interval_s)` in one of "
+    + ", ".join(CANDLE_BUILDER_MODULES)
+    + ", returning one candle per closed bar carrying ts/open/high/low/close/volume"
+)
+
+
+def _field(obj: Any, name: str) -> Any:
+    """A field off a mapping or off a model, without caring which A chose."""
+    if isinstance(obj, Mapping):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def _decimal_or_none(value: Any) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return as_decimal(value, "value")
+    except (TypeError, ValueError):
+        return None
+
+
+def _pair_tick_sizes(root: Path) -> tuple[dict[str, Decimal] | None, Outcome | None]:
+    """`tick_size` per pair, **as `AssetPairs` reports it**.
+
+    Read through the fake Kraken client rather than out of the JSON directly. The
+    phase row says "as reported by `AssetPairs`", and the point of that wording is
+    that the tolerance is an exchange value the system fetches, not a number a test
+    knows. Going through the client keeps the criterion reading it the same way the
+    engines do, so a change in how a pair rule is parsed reaches this gate too.
+    """
+    fixture = root / "tests" / "fixtures" / "kraken" / "asset_pairs.json"
+    if not fixture.is_file():
+        return None, pending("tests/fixtures/kraken/asset_pairs.json does not exist yet")
+    module, problem = try_import("tests.harness.fake_kraken")
+    if module is None:
+        return None, problem
+    client_cls, missing = module_attr(module, "FakeKrakenClient")
+    if client_cls is None:
+        return None, pending("test doubles unavailable: " + missing)
+    snapshot = asyncio.run(client_cls().asset_pairs())
+    return {pair: rule.tick_size for pair, rule in snapshot.pairs.items()}, None
+
+
+def _candle_builder() -> tuple[Any, Outcome | None]:
+    for dotted in CANDLE_BUILDER_MODULES:
+        module, problem = try_import(dotted)
+        if module is None:
+            if problem is not None and problem.result is Result.FAIL:
+                return None, problem
+            continue
+        builder = getattr(module, "build_candles", None)
+        if builder is not None:
+            return builder, None
+    return None, pending("no `build_candles` exists yet (spec 28) - " + CANDLES_CONTRACT)
+
+
+def check_candles_match_kraken_ohlc(ctx: VerifyContext) -> Outcome:
+    """Built 15-minute candles against Kraken's own OHLC, for three pairs.
+
+    Every OHLC field within one `tick_size` **for that pair as `AssetPairs` reports
+    it**, and volume within 0.1%. The tolerance is fetched, never hardcoded: rule 2
+    of `trading-invariants.md` says any tick size an agent remembers is stale, and a
+    criterion carrying its own copy of one would be asserting against a number the
+    exchange has already moved.
+    """
+    fixture_path = ctx.root / OHLC_FIXTURE
+    if not fixture_path.is_file():
+        return pending(
+            "tests/fixtures/kraken/ohlc.json does not exist yet (spec 28) - " + CANDLES_CONTRACT
+        )
+    try:
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return failed("ohlc.json is not valid JSON: " + str(exc))
+    if not isinstance(fixture, Mapping) or not isinstance(fixture.get("pairs"), Mapping):
+        return pending("ohlc.json carries no `pairs` yet - " + CANDLES_CONTRACT)
+
+    pairs = fixture["pairs"]
+    if len(pairs) < OHLC_MIN_PAIRS:
+        return failed(
+            f"ohlc.json covers {len(pairs)} pair(s); the phase row asks for "
+            f"{OHLC_MIN_PAIRS}"
+        )
+    interval_s = fixture.get("interval_s", 900)
+    if not isinstance(interval_s, int) or interval_s <= 0:
+        return failed("ohlc.json `interval_s` is not a positive integer")
+
+    with root_import_path(ctx.root):
+        tick_sizes, early = _pair_tick_sizes(ctx.root)
+        if tick_sizes is None:
+            return early or pending("no pair rules to read a tolerance from")
+        builder, early = _candle_builder()
+        if builder is None:
+            return early or pending("no candle builder yet - " + CANDLES_CONTRACT)
+
+        checked = 0
+        for pair, payload in pairs.items():
+            if pair not in tick_sizes:
+                return failed(
+                    f"{pair} is in ohlc.json and not in asset_pairs.json, so its "
+                    "tick_size cannot be read from AssetPairs and the tolerance would "
+                    "have to be invented"
+                )
+            tick = tick_sizes[pair]
+            if not isinstance(payload, Mapping):
+                return failed(f"ohlc.json pairs[{pair}] is not an object")
+            trades = payload.get("trades")
+            expected_bars = payload.get("ohlc")
+            if trades is None or expected_bars is None:
+                return pending(
+                    f"ohlc.json pairs[{pair}] carries no trades/ohlc yet - " + CANDLES_CONTRACT
+                )
+            built = builder(trades, interval_s=interval_s)
+            by_ts: dict[int, Any] = {}
+            for candle in built:
+                ts = _field(candle, "ts")
+                if not isinstance(ts, int):
+                    return failed(f"a built candle for {pair} carries no integer `ts`")
+                by_ts[ts] = candle
+
+            for expected in expected_bars:
+                ts = _field(expected, "ts")
+                if not isinstance(ts, int):
+                    return failed(f"ohlc.json has a {pair} bar with no integer `ts`")
+                candle = by_ts.get(ts)
+                if candle is None:
+                    return failed(
+                        f"the builder produced no {pair} candle at ts={ts}, which Kraken's "
+                        "own OHLC has. A dropped bar is a missing decision bar."
+                    )
+                for name in OHLC_FIELDS:
+                    want = _decimal_or_none(_field(expected, name))
+                    got = _decimal_or_none(_field(candle, name))
+                    if want is None or got is None:
+                        return failed(f"{pair} at ts={ts}: `{name}` is missing or not a number")
+                    if abs(got - want) > tick:
+                        return failed(
+                            f"{pair} at ts={ts}: {name} {got} vs Kraken {want}, which is "
+                            f"more than one tick_size ({tick}) from AssetPairs"
+                        )
+                want_vol = _decimal_or_none(_field(expected, "volume"))
+                got_vol = _decimal_or_none(_field(candle, "volume"))
+                if want_vol is None or got_vol is None:
+                    return failed(f"{pair} at ts={ts}: `volume` is missing or not a number")
+                allowed = abs(want_vol) * VOLUME_TOLERANCE
+                if abs(got_vol - want_vol) > allowed:
+                    return failed(
+                        f"{pair} at ts={ts}: volume {got_vol} vs Kraken {want_vol}, outside 0.1%"
+                    )
+                checked += 1
+
+    return passed(
+        f"{len(pairs)} pairs, {checked} bar(s): every OHLC field within one tick_size as "
+        "AssetPairs reports it, volume within 0.1%"
+    )
+
+
+# --- data_guard_blocks_bad_data -------------------------------------------- #
+
+#: The three conditions the phase row names, plus the pass case. A gate with only a
+#: happy path is incomplete; a gate with only block cases is a gate that blocks
+#: everything and proves nothing, so the clean case is not optional either.
+GUARD_BLOCK_SCENARIOS = ("stale", "negative_spread", "missing_candle")
+GUARD_CLEAN_SCENARIO = "clean"
+
+DATA_GUARD_CONTRACT = (
+    "expected: acsoe.engines.data_guard.contracts.BAD_DATA_SCENARIOS mapping "
+    + repr([*GUARD_BLOCK_SCENARIOS, GUARD_CLEAN_SCENARIO])
+    + " to a `state` mapping ready to hand to the engine, and "
+    "acsoe.engines.data_guard.engine exposing the BaseEngine subclass with "
+    "name == 'data_guard'. The fixtures live in A's own contracts module because the "
+    "fields they set belong to engines 1 and 3, and this gate must not hardcode a "
+    "field name it does not own"
+)
+
+
+def _engine_named(module: ModuleType, name: str) -> Any:
+    """The `BaseEngine` subclass in `module` whose `name` is `name`."""
+    for value in vars(module).values():
+        if inspect.isclass(value) and getattr(value, "name", None) == name:
+            return value
+    return None
+
+
+def check_data_guard_blocks_bad_data(ctx: VerifyContext) -> Outcome:
+    """Injected stale, negative-spread and missing-candle data each block; clean passes.
+
+    Four cases in one criterion, because three block cases without a pass case would
+    be satisfied by a gate that refuses everything, and a pass case without the block
+    cases would be satisfied by a gate that refuses nothing.
+    """
+    with root_import_path(ctx.root):
+        contracts_mod, problem = try_import("acsoe.engines.data_guard.contracts")
+        if contracts_mod is None:
+            return _with_contract(
+                problem,
+                "engine 4 `data_guard` does not exist yet (spec 29)",
+                DATA_GUARD_CONTRACT,
+            )
+        engine_mod, problem = try_import("acsoe.engines.data_guard.engine")
+        if engine_mod is None:
+            return problem or pending("acsoe.engines.data_guard.engine does not exist yet")
+        scenarios = getattr(contracts_mod, "BAD_DATA_SCENARIOS", None)
+        if not isinstance(scenarios, Mapping):
+            return pending("no BAD_DATA_SCENARIOS yet - " + DATA_GUARD_CONTRACT)
+        missing = [
+            key
+            for key in (*GUARD_BLOCK_SCENARIOS, GUARD_CLEAN_SCENARIO)
+            if key not in scenarios
+        ]
+        if missing:
+            return pending(
+                "BAD_DATA_SCENARIOS is missing " + ", ".join(missing) + " - " + DATA_GUARD_CONTRACT
+            )
+
+        engine_cls = _engine_named(engine_mod, "data_guard")
+        if engine_cls is None:
+            return pending(
+                "acsoe.engines.data_guard.engine exposes no class with name == 'data_guard'"
+            )
+        if not getattr(engine_cls, "is_gate", False):
+            return failed(
+                "data_guard declares is_gate = False. It is the first real gate in the "
+                "system and engine-contracts.md marks it Y."
+            )
+
+        doubles, problem = _harness_doubles()
+        if doubles is None:
+            return problem or pending("test doubles unavailable")
+        try:
+            engine = engine_cls(doubles.config) if _takes_config(engine_cls) else engine_cls()
+            context = _guard_context(doubles)
+            if context is None:
+                return pending("acsoe.core.contracts.EngineContext does not exist yet")
+
+            reasons: dict[str, str] = {}
+            for key in GUARD_BLOCK_SCENARIOS:
+                state = dict(scenarios[key])
+                result = engine.process(context, state)
+                if not getattr(result, "blocks_trading", False):
+                    return failed(
+                        f"injected {key.replace('_', ' ')} data did not block. A gate that "
+                        "passes data it does not trust is not a gate."
+                    )
+                reason = getattr(result, "reason", None)
+                if not isinstance(reason, str) or not reason.strip():
+                    return failed(f"the {key} block carries no reason for the operator")
+                reasons[key] = reason.strip()
+
+            clean = engine.process(context, dict(scenarios[GUARD_CLEAN_SCENARIO]))
+            if getattr(clean, "blocks_trading", False):
+                return failed(
+                    "clean data blocked with reason "
+                    + repr(getattr(clean, "reason", None))
+                    + ". A gate that blocks everything proves nothing."
+                )
+        finally:
+            doubles.close()
+
+    if len(set(reasons.values())) != len(reasons):
+        return failed(
+            "two of the three conditions report the same reason, so the operator cannot "
+            "tell a stale feed from a crossed book: " + repr(sorted(reasons.values()))
+        )
+    return passed(
+        "stale, negative-spread and missing-candle each block with a distinct "
+        "operator-readable reason, and clean data passes"
+    )
+
+
+def _takes_config(engine_cls: Any) -> bool:
+    try:
+        parameters = inspect.signature(engine_cls).parameters
+    except (TypeError, ValueError):
+        return False
+    return bool(parameters)
+
+
+def _guard_context(doubles: Any) -> Any:
+    """An `EngineContext` for one tick, built from the shared doubles."""
+    core_mod, problem = try_import("acsoe.core.contracts")
+    if core_mod is None or problem is not None:
+        return None
+    context_cls = getattr(core_mod, "EngineContext", None)
+    if context_cls is None:
+        return None
+    return context_cls(
+        now=doubles.clock.now(),
+        cycle_id=1,
+        run_id="verify-data-guard",
+        config=doubles.config,
+        clients=doubles.clients,
+    )
+
+
+# --- historical_loader_reports_gaps ---------------------------------------- #
+
+#: A fabricated archive: 15-minute bars with three holes of 1, 2 and 4 missing bars.
+#: Deliberately three holes of *different* sizes, so a loader that reported the
+#: number of missing bars rather than the number of gaps reports 7 and is caught.
+ARCHIVE_INTERVAL_S = 900
+ARCHIVE_BARS = 48
+ARCHIVE_HOLES = ((10, 1), (20, 2), (33, 4))
+
+HISTORICAL_CONTRACT = (
+    "expected: acsoe.research.historical.load_archive(path, *, interval_s) returning a "
+    "report carrying `gap_count: int`, `row_count: int`, `timestamps` (the archive's "
+    "own timestamps, in seconds), `duration_buckets` and a largest-gap figure"
+)
+
+
+def _fabricate_archive(path: Path) -> tuple[list[int], int]:
+    """Write a Kraken OHLCVT CSV with known holes. Returns (timestamps, gap count)."""
+    skipped: set[int] = set()
+    for start, length in ARCHIVE_HOLES:
+        skipped.update(range(start, start + length))
+    base = 1_700_000_000
+    lines: list[str] = []
+    timestamps: list[int] = []
+    for index in range(ARCHIVE_BARS):
+        if index in skipped:
+            continue
+        ts = base + index * ARCHIVE_INTERVAL_S
+        timestamps.append(ts)
+        price = 100 + index
+        lines.append(f"{ts},{price}.0,{price}.5,{price}.0,{price}.2,1.5,7")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return timestamps, len(ARCHIVE_HOLES)
+
+
+def check_historical_loader_reports_gaps(ctx: VerifyContext) -> Outcome:
+    """A fabricated archive with a known number of holes reports exactly that number.
+
+    And a second assertion the first one cannot make: **no timestamp in the output
+    was absent from the input.** Counting gaps correctly while also emitting filled
+    rows passes the count check and still poisons Phase 4's triple-barrier labels,
+    because a synthesised candle at a price that never traded invents a barrier
+    touch that never happened. Spec 30 calls that its single most important
+    sentence, so the gate asserts it separately rather than trusting the count.
+    """
+    with (
+        root_import_path(ctx.root),
+        tempfile.TemporaryDirectory(prefix="acsoe-verify-archive-") as tmp,
+    ):
+        module, problem = try_import("acsoe.research.historical")
+        if module is None:
+            return _with_contract(
+                problem,
+                "acsoe.research.historical does not exist yet (spec 30)",
+                HISTORICAL_CONTRACT,
+            )
+        loader, missing = module_attr(module, "load_archive")
+        if loader is None:
+            return pending(missing + " - " + HISTORICAL_CONTRACT)
+
+        archive = Path(tmp) / "XBTUSD_15.csv"
+        timestamps, expected_gaps = _fabricate_archive(archive)
+        report = loader(archive, interval_s=ARCHIVE_INTERVAL_S)
+
+        gap_count = _field(report, "gap_count")
+        if not isinstance(gap_count, int):
+            return pending("the report carries no integer `gap_count` yet - " + HISTORICAL_CONTRACT)
+        if gap_count != expected_gaps:
+            return failed(
+                f"the archive has {expected_gaps} hole(s) of "
+                + ", ".join(str(n) for _, n in ARCHIVE_HOLES)
+                + f" bars and the loader reported {gap_count}. A loader that silently "
+                "filled the holes, or that counted missing bars rather than gaps, "
+                "reports a different number - which is why the holes differ in size."
+            )
+
+        row_count = _field(report, "row_count")
+        if isinstance(row_count, int) and row_count != len(timestamps):
+            return failed(
+                f"the archive carries {len(timestamps)} rows and the report says "
+                f"{row_count}. A row the archive did not contain is an invented candle."
+            )
+
+        emitted = _field(report, "timestamps")
+        if emitted is None:
+            return pending(
+                "the report exposes no `timestamps` to check against the input - "
+                + HISTORICAL_CONTRACT
+            )
+        try:
+            emitted_set = {int(value) for value in emitted}
+        except (TypeError, ValueError):
+            return failed("the report's `timestamps` are not integers")
+        invented = sorted(emitted_set - set(timestamps))
+        if invented:
+            return failed(
+                f"{len(invented)} timestamp(s) in the output were absent from the archive, "
+                f"first at {invented[0]}. A missing candle means no trades occurred; "
+                "interpolating one fabricates the outcome Phase 4 then labels."
+            )
+
+        for name in ("duration_buckets", "largest_gap_bars", "largest_gap"):
+            if _field(report, name) is not None:
+                break
+        else:
+            return pending(
+                "the report neither buckets gap durations nor reports the largest - "
+                + HISTORICAL_CONTRACT
+            )
+
+    return passed(
+        f"{expected_gaps} gaps of "
+        + "/".join(str(n) for _, n in ARCHIVE_HOLES)
+        + f" bars reported exactly, over {len(timestamps)} rows, and no timestamp in the "
+        "output was absent from the input"
+    )
+
+
+# --- console_shows_live_rows ----------------------------------------------- #
+
+
+def _moment_after_newest_run(db_path: Path) -> datetime:
+    """A clock reading later than every `runs` row already in the database.
+
+    The seed's timestamps are fixed constants with no relationship to wall time -
+    that is deliberate, so two seedings are byte-identical - and they happen to sit
+    in the future. A daemon driven from an ordinary fixed clock would therefore
+    write a `runs` row that sorts *before* every seeded one, and a console that
+    reads the latest run would render seeded history and call it current. Starting
+    the daemon after the seed is what a real daemon does; it weakens nothing,
+    because the rows the criterion then asserts on are still written by a real
+    orchestrator through a real store.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute("SELECT MAX(started_at) FROM runs").fetchone()
+    finally:
+        conn.close()
+    newest = int(row[0] or 0)
+    return datetime.fromtimestamp(newest / 1_000_000, tz=UTC) + timedelta(minutes=1)
+
+
+#: The four engines this phase builds. The criterion is PENDING until at least one
+#: of them is registered, because until then no daemon can write a live row at all.
+PHASE_2_ENGINE_NUMBERS = frozenset({1, 2, 3, 4})
+
+LIVE_ROWS_CONTRACT = (
+    "expected: engines 1 to 4 registered in bootstrap.py, and a tick of the real "
+    "Orchestrator over the real StoreClient leaving at least one row carrying the "
+    "daemon's own run_id that the console then renders"
+)
+
+
+def _run_ids_in_store(db_path: Path) -> set[str]:
+    """Every `run_id` any console-rendered table currently carries."""
+    conn = sqlite3.connect(db_path)
+    found: set[str] = set()
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        for table in sorted(tables):
+            columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if "run_id" not in columns:
+                continue
+            # The table name comes from sqlite_master, never from input.
+            for row in conn.execute(f"SELECT DISTINCT run_id FROM {table}"):
+                if row[0] is not None:
+                    found.add(str(row[0]))
+    finally:
+        conn.close()
+    return found
+
+
+class _LiveClients:
+    """The three injected clients, with the *real* store and the fake exchange.
+
+    `_RoundTripClients` next door exposes its three as read-only properties, which
+    is right for the criterion it was written for and wrong here: this one needs a
+    fake Kraken client, because a Phase 2 engine that fetched over the network
+    inside a phase gate would be a criterion that cannot run on a fresh clone.
+    """
+
+    def __init__(self, store: Any, kraken: Any, recorder: Any) -> None:
+        self.store = store
+        self.kraken = kraken
+        self.recorder = recorder
+
+
+def _registered_phase_2_engines(bootstrap: ModuleType) -> list[str]:
+    """The names of engines 1 to 4 that are actually wired into a chain."""
+    built: list[str] = []
+    for symbol in CHAIN_SYMBOLS:
+        for engine in getattr(bootstrap, symbol, ()) or ():
+            if getattr(engine, "number", None) in PHASE_2_ENGINE_NUMBERS:
+                built.append(str(getattr(engine, "name", type(engine).__name__)))
+    return built
+
+
+def check_console_shows_live_rows(ctx: VerifyContext) -> Outcome:
+    """The console renders rows a daemon wrote, not only rows the seed wrote.
+
+    **Distinguished by run**, which is what makes the criterion unsatisfiable by
+    seeded data: the daemon mints its own `run_id` and no seeded row carries it, so
+    a console that renders the seed and nothing else cannot pass this by accident.
+    """
+    with root_import_path(ctx.root), console_workspace() as tmp:
+        bootstrap, problem = try_import("acsoe.bootstrap")
+        if bootstrap is None:
+            return problem or pending("acsoe.bootstrap does not exist yet")
+        built = _registered_phase_2_engines(bootstrap)
+        if not built:
+            return pending(
+                "no Phase 2 engine is registered in bootstrap.py yet (specs 26-29) - "
+                + LIVE_ROWS_CONTRACT
+            )
+
+        config, early = console_config()
+        if config is None:
+            return early or pending("no config to build the console with")
+        db_path, early = seeded_console_db(tmp)
+        if db_path is None:
+            return early or pending("no seeded database")
+
+        seeded_runs = _run_ids_in_store(db_path)
+
+        client_mod, problem = try_import("acsoe.clients.store.client")
+        if client_mod is None:
+            return problem or pending("acsoe.clients.store.client does not exist yet")
+        store_cls, missing = module_attr(client_mod, "StoreClient")
+        if store_cls is None:
+            return pending(missing)
+        orch_cls, chains_cls, early = _orchestrator_and_chains()
+        if orch_cls is None or chains_cls is None:
+            return early or pending("the orchestrator does not exist yet")
+
+        doubles, problem = _harness_doubles()
+        if doubles is None:
+            return problem or pending("test doubles unavailable")
+        try:
+            doubles.clock.set(_moment_after_newest_run(db_path))
+            with store_cls(db_path) as store:
+                clients = _LiveClients(store, doubles.clients.kraken, doubles.clients.recorder)
+                orchestrator = orch_cls(
+                    config=doubles.config,
+                    clock=doubles.clock,
+                    clients=clients,
+                    chains=chains_cls(
+                        guard=bootstrap.GUARD_CHAIN,
+                        opportunity=bootstrap.OPPORTUNITY_CHAIN,
+                        manage=bootstrap.MANAGE_CHAIN,
+                    ),
+                )
+                try:
+                    orchestrator.tick()
+                    doubles.clock.advance(60)
+                    orchestrator.tick()
+                except Exception as exc:  # a registered engine must survive a tick
+                    return failed(
+                        "a tick over the registered Phase 2 engines raised "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                daemon_run_id = orchestrator.run_id
+        finally:
+            doubles.close()
+
+        live_runs = _run_ids_in_store(db_path) - seeded_runs
+        if daemon_run_id not in live_runs:
+            return pending(
+                "the registered engines ("
+                + ", ".join(built)
+                + ") left no store row carrying the daemon's run_id, so there is nothing "
+                "live for the console to render yet. Engine 19 `memory` is the single "
+                "writer of relational rows and is Phase 4; the run record is the "
+                "orchestrator's."
+            )
+
+        app, early = console_app(config, db_path)
+        if app is None:
+            return early or pending("the console application does not exist yet")
+        try:
+            rendered = {
+                path: asgi_request(app, "GET", path)
+                for path, _ in CONSOLE_SCREENS
+                if path != "/"
+            }
+        finally:
+            close_console(app)
+
+    showing = [path for path, response in rendered.items() if daemon_run_id in response.text]
+    if not showing:
+        answered = {path: response.status for path, response in rendered.items()}
+        return failed(
+            "the daemon wrote rows under run_id "
+            + daemon_run_id
+            + " and no console screen renders any of them; screens answered "
+            + repr(answered)
+        )
+    return passed(
+        "a tick of "
+        + ", ".join(built)
+        + " wrote rows under the daemon's own run_id, and "
+        + ", ".join(sorted(showing))
+        + " render them alongside the seed"
+    )
+
+
+def _orchestrator_and_chains() -> tuple[Any, Any, Outcome | None]:
+    orch_mod, problem = try_import("acsoe.core.orchestrator")
+    if orch_mod is None:
+        return None, None, problem or pending("acsoe.core.orchestrator does not exist yet")
+    core_mod, problem = try_import("acsoe.core.contracts")
+    if core_mod is None:
+        return None, None, problem or pending("acsoe.core.contracts does not exist yet")
+    orch_cls, missing = module_attr(orch_mod, "Orchestrator")
+    if orch_cls is None:
+        return None, None, pending(missing)
+    chains_cls, missing = module_attr(core_mod, "Chains")
+    if chains_cls is None:
+        return None, None, pending(missing)
+    return orch_cls, chains_cls, None
+
+
+# --- console_reads_persisted_mode ------------------------------------------ #
+
+RUNNING_STATE_TEXT = "Running"
+FROZEN_STATE_TEXT = "Frozen"
+
+PERSISTED_MODE_CONTRACT = (
+    "expected: the command reader in core/ writing the run record at startup and "
+    "calling store.set_system_mode(run_id, mode, at=now) after each transition it "
+    "applies, so the console reads the mode as a fact"
+)
+
+
+def check_console_reads_persisted_mode(ctx: VerifyContext) -> Outcome:
+    """`Running` and `Frozen` in the band, from a mode a **real daemon wrote**.
+
+    Not a fabricated column value, per the operator's Phase 1 ruling. The criterion
+    drives the real `Orchestrator` against the real `StoreClient`, appends a real
+    `activate` and then a real `freeze` through the real command table, and asks the
+    console what its State field says. Writing the column here directly would prove
+    the console can read a column and nothing at all about the seam that fills it -
+    which is precisely the class of defect `commands_round_trip` exists to catch.
+    """
+    with root_import_path(ctx.root), console_workspace() as tmp:
+        config, early = console_config()
+        if config is None:
+            return early or pending("no config to build the console with")
+        db_path, early = seeded_console_db(tmp)
+        if db_path is None:
+            return early or pending("no seeded database")
+
+        client_mod, problem = try_import("acsoe.clients.store.client")
+        if client_mod is None:
+            return problem or pending("acsoe.clients.store.client does not exist yet")
+        contracts_mod, problem = try_import("acsoe.clients.store.contracts")
+        if contracts_mod is None:
+            return problem or pending("acsoe.clients.store.contracts does not exist yet")
+        store_cls, missing = module_attr(client_mod, "StoreClient")
+        if store_cls is None:
+            return pending(missing)
+        if not hasattr(store_cls, "set_system_mode") or not hasattr(store_cls, "system_mode"):
+            return pending(
+                "StoreClient has no system-mode accessor yet (spec 31) - "
+                + PERSISTED_MODE_CONTRACT
+            )
+        orch_cls, chains_cls, early = _orchestrator_and_chains()
+        if orch_cls is None or chains_cls is None:
+            return early or pending("the orchestrator does not exist yet")
+
+        clock = _RoundTripClock(_moment_after_newest_run(db_path))
+        stamp = 1_788_100_000_000_000
+        readings: dict[str, str] = {}
+        for name, expected in (("activate", RUNNING_STATE_TEXT), ("freeze", FROZEN_STATE_TEXT)):
+            with store_cls(db_path) as store:
+                _append_command(store, contracts_mod, name, stamp)
+                orchestrator = orch_cls(
+                    config=_RoundTripConfig(),
+                    clock=clock,
+                    clients=_RoundTripClients(store),
+                    chains=chains_cls(),
+                )
+                orchestrator.tick()
+                run_id = orchestrator.run_id
+                persisted = store.system_mode(run_id)
+            stamp += 1
+
+            if persisted is None:
+                return pending(
+                    "the daemon left no `runs` row for its own run_id, so "
+                    "set_system_mode had nothing to update. The run record is written "
+                    "at startup by the orchestrator and that write does not exist yet - "
+                    + PERSISTED_MODE_CONTRACT
+                )
+            if persisted.mode is None:
+                return pending(
+                    "the run exists and carries no persisted mode after `"
+                    + name
+                    + "`, so core/'s command reader is not calling set_system_mode yet - "
+                    + PERSISTED_MODE_CONTRACT
+                )
+
+            app, early = console_app(config, db_path)
+            if app is None:
+                return early or pending("the console application does not exist yet")
+            try:
+                response = asgi_request(app, "GET", "/api/state")
+            finally:
+                close_console(app)
+            if response.status == 404:
+                return pending("the status band is not routed yet (GET /api/state is a 404)")
+            if response.status != 200:
+                return failed("GET /api/state answered " + str(response.status))
+            readings[name] = response.text
+            if expected not in response.text:
+                return failed(
+                    "the daemon persisted mode "
+                    + repr(str(persisted.mode))
+                    + " after `"
+                    + name
+                    + "` and the band does not read `"
+                    + expected
+                    + "`. The mode is a fact in the store; the band is reading "
+                    "something else."
+                )
+
+    if RESTART_STATE_TEXT in readings["activate"] or RESTART_STATE_ESCAPED in readings["activate"]:
+        return failed(
+            "the band still reads the restart banner over a running daemon. An idle "
+            "reading and a running one are different facts."
+        )
+    return passed(
+        "a real daemon applied activate then freeze through the real store, and the "
+        "band followed to `Running` then `Frozen`"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Registration
 # --------------------------------------------------------------------------- #
 
@@ -2824,6 +3901,16 @@ register(0, Criterion("is_gate_matches_registry", check_is_gate_matches_registry
 # Phase 2. Registered by the lead at the phase opening, ahead of every engine spec,
 # because it judges a defect that already exists rather than work still to come.
 register(2, Criterion("commands_round_trip", check_commands_round_trip))
+
+# Phase 2 - the data spine. Spec 33, registered before the engines it judges so that A
+# has a gate to build against from the first commit, exactly as spec 16 was registered
+# before the console. Every one of these reports PENDING until its subject lands.
+register(2, Criterion("recording_span_continuous", check_recording_span_continuous))
+register(2, Criterion("candles_match_kraken_ohlc", check_candles_match_kraken_ohlc))
+register(2, Criterion("data_guard_blocks_bad_data", check_data_guard_blocks_bad_data))
+register(2, Criterion("historical_loader_reports_gaps", check_historical_loader_reports_gaps))
+register(2, Criterion("console_shows_live_rows", check_console_shows_live_rows))
+register(2, Criterion("console_reads_persisted_mode", check_console_reads_persisted_mode))
 
 # Phase 1 only - the console. Spec 16, registered before the console it judges so
 # that specs 17 to 24 have a gate to build against from the first commit. Every
@@ -2920,9 +4007,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.phase not in _REGISTRY:
         parser.error("--phase must be between " + str(MIN_PHASE) + " and " + str(MAX_PHASE))
 
+    # Before anything else, and again at the end: this process is the only one that
+    # knows an `acsoe-verify-*` directory is safe to delete, and a run that finds
+    # fifty of its own leftovers should clear them rather than add a fifty-first.
+    # Skipped inside a `toolchain_green` subprocess, where a concurrent outer run
+    # may be using its own workspace right now.
+    sweeping = not os.environ.get(RECURSION_GUARD_ENV)
+    if sweeping:
+        sweep_stale_workspaces()
+
     context = VerifyContext(root=REPO_ROOT, live=bool(args.live))
     to_run, skipped = criteria_for(args.phase, context.live)
     results = [(criterion, run_criterion(criterion, context)) for criterion in to_run]
+
+    if sweeping:
+        sweep_stale_workspaces(report=False)
 
     print(format_report(args.phase, context.root, results, skipped))
     return 1 if any(o.result is Result.FAIL for _, o in results) else 0

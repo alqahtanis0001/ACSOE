@@ -517,3 +517,36 @@ fault appears outside this write path". It has: this is a *read* path, and it ma
 a validation error rather than a native crash. Flagged to the lead as a widening of the
 known signature rather than a new defect, since the mitigation here closes this instance
 and hardware remains the suspected root cause.
+
+### The verify script leaked 114GB of temp directories and filled the disk
+
+**Agent:** B · **Task:** spec 36 · **Date:** 2026-09-09
+
+**What happened.** A `write_text` to `context/progress/b-store.md` failed with
+`OSError: [Errno 28] No space left on device` and **truncated the file to zero bytes**. The
+disk was at 100% — 118MB free of 923GB. Restored from `git checkout`, losing nothing,
+because the lead had committed the file at `84321dd`.
+
+**Why.** Not the test suite: `pytest-of-saad2` held only 96MB. The temp directory carried
+**over 250 `acsoe-verify-console-*` directories**, one per run of the console criteria in
+`scripts/verify.py`, none ever removed. Deleting them freed **114GB**, so each was roughly
+450MB — a full console fixture set per criterion per run, retained forever. Three agents
+running `verify.py` repeatedly through Phase 1 and Phase 2 is what turned a leak into an
+outage.
+
+**Fix.** Removed the leaked directories plus four stale `pytest-*` trees and the
+`acsoe-verify-doubles-*` leftovers. Disk went from 118MB free to 114GB. The leak itself is
+in `scripts/verify.py`, which is C's file — reported, not touched.
+
+**Why it is the same defect C fixed this morning, one directory over.** C had just fixed
+`acsoe-verify-doubles-*` leaking because `check_orchestrator_empty_registry` never called
+`VerifyDoubles.close()` and the removal then happened in a `TemporaryDirectory` finalizer at
+GC where nothing could catch the refusal. The console criteria have the same shape and were
+not covered by that fix. The `doubles` leak was visible as a `PermissionError` printed above
+the report; the console one was **completely silent** and two orders of magnitude larger.
+
+**Consequence worth recording.** The failure did not present as a disk problem. It presented
+as a truncated progress file mid-write, and if the lead had not been committing at every
+task boundary it would have destroyed a session's worth of reasoning rather than five
+minutes of it. The commit-per-boundary rule, introduced after a different incident, is what
+made this a nuisance instead of a loss.

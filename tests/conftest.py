@@ -20,6 +20,7 @@ import importlib.util
 import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -166,13 +167,60 @@ def seed_fixtures(tmp_path: Path) -> Any:
     on it and every console test that touches staleness needs a clock anchored to
     the seed rather than to wall time. `.db_path` is on it too.
 
+    **The thresholds are injected from `config/default.yaml`**, which is the whole
+    point of `SeedThresholds` being a parameter. Its defaults are documented as
+    fixture-*shape* constants, not as recommended values, and one of them has
+    already diverged: `max_errors_in_window` defaults to 10 while the operator set
+    20. The seed overshoots a limit by three, so an uninjected fixture produced 13
+    ERROR rows — over the default, comfortably under the config — and a Phase 3
+    test of engine 17's error-rate input against it found the condition untripped
+    and **failed pointing at the engine**. Nothing raised; the fixture was simply
+    built against a limit nobody uses.
+
+    `scripts/verify.py` has always done this, which is why `seed_fixtures_present`
+    reports 23 ERROR rows where this fixture reported 13. Making `seed.py`'s
+    defaults track the config instead would have the seed claim to know a trading
+    threshold, which is exactly the coupling the injection exists to prevent — so
+    the injection belongs here, in the fixture, and not there.
+
     Never under `data/`: `data/` is gitignored and no test or criterion may depend
     on anything inside it.
     """
     seed = pytest.importorskip(
         "acsoe.clients.store.seed", reason="the seed generator does not exist yet"
     )
-    return seed.seed_database(tmp_path / "acsoe.sqlite")
+    return seed.seed_database(tmp_path / "acsoe.sqlite", thresholds=seed_thresholds_from_config())
+
+
+def seed_thresholds_from_config() -> Any:
+    """`SeedThresholds` built from the committed config, or the defaults without one.
+
+    A missing `config/default.yaml` is not an error here: several tests that use the
+    seed run on trees where it has not been written yet, and the shape constants are
+    a legitimate fallback for those. A key that is *present and null* is a different
+    thing and is deliberately left to `SeedThresholds` to default, because "the
+    operator has not decided yet" must not become a number this file invented.
+    """
+    seed = pytest.importorskip("acsoe.clients.store.seed")
+    if not (REPO_ROOT / "config" / "default.yaml").is_file():
+        return seed.SeedThresholds()
+    config = load_default_config()
+    fields = {
+        "max_consecutive_data_blocks": int,
+        "max_drawdown_pct": Decimal,
+        "max_consecutive_losses": int,
+        "error_rate_window_s": int,
+        "max_errors_in_window": int,
+    }
+    supplied: dict[str, Any] = {}
+    for name, cast in fields.items():
+        try:
+            value = config.get("safety." + name)
+        except KeyError:
+            continue
+        if value is not None:
+            supplied[name] = cast(str(value)) if cast is Decimal else cast(value)
+    return seed.SeedThresholds(**supplied)
 
 
 @pytest.fixture

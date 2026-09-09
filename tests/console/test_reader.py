@@ -25,12 +25,17 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from acsoe.clients.store.contracts import RunMode, RunRow
+from acsoe.clients.store.client import StoreClient
+from acsoe.clients.store.contracts import RunMode, RunRow, SystemMode
 from acsoe.console.format import MINUS_SIGN
 from acsoe.console.reader import ConsoleReader, ReadOnlyStore, open_readonly_connection
 from acsoe.console.views import (
+    FROZEN,
     IDLE,
+    IDLE_READINGS,
     IDLE_RESTARTED,
+    RUNNING,
+    STATE_READINGS,
     PositionView,
     RejectionRowView,
     StatusBand,
@@ -332,6 +337,237 @@ def test_the_restart_comparison_reads_the_store_and_nothing_the_process_remember
         assert second.status_band(mode="paper").restarted is False
     finally:
         second.close()
+
+
+# --------------------------------------------------------------------------- #
+# The State field's four readings. Spec 32.
+# --------------------------------------------------------------------------- #
+#
+# Through Phase 1 this field had two readings and the other two were deferred,
+# because mode lived only in the daemon's memory and nothing the console could read
+# distinguished a running daemon from a frozen one. The operator ended that deferral
+# with the Phase 2 approval on 2026-09-09, and the mode is now persisted by the
+# command reader in `core/` and read here as a fact.
+#
+# The deferral was supposed to be held by a test asserting the field never leaves
+# the idle pair. That test never existed - `views.IDLE_READINGS` said it did. See
+# `docs/build-log/phase-2/c-interface.md`.
+
+
+def persist_mode(db_path: Path, run_id: str, mode: str) -> None:
+    """Write the mode the way the daemon does: through B's accessor, not raw SQL.
+
+    `set_system_mode` is the column's only writer by design - `write_run` excludes
+    it - so a test that reached past it with an `UPDATE` would be asserting against
+    a state the system cannot actually produce.
+    """
+    with StoreClient(db_path) as store:
+        assert store.set_system_mode(run_id, SystemMode(mode), at=1_800_000_000_000_000)
+
+
+def latest_run_id(db_path: Path) -> str:
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT run_id FROM runs ORDER BY started_at DESC, id DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    return str(row[0])
+
+
+def test_a_daemon_that_persisted_running_reads_running(
+    seeded_db: Path, seed_clock: Any
+) -> None:
+    persist_mode(seeded_db, latest_run_id(seeded_db), "running")
+    reader = reader_for(seeded_db, seed_clock)
+    try:
+        band = reader.status_band(mode="paper")
+    finally:
+        reader.close()
+    assert band.state == RUNNING
+    assert band.system_mode == "running"
+    assert band.run_record_missing is False
+
+
+def test_a_daemon_that_persisted_frozen_reads_frozen(seeded_db: Path, seed_clock: Any) -> None:
+    """`Freeze` produces the state `Frozen` - an action keeps its name through the
+    whole flow, per the copy rules."""
+    persist_mode(seeded_db, latest_run_id(seeded_db), "frozen")
+    reader = reader_for(seeded_db, seed_clock)
+    try:
+        band = reader.status_band(mode="paper")
+    finally:
+        reader.close()
+    assert band.state == FROZEN
+    assert band.system_mode == "frozen"
+
+
+def test_a_persisted_running_mode_wins_over_the_restart_banner(
+    seeded_db: Path, seed_clock: Any
+) -> None:
+    """The seed carries two runs, so the restart test is true and the mode is not idle.
+
+    A band that showed `Idle - restarted, not trading` over a daemon that is
+    actually trading would be the exact failure the restart banner exists to
+    prevent, pointed the other way.
+    """
+    persist_mode(seeded_db, latest_run_id(seeded_db), "running")
+    reader = reader_for(seeded_db, seed_clock)
+    try:
+        band = reader.status_band(mode="paper")
+    finally:
+        reader.close()
+    assert band.restarted is True
+    assert band.state == RUNNING
+
+
+def test_a_run_that_exists_with_no_persisted_mode_reads_idle(
+    seeded_reader: ConsoleReader,
+) -> None:
+    """The ordinary null: the run exists and no daemon has written a mode yet.
+
+    B asserts in `test_the_seed_writes_no_system_mode` that the seed writes none,
+    which is what makes the two tests above worth having - they cannot pass without
+    a mode actually being persisted.
+    """
+    band = seeded_reader.status_band(mode="paper")
+    assert band.system_mode is None
+    assert band.run_record_missing is False
+    assert band.state in IDLE_READINGS
+
+
+def test_the_two_nulls_are_not_collapsed(seeded_db: Path, seed_clock: Any) -> None:
+    """`None` from the accessor is a **missing runs row**, not a missing mode.
+
+    B's `SystemModeRow` docstring is explicit: both render an idle reading and only
+    one is normal, and a reader that cannot tell them apart cannot log the abnormal
+    one. This drives the abnormal branch by deleting the row the band just named as
+    current, which is the shape of the race it stands for.
+    """
+    run_id = latest_run_id(seeded_db)
+    reader = reader_for(seeded_db, seed_clock)
+    try:
+        real = reader.status_band(mode="paper")
+        assert real.run_record_missing is False
+
+        original = reader.store.system_mode
+
+        def missing_row(_: str) -> None:
+            return None
+
+        reader.store.system_mode = missing_row  # type: ignore[method-assign]
+        try:
+            band = reader.status_band(mode="paper")
+        finally:
+            reader.store.system_mode = original  # type: ignore[method-assign]
+    finally:
+        reader.close()
+    assert band.run_id == run_id
+    assert band.system_mode is None
+    assert band.run_record_missing is True
+    assert band.state in IDLE_READINGS
+
+
+def test_the_database_itself_refuses_a_mode_the_band_could_not_render(
+    seeded_db: Path,
+) -> None:
+    """The reader's fallback for an unrecognised mode is unreachable, and that is B's doing.
+
+    `_state_reading` treats a mode it does not know exactly as a missing one, and I
+    expected to drive that branch with a direct `UPDATE`. The column carries
+    `CHECK (system_mode IS NULL OR system_mode IN ('idle', 'running', 'frozen'))`,
+    so the write is refused by SQLite before the console is ever involved. The
+    fallback stays - a schema outlives the release that wrote it and this console
+    may one day read a database with a fourth mode in it - but it is defence, not a
+    reachable path, and this test is what says so rather than leaving a reader to
+    wonder why the branch has no coverage.
+    """
+    conn = sqlite3.connect(seeded_db)
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="system_mode"):
+            conn.execute(
+                "UPDATE runs SET system_mode = 'liquidating' WHERE run_id = ?",
+                (latest_run_id(seeded_db),),
+            )
+    finally:
+        conn.close()
+
+
+def test_the_persisted_idle_mode_reads_as_an_idle_reading(
+    seeded_db: Path, seed_clock: Any
+) -> None:
+    """`idle` is a value the column permits, and it is not in the mode map.
+
+    It falls through to the restart test, which is the right answer: `Idle` and
+    `Idle - restarted, not trading` are the two things an idle daemon can be, and
+    which of them applies is decided by whether a previous run exists.
+    """
+    persist_mode(seeded_db, latest_run_id(seeded_db), "idle")
+    reader = reader_for(seeded_db, seed_clock)
+    try:
+        band = reader.status_band(mode="paper")
+    finally:
+        reader.close()
+    assert band.system_mode == "idle"
+    assert band.state == IDLE_RESTARTED
+
+
+def test_every_reading_the_state_field_takes_is_declared(
+    seeded_db: Path, seed_clock: Any
+) -> None:
+    """All four, and nothing else.
+
+    This replaces the Phase 1 assertion that the field never left the idle pair.
+    That one enforced a deferral the operator has ended; this one enforces the
+    positive statement that took its place - `views.STATE_READINGS` is the whole
+    set, and a fifth reading has to be added there deliberately.
+    """
+    seen = set()
+    for persisted in (None, "idle", "running", "frozen"):
+        conn = sqlite3.connect(seeded_db)
+        try:
+            conn.execute(
+                "UPDATE runs SET system_mode = ? WHERE run_id = ?",
+                (persisted, latest_run_id(seeded_db)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        reader = reader_for(seeded_db, seed_clock)
+        try:
+            seen.add(reader.status_band(mode="paper").state)
+        finally:
+            reader.close()
+
+    assert seen <= set(STATE_READINGS)
+    assert {RUNNING, FROZEN} <= seen
+    assert set(STATE_READINGS) == {IDLE, IDLE_RESTARTED, RUNNING, FROZEN}
+
+
+def test_the_console_never_reads_the_commands_table_to_decide_a_mode(
+    repo_root: Path,
+) -> None:
+    """Rejected at the Phase 1 close, and asserted on the source rather than trusted.
+
+    Deriving the mode from the trail of claimed `commands` rows reconstructs it from
+    a command history, so it is only ever as correct as the assumption that every
+    transition leaves a claimed row - and a transition that leaves none makes the
+    band confidently wrong. `console/commands.py` *writes* that table, which is
+    spec 24 and is fine; nothing in the read path may select from it.
+    """
+    read_path = ("reader.py", "views.py", "payloads.py", "websocket.py", "app.py")
+    package = repo_root / "src" / "acsoe" / "console"
+    for name in read_path:
+        source = (package / name).read_text(encoding="utf-8")
+        code = "\n".join(
+            line for line in source.splitlines() if not line.lstrip().startswith("#")
+        )
+        lowered = code.lower()
+        assert "from commands" not in lowered, name
+        assert "claimed_by_run_id" not in lowered, name
+        assert "claimed_unconsumed" not in lowered, name
+        assert "pending_commands" not in lowered, name
 
 
 # --------------------------------------------------------------------------- #

@@ -32,12 +32,15 @@ from pathlib import Path
 from types import TracebackType
 from typing import Final, Self
 
+import structlog
+
 from acsoe.clients.store.client import StoreClient
 from acsoe.clients.store.contracts import (
     BlockRecordRow,
     LeaderboardRow,
     PositionRow,
     RejectionRow,
+    RunRow,
     TradeRow,
     to_micros,
 )
@@ -58,6 +61,7 @@ from acsoe.console.format import (
 from acsoe.console.views import (
     IDLE,
     IDLE_RESTARTED,
+    MODE_READINGS,
     SHAP_PRODUCED_IN_PHASE,
     FeedRowView,
     FeedStage,
@@ -124,6 +128,28 @@ SHAP_EMPTY_STATE: Final = (
     f"{SHAP_PRODUCED_IN_PHASE}. Nothing has been trained and nothing has been "
     "explained yet, so there is nothing here to show."
 )
+
+
+#: The console is a separate process from the daemon and does not go through
+#: `platform/logging.py`'s setup, so this is a plain `structlog` logger. It exists
+#: for exactly one thing: saying out loud that the current run has no `runs` row.
+#: That is the abnormal one of spec 31's two nulls, it renders identically to the
+#: ordinary one, and without a line here it would be invisible.
+_log: Final = structlog.get_logger("acsoe.console.reader")
+
+
+def _state_reading(system_mode: str | None, *, restarted: bool) -> str:
+    """The one word the operator reads, out of the mode and the restart test.
+
+    A mode this does not recognise is treated exactly as a missing one: an idle
+    reading. Guessing at an unknown mode would be inference, which is the thing
+    spec 32 forbids, and rendering the raw value would put a database string in
+    front of an operator.
+    """
+    reading = MODE_READINGS.get(system_mode or "")
+    if reading is not None:
+        return reading
+    return IDLE_RESTARTED if restarted else IDLE
 
 
 def _feed_order(row: FeedRowView) -> tuple[int, int]:
@@ -271,10 +297,20 @@ class ConsoleReader:
     # -- status band ----------------------------------------------------
 
     def status_band(self, *, mode: str) -> StatusBand:
-        """The band, including the restart reading.
+        """The band, including the State field's four readings.
 
         ``mode`` is paper, live or replay and comes from the injected `Config`;
-        the State field is a different thing entirely and is derived here.
+        the State field is a different axis entirely and is derived here.
+
+        **The mode is read as a fact, never inferred.** The command reader in
+        ``core/`` that owns ``state["system"]["mode"]`` persists it against the
+        current run, and this reads it back scoped to that ``run_id`` so no
+        previous run leaks into the band. Deriving it instead from the trail of
+        claimed ``commands`` rows was considered and rejected at the Phase 1 close:
+        a transition that leaves no claimed row would make the band confidently
+        wrong, and for the one element answering *is this safe*, silent beats
+        wrong. **A mode the console cannot read renders an idle reading**, and
+        there is no third path.
 
         **The restart reading is a presence test, and the schema is why.**
         ``db/migrations/0001_initial.sql`` declares ``run_id TEXT NOT NULL
@@ -283,16 +319,14 @@ class ConsoleReader:
         is the first one ever. Asking whether the current and previous ``run_id``s
         *differ* describes a state the schema forbids and would make the negative
         half of the check impossible to build, so the question asked here is
-        whether a previous ``runs`` row exists at all.
-
-        The State field takes one of :data:`~acsoe.console.views.IDLE_READINGS`
-        and nothing else this phase. See that constant for why ``running`` and
-        ``frozen`` wait for Phase 2.
+        whether a previous ``runs`` row exists at all. It is unchanged by spec 32
+        and still governs both idle readings.
         """
         runs = self._store.latest_runs(2)
         current = runs[0] if runs else None
         previous = runs[1] if len(runs) > 1 else None
         restarted = previous is not None
+        system_mode, run_record_missing = self._system_mode(current)
 
         equity = self._store.latest_equity_snapshot()
         watermark = self._store.watermark()
@@ -301,7 +335,9 @@ class ConsoleReader:
 
         return StatusBand(
             mode=str(mode),
-            state=IDLE_RESTARTED if restarted else IDLE,
+            state=_state_reading(system_mode, restarted=restarted),
+            system_mode=system_mode,
+            run_record_missing=run_record_missing,
             restarted=restarted,
             run_id=None if current is None else current.run_id,
             previous_run_id=None if previous is None else previous.run_id,
@@ -315,6 +351,36 @@ class ConsoleReader:
             watermark_ts=watermark_ts,
             data_staleness=None if watermark_ts is None else self.staleness(watermark_ts),
         )
+
+    def _system_mode(self, current: RunRow | None) -> tuple[str | None, bool]:
+        """The persisted mode for the current run, and whether its row is missing.
+
+        Two nulls, kept apart. ``StoreClient.system_mode`` answers ``None`` when
+        there is **no ``runs`` row** for that ``run_id`` — a defect or a race,
+        because the row is written at startup and the console is reading a
+        ``run_id`` it just took out of that same table. It answers a row whose
+        ``mode`` is ``None`` when the run exists and **no daemon has written a mode
+        yet**, which is ordinary: it is every run's state before the first command
+        is read. Both render an idle reading; only the first is worth a log line,
+        and a reader that collapsed them could not produce one.
+
+        Never raises. Spec 32: a missing value renders an idle reading and the band
+        keeps working, because an instrument panel that throws is worse than one
+        that says less.
+        """
+        if current is None:
+            return None, False
+        try:
+            row = self._store.system_mode(current.run_id)
+        except sqlite3.Error:
+            # The column arrives in a migration. A console pointed at a database
+            # from before it renders idle rather than failing the whole screen.
+            _log.warning("console_system_mode_unreadable", run_id=current.run_id)
+            return None, False
+        if row is None:
+            _log.warning("console_run_record_missing", run_id=current.run_id)
+            return None, True
+        return (None if row.mode is None else str(row.mode)), False
 
     # -- open positions -------------------------------------------------
 

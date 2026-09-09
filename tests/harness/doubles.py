@@ -14,8 +14,10 @@ recorded in `context/progress/c-interface.md`.
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 from collections.abc import Iterator, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -205,8 +207,16 @@ def migrated_store(db_path: Path) -> Any:
 class VerifyDoubles:
     """What `scripts/verify.py` needs to run one orchestrator tick.
 
-    The temporary directory is held on the instance so it outlives the call and is
-    cleaned up when the doubles are dropped.
+    The temporary directory is held on the instance so it outlives the call, and
+    :meth:`close` releases it. **The store is closed before the directory is
+    removed, and the removal is best-effort.** Both halves are load-bearing on
+    Windows: SQLite holds the file open until the connection is closed, so a
+    directory removed first raises `PermissionError [WinError 32]` - which is
+    exactly what `verify.py --phase 0` printed above its report on every run,
+    green ones included, out of `TemporaryDirectory`'s finalizer where nothing
+    could catch it. Failing to delete a throwaway database is not a verdict about
+    anything, so it is swallowed rather than raised at a caller who is checking
+    the orchestrator.
     """
 
     config: MappingConfig
@@ -215,8 +225,19 @@ class VerifyDoubles:
     _tmp: Any = None
 
     def close(self) -> None:
+        store = self.clients.store
+        closer = getattr(store, "close", None)
+        if callable(closer):
+            with suppress(Exception):
+                closer()
+        self.clients.store = None
         if self._tmp is not None:
-            self._tmp.cleanup()
+            path = Path(self._tmp.name)
+            # Disarm the finalizer before removing the tree ourselves: its cleanup
+            # is the thing that raised, and it runs at collection with no caller.
+            with suppress(Exception):
+                self._tmp._finalizer.detach()  # noqa: SLF001 - no public disarm exists
+            shutil.rmtree(path, ignore_errors=True)
             self._tmp = None
 
 
@@ -226,15 +247,26 @@ def build_verify_doubles() -> VerifyDoubles:
     Called from `scripts/verify.py`, outside pytest, so it does its own temporary
     directory rather than leaning on `tmp_path`. Nothing is written under `data/`:
     every criterion has to pass on a fresh clone, and `data/` is gitignored.
+
+    The caller owns the result and must call :meth:`VerifyDoubles.close`.
     """
     tmp = tempfile.TemporaryDirectory(prefix="acsoe-verify-doubles-")
-    store = migrated_store(Path(tmp.name) / "acsoe.sqlite")
-    return VerifyDoubles(
+    doubles = VerifyDoubles(
         config=load_default_config(),
         clock=FixedClock(),
-        clients=FakeClients(store=store),
+        clients=FakeClients(),
         _tmp=tmp,
     )
+    try:
+        doubles.clients.store = migrated_store(Path(tmp.name) / "acsoe.sqlite")
+    except Exception:
+        # The directory is already made, so anything raised past this point leaks it
+        # - and a criterion pointed at a fabricated tree raises here routinely,
+        # because a store that exists and does not answer `migrate()` is exactly the
+        # subject some of those criteria are judging.
+        doubles.close()
+        raise
+    return doubles
 
 
 def iter_repo_docs(root: Path = REPO_ROOT) -> Iterator[Path]:

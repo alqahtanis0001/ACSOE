@@ -20,6 +20,7 @@ test that is a race rather than an assertion.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict
@@ -27,10 +28,14 @@ from pydantic import BaseModel, ConfigDict
 from acsoe.clients.store.contracts import Micros, Money
 
 __all__ = [
+    "FROZEN",
     "IDLE",
     "IDLE_READINGS",
     "IDLE_RESTARTED",
+    "MODE_READINGS",
+    "RUNNING",
     "SHAP_PRODUCED_IN_PHASE",
+    "STATE_READINGS",
     "FeedRowView",
     "FeedStage",
     "FeedSummary",
@@ -55,23 +60,43 @@ IDLE: Final = "Idle"
 #: for live mode, and the words have to carry the meaning anyway.
 IDLE_RESTARTED: Final = "Idle \N{EM DASH} restarted, not trading"
 
-#: **Every reading the State field may take in Phase 1, and there are two.**
-#:
-#: The daemon also has ``running`` and ``frozen``, and the Phase 1 console cannot
-#: render either: mode lives only in ``state["system"]["mode"]`` in the daemon's
-#: memory, and ``runs.mode`` is paper/live/replay, a different axis entirely. That
-#: is honest here rather than incomplete — no daemon runs in Phase 1, the console
-#: renders the Phase 0 seed, and neither state can occur.
-#:
-#: The operator ruled on 2026-09-09 that the fix lands in **Phase 2**, where the
-#: command reader in ``core/`` that already owns the mode also persists it and the
-#: console reads it as a fact. Deriving it from the claimed-``commands`` trail was
-#: considered and rejected: a transition leaving no claimed row makes the band
-#: confidently wrong, and for the one element answering *is this safe* silent
-#: beats wrong. ``tests/console/test_reader.py`` asserts the State field never
-#: leaves this tuple, so the deferral is enforced by the suite rather than
-#: remembered by a person.
+#: The daemon is running: the opportunity chain is looking for candidates.
+RUNNING: Final = "Running"
+
+#: The daemon is frozen: the opportunity chain has stopped, and the guard and
+#: manage chains have not. ``architecture-context.md``: freeze never stops data
+#: collection, and open positions are still managed. Text only — amber is reserved
+#: for live mode and appears nowhere else in the interface.
+FROZEN: Final = "Frozen"
+
+#: The two readings the band shows when no daemon has claimed a mode for this run.
 IDLE_READINGS: Final = (IDLE, IDLE_RESTARTED)
+
+#: **Every reading the State field may take, and there are four.**
+#:
+#: Two of them arrived in Phase 2 with spec 32. Through Phase 1 the field showed
+#: the idle pair alone, because mode lived only in ``state["system"]["mode"]`` in
+#: the daemon's memory and nothing the console could read distinguished a running
+#: daemon from a frozen one — ``runs.mode`` is paper/live/replay, a different axis
+#: entirely. That was honest rather than incomplete while no daemon ran at all,
+#: and it stopped being honest the moment one did.
+#:
+#: The mode is now **read as a fact**: the command reader in ``core/`` that owns
+#: ``state["system"]["mode"]`` persists it through ``StoreClient.set_system_mode``,
+#: and ``ConsoleReader.status_band`` reads it back scoped to the current ``run_id``.
+#: Deriving it instead from the trail of claimed ``commands`` rows was considered
+#: and **rejected** at the Phase 1 close: that reconstructs a mode from a command
+#: history, so it is only ever as correct as the assumption that every transition
+#: leaves a claimed row, and a transition that leaves none makes the band
+#: confidently wrong. For the one element whose job is to answer *is this safe*,
+#: silent beats wrong. **A value the console cannot read renders an idle reading.
+#: There is no third path.**
+STATE_READINGS: Final = (IDLE, IDLE_RESTARTED, RUNNING, FROZEN)
+
+#: The persisted ``system_mode`` values, to the words the operator reads. A mode
+#: outside this map is not guessed at: it renders an idle reading, exactly as a
+#: missing one does.
+MODE_READINGS: Final[Mapping[str, str]] = {"running": RUNNING, "frozen": FROZEN}
 
 #: Which phase produces per-decision attribution. ``rejections.shap_ref`` is the
 #: join key and the Parquet it points at is written by the training pipeline; there
@@ -116,10 +141,25 @@ class StatusBand(_View):
     writing block records every tick while the equity series has not moved, and a
     band that conflated them would report the screen fresh because *something*
     changed.
+
+    ``mode`` is paper/live/replay from the injected `Config`. ``system_mode`` is
+    the *other* axis entirely — idle/running/frozen, persisted by the daemon's
+    command reader — and ``state`` is the word the operator reads, which is the two
+    of them plus the restart test rendered into one field.
+
+    **``system_mode`` and ``run_record_missing`` are two different nulls and are
+    kept apart deliberately.** `StoreClient.system_mode` returns ``None`` when
+    there is no ``runs`` row for that ``run_id`` at all, which is a defect or a
+    race; it returns a row whose ``mode`` is ``None`` when the run exists and no
+    daemon has written a mode yet, which is the ordinary state before the first
+    command is read. Both render an idle reading, per spec 32 — but only one of
+    them is normal, and a band that collapsed them could not log the abnormal one.
     """
 
     mode: str
     state: str
+    system_mode: str | None
+    run_record_missing: bool
     restarted: bool
     run_id: str | None
     previous_run_id: str | None

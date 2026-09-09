@@ -48,6 +48,11 @@
     </div>
 
     <div class="band__field">
+      <!-- Four readings: Idle, Idle - restarted not trading, Running, Frozen. The
+           first two are decided by whether the current run has a previous runs
+           row; the last two are read from the mode the daemon persisted, never
+           inferred from the commands trail. Text only, in every case - amber is
+           reserved for live mode and appears nowhere else in the interface. -->
       <span class="band__label" id="label-state">State</span>
       <span class="band__value" data-field="state" aria-labelledby="label-state">Idle</span>
     </div>

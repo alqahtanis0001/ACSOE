@@ -9,8 +9,55 @@
   `clients/store/{client,contracts}.py`, `tests/db/`, `tests/clients/store/`. *Complete,
   green on all three phase gates.*
 
-Not started, and deliberately: **specs 34, 35, 36** (engines `cost`, `risk`, `safety`).
-Held until the lead says to continue.
+- **Spec 34** — engine 10 `cost`. *Complete, committed at `3581e87`.*
+- **Spec 35** — engine 11 `risk`. *Complete, committed at `5b0dd2b`.*
+- **Spec 36** — engine 17 `safety`. *Complete and green, committed at `5b0dd2b`. **One
+  policy table in it is an open question, not a decision** — see below.*
+
+Nothing is in progress. Holding, per the lead, until the operator rules on
+`CONDITION_ACTION`.
+
+## OPEN QUESTION — engine 17's `CONDITION_ACTION` is NOT ratified
+
+**Read this before treating `engines/safety/contracts.py`'s mapping as settled.** It is my
+implemented reading of a contradiction, not a decision anyone has approved.
+
+`trading-invariants.md` §14 and `feature-specs/36` cannot both be satisfied by the Phase 0
+seed. §14 says `safety` escalates — writes `close_all` — on "its configured drawdown and
+loss-streak limits are breached" or "a sustained data outage", when there are open positions
+or resting entry orders. Spec 36's Check When Done says "it **freezes** on the seeded
+drawdown". The seed carries drawdown 0.2000 against a 0.10 limit, a streak of 8 against 5,
+**and** 2 open positions and 2 resting entry orders — every precondition §14 names, because
+I built it that way in Phase 0 *to* satisfy §14. So under §14 the seeded drawdown emits
+`close_all`; under spec 36 it emits `freeze`. There is no fixture on which both are true.
+
+Escalated 2026-09-09 with three candidate readings and two further gaps: which command the
+error rate emits, and whether an escalating condition emits `freeze` first. **With the
+operator.**
+
+What is implemented meanwhile, isolated in one dictionary so the ruling is one edit:
+drawdown, loss streak and outage map to `close_all`; the error rate maps to `freeze`,
+because §14 does not list it among the escalation conditions at all — it is an
+engine-health problem rather than account exposure, and liquidating because the system is
+throwing exceptions would be the breaker causing the loss it exists to prevent.
+
+**Ratified by the lead, and separate from the above:** the `BOUNDARY_SOURCE` table beside
+it, fixing whether each threshold trips *at* its limit or *above* it, each with the sentence
+in the documents that fixes it. Drawdown, loss streak and error rate trip at the limit; the
+outage is the only strictly-greater one.
+
+## `bootstrap.py` — requested, deliberately deferred by the lead
+
+- `CostEngine` — opportunity chain, after 9, before 11. `is_gate=True`.
+- `RiskEngine` — opportunity chain, after 10, before 14. `is_gate=True`.
+- `SafetyEngine` — **guard** chain, last, after 4. `is_gate=True`.
+
+Deferred until the tree is globally green: `safety` in the guard chain runs on every tick of
+`orchestrator_empty_registry` (a Phase 0 gate) and `commands_round_trip` (Phase 2), both
+against a real `StoreClient`. On an empty database nothing should trip — but "should" is
+doing work in that sentence, and if it does trip that is a finding worth having in isolation
+rather than tangled with A's in-flight engine work. Engines 10 and 11 are opportunity-chain
+and inert in both criteria.
 
 ## Spec 31 — persisted system mode
 

@@ -5,6 +5,11 @@ Never edit the tracker directly.
 
 ## Current Task
 
+- **Phase 2. Claimed: specs 33 then 32.** Claimed 2026-09-09, before any code was written, in the
+  order `PHASE-2-TASKS.md` sets: 33 concurrently with A from the first commit, so the criteria
+  exist and report PENDING while A builds the engines they judge; then 32, the Phase 1 debt.
+  **Both are finished.** `--phase 2` reports 3 PASS, 0 FAIL, 6 PENDING, which is the mid-phase
+  bar; every PENDING names the subject it is waiting for and who owns it.
 - **Phase 1. Claimed: specs 19, 20, 21, 22, 23, 24** — the operator's checkpoint after 18 has
   been held and cleared, and all three rulings below are folded into the specs. Claimed
   2026-09-09, before any code was written, in the order `PHASE-1-TASKS.md` sets: 19, 20, 21, 22,
@@ -22,6 +27,20 @@ Never edit the tracker directly.
   until it ran.
 
 ## Completed
+
+- **Spec 33 — the Phase 2 criteria in `verify.py`.** Six registered for phase 2 alongside the
+  lead's `commands_round_trip`, each proved twice and most of them a third time in the red
+  direction: 42 tests in `tests/verify/test_phase2_criteria.py`. Five of the six judge code A
+  has not written, so each names the surface it expects in its own PENDING line — the pattern
+  spec 16 set with `CONSOLE_CONTRACT`, where the failure tells the owner what to build. All six
+  contracts were messaged to A and accepted unchanged. `commands_round_trip` now has the negative
+  test it never had: the **real** `core/` orchestrator over a store with no command reader, which
+  is the Phase 1 defect exactly, reproduced.
+- **Spec 32 — the status band reads `Running` and `Frozen`.** The mode is read as a fact through
+  B's `system_mode(run_id)` accessor and never inferred from the `commands` trail, which a source
+  scan asserts across the whole read path. `views.STATE_READINGS` names all four readings and a
+  test pins the band's output to that tuple. B's two nulls are kept apart on the band —
+  `system_mode` and `run_record_missing` — and the abnormal one is logged; both render idle.
 
 - **Spec 00 — `scripts/verify.py` runner and criterion framework.** `--phase N`, the three
   results (PASS / FAIL / PENDING), `VerifyContext` carrying `root` as a parameter rather than
@@ -110,7 +129,8 @@ and a later "simplification" would break the gate without saying so.
 
 ## In Progress
 
-- Nothing. All nine of my Phase 1 specs — 16, 17, 18, 19, 20, 21, 22, 23, 24 — are complete and
+- Nothing. Specs 33 and 32 are both complete and self-tested; the four checks are below.
+- All nine of my Phase 1 specs — 16, 17, 18, 19, 20, 21, 22, 23, 24 — are complete and
   self-tested, and `scripts/verify.py --phase 1` reports **9 PASS, 0 FAIL, 0 PENDING**.
 - **Two test modules that spec 19-22 docstrings claimed and did not have** are now written.
   `console/payloads.py` said `tests/console/test_payloads.py` asserts no JSON float anywhere in
@@ -317,6 +337,50 @@ console renders the two idle readings and nothing else, and the suite enforces t
 
 Paste the real output of your last run. Never report a task complete without it.
 
+Last run 2026-09-09, after specs 33 and 32. Phase 1's run is kept below it.
+
+```
+$ .venv/Scripts/python.exe -m pytest tests/ -q
+940 passed in 41.97s
+
+$ .venv/Scripts/python.exe -m mypy --strict src/
+Success: no issues found in 60 source files
+
+$ .venv/Scripts/python.exe -m ruff check src/
+All checks passed!
+
+$ .venv/Scripts/python.exe scripts/verify.py --phase 2
+PASS    docs_vocabulary                 14 files scanned, 9 retired terms, no hit
+PASS    toolchain_green                 pytest, mypy --strict and ruff all green (python.exe)
+PASS    commands_round_trip             real StoreClient through the real reader: activate and
+                                        freeze applied and consumed on the claiming tick,
+                                        close_all claimed but not consumed, and an interrupted
+                                        close_all re-applied on restart and consumed only once done
+PENDING recording_span_continuous       tests/fixtures/recording_report.json does not exist yet
+                                        (spec 27) - <contract>
+PENDING candles_match_kraken_ohlc       tests/fixtures/kraken/ohlc.json does not exist yet
+                                        (spec 28) - <contract>
+PENDING data_guard_blocks_bad_data      engine 4 `data_guard` does not exist yet (spec 29)
+                                        - <contract>
+PENDING historical_loader_reports_gaps  acsoe.research.historical does not exist yet (spec 30)
+                                        - <contract>
+PENDING console_shows_live_rows         no Phase 2 engine is registered in bootstrap.py yet
+                                        (specs 26-29) - <contract>
+PENDING console_reads_persisted_mode    the daemon left no `runs` row for its own run_id, so
+                                        set_system_mode had nothing to update. The run record is
+                                        written at startup by the orchestrator and that write
+                                        does not exist yet - <contract>
+
+9 criteria: 3 PASS, 0 FAIL, 6 PENDING
+Phase 2 is not green: 6 PENDING. Mid-phase the bar is no FAIL, so this is expected.
+```
+
+Every `<contract>` above is the full expected surface, printed in the real output and elided
+here only for width. The six PENDINGs are five of A's subjects and one of the lead's; none is
+mine. `--phase 0` and `--phase 1` both still report every criterion PASS and zero PENDING.
+
+### Phase 1, for the record
+
 Last run 2026-09-09, after specs 23 and 24, on the tree carrying all nine of my Phase 1 specs.
 
 ```
@@ -356,6 +420,29 @@ The suite grew from 641 to 707 in this session: 66 new tests across
 `test_commands.py`, plus the widened assertions in `test_app.py` and `test_page.py`. Two of the
 641 were failing on the tree I picked up and are fixed; see the entries in the build log.
 
+## Open Questions — Phase 2
+
+- **`console_reads_persisted_mode` is blocked on two writes in `core/`, not one.** Spec 31 gave
+  the store `set_system_mode(run_id, mode, *, at)` and B's note to the lead names the first: the
+  command reader must call it after applying each transition. There is a second, and it is
+  upstream of it. **The orchestrator writes no `runs` row at all.** `ownership.md`'s seam table
+  says the run record is "written at startup" by the lead's orchestrator, and `Orchestrator`
+  mints `run_id` onto the context and never stores it. `set_system_mode` returns `False` for an
+  unknown `run_id`, so even once the reader calls it there is no row to update, and the console —
+  which reads the latest `runs` row to decide what the current run is — would keep rendering the
+  previous process. My criterion reports these as two distinct PENDINGs with different messages
+  and never as a FAIL, because neither is mine. **What I am asking for:** both writes, in the
+  order run-record-then-mode. No console change follows from either; spec 32 is complete and its
+  reader is already correct against a database that has them.
+
+- **`toolchain_green` still lints and type-checks `src/` only.** Carried from the Phase 0 and
+  Phase 1 boundaries and now due for the third time. `ruff check scripts/verify.py` reports 5
+  findings and `mypy --strict scripts/` reports 2, none reachable by the gate that implements
+  them. Two of the five are mine and old (`UP041` on `asyncio.TimeoutError`); one is a legitimate
+  `RUF001` on the U+2212 glyph in a comment, which is the case the `noqa` policy exists for. The
+  widening is a change to what every phase asserts, so it stays the lead's call. Unchanged
+  otherwise.
+
 ## Notes For Next Session
 
 - Recorder line schema received from A and pinned: seven outer keys, `kind` in
@@ -373,7 +460,17 @@ The suite grew from 641 to 707 in this session: 66 new tests across
 - Phase 1's console surface is now complete and `tests/console/test_app.py` asserts the route
   set exhaustively. From here that assertion changes meaning — it stops tracking progress and
   starts guarding the surface, so a Phase 2 route has to be added there deliberately.
-- The Phase 2 mode question is already answered and already has a home: the command reader in
-  `core/` persists `state["system"]["mode"]` and the console reads it as a fact. When it lands,
-  `views.IDLE_READINGS` and the test asserting the State field never leaves that tuple are the
-  two places that change, and `console/reader.py:status_band` is the third.
+- **A docstring that names a test is not evidence of one.** Three instances now, all from a
+  session killed between writing a module and writing its tests, and all three found only
+  because someone went looking for the test by name. The third — `views.IDLE_READINGS`
+  claiming the suite enforced the Running/Frozen deferral — survived a phase close. Grep for
+  the test module or symbol at the point the docstring is written.
+- **A cleanup that cannot fail is a cleanup nobody can see fail.** `console_workspace`'s
+  `ignore_errors=True` was right about not turning a leaked directory into a FAIL and wrong
+  about saying nothing, and it silently filled a 923GB disk. The visible leak, in
+  `tests/harness/doubles.py`, was two orders of magnitude smaller and was fixed first
+  *because* it printed something. Anything defensive here should be designed for the leak that
+  cannot be seen: ask whether the directory is gone, do not just try to remove it.
+- **The console has two SQLite connections and the ASGI lifespan never runs in a criterion.**
+  `close_console` must close `reader` **and** `command_writer`; `CONSOLE_CONNECTION_ATTRS` is
+  the list, and a third connection added to `app.state` has to go in it.

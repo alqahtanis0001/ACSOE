@@ -90,6 +90,15 @@ _DAYS = 24 * _HOURS
 #: sentence invented in the view layer is a sentence nothing verifies.
 REASON_PROSE: Final[Mapping[str, str]] = {
     "net_edge_below_hurdle": "Net edge did not clear the hurdle after fees",
+    # The two fail-closed paths, deliberately not variants of the lines around
+    # them. "The edge was too thin" is a normal Tuesday and this system refusing
+    # almost everything is the point; "the gate could not reach its inputs" is a
+    # data problem the operator may need to act on, and invariant 3 is why it
+    # reads as a refusal either way. Requested by B for engines 10 and 11,
+    # 2026-09-09; B's wording, kept verbatim so the producer and the consumer
+    # cannot drift.
+    "cost_inputs_unavailable": "The cost gate could not price this candidate",
+    "risk_inputs_unavailable": "The risk gate could not size this candidate",
     "spread_wider_than_move": "The spread is wider than the expected move",
     "below_ordermin": "Position would be below the pair's minimum order size",
     "below_costmin": "Position value would be below the pair's minimum order value",

@@ -18,6 +18,7 @@ test in the repository.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -186,6 +187,7 @@ def test_the_verify_doubles_build_and_clean_up_after_themselves() -> None:
     `tmp_path`. Nothing is written under `data/`: every criterion has to pass on a
     fresh clone, and `data/` is gitignored."""
     doubles = build_verify_doubles()
+    directory = Path(doubles._tmp.name)
     try:
         assert isinstance(doubles.clock, Clock)
         assert isinstance(doubles.config, Config)
@@ -194,3 +196,9 @@ def test_the_verify_doubles_build_and_clean_up_after_themselves() -> None:
     finally:
         doubles.close()
     assert doubles._tmp is None
+    # The regression: `close()` used to remove the directory while the store still
+    # held `acsoe.sqlite` open, which Windows refuses. The refusal surfaced from
+    # `TemporaryDirectory`'s finalizer at garbage collection, where nothing could
+    # catch it, and `verify.py --phase 0` printed a `PermissionError` above its
+    # report on every run - green ones included.
+    assert not directory.exists()
