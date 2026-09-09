@@ -61,9 +61,14 @@ def build_state(
         "scout": {"pair": pair},
         "prediction": {"expected_move_pct": expected_move_pct},
         "order_book": {"estimated_slippage_pct": slippage_pct},
+        # Spread is published by engine 3, the market-data engine — not by engine 1,
+        # which is the account engine. Ratified by the lead on 2026-09-09 after B
+        # proposed it on `exchange`; the deciding argument was that `data_guard` blocks
+        # on stale data, a negative spread and a missing candle, and all three are
+        # market-data faults that should arrive from one publisher.
+        "market_sensor": {"bar_closed": True, "quotes": {pair: {"spread_pct": spread_pct}}},
         "exchange": {
             "fees": dict(fees),
-            "pairs": {pair: {"spread_pct": spread_pct}},
             "balances": {"USD": "5000.00"},
             "fallbacks_used": list(fallbacks or []),
         },
@@ -218,7 +223,7 @@ def test_no_reference_fee_appears_in_the_engine_source() -> None:
 
 @pytest.mark.parametrize(
     "drop",
-    ["scout", "prediction", "order_book", "exchange"],
+    ["scout", "prediction", "order_book", "exchange", "market_sensor"],
 )
 def test_a_missing_publisher_blocks(cost: CostEngine, engine_context: Any, drop: str) -> None:
     """Invariant 3: a gate that cannot reach its data blocks."""
@@ -244,11 +249,11 @@ def test_a_null_spread_is_not_read_as_a_zero_spread(
     cheapest possible trade.
     """
     state = build_state(fees=TIER_3, expected_move_pct="0.03")
-    state["exchange"]["pairs"][PAIR]["spread_pct"] = None
+    state["market_sensor"]["quotes"][PAIR]["spread_pct"] = None
 
     blocked = cost.process(engine_context, state)
 
-    state["exchange"]["pairs"][PAIR]["spread_pct"] = "0"
+    state["market_sensor"]["quotes"][PAIR]["spread_pct"] = "0"
     zero_spread = cost.process(engine_context, state)
 
     assert blocked.blocks_trading is True
@@ -321,17 +326,23 @@ def test_every_reason_code_this_engine_emits_is_renderable_by_the_console() -> N
     """The seam nothing else would notice.
 
     `console/format.py` maps a stored `reason_code` to the sentence an operator reads,
-    and a code absent from that table renders "No reason was recorded." Two agents own
-    the two halves, so this asserts they agree — and it deliberately allows
-    `cost_inputs_unavailable` to be missing for now, because that path always writes
-    prose and `operator_reason` prefers prose over the mapping. When C adds it, delete
-    the exemption rather than the test.
-    """
-    from acsoe.console.format import REASON_PROSE, operator_reason
+    and a code absent from that table renders "No reason was recorded." with no error
+    anywhere. Two agents own the two halves; `ownership.md` now carries it as a seam row,
+    and this is the assertion that holds it.
 
-    assert REASON_NET_EDGE_BELOW_HURDLE in REASON_PROSE
-    assert REASON_SPREAD_WIDER_THAN_MOVE in REASON_PROSE
-    assert operator_reason(REASON_INPUTS_UNAVAILABLE, "Cost gate could not price it") != ""
+    `cost_inputs_unavailable` was exempt when this engine landed because C had not added
+    it yet. C has, so the exemption is gone rather than the test — all three codes are
+    now required to be renderable.
+    """
+    from acsoe.console.format import NO_REASON_RECORDED, REASON_PROSE, operator_reason
+
+    for code in (
+        REASON_NET_EDGE_BELOW_HURDLE,
+        REASON_SPREAD_WIDER_THAN_MOVE,
+        REASON_INPUTS_UNAVAILABLE,
+    ):
+        assert code in REASON_PROSE
+        assert operator_reason(code) != NO_REASON_RECORDED
 
 
 @pytest.mark.parametrize(

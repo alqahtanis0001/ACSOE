@@ -1,0 +1,528 @@
+"""The Kraken REST client: the envelope, the mapping, the retention.
+
+Three things happen here and nowhere else.
+
+**The envelope.** Kraken wraps every answer in ``{"error": [...], "result": {...}}``
+and does **not** use HTTP status to signal application errors, so a 200 carrying a
+populated ``error`` array is a failure. :func:`parse_envelope` is the only place a
+response body is opened, and it has to get *both* halves right: a populated array
+raises :class:`~acsoe.clients.kraken.errors.KrakenAPIError`, and an empty one
+parses cleanly and yields its ``result``. A parser that raised on everything would
+satisfy the first half perfectly and be useless.
+
+**The mapping.** The exchange's field names are turned into the models in
+``contracts.py`` by the four ``map_*`` functions below, and a missing field is a
+failure rather than a default. This is the one part of this module that cannot be
+proved offline: ``AGENTS.md`` says any Kraken endpoint shape an agent remembers is
+stale, so the mapping is written against the committed fixtures in
+``tests/fixtures/kraken/`` and is confirmed against the live endpoints by
+``--live``, which is opt-in. It is deliberately isolated into named functions so
+that confirming it is a small, obvious edit rather than an archaeology exercise.
+
+**Retention.** ``asset_pairs`` and ``balance`` retain their last successful value
+with the time it was fetched and never discard it on a failure, because rule 14's
+emergency liquidation has to complete during the outage that triggered it.
+``trade_volume`` and ``order_book`` retain nothing: their only reader is the cost
+gate, and invariant 2 says an assumed spread or fee invalidates that gate.
+
+**No value in this module is a number.** No fee, no minimum, no tick size, no
+precision — not as a constant, not as a fallback, not in a comment.
+
+**No credential is ever rendered.** The signing inputs never enter an exception
+message, a log line, or a repr; the transport is handed headers it does not print,
+and every error carries the method and the path only.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from typing import Any, Protocol
+from urllib.parse import urlencode
+
+from acsoe.clients.kraken.contracts import (
+    BalancesSnapshot,
+    BookLevel,
+    FeeTierSnapshot,
+    OrderBookSnapshot,
+    PairRule,
+    PairRulesSnapshot,
+    RetainedValue,
+    to_micros,
+)
+from acsoe.clients.kraken.errors import KrakenAPIError, KrakenError, KrakenUnavailableError
+from acsoe.clients.kraken.limiter import RateLimiter
+from acsoe.platform.clock import Clock
+from acsoe.platform.config import Credentials
+
+__all__ = [
+    "HttpResponse",
+    "HttpTransport",
+    "HttpxTransport",
+    "KrakenRestClient",
+    "map_asset_pairs",
+    "map_balances",
+    "map_order_book",
+    "map_trade_volume",
+    "parse_envelope",
+    "sign_request",
+]
+
+KRAKEN_REST_URL = "https://api.kraken.com"
+
+ASSET_PAIRS_PATH = "/0/public/AssetPairs"
+ORDER_BOOK_PATH = "/0/public/Depth"
+TRADE_VOLUME_PATH = "/0/private/TradeVolume"
+BALANCE_PATH = "/0/private/Balance"
+
+#: Calls whose last successful value is kept for rule 14 and nothing else.
+RETAINED_CALLS = frozenset({"asset_pairs", "balance"})
+
+
+# --------------------------------------------------------------------------- #
+# Transport
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class HttpResponse:
+    """Just enough of an HTTP response to parse an envelope from."""
+
+    status_code: int
+    body: bytes
+
+
+class HttpTransport(Protocol):
+    """How this client reaches HTTP.
+
+    A seam rather than a direct ``httpx`` call, and it exists for a reason that is
+    not testability in the abstract: ``tests/conftest.py``'s autouse network guard
+    patches ``httpx.AsyncClient.send`` itself, so even a ``MockTransport`` cannot be
+    exercised through ``httpx`` inside a test. Injecting at this level means the
+    envelope, the mapping and the retention are all covered offline while the guard
+    stays exactly as strict as it is.
+    """
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        content: bytes | None,
+        timeout_s: float,
+    ) -> HttpResponse: ...
+
+
+class HttpxTransport:
+    """The real transport. ``httpx`` plus nothing.
+
+    A fresh ``AsyncClient`` per request, deliberately. The runtime loop is
+    synchronous and ticks once a minute, so each tick's fetches run under one
+    ``asyncio.run`` and a client held across ticks would be bound to an event loop
+    that has since closed. Three handshakes a minute is not a cost worth a
+    connection-pool lifecycle bug in the path that prices trades.
+    """
+
+    def __init__(self, *, verify: bool = True) -> None:
+        self._verify = verify
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        content: bytes | None,
+        timeout_s: float,
+    ) -> HttpResponse:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout_s, verify=self._verify) as client:
+                response = await client.request(
+                    method, url, headers=dict(headers), content=content
+                )
+        except httpx.HTTPError as exc:
+            # The URL is safe to name; the headers are not, and are never rendered.
+            raise KrakenUnavailableError(f"{method} {url} failed at the transport", exc) from exc
+        return HttpResponse(status_code=response.status_code, body=response.content)
+
+
+# --------------------------------------------------------------------------- #
+# The envelope — both halves
+# --------------------------------------------------------------------------- #
+
+
+def parse_envelope(body: bytes | str, call: str) -> Any:
+    """Open one Kraken response and return its ``result``.
+
+    Raises :class:`KrakenAPIError` when ``error`` is non-empty, whatever the HTTP
+    status was, and :class:`KrakenUnavailableError` when the body is not a Kraken
+    envelope at all — a proxy error page, a truncated read, an HTML maintenance
+    notice. The second case is "we did not get an answer" and both block.
+    """
+    try:
+        payload = json.loads(body)
+    except (ValueError, TypeError) as exc:
+        raise KrakenUnavailableError(f"{call}: response body was not JSON", exc) from exc
+    if not isinstance(payload, dict) or "error" not in payload:
+        raise KrakenUnavailableError(
+            f"{call}: response body was not a Kraken envelope "
+            "({'error': [...], 'result': {...}})"
+        )
+    errors = payload.get("error") or []
+    if not isinstance(errors, list):
+        raise KrakenUnavailableError(f"{call}: envelope 'error' was not a list")
+    if errors:
+        rendered = [str(item) for item in errors]
+        raise KrakenAPIError(f"{call} failed: {'; '.join(rendered)}", rendered)
+    if "result" not in payload:
+        raise KrakenUnavailableError(
+            f"{call}: envelope carried no 'result' and no error, which is neither a "
+            "yes nor a no"
+        )
+    return payload["result"]
+
+
+# --------------------------------------------------------------------------- #
+# Mapping — the field-name assumption, isolated on purpose
+# --------------------------------------------------------------------------- #
+
+
+def _require(result: Mapping[str, Any], key: str, call: str) -> Any:
+    if key not in result:
+        raise KrakenUnavailableError(
+            f"{call}: the response carried no {key!r}. The field names this client maps "
+            "are confirmed against the live endpoint by --live; a rename shows up here "
+            "as a failure rather than as a default."
+        )
+    return result[key]
+
+
+def _decimal(value: Any, key: str, call: str) -> Decimal:
+    if isinstance(value, float):
+        raise KrakenUnavailableError(
+            f"{call}: {key} arrived as a float, which has already lost precision"
+        )
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise KrakenUnavailableError(f"{call}: {key} is not a decimal number") from exc
+
+
+def map_asset_pairs(result: Any, *, fetched_at: int) -> PairRulesSnapshot:
+    """``AssetPairs`` result to :class:`PairRulesSnapshot`.
+
+    A pair whose entry is missing a field is **dropped with the failure surfaced**
+    rather than defaulted: a pair with no ``ordermin`` cannot be sized, and rule 2
+    says a missing pair rule blocks that pair with no fallback. Dropping one pair
+    does not fail the whole fetch, because one delisted or malformed symbol must not
+    take the universe down with it.
+    """
+    if not isinstance(result, Mapping):
+        raise KrakenUnavailableError("asset_pairs: result was not a mapping of pairs")
+    rules: dict[str, PairRule] = {}
+    for name, entry in result.items():
+        if not isinstance(entry, Mapping):
+            continue
+        try:
+            rules[str(name)] = PairRule(
+                pair=str(name),
+                base=str(_require(entry, "base", "asset_pairs")),
+                quote=str(_require(entry, "quote", "asset_pairs")),
+                ordermin=_decimal(_require(entry, "ordermin", "asset_pairs"), "ordermin", "ap"),
+                costmin=_decimal(_require(entry, "costmin", "asset_pairs"), "costmin", "ap"),
+                tick_size=_decimal(
+                    _require(entry, "tick_size", "asset_pairs"), "tick_size", "ap"
+                ),
+                lot_decimals=int(_require(entry, "lot_decimals", "asset_pairs")),
+                pair_decimals=int(_require(entry, "pair_decimals", "asset_pairs")),
+            )
+        except (KrakenUnavailableError, ValueError, TypeError):
+            # One unusable pair is not a failed fetch. It is simply a pair with no
+            # rules, and a pair with no rules is blocked by rule 2 wherever it is
+            # reached for. Keeping it out of the snapshot is what makes that true.
+            continue
+    if not rules:
+        raise KrakenUnavailableError(
+            "asset_pairs: no pair in the response carried a complete rule set"
+        )
+    return PairRulesSnapshot(pairs=rules, fetched_at=fetched_at)
+
+
+def map_trade_volume(result: Any, *, fetched_at: int) -> FeeTierSnapshot:
+    """``TradeVolume`` result to :class:`FeeTierSnapshot`.
+
+    Every field is required. There is no "assume a tier" here and there must never
+    be: invariant 2's paper-mode fee fallback is a decision made by the consumer,
+    which has to record that it fired, and a client that quietly supplied one would
+    make that record impossible.
+    """
+    if not isinstance(result, Mapping):
+        raise KrakenUnavailableError("trade_volume: result was not a mapping")
+    call = "trade_volume"
+    return FeeTierSnapshot(
+        tier=int(_require(result, "tier", call)),
+        currency=str(_require(result, "currency", call)),
+        volume_30d=_decimal(_require(result, "volume_30d", call), "volume_30d", call),
+        maker_fee_pct=_decimal(_require(result, "maker_fee_pct", call), "maker_fee_pct", call),
+        taker_fee_pct=_decimal(_require(result, "taker_fee_pct", call), "taker_fee_pct", call),
+        fetched_at=fetched_at,
+    )
+
+
+def map_balances(result: Any, *, fetched_at: int) -> BalancesSnapshot:
+    """``Balance`` result to :class:`BalancesSnapshot`. A currency-to-amount map."""
+    if not isinstance(result, Mapping):
+        raise KrakenUnavailableError("balance: result was not a mapping")
+    return BalancesSnapshot(
+        balances={
+            str(code): _decimal(amount, str(code), "balance") for code, amount in result.items()
+        },
+        fetched_at=fetched_at,
+    )
+
+
+def _levels(raw: Any, side: str, depth: int, pair: str) -> tuple[BookLevel, ...]:
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        raise KrakenUnavailableError(f"order_book: {pair} {side} was not a list of levels")
+    levels: list[BookLevel] = []
+    for entry in list(raw)[:depth]:
+        if not isinstance(entry, Sequence) or isinstance(entry, (str, bytes)) or len(entry) < 2:
+            raise KrakenUnavailableError(f"order_book: {pair} {side} level is malformed")
+        levels.append(
+            (
+                _decimal(entry[0], f"{side}.price", "order_book"),
+                _decimal(entry[1], f"{side}.volume", "order_book"),
+            )
+        )
+    return tuple(levels)
+
+
+def map_order_book(result: Any, *, pair: str, depth: int, fetched_at: int) -> OrderBookSnapshot:
+    """``Depth`` result to :class:`OrderBookSnapshot`.
+
+    An unknown pair, or one with an empty side, raises. It never returns a book with
+    no levels: that would reach the cost gate as a zero spread, and invariant 2 says
+    an assumed spread invalidates the gate outright.
+    """
+    if not isinstance(result, Mapping):
+        raise KrakenUnavailableError("order_book: result was not a mapping")
+    book = result.get(pair)
+    if not isinstance(book, Mapping):
+        raise KrakenAPIError(
+            f"order_book failed: EQuery:Unknown asset pair ({pair})",
+            ["EQuery:Unknown asset pair"],
+        )
+    try:
+        return OrderBookSnapshot(
+            pair=pair,
+            bids=_levels(_require(book, "bids", "order_book"), "bids", depth, pair),
+            asks=_levels(_require(book, "asks", "order_book"), "asks", depth, pair),
+            fetched_at=fetched_at,
+        )
+    except ValueError as exc:
+        # An empty side. `OrderBookSnapshot` refuses it, and it has to reach the
+        # caller as a failure rather than as a snapshot.
+        raise KrakenUnavailableError(f"order_book: {pair} came back unusable: {exc}") from exc
+
+
+# --------------------------------------------------------------------------- #
+# Signing
+# --------------------------------------------------------------------------- #
+
+
+def sign_request(*, path: str, nonce: int, form: Mapping[str, Any], secret: str) -> str:
+    """Kraken's private-endpoint signature.
+
+    HMAC-SHA512 over the path and the SHA-256 of the nonced form body, keyed by the
+    base64-decoded secret, returned base64.
+
+    **This is the one thing in this package that cannot be proved offline.** Its
+    inputs and its output are deterministic and are tested as such, but whether the
+    scheme is the one Kraken currently accepts can only be established by a call
+    that succeeds — and ``AGENTS.md`` warns that remembered endpoint shapes are
+    stale. It is confirmed by ``--live`` once the operator restores a key, and it is
+    recorded as an open item in ``context/progress/a-platform.md`` until then.
+
+    Raises rather than returning anything derived from a malformed secret. Nothing
+    here is logged: not the secret, not the nonce, not the returned signature.
+    """
+    try:
+        decoded = base64.b64decode(secret, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise KrakenUnavailableError(
+            "the API secret is not valid base64. The value itself is never rendered."
+        ) from exc
+    post = urlencode({"nonce": nonce, **form})
+    digest = hashlib.sha256(f"{nonce}{post}".encode()).digest()
+    signature = hmac.new(decoded, path.encode() + digest, hashlib.sha512)
+    return base64.b64encode(signature.digest()).decode()
+
+
+# --------------------------------------------------------------------------- #
+# The client
+# --------------------------------------------------------------------------- #
+
+
+class KrakenRestClient:
+    """Read-only REST access to Kraken.
+
+    Four calls, all read-only. ``AddOrder`` is not here and must not be added in
+    this phase: Phase 2 does not mutate the exchange.
+
+    :param clock: the injected clock. Nothing in this package reads the wall clock.
+    :param limiter: the shared rate limiter. Every call goes through it.
+    :param transport: HTTP. Injected, so the envelope and the mapping are testable
+        without the network and without relaxing the test guard.
+    :param credentials: the key pair, or None. Absent credentials make the two
+        private calls raise rather than silently return something.
+    """
+
+    def __init__(
+        self,
+        *,
+        clock: Clock,
+        limiter: RateLimiter,
+        transport: HttpTransport | None = None,
+        credentials: Credentials | None = None,
+        base_url: str = KRAKEN_REST_URL,
+        timeout_s: float = 20.0,
+        book_depth: int = 10,
+    ) -> None:
+        self._clock = clock
+        self._limiter = limiter
+        self._transport: HttpTransport = transport if transport is not None else HttpxTransport()
+        self._credentials = credentials
+        self._base_url = base_url.rstrip("/")
+        self._timeout_s = timeout_s
+        self._book_depth = book_depth
+        self._retained: dict[str, RetainedValue] = {}
+        self._nonce = 0
+
+    # -- retention, read only by rule 14 ---------------------------------- #
+
+    @property
+    def last_known_good_asset_pairs(self) -> RetainedValue | None:
+        """The last successful ``AssetPairs``, kept past its TTL. Rule 14 only."""
+        return self._retained.get("asset_pairs")
+
+    @property
+    def last_known_good_balances(self) -> RetainedValue | None:
+        """The last successful ``Balance``, kept past its TTL. Rule 14 only."""
+        return self._retained.get("balance")
+
+    # -- plumbing --------------------------------------------------------- #
+
+    def _now_micros(self) -> int:
+        return to_micros(self._clock.now())
+
+    def _next_nonce(self) -> int:
+        """Strictly increasing, seeded from the injected clock.
+
+        Kraken rejects a nonce that does not increase, and an injected clock may
+        legitimately stand still — a replay clock does. Taking the maximum of the
+        clock and the last nonce plus one keeps both properties.
+        """
+        candidate = self._now_micros()
+        self._nonce = max(candidate, self._nonce + 1)
+        return self._nonce
+
+    def _retain(self, call: str, snapshot: PairRulesSnapshot | BalancesSnapshot) -> None:
+        if call in RETAINED_CALLS:
+            self._retained[call] = RetainedValue(value=snapshot, fetched_at=snapshot.fetched_at)
+
+    async def _public(self, call: str, path: str, params: Mapping[str, str]) -> Any:
+        await self._limiter.acquire()
+        url = f"{self._base_url}{path}"
+        if params:
+            url = f"{url}?{urlencode(params)}"
+        response = await self._transport.request(
+            "GET", url, headers={"Accept": "application/json"}, content=None,
+            timeout_s=self._timeout_s,
+        )
+        return self._unwrap(call, path, response)
+
+    async def _private(self, call: str, path: str, form: Mapping[str, Any]) -> Any:
+        credentials = self._credentials
+        if credentials is None:
+            raise KrakenUnavailableError(
+                f"{call} needs API credentials and none are set. KRAKEN_API_KEY and "
+                "KRAKEN_API_SECRET come from the environment only, and a missing key "
+                "blocks rather than falling back."
+            )
+        await self._limiter.acquire()
+        nonce = self._next_nonce()
+        body = urlencode({"nonce": nonce, **form}).encode()
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "API-Key": credentials.key,
+            "API-Sign": sign_request(
+                path=path, nonce=nonce, form=form, secret=credentials.secret
+            ),
+        }
+        response = await self._transport.request(
+            "POST", f"{self._base_url}{path}", headers=headers, content=body,
+            timeout_s=self._timeout_s,
+        )
+        return self._unwrap(call, path, response)
+
+    def _unwrap(self, call: str, path: str, response: HttpResponse) -> Any:
+        """Envelope first, status second.
+
+        Deliberately in that order. A 5xx carrying a proper envelope is still an
+        application answer, and a 200 carrying a populated ``error`` array is still a
+        failure — which is the whole reason the status code is not the test. The
+        status is only consulted when the body turned out not to be an envelope at
+        all, where it is the more informative thing to report.
+        """
+        try:
+            return parse_envelope(response.body, call)
+        except KrakenUnavailableError:
+            if response.status_code >= 400:
+                raise KrakenUnavailableError(
+                    f"{call}: HTTP {response.status_code} from {path} with no Kraken envelope"
+                ) from None
+            raise
+
+    # -- the Protocol ----------------------------------------------------- #
+
+    async def asset_pairs(self) -> PairRulesSnapshot:
+        result = await self._public("asset_pairs", ASSET_PAIRS_PATH, {})
+        snapshot = map_asset_pairs(result, fetched_at=self._now_micros())
+        self._retain("asset_pairs", snapshot)
+        return snapshot
+
+    async def trade_volume(self) -> FeeTierSnapshot:
+        result = await self._private("trade_volume", TRADE_VOLUME_PATH, {})
+        return map_trade_volume(result, fetched_at=self._now_micros())
+
+    async def balance(self) -> BalancesSnapshot:
+        result = await self._private("balance", BALANCE_PATH, {})
+        snapshot = map_balances(result, fetched_at=self._now_micros())
+        self._retain("balance", snapshot)
+        return snapshot
+
+    async def order_book(self, pair: str, depth: int = 10) -> OrderBookSnapshot:
+        result = await self._public(
+            "order_book", ORDER_BOOK_PATH, {"pair": pair, "count": str(depth)}
+        )
+        return map_order_book(
+            result, pair=pair, depth=depth, fetched_at=self._now_micros()
+        )
+
+
+def is_exchange_error(exc: BaseException) -> bool:
+    """True for anything a caller should treat as "the exchange said no or nothing".
+
+    Exists so a fail-closed caller has one predicate rather than an import list that
+    drifts.
+    """
+    return isinstance(exc, KrakenError)

@@ -29,15 +29,18 @@ because a stop must always exit as a taker. Both rates are added once.
 | Expected move | `state["prediction"]["expected_move_pct"]` | 8 `prediction` (C) |
 | Maker fee | `state["exchange"]["fees"]["maker_pct"]` | 1 `exchange` (A) |
 | Taker fee | `state["exchange"]["fees"]["taker_pct"]` | 1 `exchange` (A) |
-| Measured spread | `state["exchange"]["pairs"][pair]["spread_pct"]` | 1 `exchange` (A) |
+| Measured spread | `state["market_sensor"]["quotes"][pair]["spread_pct"]` | 3 `market_sensor` (A) |
 | Estimated slippage | `state["order_book"]["estimated_slippage_pct"]` | 9 `order_book` (C) |
 | Fallbacks that fired | `state["exchange"]["fallbacks_used"]` | 1 `exchange` (A) |
 
 Configuration: `trading.hurdle_multiple`, and nothing else.
 
-**Only the fee-tier path is ratified.** Spec 34 fixes it in prose; the other four are B's
-proposal and are declared as `Final` constants in `contracts.py` so re-pointing one is a
-single-line edit. The open question is in `context/progress/b-store.md`.
+**All five paths are ratified**, in `engine-contracts.md`'s cross-chain key table, as of
+2026-09-09. They were B's proposal when this engine was written, declared as `Final`
+constants under a heading saying so — which is what let the lead re-point the spread from
+`state["exchange"]` to `state["market_sensor"]` as a one-constant edit rather than an
+argument. Engine 1 `exchange` is the *account* engine (balances, fee tier, pair rules);
+engine 3 `market_sensor` is the *market-data* engine, and spread is market data.
 
 **Money crosses `state` as an exact decimal string, never a `Decimal` and never a
 `float`.** `EngineResult.data` refuses a `Decimal` outright — its JSON check allows only

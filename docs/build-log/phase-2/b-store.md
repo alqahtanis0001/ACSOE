@@ -317,3 +317,203 @@ would satisfy every behavioural test above on a tier-1 fixture. So
 `test_no_reference_fee_appears_in_the_engine_source` reads the engine's own source and
 asserts none of the six reference figures is written into it. Behavioural tests cannot
 catch a constant that agrees with the fixture; only reading the source can.
+
+### The spread moved from engine 1 to engine 3, and it cost one constant
+
+**Agent:** B · **Task:** spec 34 · **Date:** 2026-09-09
+
+**What happened.** The lead ratified three of my four proposed state paths and re-pointed
+the fourth: the measured spread is `state["market_sensor"]["quotes"][pair]["spread_pct"]`,
+not `state["exchange"]["pairs"][pair]["spread_pct"]`.
+
+**Why the ruling is right.** Engine 1 `exchange` is the *account* engine — balances, fee
+tier, pair rules. Engine 3 `market_sensor` is the *market-data* engine. Spread is market
+data. The deciding argument is engine 4 `data_guard`, which blocks on stale data, a
+negative spread and a missing candle: all three are market-data faults and having them
+arrive from two publishers would split one responsibility across two engines.
+
+**What it cost.** One `Final` constant in `engines/cost/contracts.py`, one fixture key in
+the test file, one README row. That is the entire point of having declared the unratified
+paths as named constants under a heading saying they were unratified, rather than inlining
+guessed key names three levels down in `_read_inputs`. Worth recording as a pattern rather
+than as an event: **when you have to propose an interface, propose it in one visible
+place, and a later ruling is an edit instead of an argument.**
+
+### Engine 11: asserting the absence of a resized quantity, and getting it wrong first
+
+**Agent:** B · **Task:** spec 35 · **Date:** 2026-09-09
+
+**What happened.** Spec 35 requires the sub-`ordermin` test to assert on the *absence of a
+resized quantity*, because "a test that only checked 'did not place' would pass against a
+rounding implementation". My first attempt asserted that no value anywhere in the payload
+equalled `ordermin`. It failed immediately — against a correct implementation.
+
+**Why.** `RiskSizing` legitimately publishes `ordermin` itself, so the console and the
+`rejections` row can say what the minimum was. The check could not distinguish "the
+minimum, reported as the minimum" from "the quantity, bumped to the minimum". Worse, it
+would not have caught the defect it was aimed at anyway: an implementation that bumped to
+`ordermin + one lot` would have passed it.
+
+**Fix.** Assert the whole key set instead. On a rejection the payload is exactly
+`{pair, approved, ordermin, costmin, reason_code, fallbacks_used}` — `to_state_data` omits
+`qty`, `notional` and `risk_amount` entirely rather than emitting them as `null`. There is
+no field for a quantity to be bumped *into*, which is a structural guarantee rather than a
+behavioural one, and the test now says so by pinning the shape.
+
+**Consequence.** Two further orderings that are easy to get backwards, each with a test.
+Rounding is **down**, never to-nearest — to-nearest would round a quantity one lot below
+`ordermin` *up to* it, the rounding-up defect arriving through a rounding mode rather than
+an explicit bump. And rounding happens **before** the minimum is tested, so the number
+compared against `ordermin` is the number that would actually be sent; checking first and
+rounding after would let a quantity that passed be rounded below the minimum and placed.
+
+### The sizing rule had a 66x reading, and the config settled it
+
+**Agent:** B · **Task:** spec 35 · **Date:** 2026-09-09
+
+**What happened.** `trading.risk_fraction_per_trade: 0.01` has two readings — 1% of equity
+as *notional*, or 1% of equity as *money at risk*. At the configured 1.5% stop they differ
+by a factor of 66.
+
+**Why it is not a judgement call.** Invariant 6 says "risk per trade never exceeds the
+configured fraction of total account equity", and the money at risk on a position is the
+distance to its stop, which gives `notional = equity x fraction / stop_pct`. The
+confirmation is in `config/default.yaml` itself: the operator's comment on
+`max_concurrent_positions` reads "the balance binds first at $5,000: one position is
+~$3,333 notional", and $5,000 x 1% / 1.5% is $3,333.33. So the intended reading is stated
+in the committed config and did not have to be inferred.
+
+**Fix.** The sizing test asserts against that worked example by name, so a change to the
+rule fails against the operator's stated intent rather than against a number this file
+invented. The notional reading would have sized every position at 0.5 units — an error
+that looks conservative, produces no exception, and would have made every downstream
+economics result meaningless.
+
+**One decision alongside it.** Equity comes from `store.latest_equity_snapshot()`, not from
+the quote balance, and an absent snapshot blocks rather than falling back to cash. Sizing
+against one currency's cash would shrink the risk budget every time a position opened,
+which is not what a fixed fraction of equity means; and a fallback to cash would let the
+system size a trade against an equity figure nothing had computed, which is the optimistic
+kind of fallback invariant 2 forbids outright.
+
+### Two documents disagree about what a drawdown breach emits
+
+**Agent:** B · **Task:** spec 36 · **Date:** 2026-09-09
+
+**What happened.** Before writing engine 17's condition-to-command mapping I found that
+`trading-invariants.md` §14 and `feature-specs/36-engine-17-safety.md` cannot both be
+satisfied by the Phase 0 seed.
+
+§14: `safety` escalates — sets `close_intent`, i.e. writes `close_all` — on "its configured
+drawdown and loss-streak limits are breached" or "a sustained data outage", and escalates
+"when there are open positions or resting entry orders". Spec 36's Check When Done: "It
+**freezes** on the seeded drawdown on a tick where the opportunity chain never runs."
+
+**Why the seed makes it unavoidable.** The seed carries drawdown 0.2000 against a 0.10
+limit, a losing streak of 8 against a limit of 5, **and** 2 open positions and 2 resting
+entry orders. Every precondition §14 names for escalation is satisfied, deliberately — I
+built it that way in Phase 0 to satisfy §14. So under §14 the seeded drawdown emits
+`close_all` and under spec 36 it emits `freeze`. There is no fixture on which both are
+true.
+
+**Not fixed — escalated.** This decides whether a drawdown liquidates the account or only
+stops it opening, which is precisely the class of question `AGENTS.md` says to stop on. The
+lead has the three candidate readings and the two further gaps: which command the error
+rate emits, and whether an escalating condition emits `freeze` first or goes straight to
+`close_all`. Everything unambiguous is being built meanwhile — the six store reads, the
+outage arithmetic, the exposure precondition, the idempotency rule — with the mapping
+isolated as a single table in `engines/safety/contracts.py` so the ruling is one edit.
+
+### The seed can never sit on a boundary, and the outage test needed to
+
+**Agent:** B · **Task:** spec 36 · **Date:** 2026-09-09
+
+**What happened.** Spec 36 requires `close_all` "on the tick after
+`max_consecutive_data_blocks` and **not one tick before**", counted from the seeded
+`block_records`. I could not write the "not one before" half against the seed.
+
+**Why.** The seed overshoots every threshold by three, deliberately — `outage_run_length =
+max_consecutive_data_blocks + 3` — so that a fixture pinned to a literal cannot stop
+overshooting when the operator raises a limit. That is right for proving the breaker
+*fires*, and it makes the seed structurally **incapable of sitting at the boundary**. A
+second constraint compounded it: the outage walker anchors on the current tick and requires
+the newest stored tick to be `(run_id, cycle_id - 1)`, so anchoring part-way into the
+seeded run returns zero rather than a partial count. That is correct behaviour — it is what
+stops "an outage that ended two ticks ago" reading as one still running — but it removes
+the other way of reaching the boundary.
+
+**Fix.** Split the claim. The boundary is tested on a controlled `block_records` fixture
+that reproduces the seed's load-bearing property — two `run_id`s with reused `cycle_id`
+values, `run-a` cycles 5-9 then `run-b` restarting at 1 — with 14 stored ticks plus this
+one giving exactly the limit and no escalation, and 15 plus this one giving one past it and
+an escalation. The seed is then used for the realistic case and for the
+`ts`-versus-`cycle_id` discrimination, which spec 36 names explicitly. Both halves are
+separate tests so a failure names which side of the boundary broke.
+
+**Consequence worth stating.** "Test it against the seed" and "test the boundary" are not
+compatible instructions for a fixture built to overshoot. Recorded in the engine's README
+so the next person does not spend the same half hour discovering it.
+
+### The shared seed fixture disagrees with the committed config
+
+**Agent:** B · **Task:** spec 36 · **Date:** 2026-09-09
+
+**What happened.** `test_error_rate_blocks_on_the_seeded_window` failed: the seeded
+database carried 13 ERROR rows against a configured limit of 20, so engine 17's error-rate
+condition did not trip.
+
+**Why.** `seed_database` takes its thresholds by injection and `SeedThresholds`' defaults
+are documented as "fixture-shape constants, not recommended values". One has since
+diverged: the default `max_errors_in_window` is 10 — my own Phase 0 proposal, which the
+operator did not take — while `config/default.yaml` says 20. The seed overshoots by three,
+so the defaults produce 13, which clears 10 and sits well under 20.
+`tests/conftest.py`'s shared `seed_fixtures` fixture calls `seed_database` with no
+`thresholds` argument, so every test using it gets the stale numbers.
+
+**This is exactly the defect `seed.py`'s own docstring warns about**, arriving through the
+shared fixture rather than through a literal in a test — and `scripts/verify.py` already
+avoids it by building `SeedThresholds` from the config, which is why
+`seed_fixtures_present` has been passing with 23 ERROR rows while the shared fixture
+produced 13.
+
+**Fix.** `tests/engines/test_safety.py` defines its own `seed_fixtures` that injects the
+committed config's five `safety.*` values, doing what verify does. Not fixed in `seed.py`:
+the defaults are documented as shape constants and changing them would make the seed claim
+to know a trading threshold, which is the coupling the injection exists to prevent.
+Reported to C, who owns the shared fixture.
+
+**The failure mode is the point.** It does not raise. A Phase 3 test of the error-rate input
+against the shared fixture would simply find the condition not tripped and fail with
+"expected error_rate in tripped", pointing at the engine rather than at the fixture.
+
+### A lax pydantic validator behaved as a strict one, and it was not a crash
+
+**Agent:** B · **Task:** spec 36 · **Date:** 2026-09-09
+
+**What happened.** A reported, from a full-suite baseline run before touching any code:
+`ValidationError: BlockRecordRow.is_primary — Input should be a valid boolean
+[input_value=0, input_type=int]`, raised from `client.py`'s `block_records_in_window`. Not
+reproducible when that file was run alone, and it has not recurred.
+
+**Why it is worth an entry despite being unreproducible.** `_Row` is not strict, and in lax
+mode pydantic accepts `0` and `1` for a `bool` — so that error should be unreachable. A lax
+validator behaving as a strict one is the signature of the known intermittent pydantic-core
+fault already in Known Risks, which has produced `0xC0000005`, `0xC0000374`, `0xC0000409`
+and an `AttributeError` from inside `to_python`. **This is the same fault arriving as a
+wrong answer rather than as a crash**, which is materially worse: a crash is obviously a
+crash, while a `ValidationError` naming a field looks like a schema bug and invites
+somebody to loosen that field's type — which would then accept a genuinely bad value
+forever.
+
+**Fix.** `_row_to_dict` now converts `is_primary` and `promoted` explicitly, via a
+`_BOOLEAN_COLUMNS` constant beside the existing `_JSON_COLUMNS`. It is honest on its own
+terms — SQLite has no boolean type and these columns are `INTEGER ... CHECK (col IN (0, 1))`
+— and it makes the whole class of failure unreachable rather than merely rarer, at one dict
+lookup per row. `test_sqlite_integers_become_real_booleans_at_the_client_boundary` asserts
+`type(value) is bool` rather than truthiness, so the conversion cannot be quietly dropped.
+
+**Escalation note.** Per my Phase 0 entry the intermittent fault becomes mine again "if the
+fault appears outside this write path". It has: this is a *read* path, and it manifested as
+a validation error rather than a native crash. Flagged to the lead as a widening of the
+known signature rather than a new defect, since the mitigation here closes this instance
+and hardware remains the suspected root cause.

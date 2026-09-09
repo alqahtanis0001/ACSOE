@@ -45,7 +45,8 @@ from acsoe.engines.cost.contracts import (
     EXCHANGE_FALLBACKS_KEY,
     EXCHANGE_FEES_KEY,
     EXCHANGE_KEY,
-    EXCHANGE_PAIRS_KEY,
+    MARKET_SENSOR_KEY,
+    MARKET_SENSOR_QUOTES_KEY,
     ORDER_BOOK_KEY,
     PREDICTION_KEY,
     REASON_INPUTS_UNAVAILABLE,
@@ -156,8 +157,15 @@ class CostEngine(BaseEngine):
 
         exchange = state.get(EXCHANGE_KEY)
         fees = _require(exchange, EXCHANGE_FEES_KEY, EXCHANGE_KEY)
-        pairs = _require(exchange, EXCHANGE_PAIRS_KEY, EXCHANGE_KEY)
-        pair_facts = _require(pairs, str(pair), f"{EXCHANGE_KEY}.{EXCHANGE_PAIRS_KEY}")
+
+        # Spread comes from engine 3, not engine 1: `market_sensor` is the market-data
+        # engine and `exchange` is the account engine, and `data_guard` needs every
+        # market-data fault to arrive from one publisher.
+        quotes = _require(
+            state.get(MARKET_SENSOR_KEY), MARKET_SENSOR_QUOTES_KEY, MARKET_SENSOR_KEY
+        )
+        quote_where = f"{MARKET_SENSOR_KEY}.{MARKET_SENSOR_QUOTES_KEY}"
+        pair_quote = _require(quotes, str(pair), quote_where)
 
         raw: dict[str, Any] = {
             "pair": pair,
@@ -170,9 +178,7 @@ class CostEngine(BaseEngine):
             "taker_fee_pct": _require(
                 fees, "taker_pct", f"{EXCHANGE_KEY}.{EXCHANGE_FEES_KEY}"
             ),
-            "spread_pct": _require(
-                pair_facts, "spread_pct", f"{EXCHANGE_KEY}.{EXCHANGE_PAIRS_KEY}.{pair}"
-            ),
+            "spread_pct": _require(pair_quote, "spread_pct", f"{quote_where}.{pair}"),
             "slippage_pct": _require(
                 state.get(ORDER_BOOK_KEY), "estimated_slippage_pct", ORDER_BOOK_KEY
             ),

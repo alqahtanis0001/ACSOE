@@ -36,6 +36,7 @@ variable. It deliberately does not read ``ACSOE_LIVE``: that is one of invariant
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated, Any, Final, Literal, Self
@@ -507,6 +508,53 @@ def load_dotenv(path: Path | None = None) -> int:
             os.environ[key] = value
             loaded += 1
     return loaded
+
+
+@dataclass(frozen=True)
+class Credentials:
+    """A Kraken API key pair, carried without ever being renderable.
+
+    ``__repr__`` and ``__str__`` are overridden together and both return a constant.
+    That is not belt and braces: the single most common way a key reaches a log is
+    that nobody logged it — an exception was formatted, or a dataclass holding it
+    was interpolated into a message, and the default ``repr`` printed every field.
+    ``platform/logging.py``'s value scrubber is the second line of defence and this
+    is the first, because the scrubber only protects lines that go through the
+    logger.
+
+    Constructed only by :func:`load_credentials`, which is the only reader of the
+    environment in the system.
+    """
+
+    key: str
+    secret: str
+
+    def __repr__(self) -> str:
+        return "Credentials(key=<redacted>, secret=<redacted>)"
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
+
+def load_credentials(*, arm_redaction: bool = True) -> Credentials | None:
+    """The Kraken key pair from the environment, or None when it is not set.
+
+    Returns None rather than raising, because a missing key is the normal state of a
+    fresh clone: paper mode runs the whole pipeline without one, and invariant 2's
+    paper fallbacks exist exactly so that it can. The caller decides whether the
+    absence blocks — in live mode it does.
+
+    Registers both values with the log redactor before returning them, so a client
+    built from this can never be the first thing to leak one.
+    """
+    key = os.environ.get("KRAKEN_API_KEY", "").strip()
+    secret = os.environ.get("KRAKEN_API_SECRET", "").strip()
+    if not key or not secret:
+        return None
+    if arm_redaction:
+        register_secret(key)
+        register_secret(secret)
+    return Credentials(key=key, secret=secret)
 
 
 def arm_secret_redaction() -> int:

@@ -884,6 +884,58 @@ def test_the_seed_writes_no_system_mode(seeded_db: Path) -> None:
     assert modes == [None] * len(modes)
 
 
+def test_sqlite_integers_become_real_booleans_at_the_client_boundary(
+    store: StoreClient,
+) -> None:
+    """SQLite has no boolean type: `is_primary` and `promoted` are `INTEGER ... CHECK
+    (col IN (0, 1))` and read back as `0`/`1`.
+
+    Converted in `_row_to_dict` rather than left to pydantic's lax coercion. Lax mode
+    accepts `0` and `1` for a `bool`, so this is normally unnecessary — except that A
+    observed `BlockRecordRow.is_primary — Input should be a valid boolean
+    [input_value=0, input_type=int]` out of this module in one full-suite run, not
+    reproducible alone, on a model that is not strict. A lax validator behaving as a
+    strict one is the known intermittent pydantic-core fault arriving as a wrong answer
+    rather than as a crash.
+
+    The hazard is the diagnosis, not the failure: a `ValidationError` naming a field
+    invites loosening that field's type, which would then accept a genuinely bad value
+    forever. This asserts the values are real `bool`s and not truthy integers, so the
+    conversion cannot be quietly dropped.
+    """
+    store.write_block_record(
+        BlockRecordRow(
+            cycle_id=1,
+            run_id="run-a",
+            ts=1_000,
+            blocked_by="data_guard",
+            block_reason="stale",
+            is_primary=True,
+            status=BlockStatus.BLOCK,
+            updated_at=1_000,
+        )
+    )
+    store.write_block_record(
+        BlockRecordRow(
+            cycle_id=1,
+            run_id="run-a",
+            ts=1_000,
+            blocked_by="safety",
+            block_reason="drawdown",
+            is_primary=False,
+            status=BlockStatus.BLOCK,
+            updated_at=1_000,
+        )
+    )
+
+    rows = store.block_records_in_window(start_ts=0, end_ts=10_000)
+    flags = {row.blocked_by: row.is_primary for row in rows}
+
+    assert flags == {"data_guard": True, "safety": False}
+    for value in flags.values():
+        assert type(value) is bool, "a truthy int is not a bool; the conversion was dropped"
+
+
 def test_equity_series_returns_the_whole_curve_oldest_first(store: StoreClient) -> None:
     for index in range(5):
         store.write_equity_snapshot(

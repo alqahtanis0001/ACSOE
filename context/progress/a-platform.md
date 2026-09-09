@@ -5,8 +5,16 @@ Never edit the tracker directly.
 
 ## Current Task
 
-**Claimed: specs 03, 07, 08, 09, 10.** All five Phase 0 tasks for Agent A. All five are
-finished. Nothing of mine is outstanding.
+**Phase 2. Claimed: specs 25, 26, 27, 28, 29, 30**, in that order, per
+`feature-specs/PHASE-2-TASKS.md` and ownership rule 5.
+
+- **Spec 25 — Kraken REST and WebSocket clients: COMPLETE.** Four checks below.
+- Specs 26 to 30: not started.
+
+Phase 0 (below) is closed and green; it is kept for the record.
+
+**Claimed in Phase 0: specs 03, 07, 08, 09, 10.** All five Phase 0 tasks for Agent A. All five
+are finished. Nothing of mine is outstanding.
 
 This session was a follow-up, not a new spec: the operator supplied the nine OPERATOR REQUIRED
 values, three of my tests asserted the committed config refuses to load, and those assertions
@@ -93,19 +101,79 @@ operator's, so that revising a provisional trading number in Phase 3 does not ch
 YAML parsing. Assertions about the shipped numbers live in the `test_default_yaml_*` tests and
 nowhere else.
 
+## Phase 2 — spec 25, what was built
+
+`src/acsoe/clients/kraken/` is now the system's only route to the exchange.
+`contracts.py` landed first and was messaged to B and C the same session, so neither
+waited on the implementation.
+
+- **`contracts.py`** — `PairRule`, `PairRulesSnapshot`, `FeeTierSnapshot`,
+  `BalancesSnapshot`, `OrderBookSnapshot`, `RetainedValue`, `RawFrame`, `TradeTick`,
+  `QuoteTick`, and the `KrakenClientProtocol` / `MarketStreamProtocol` Protocols. Field
+  names match `tests/harness/fake_kraken.py` exactly, so the fake and the real client
+  are interchangeable and no consumer has to know which it has.
+- **`errors.py`** — `KrakenError` / `KrakenAPIError(message, errors)` /
+  `KrakenUnavailableError(message, cause)`, re-exported from the package. C's harness
+  now takes its real-import branch; its fallback definitions are dead code.
+- **`limiter.py`** — token bucket, injected clock and sleep, **no default budget**.
+- **`rest.py`** — the envelope, the four `map_*` functions, retention, signing.
+- **`ws.py`** — buffered v2 stream on its own thread, gaps marked never healed.
+- **`client.py`** — the `KrakenClient` facade `context.clients.kraken` holds.
+- **`README.md`** — the envelope rule, what is fetched at runtime, what is retained
+  and why the other two deliberately are not.
+- **`platform/config.py`** gained `Credentials` and `load_credentials()`. It stays the
+  only module in the system that reads an environment variable, and `Credentials`
+  renders as a constant from both `__repr__` and `__str__`.
+
+50 tests in `tests/clients/kraken/`.
+
+### Three things I want the next reader to notice
+
+1. **The envelope is tested as a pair, not as one assertion.** A 200 with a populated
+   `error` array raises, **and** a 200 with an empty one parses cleanly and yields its
+   `result`. A parser that raised on everything satisfies the first perfectly and is
+   useless; discrimination is the only property the envelope has and one assertion
+   cannot demonstrate it.
+2. **The client applies no fallback, deliberately.** `map_trade_volume` raises on a
+   missing fee field and never assumes a tier. Invariant 2's paper-mode fallbacks are
+   decisions made by the *consumer*, which must record which one fired, and a client
+   that quietly supplied one would make that record impossible.
+3. **Absent is structurally distinct from zero.** `OrderBookSnapshot` cannot be
+   constructed with an empty side, so "no book" arrives as an exception rather than as
+   a zero spread. A *crossed* book is reported faithfully — `spread` may be negative —
+   because engine 4 has to see it.
+
 ## In Progress
 
-- Nothing.
+- **Spec 26 `exchange`, next.** Nothing written yet.
 
 ## Blocked On
 
-- Nothing.
+- Nothing. Two config keys are with the operator (below) and neither blocks: I will
+  reference them with `config.get(...)` and let the `KeyError` stand until they land,
+  which is the correct fail-closed behaviour and is testable as such.
 
 ## Open Questions
 
 Unresolved requirements go here and that unit of work stops. Never guess at trading behaviour.
 
-- None.
+- **The signing scheme and the four `map_*` field names in `rest.py` are unverified
+  against the live exchange, and cannot be verified offline.** `AGENTS.md` says any
+  remembered endpoint shape is stale; the operator has rotated the key; the committed
+  fixtures are C's simplified harness shape, not recorded responses. Both are isolated
+  into single named functions so correcting them is a small edit, and a renamed field
+  surfaces as a `KrakenUnavailableError` naming the field rather than as a default.
+  Confirmed by `--live` when a key exists. **Blocks nothing** — every Phase 2 criterion
+  runs offline.
+- **Invariant 2's paper-mode fee fallback is unimplementable as written.** "Assume tier
+  1, the worst tier" requires tier 1's rates, which are exchange-supplied, and the same
+  rule forbids hardcoding a fee anywhere. Raised with the lead, who has taken it to the
+  operator. Not mine to resolve — it is engine 10's surface — and my client deliberately
+  does not paper over it. The lead asked whether `AssetPairs` carries a public fee
+  schedule that would dissolve the contradiction: **it does not.**
+  `tests/fixtures/kraken/asset_pairs.json` carries exactly `base`, `quote`, `ordermin`,
+  `costmin`, `tick_size`, `lot_decimals`, `pair_decimals` for all four pairs, and no fee
+  field of any kind. Reported to the lead.
 
 ## Escalations To Lead
 
@@ -138,6 +206,21 @@ Anything touching `core/`, `bootstrap.py`, the engine registry, an invariant, a 
   deciding whether the seed should read them or deliberately keep its own — the seed's numbers
   must stay independent of a provisional trading value that Phase 3 will revise, or every
   fixture moves when the operator retunes one number. Not mine to change; flagging the choice.
+
+## Escalations To Lead — Phase 2
+
+- **Config keys.** Requested six. Four approved and awaiting my model sections
+  (`kraken.rest_capacity`, `kraken.rest_refill_per_s`, `kraken.rest_timeout_s`,
+  `market_sensor.published_bars`). Two held as trading behaviour and put to the
+  operator: **`data_guard.max_data_age_s`** and **`kraken.cache_ttl_s`**. The second is
+  the more serious of the two: invariant 2 says "a cache stale beyond its TTL counts as
+  a failed fetch" and rule 14 says a liquidation may use a value "past its TTL", and
+  **no TTL exists anywhere in `config/default.yaml`** — so both sentences currently have
+  no *its*.
+- **`bootstrap.py` registration for engines 1 to 4** — will be sent as one batch, and
+  deliberately not before all four survive two real orchestrator ticks against the fake
+  client. C's `console_shows_live_rows` criterion turns from PENDING to a FAIL naming
+  the exception if a registered engine raises during a tick.
 
 ## Verification
 

@@ -14,19 +14,22 @@ refused at this boundary rather than discovered three decimals into a hurdle com
 one money rule in this project and it should have one definition; a second copy here
 would be a second place for it to drift.
 
-## The state paths below are B's proposal, not yet ratified
+## The state paths below are ratified
 
-`engine-contracts.md` fixes exactly four cross-chain keys and none of them is an input to
-this engine. Spec 34 fixes one path in prose — the fee tier "reaches this engine as
-`state["exchange"]`'s fee tier, published by A's engine 1" — and says nothing about where
-the expected move, the spread or the slippage estimate arrive. Rather than scatter
-guessed key names through the engine, every path this module reads is a `Final` constant
-here, so re-pointing one when the lead fixes the table is a one-line edit and a reviewer
-can see the whole surface at once. The open question is recorded in
-`context/progress/b-store.md`.
+They were B's proposal when this engine was written, declared as `Final` constants under
+a heading saying so, precisely so that a ruling could be applied without hunting inlined
+key names through the engine. The lead ratified all four on 2026-09-09 and they are now
+in the cross-chain key table in `engine-contracts.md`.
 
-None of this guesses at *trading behaviour*: the arithmetic is invariant 5, quoted in
-:mod:`acsoe.engines.cost.engine`, and it is fixed. Only the wiring is provisional.
+**The spread was re-pointed, and the reason is worth keeping.** It is not
+`state["exchange"]["pairs"][pair]["spread_pct"]`, which is where B first proposed it, but
+`state["market_sensor"]["quotes"][pair]["spread_pct"]`. Engine 1 `exchange` is the
+*account* engine — balances, fee tier, pair rules — and engine 3 `market_sensor` is the
+*market-data* engine. Spread is market data. The deciding argument is engine 4
+`data_guard`, which blocks on stale data, a negative spread and a missing candle: all
+three are market-data faults and should arrive from one publisher rather than two.
+
+The whole re-point was one constant.
 """
 
 from __future__ import annotations
@@ -40,11 +43,11 @@ from acsoe.clients.store.contracts import Money
 
 __all__ = [
     "CANDIDATE_PAIR_PATH",
-    "EXCHANGE_BALANCES_KEY",
     "EXCHANGE_FALLBACKS_KEY",
     "EXCHANGE_FEES_KEY",
     "EXCHANGE_KEY",
-    "EXCHANGE_PAIRS_KEY",
+    "MARKET_SENSOR_KEY",
+    "MARKET_SENSOR_QUOTES_KEY",
     "MINUS_SIGN",
     "ORDER_BOOK_KEY",
     "PERCENT_PLACES",
@@ -59,7 +62,7 @@ __all__ = [
 ]
 
 # --------------------------------------------------------------------------- #
-# State paths — provisional, see the module docstring
+# State paths — ratified 2026-09-09, see the module docstring
 # --------------------------------------------------------------------------- #
 
 #: Engine 1 `exchange` (A). Spec 34 fixes this one: the fee tier arrives here.
@@ -69,17 +72,18 @@ EXCHANGE_KEY: Final = "exchange"
 #: not keyed by pair.
 EXCHANGE_FEES_KEY: Final = "fees"
 
-#: Per-pair exchange facts, under :data:`EXCHANGE_KEY`, keyed by pair name: the measured
-#: spread here, and `ordermin`/`costmin` for engine 11.
-EXCHANGE_PAIRS_KEY: Final = "pairs"
-
-#: Currency-to-amount map, under :data:`EXCHANGE_KEY`. Read by engine 11, not by this one.
-EXCHANGE_BALANCES_KEY: Final = "balances"
-
 #: Which paper-mode fallbacks fired on this tick, under :data:`EXCHANGE_KEY`. Invariant 2
 #: requires every decision affected by a fallback to record which one, and a gate outcome
 #: is such a decision, so it is carried through into this engine's `data` verbatim.
 EXCHANGE_FALLBACKS_KEY: Final = "fallbacks_used"
+
+#: Engine 3 `market_sensor` (A). The market-data engine, and therefore the publisher of
+#: the measured spread — not engine 1, which is the account engine.
+MARKET_SENSOR_KEY: Final = "market_sensor"
+
+#: Per-pair top-of-book quotes, under :data:`MARKET_SENSOR_KEY`, keyed by pair name.
+#: Per-tick, alongside `bar_closed`, which is per-bar.
+MARKET_SENSOR_QUOTES_KEY: Final = "quotes"
 
 #: Engine 8 `prediction` (C). The expected move for the candidate, as a signed ratio.
 PREDICTION_KEY: Final = "prediction"

@@ -71,6 +71,24 @@ DEFAULT_OUTAGE_SCAN_LIMIT: Final = 5_000
 
 _JSON_COLUMNS: Final[frozenset[str]] = frozenset({"fallbacks_used"})
 
+#: Columns the schema stores as `INTEGER ... CHECK (col IN (0, 1))` and the contracts
+#: model as `bool`. SQLite has no boolean type, so these read back as `0`/`1`.
+#:
+#: Converted here rather than left to pydantic. In lax mode pydantic accepts `0` and `1`
+#: for a `bool` and this is unnecessary; in strict mode it refuses them. That difference
+#: is normally settled by the model config and would not be worth a constant — except
+#: that A observed `BlockRecordRow.is_primary — Input should be a valid boolean
+#: [input_value=0, input_type=int]` from this module in one full-suite run, not
+#: reproducible when the file was run alone, on a model that is not strict. A lax
+#: validator behaving as a strict one is the signature of the known intermittent
+#: pydantic-core fault in Known Risks, arriving as a wrong answer rather than as a crash.
+#:
+#: The hazard is not the failure, it is the diagnosis: a `ValidationError` naming a field
+#: invites someone to loosen that field's type, which would silently accept a real bad
+#: value forever. Converting at the boundary makes the whole class unreachable and costs
+#: one dict lookup per row.
+_BOOLEAN_COLUMNS: Final[frozenset[str]] = frozenset({"is_primary", "promoted"})
+
 
 def money_to_text(value: Decimal) -> str:
     """The canonical stored form of a money value. One rule, in one place.
@@ -113,11 +131,20 @@ def _to_sql(value: Any) -> Any:
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
-    """Turn a raw row into kwargs a contract model accepts."""
+    """Turn a raw row into kwargs a contract model accepts.
+
+    Two conversions, and both exist because SQLite's type system is narrower than the
+    contracts': JSON text back to a tuple, and `0`/`1` back to `bool`. Everything else,
+    money included, is handed to pydantic as stored.
+    """
     data: dict[str, Any] = dict(row)
     for column in _JSON_COLUMNS & data.keys():
         raw = data[column]
         data[column] = tuple(json.loads(raw)) if raw else ()
+    for column in _BOOLEAN_COLUMNS & data.keys():
+        value = data[column]
+        if value is not None:
+            data[column] = bool(value)
     return data
 
 
