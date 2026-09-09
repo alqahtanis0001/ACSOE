@@ -41,6 +41,7 @@ from acsoe.clients.store.contracts import (
     PositionRow,
     PositionStatus,
     RejectionRow,
+    RunMode,
     RunRow,
     SystemMode,
     SystemModeRow,
@@ -541,10 +542,79 @@ class StoreClient:
         return cursor.rowcount == 1
 
     # ------------------------------------------------------------------
-    # System mode — spec 31. The command reader in `core/` writes; the console reads.
+    # The two writes `core/` makes — primitives only
+    #
+    # Invariant 0: `core/` imports nothing from the rest of the package. That is what
+    # keeps the lead's shape and B's implementation apart, and it means the orchestrator
+    # cannot construct a `RunRow` to hand to `write_run`. The command reader gets away
+    # with duck-typing today only because it exclusively *reads* attributes off rows this
+    # client hands it; a write is a different problem, because a write needs a
+    # constructor.
+    #
+    # So these two take `str` and `int` and nothing else. No model, no enum, no import.
+    # `tests/clients/store/test_core_entry_points.py` proves it by running the whole path
+    # in a fresh interpreter that imports only `StoreClient`.
     # ------------------------------------------------------------------
 
-    def set_system_mode(self, run_id: str, mode: SystemMode, *, at: int) -> bool:
+    def start_run(
+        self,
+        run_id: str,
+        *,
+        mode: str,
+        started_at: int,
+        acsoe_version: str | None = None,
+        config_digest: str | None = None,
+    ) -> None:
+        """Record one daemon process, at startup, before the first tick.
+
+        **Refuses a duplicate `run_id` rather than upserting.** `write_run` upserts
+        because the orchestrator legitimately writes that row more than once — stamping
+        `ended_at` at shutdown, say. Starting a run is not that: `run_id` is minted once
+        per process, so a second `start_run` with the same id is either a restart that
+        cannot have happened or a bug, and an upsert would silently rewrite `started_at`
+        and hide it. The console decides the current run from the newest `runs` row, so a
+        rewritten `started_at` reorders the two rows it compares.
+
+        **It does not write `system_mode` or `system_mode_at`, and the column list here
+        is why.** Adding those columns to `runs` in spec 31 silently made `write_run` a
+        writer of the system mode, so a shutdown rewrite from a startup-built `RunRow`
+        would have reset a frozen daemon's persisted mode to NULL. A new entry point is
+        exactly where that trap gets walked back into, so this one names its columns
+        explicitly rather than dumping a payload. :meth:`set_system_mode` remains the
+        only writer of both.
+
+        Raises :class:`StoreError` on a duplicate `run_id` or an unrecognised `mode`. A
+        bad mode is a defect rather than a missing row: writing nothing for a typo would
+        leave the console reading a run that does not exist, silently and forever.
+        """
+        try:
+            recognised = RunMode(mode)
+        except ValueError as exc:
+            legal = ", ".join(sorted(member.value for member in RunMode))
+            raise StoreError(f"unknown run mode {mode!r}; expected one of {legal}") from exc
+
+        try:
+            self.connection.execute(
+                "INSERT INTO runs "
+                "(run_id, mode, started_at, acsoe_version, config_digest, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    recognised.value,
+                    int(started_at),
+                    acsoe_version,
+                    config_digest,
+                    int(started_at),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise StoreError(
+                f"run {run_id!r} already exists. `run_id` is minted once per process, so "
+                "starting it twice is a defect rather than a restart; use write_run to "
+                "amend an existing row."
+            ) from exc
+
+    def set_system_mode(self, run_id: str, mode: SystemMode | str, *, at: int) -> bool:
         """Record the mode this run is actually in. Returns False if the run is unknown.
 
         **Written for the console to read, never for the daemon to resume from.** There
@@ -565,11 +635,30 @@ class StoreClient:
         mode. It is returned rather than raised because the command reader must not
         abort a `freeze` it has already applied to `state` over a bookkeeping write;
         the caller logs it.
+
+        **`mode` may be a plain `str`, and that is a guarantee rather than an accident.**
+        `SystemMode` is a `StrEnum`, so `SystemMode("running")` has always worked — but
+        "it happens to work" is not something that should be load-bearing under the
+        status band, and the caller is `core/`, which may not import the enum at all. The
+        coercion is explicit and `test_core_entry_points.py` pins it.
+
+        An unrecognised mode **raises**, unlike an unknown run. The two failures are not
+        alike: a missing row is a race the caller should log and continue past, while a
+        misspelled mode is a defect, and returning `False` for it would leave the console
+        reading a stale mode with nothing anywhere saying why.
         """
+        try:
+            recognised = SystemMode(mode)
+        except ValueError as exc:
+            legal = ", ".join(sorted(member.value for member in SystemMode))
+            raise StoreError(
+                f"unknown system mode {mode!r}; expected one of {legal}"
+            ) from exc
+
         cursor = self.connection.execute(
             "UPDATE runs SET system_mode = ?, system_mode_at = ?, updated_at = ? "
             "WHERE run_id = ?",
-            (SystemMode(mode).value, int(at), int(at), run_id),
+            (recognised.value, int(at), int(at), run_id),
         )
         return cursor.rowcount == 1
 

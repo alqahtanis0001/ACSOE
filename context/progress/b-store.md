@@ -46,6 +46,39 @@ it, fixing whether each threshold trips *at* its limit or *above* it, each with 
 in the documents that fixes it. Drawdown, loss streak and error rate trip at the limit; the
 outage is the only strictly-greater one.
 
+## `core/`'s two writes — landed, primitives only
+
+`core/` imports nothing from the rest of the package, so it cannot construct a `RunRow`
+to hand to `write_run`. Two entry points now take `str` and `int` and nothing else:
+
+```python
+def start_run(self, run_id: str, *, mode: str, started_at: int,
+              acsoe_version: str | None = None,
+              config_digest: str | None = None) -> None: ...
+def set_system_mode(self, run_id: str, mode: SystemMode | str, *, at: int) -> bool: ...
+```
+
+Four decisions in them:
+
+- **`start_run` refuses a duplicate `run_id`** rather than upserting. `run_id` is minted
+  once per process, so a second start is a bug; an upsert would rewrite `started_at`, and
+  the console decides the current run from the newest `runs` row — so the silent version
+  of that defect reorders the two rows the restart banner compares. Raises `StoreError`.
+- **It names its columns explicitly** instead of dumping a payload, so it cannot become a
+  writer of `system_mode` the way `write_run` silently did when spec 31 added the columns
+  to `RunRow`. `set_system_mode` stays the only writer of both.
+- **`set_system_mode` takes a plain `str`**, and that is now a guarantee rather than a
+  `StrEnum` implementation detail that happened to work.
+- **An unrecognised mode raises; an unknown run returns `False`.** The two are not alike:
+  a missing row is a race the caller logs and continues past, a misspelled mode is a
+  defect, and sharing a return value would leave the console on a stale mode with nothing
+  saying why.
+
+Proved with no double, the way `commands_round_trip` is: a **fresh interpreter** whose
+entire import of this package is `StoreClient`, running the whole path on real SQLite,
+plus a test that reads that caller's own source and asserts it names no contract and
+constructs no row. `tests/clients/store/test_core_entry_points.py`, 17 tests.
+
 ## `bootstrap.py` — requested, deliberately deferred by the lead
 
 - `CostEngine` — opportunity chain, after 9, before 11. `is_gate=True`.

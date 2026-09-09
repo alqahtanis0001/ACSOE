@@ -550,3 +550,43 @@ as a truncated progress file mid-write, and if the lead had not been committing 
 task boundary it would have destroyed a session's worth of reasoning rather than five
 minutes of it. The commit-per-boundary rule, introduced after a different incident, is what
 made this a nuisance instead of a loss.
+
+### The intermittent native fault beat the gate's retry for the first time
+
+**Agent:** B · **Task:** spec 31 follow-up (`start_run`) · **Date:** 2026-09-09
+
+**What happened.** `scripts/verify.py --phase 2` reported `FAIL toolchain_green` with
+**both** the run and its retry crashing, captured verbatim before any re-run:
+
+```
+FAIL    toolchain_green   CRASH - pytest CRASHED: the process died with 3221225477
+(0xC0000005 ACCESS_VIOLATION), which is outside the 0-5 range pytest returns. Last
+output: File ".venv\Lib\site-packages\pytest\__main__.py", line 9 in <module> | File
+"<frozen runpy>", line 88 in _run_code | File "<frozen runpy>", line 198 in
+_run_module_as_main; the retry crashed too - pytest CRASHED: the process died with
+3221226505 (0xC0000409 STACK_BUFFER_OVERRUN), which is outside the 0-5 range pytest
+returns. Last output: ........ [ 64%] | ........ [ 72%] | ..............
+```
+
+Immediately before it, my own `pytest tests/ -q` had reported **1000 passed in 43.76s**,
+and immediately after, the same gate ran clean. So the suite is not broken; the process
+is dying.
+
+**Why it is escalation-worthy rather than another instance.** My Phase 0 entry closed this
+as a risk with two named conditions that would reopen it: the fault appearing outside the
+seed write path, or **"the gate starts reporting `CRASH -` after its retry — which would
+mean the rate has moved and the mitigation no longer holds."** Both have now happened
+within one session. The read-path `ValidationError` earlier today was the first; this is
+the second, and it is the one the mitigation was specifically built to absorb.
+
+Two details that are new. The first crash carries **no test progress at all** — its last
+output is the `pytest/__main__.py` and `runpy` frames, so the process died during
+collection or start-up rather than inside any test, which is the first observation not
+located in a write path. And the two crashes carry **different NTSTATUS codes in one gate
+run** (`0xC0000005` then `0xC0000409`), which is the signature of memory corruption rather
+than of a reproducible defect in a particular code path.
+
+**Not fixed. Escalated.** The retry-once mitigation is what has been holding this phase's
+gate together, and a double crash means one retry is no longer enough. Recorded here
+rather than worked around: raising the retry count would hide the rate change, which is
+the one fact worth having.

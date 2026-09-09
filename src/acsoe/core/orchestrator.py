@@ -96,6 +96,12 @@ class Orchestrator:
         # Interrupted commands are re-applied once, before the first tick's own read.
         self._startup_replayed = False
 
+        # The `runs` row is written once, at the top of the first tick rather than in
+        # this constructor: a constructor that opens a database makes the object
+        # untestable without one, and `ownership.md` only requires the row to exist
+        # "at startup", which the first tick satisfies.
+        self._run_recorded = False
+
     # ------------------------------------------------------------------ properties
 
     @property
@@ -211,7 +217,15 @@ class Orchestrator:
             self._log("commands_skipped", reason="no store client")
             return
 
-        # Interrupted commands come first, before this run reads anything of its own.
+        # The run record comes first of all: `set_system_mode` updates the row for this
+        # `run_id`, so a mode written before the row exists updates nothing, and the
+        # console — which picks the current run from the newest `runs` row — would go on
+        # rendering the previous process indefinitely.
+        if not self._run_recorded:
+            self._record_run(store)
+            self._run_recorded = True
+
+        # Interrupted commands come next, before this run reads anything of its own.
         if not self._startup_replayed:
             self._replay_interrupted_commands(store)
             self._startup_replayed = True
@@ -239,6 +253,71 @@ class Orchestrator:
                 self._log("command_already_claimed", command_id=command_id)
                 continue
             self._apply_command(store, row, command_id, stamp)
+
+    def _record_run(self, store: Any) -> None:
+        """Write this process's `runs` row, once, before anything reads it.
+
+        `ownership.md`'s seam table has said the orchestrator writes this row at startup
+        since Phase 0 and it never did: `run_id` was minted onto the context and never
+        stored. C found it building the console's mode reading, upstream of the missing
+        `set_system_mode` call and invisible behind it — with no row, the mode write has
+        nothing to update and the console reads the *previous* process forever.
+
+        `mode` here is the **run** mode, paper/live/replay, from config — a different
+        axis from `state["system"]["mode"]`, which is idle/running/frozen and is written
+        by `_persist_mode` below. Confusing the two is what `ui-context.md` says left the
+        Phase 1 status band unable to render Running.
+
+        A failure is logged and the tick continues. `start_run` refuses a duplicate
+        `run_id` by raising, which is right — an upsert would rewrite `started_at` and
+        reorder the two rows the restart banner compares — but a daemon that cannot write
+        a bookkeeping row must still guard and manage open positions. The cost of
+        continuing is a console showing a stale run; the cost of raising is a loop that
+        does not run at all, and the second is worse.
+        """
+        start = getattr(store, "start_run", None)
+        if start is None:
+            self._log("run_record_skipped", reason="store exposes no start_run")
+            return
+        try:
+            start(
+                self._run_id,
+                mode=str(self._config.mode),
+                started_at=_to_micros(self._clock.now()),
+            )
+        # Broad by intent: a bookkeeping row must never stop the loop. See the docstring.
+        except Exception as exc:
+            self._log("run_record_failed", run_id=self._run_id, error=repr(exc))
+            return
+        self._log("run_recorded", run_id=self._run_id, mode=str(self._config.mode))
+
+    def _persist_mode(self, store: Any, stamp: int) -> None:
+        """Record the system mode this run is now in, for the console to read.
+
+        Called **after** the transition has been applied to `state["system"]["mode"]`,
+        never before, so a mode that was never actually entered is never persisted.
+
+        A `False` return means the `runs` row is unknown, which is logged and not raised:
+        a raise here would abort a `freeze` that has *already happened* in memory, over a
+        bookkeeping row. The mode is still never read back — a daemon always starts idle
+        and only reaches `running` through an `activate` command.
+        """
+        write = getattr(store, "set_system_mode", None)
+        if write is None:
+            self._log("system_mode_not_persisted", reason="store exposes no set_system_mode")
+            return
+        try:
+            written = write(self._run_id, self._system["mode"], at=stamp)
+        # Broad by intent: the mode has already changed in memory. See the docstring.
+        except Exception as exc:
+            self._log("system_mode_write_failed", mode=self._system["mode"], error=repr(exc))
+            return
+        if not written:
+            self._log(
+                "system_mode_not_persisted",
+                mode=self._system["mode"],
+                reason="no runs row for this run_id",
+            )
 
     def _replay_interrupted_commands(self, store: Any) -> None:
         """Re-apply every row claimed by an earlier process that never completed.
@@ -294,6 +373,10 @@ class Orchestrator:
             return
 
         self._log("command_applied", command=str(name), mode=self._system["mode"])
+        # After the transition, never before. Applies to the startup replay too, which
+        # shares this method: a re-applied `close_all` must leave the console showing
+        # `frozen` rather than whatever the dead process last wrote.
+        self._persist_mode(store, stamp)
         # `activate` and `freeze` are pure mode changes and are complete now.
         # `close_all` is consumed in step 4, and only once both engines report done.
         if name != "close_all":
