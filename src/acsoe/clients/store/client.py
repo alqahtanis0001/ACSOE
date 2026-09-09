@@ -42,6 +42,8 @@ from acsoe.clients.store.contracts import (
     PositionStatus,
     RejectionRow,
     RunRow,
+    SystemMode,
+    SystemModeRow,
     TradeRow,
 )
 from acsoe.clients.store.migrations import apply_migrations
@@ -512,11 +514,78 @@ class StoreClient:
         return cursor.rowcount == 1
 
     # ------------------------------------------------------------------
+    # System mode — spec 31. The command reader in `core/` writes; the console reads.
+    # ------------------------------------------------------------------
+
+    def set_system_mode(self, run_id: str, mode: SystemMode, *, at: int) -> bool:
+        """Record the mode this run is actually in. Returns False if the run is unknown.
+
+        **Written for the console to read, never for the daemon to resume from.** There
+        is deliberately no method that reads this back into `state`: mode is still
+        reached only through an `activate` command, so a crashed daemon comes back idle.
+
+        The caller is the command reader in `core/`, which already owns
+        `state["system"]["mode"]`. It is the single writer, and it calls this after the
+        transition rather than before, so a mode that was never actually entered is
+        never persisted.
+
+        `updated_at` moves with the mode. `runs` is in :data:`WATERMARK_TABLES`, so
+        without that bump the console would not repoll and the status band it feeds
+        would sit stale on the previous reading — the exact failure spec 31 exists to
+        end.
+
+        A `False` return is a missing `runs` row, which is a defect or a race and not a
+        mode. It is returned rather than raised because the command reader must not
+        abort a `freeze` it has already applied to `state` over a bookkeeping write;
+        the caller logs it.
+        """
+        cursor = self.connection.execute(
+            "UPDATE runs SET system_mode = ?, system_mode_at = ?, updated_at = ? "
+            "WHERE run_id = ?",
+            (SystemMode(mode).value, int(at), int(at), run_id),
+        )
+        return cursor.rowcount == 1
+
+    def system_mode(self, run_id: str) -> SystemModeRow | None:
+        """The persisted mode for one run, scoped by `run_id` so no previous run leaks.
+
+        `None` means there is no such run. A row with `mode is None` means the run
+        exists and no daemon has written a mode for it yet. Both render as an idle
+        reading, but only the second is ordinary, and a reader that cannot tell them
+        apart cannot log the first.
+        """
+        row = self.connection.execute(
+            "SELECT run_id, system_mode, system_mode_at FROM runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return SystemModeRow(
+            run_id=str(row["run_id"]),
+            mode=row["system_mode"],
+            at=row["system_mode_at"],
+        )
+
+    # ------------------------------------------------------------------
     # Writes — engine 19 `memory` is the single writer of relational rows
     # ------------------------------------------------------------------
 
     def write_run(self, row: RunRow) -> None:
-        self._upsert("runs", row.model_dump(exclude={"id"}), key=("run_id",))
+        """Insert or update one run row. **Does not write the system mode.**
+
+        `system_mode` and `system_mode_at` are excluded so that :meth:`set_system_mode`
+        is their only writer. The orchestrator writes this row at startup, when no mode
+        has been decided, and stamps `ended_at` through it again at shutdown; if those
+        two columns were in the payload, the shutdown write would carry whatever
+        `system_mode` the caller's stale `RunRow` happened to hold and silently
+        overwrite the real one. Excluded from the INSERT they default to NULL, and
+        excluded from the `DO UPDATE` set they are left exactly as they were.
+        """
+        self._upsert(
+            "runs",
+            row.model_dump(exclude={"id", "system_mode", "system_mode_at"}),
+            key=("run_id",),
+        )
 
     def write_block_record(self, row: BlockRecordRow) -> int:
         """Append one guard blocker for one tick.

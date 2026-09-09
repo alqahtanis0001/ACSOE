@@ -106,4 +106,11 @@ proper.
 - Write `context/progress/<agent>.md` and append to `docs/build-log/phase-2/<agent>.md` **as you
   work**, not at the end. Three IDE crashes in Phase 1 each took the code and the log at different
   moments, and only the entries already written survived.
-- Teammates do not commit. The lead commits at task boundaries.
+- Teammates do not commit. **The lead commits at every task boundary, not at phase close.**
+  Operator process change, 2026-09-09, after a third session ended mid-flight: a completed spec
+  with its four checks green is a commit. The point is that a session which dies resumes from a
+  green tree rather than from a half-applied migration — which is exactly what the third one left
+  behind. **Tell the lead the moment a spec is green** so it can be committed; do not batch
+  several specs and report them together.
+- The lead still does not commit anything that fails `scripts/verify.py`. A red tree is not a
+  boundary, it is work in progress.

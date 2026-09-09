@@ -109,13 +109,36 @@ _POSITION_INSERT = (
 # --------------------------------------------------------------------------- #
 
 
+def _migration_files() -> list[Path]:
+    """Every migration file, by name, counted without going through the parser.
+
+    `discover_migrations` is the thing under test in half this module, so an
+    expectation derived from it would agree with it by construction. A plain glob is an
+    independent count: it is wrong only if a file is missing from the directory, which
+    is a different failure and one worth catching.
+    """
+    return sorted(default_migrations_dir().glob("*.sql"))
+
+
 def test_fresh_database_migrates_from_empty(tmp_path: Path) -> None:
+    """The expectation is derived from `db/migrations/`, not hardcoded.
+
+    It used to read `assert applied == [1]`, which meant every migration ever added
+    broke this test and the next person to add one would edit the literal — the one
+    edit that makes the assertion agree with whatever just happened rather than with
+    what should have happened. Deriving it keeps the two properties that actually
+    matter, and both are still asserted here: **every** migration in the directory was
+    applied, and they were applied in ascending contiguous order from 1. A migration
+    silently skipped, applied twice, or applied out of order still fails.
+    """
+    expected = list(range(1, len(_migration_files()) + 1))
+    assert len(expected) >= 2, "0002 is spec 31's; a shorter list means one went missing"
     db_path = tmp_path / "fresh.sqlite"
     assert not db_path.exists()
 
     applied = apply_migrations(db_path)
 
-    assert applied == [1]
+    assert applied == expected
     assert db_path.is_file()
 
 
@@ -147,9 +170,15 @@ def test_table_and_index_sets_match_the_contract(migrated_db: Path) -> None:
 
 
 def test_user_version_records_the_applied_schema(migrated_db: Path) -> None:
+    """`PRAGMA user_version` is the highest migration on disk, derived not hardcoded.
+
+    This is the field an operator reads to ask "which schema is in this file", so what
+    it must equal is the newest migration, not a number that was true once.
+    """
+    latest = len(_migration_files())
     conn = open_connection(migrated_db)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == latest
     finally:
         close_connection(conn)
 
@@ -395,3 +424,59 @@ def test_live_mode_is_not_present_anywhere_in_a_fresh_database(migrated_db: Path
     finally:
         close_connection(conn)
     assert rows["n"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# 0002 — the persisted system mode (spec 31)
+# --------------------------------------------------------------------------- #
+
+_RUN_INSERT = (
+    "INSERT INTO runs (run_id, mode, started_at, updated_at) VALUES (?, 'paper', 1000, 1000)"
+)
+
+
+def test_a_new_run_row_has_no_system_mode(migrated_db: Path) -> None:
+    """NULL is "no daemon has written a mode for this run yet", and it is a different
+    fact from 'idle', which is a daemon actively reporting that it is idle. The column
+    is nullable and has no default precisely so the two are not collapsed."""
+    conn = open_connection(migrated_db)
+    try:
+        conn.execute(_RUN_INSERT, ("run-a",))
+        row = conn.execute(
+            "SELECT system_mode, system_mode_at FROM runs WHERE run_id = 'run-a'"
+        ).fetchone()
+    finally:
+        close_connection(conn)
+    assert row["system_mode"] is None
+    assert row["system_mode_at"] is None
+
+
+def test_an_unrecognised_system_mode_is_refused(migrated_db: Path) -> None:
+    """Unlike `commands.command`, this column carries a CHECK. There is no "ignore it
+    and log a warning" path for a status band: a mode the console cannot render is a
+    reading it would have to invent, so the database refuses the write instead."""
+    conn = open_connection(migrated_db)
+    try:
+        conn.execute(_RUN_INSERT, ("run-a",))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE runs SET system_mode = 'trading' WHERE run_id = 'run-a'")
+    finally:
+        close_connection(conn)
+
+
+def test_the_system_mode_columns_did_not_disturb_the_existing_runs_contract(
+    migrated_db: Path,
+) -> None:
+    """0002 is additive: `runs.mode` still means paper/live/replay and still refuses
+    anything else. Two columns named for a "mode" on one row is exactly the collision
+    that reads fine and is wrong, so both CHECKs are asserted together here."""
+    conn = open_connection(migrated_db)
+    try:
+        conn.execute(_RUN_INSERT, ("run-a",))
+        conn.execute("UPDATE runs SET system_mode = 'frozen' WHERE run_id = 'run-a'")
+        row = conn.execute("SELECT mode, system_mode FROM runs WHERE run_id = 'run-a'").fetchone()
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE runs SET mode = 'frozen' WHERE run_id = 'run-a'")
+    finally:
+        close_connection(conn)
+    assert (row["mode"], row["system_mode"]) == ("paper", "frozen")

@@ -5,10 +5,87 @@
 - **Spec 11** — `db/migrations/`, SQLite schema and forward-only migration runner. *Complete.*
 - **Spec 12** — `src/acsoe/clients/store/`, store client and contracts. *Complete.*
 - **Spec 13** — `src/acsoe/clients/store/seed.py`, seed generator. *Complete.*
+- **Spec 31** — persisted system mode: `db/migrations/0002_persisted_system_mode.sql`,
+  `clients/store/{client,contracts}.py`, `tests/db/`, `tests/clients/store/`. *Complete,
+  green on all three phase gates.*
+
+Not started, and deliberately: **specs 34, 35, 36** (engines `cost`, `risk`, `safety`).
+Held until the lead says to continue.
+
+## Spec 31 — persisted system mode
+
+**Shape.** Two nullable additive columns on `runs`, not a new table:
+`system_mode TEXT CHECK (... IN ('idle','running','frozen'))` and
+`system_mode_at INTEGER`. Nothing existing is altered, nothing is dropped, no table is
+added — so `db_migrates_from_empty` and `architecture-context.md`'s storage table need
+no lead edit. Reasoning in full in `docs/build-log/phase-2/b-store.md`; the short version
+is that `runs` already carries a UNIQUE `run_id`, so scoping by run is structural rather
+than conventional and there is no query a reader can get wrong.
+
+**The seam C builds against — this is the whole contract:**
+
+```python
+# src/acsoe/clients/store/contracts.py
+class SystemMode(StrEnum):
+    IDLE = "idle"; RUNNING = "running"; FROZEN = "frozen"
+
+class SystemModeRow(_Row):
+    run_id: str
+    mode: SystemMode | None = None
+    at: Micros | None = None          # microseconds, UTC; None iff mode is None
+
+# src/acsoe/clients/store/client.py
+def system_mode(self, run_id: str) -> SystemModeRow | None: ...
+def set_system_mode(self, run_id: str, mode: SystemMode, *, at: int) -> bool: ...
+
+# RunRow also carries `system_mode` / `system_mode_at`, read-only, for a caller that
+# already holds a RunRow and does not want a second query.
+```
+
+**Two nulls, two different facts, and the console must not collapse them.**
+`system_mode(...)` returns `None` when there is no `runs` row for that `run_id` — a
+defect or a race, not a mode. It returns a row with `mode is None` when the run exists
+and no daemon has written a mode yet — the ordinary case before the first command is
+read. Both render as an idle reading per spec 32, but only the second is normal, and a
+reader that cannot tell them apart cannot log the abnormal one.
+
+**Writer.** `set_system_mode` is the only writer of both columns. `write_run` explicitly
+excludes them, so the orchestrator's shutdown write of `ended_at` cannot clobber a
+`frozen` daemon's persisted mode with the stale `None` its startup `RunRow` carries. The
+caller is the command reader in `src/acsoe/core/orchestrator.py`, which is lead-only: I
+provide the method, the lead calls it. `set_system_mode` bumps `runs.updated_at` too,
+because `runs` is in `WATERMARK_TABLES` and without that the console would never repoll.
+
+**Mode is never restored from the store.** There is no third method that reads this back
+into `state["system"]`, and none should be added. A daemon always starts `idle` and
+reaches `running` only through an `activate` command; restoring it would invert the
+safety property that a crashed daemon comes back not trading, and it would look like a
+bug fix while doing so.
+
+**Nothing is seeded.** `seed.py` writes no system mode and
+`test_the_seed_writes_no_system_mode` now asserts it, so C's Running-band test cannot
+pass without a daemon having written one.
 
 ## Status
 
-All three are built, and both criteria that judge them report PASS:
+Spec 31 is green. All three gates, run 2026-09-09:
+
+```
+Phase 0 is green: every criterion PASS, zero PENDING.   (7 criteria: 7 PASS)
+Phase 1 is green: every criterion PASS, zero PENDING.   (10 criteria: 10 PASS)
+Phase 2 is green: every criterion PASS, zero PENDING.   (3 criteria: 3 PASS)
+```
+
+`723 passed` · `mypy --strict src/` clean, 35 files · `ruff check src/` clean.
+
+The two `tests/db/test_migrations.py` failures the migration caused are fixed, and the
+fix is not a bumped literal: both expectations now derive from the migrations directory
+while still asserting the count and the ordering. See the build log for why the literal
+was the wrong shape and for the asymmetry it exposed — `db_migrates_from_empty` passed
+throughout, because it tolerates extra tables and 0002 adds none, so the phase gate did
+not notice a schema change that my own unit tests did.
+
+Spec 11 and 12's criteria still report PASS:
 
 - `db_migrates_from_empty` — a fresh database migrates to all 9 documented tables; a second
   `migrate()` returns `[]`, so "re-migrating is a no-op" is checked on the returned list
@@ -17,6 +94,25 @@ All three are built, and both criteria that judge them report PASS:
   rather than sitting on it.
 
 Nothing of mine is outstanding. Spec 11 unblocked 12, which unblocked 13, in that order.
+
+## For the lead — two things, neither of them mine to fix
+
+1. **`core/` must now call `store.set_system_mode(run_id, mode, at=now)`** from the
+   command reader, after the transition is applied to `state["system"]["mode"]` and not
+   before. It returns `False` for an unknown `run_id`; log it, do not raise. Until that
+   call exists the column stays NULL and the console renders idle, which is correct but
+   is spec 31 only half-delivered.
+2. **An intermittent Windows teardown fault outside my paths.** The first `--phase 0`
+   run reported `FAIL toolchain_green — ERROR tests/cli/test_entrypoints.py::
+   test_console_refuses_an_unset_operator_key | 722 passed, 1 error`. An `ERROR`, not a
+   `FAILED`, exit 1 rather than an NTSTATUS, in A's `tests/cli/` — so it is neither the
+   known seed-path native fault nor anything of mine. Captured verbatim in the build log
+   before re-running, as the phase rules require; the re-run was green with no change.
+   Separately, `scripts/verify.py` prints an unhandled `PermissionError [WinError 32]`
+   on `acsoe-verify-doubles-*\acsoe.sqlite` from its own `TemporaryDirectory` finalizer
+   on **every** phase-0 run, green ones included. Same Windows shape twice — a SQLite
+   file still open when a temp directory is collected — one in A's test, one in C's
+   script.
 
 ## Open questions — both resolved
 

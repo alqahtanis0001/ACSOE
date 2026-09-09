@@ -34,6 +34,8 @@ from acsoe.clients.store.contracts import (
     PositionStatus,
     RunMode,
     RunRow,
+    SystemMode,
+    SystemModeRow,
     TradeOutcome,
     TradeRow,
 )
@@ -736,6 +738,150 @@ def test_no_seeded_or_written_run_is_ever_live(store: StoreClient) -> None:
     )
 
     assert [row.mode for row in store.latest_runs()] == [RunMode.PAPER]
+
+
+# --------------------------------------------------------------------------- #
+# The persisted system mode — spec 31. The command reader in `core/` writes it;
+# C's console reads it. Nothing here or anywhere reads it back into `state`.
+# --------------------------------------------------------------------------- #
+
+
+def _write_run(store: StoreClient, run_id: str, *, started_at: int = 1_000) -> None:
+    store.write_run(
+        RunRow(
+            run_id=run_id,
+            mode=RunMode.PAPER,
+            started_at=started_at,
+            updated_at=started_at,
+        )
+    )
+
+
+def test_the_system_mode_round_trips_for_the_run_it_was_written_for(
+    store: StoreClient,
+) -> None:
+    _write_run(store, "run-a")
+
+    assert store.set_system_mode("run-a", SystemMode.RUNNING, at=2_000) is True
+
+    row = store.system_mode("run-a")
+    assert row is not None
+    assert (row.run_id, row.mode, row.at) == ("run-a", SystemMode.RUNNING, 2_000)
+
+
+def test_one_runs_mode_does_not_leak_into_another(store: StoreClient) -> None:
+    """The whole reason spec 31 requires the value to be readable by `run_id`: a console
+    attached to a fresh daemon must not render the previous process's Running."""
+    _write_run(store, "run-a", started_at=1_000)
+    _write_run(store, "run-b", started_at=2_000)
+    store.set_system_mode("run-a", SystemMode.RUNNING, at=1_500)
+
+    previous = store.system_mode("run-a")
+    current = store.system_mode("run-b")
+
+    assert previous is not None and previous.mode is SystemMode.RUNNING
+    assert current is not None and current.mode is None and current.at is None
+
+
+def test_an_unwritten_mode_and_an_unknown_run_are_different_answers(
+    store: StoreClient,
+) -> None:
+    """Both render as an idle reading, but only one of them is ordinary. A reader handed
+    the same `None` for each could not log the abnormal one."""
+    _write_run(store, "run-a")
+
+    assert store.system_mode("run-a") == SystemModeRow(run_id="run-a", mode=None, at=None)
+    assert store.system_mode("run-missing") is None
+
+
+def test_setting_a_mode_for_an_unknown_run_reports_false_and_writes_nothing(
+    store: StoreClient,
+) -> None:
+    """Returned rather than raised: the command reader must not abort a `freeze` it has
+    already applied to `state` because a bookkeeping row was missing."""
+    assert store.set_system_mode("run-missing", SystemMode.FROZEN, at=2_000) is False
+    assert store.system_mode("run-missing") is None
+
+
+def test_the_last_mode_written_is_the_one_read_back(store: StoreClient) -> None:
+    _write_run(store, "run-a")
+    for at, mode in ((2_000, SystemMode.RUNNING), (3_000, SystemMode.FROZEN)):
+        store.set_system_mode("run-a", mode, at=at)
+
+    row = store.system_mode("run-a")
+
+    assert row is not None
+    assert (row.mode, row.at) == (SystemMode.FROZEN, 3_000)
+
+
+def test_writing_the_mode_moves_the_console_watermark(store: StoreClient) -> None:
+    """`runs` is in `WATERMARK_TABLES`. Without the `updated_at` bump the console would
+    never repoll and the status band would sit stale on the previous reading — which is
+    the failure spec 31 exists to end, arriving by a different route."""
+    _write_run(store, "run-a")
+    before = store.watermark()
+
+    store.set_system_mode("run-a", SystemMode.RUNNING, at=9_000)
+
+    assert before == 1_000
+    assert store.watermark() == 9_000
+
+
+def test_write_run_never_overwrites_a_mode_it_was_not_asked_to_change(
+    store: StoreClient,
+) -> None:
+    """`set_system_mode` is the only writer of these two columns.
+
+    The orchestrator writes the run row again at shutdown to stamp `ended_at`, and the
+    `RunRow` it holds was built at startup when no mode existed. If `write_run` carried
+    these columns, that second write would silently reset a `frozen` daemon's persisted
+    mode to null.
+    """
+    _write_run(store, "run-a")
+    store.set_system_mode("run-a", SystemMode.FROZEN, at=2_000)
+
+    store.write_run(
+        RunRow(
+            run_id="run-a",
+            mode=RunMode.PAPER,
+            started_at=1_000,
+            ended_at=5_000,
+            updated_at=5_000,
+        )
+    )
+
+    row = store.system_mode("run-a")
+    assert row is not None
+    assert (row.mode, row.at) == (SystemMode.FROZEN, 2_000)
+    assert store.latest_runs()[0].ended_at == 5_000
+
+
+def test_a_stale_run_row_carrying_a_mode_still_cannot_write_one(store: StoreClient) -> None:
+    """The exclusion is on the column, not on whether the caller left it null — a
+    `RunRow` read back out of the database carries the mode, and re-writing it must
+    still be a no-op on that column rather than a clobber that happens to agree."""
+    _write_run(store, "run-a")
+    store.set_system_mode("run-a", SystemMode.RUNNING, at=2_000)
+    stale = store.latest_runs()[0]
+    assert stale.system_mode is SystemMode.RUNNING
+
+    store.set_system_mode("run-a", SystemMode.FROZEN, at=3_000)
+    store.write_run(stale.model_copy(update={"updated_at": 4_000}))
+
+    row = store.system_mode("run-a")
+    assert row is not None
+    assert (row.mode, row.at) == (SystemMode.FROZEN, 3_000)
+
+
+def test_the_seed_writes_no_system_mode(seeded_db: Path) -> None:
+    """Spec 31 forbids seeding a mode. A seeded `running` would let C's console test for
+    the Running band pass without a daemon ever having written one, which would leave
+    the whole persisted-mode path unproven and green."""
+    with StoreClient(seeded_db) as seeded:
+        modes = [row.system_mode for row in seeded.latest_runs(limit=100)]
+
+    assert modes != []
+    assert modes == [None] * len(modes)
 
 
 def test_equity_series_returns_the_whole_curve_oldest_first(store: StoreClient) -> None:
