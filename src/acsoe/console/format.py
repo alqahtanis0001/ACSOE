@@ -64,6 +64,122 @@ _MINUTES = 60 * _SECONDS
 _HOURS = 60 * _MINUTES
 _DAYS = 24 * _HOURS
 
+#: `reason_code` to the sentence an operator reads, per rule 3 of the copy
+#: section of ``ui-context.md``: "Rejection reasons are written for the operator,
+#: not the log". The table exists so that a row whose stored ``reason`` is a bare
+#: code — which the engines are free to write, since nothing constrains that
+#: column — still reaches the screen as a sentence.
+#:
+#: Every entry is a plain restatement of what the code already says. **Nothing
+#: here adds a number, a threshold or a cause the row did not carry**, because a
+#: sentence invented in the view layer is a sentence nothing verifies.
+REASON_PROSE: Final[Mapping[str, str]] = {
+    "net_edge_below_hurdle": "Net edge did not clear the hurdle after fees",
+    "spread_wider_than_move": "The spread is wider than the expected move",
+    "below_ordermin": "Position would be below the pair's minimum order size",
+    "below_costmin": "Position value would be below the pair's minimum order value",
+    "insufficient_quote_balance": "Not enough quote currency held to open this position",
+    "max_concurrent_positions": "Already holding the maximum number of positions",
+    "outside_universe": "Pair is outside the tradable universe at this balance",
+    "meta_label_veto": "The skeptic vetoed this entry",
+    "outlier_market_state": "Market state is an outlier",
+    "dissimilarity_index": "Conditions are unlike anything in training",
+    "insufficient_depth": "Order book is too thin to fill without slippage",
+    "no_candidate_cleared": "Nothing cleared the gates on this bar",
+}
+
+#: What a row with neither prose nor a mapped code shows. A statement of absence,
+#: in the voice of the empty state — never the bare code, and never a guess at
+#: what the engine meant.
+NO_REASON_RECORDED: Final = "No reason was recorded."
+
+#: `TradeOutcome` to the operator word. The stored value is a code; the screen
+#: says which barrier the position hit.
+OUTCOME_WORDS: Final[Mapping[str, str]] = {
+    "target": "Target",
+    "stop": "Stop",
+    "timeout": "Timeout",
+    "liquidation": "Liquidation",
+}
+
+#: `snake_case_like_this` and nothing else. Used only to decide whether a stored
+#: ``reason`` is a sentence or a code that leaked into the column; it is never
+#: used to *derive* prose.
+_CODE_LIKE: Final = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)+$")
+
+
+def operator_reason(reason_code: str, reason: str = "") -> str:
+    """The sentence the operator reads for one refused candidate or blocked tick.
+
+    Three sources, in this order, and the order is a decision worth stating:
+
+    1. **The row's own ``reason``, when it is already prose.** It is the most
+       specific text available — "Net edge -0.21% after fees" carries the actual
+       number, and no mapping keyed on a code ever can. Replacing it with the
+       generic sentence for its code would throw away information the writer took
+       the trouble to record.
+    2. **:data:`REASON_PROSE` for the code**, when the stored text is empty or is
+       itself a bare code. That is the case the mapping exists for.
+    3. **:data:`NO_REASON_RECORDED`** when there is neither. Not the code — a code
+       on screen is the defect this function exists to prevent — and not an
+       invented sentence either.
+    """
+    text = reason.strip()
+    if text and not _CODE_LIKE.match(text):
+        return text
+    mapped = REASON_PROSE.get(reason_code.strip())
+    if mapped:
+        return mapped
+    return NO_REASON_RECORDED
+
+
+def format_outcome(outcome: str) -> str:
+    """The operator word for a stored outcome code.
+
+    An unmapped value is title-cased rather than mapped to a guess: a new barrier
+    the console has not been taught about should read as itself, not as one of the
+    four it knows.
+    """
+    key = str(outcome).strip()
+    return OUTCOME_WORDS.get(key.lower(), key.replace("_", " ").capitalize())
+
+
+def format_clock_time(micros: int) -> str:
+    """``HH:MM:SS`` in UTC, for the cycle feed's time column.
+
+    UTC, never a local zone. The daemon writes microseconds since the epoch and
+    the operator may not be sitting in the same zone as the machine; a feed whose
+    times silently shift with the viewer's clock cannot be compared against a log.
+    """
+    return from_micros(int(micros)).strftime("%H:%M:%S")
+
+
+def format_timestamp(micros: int) -> str:
+    """``YYYY-MM-DD HH:MM:SS`` in UTC, for history and the leaderboard.
+
+    History spans days, so the date is part of the value there in a way it is not
+    in a feed of the current run's ticks.
+    """
+    return from_micros(int(micros)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_rate_pct(value: float | None, *, places: int = PERCENT_PLACES) -> str:
+    """A **proportion** rendered as a percentage, deliberately unsigned.
+
+    Rule 2 of ``ui-context.md`` — always explicitly signed — is about *directional*
+    values, where a missing sign is a missing direction. A win rate has no
+    direction: it runs 0 to 1, and writing ``+62.00%`` would imply a change of
+    +62 points against something. So the sign rule does not apply here, and this
+    is the only percentage in the console that does not carry one.
+
+    ``float`` is correct here and only here: the leaderboard's metrics are
+    statistics, not money. ``None`` renders as an em dash, which reads as absent
+    rather than as zero.
+    """
+    if value is None:
+        return "\N{EM DASH}"
+    return format(value * 100, "." + str(places) + "f") + "%"
+
 
 def signed(text: str) -> str:
     """Replace a leading ASCII hyphen with a proper minus sign.
