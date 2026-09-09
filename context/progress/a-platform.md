@@ -14,7 +14,9 @@ Never edit the tracker directly.
 - **Spec 27 — engine 2 `market_data_recorder`: CODE COMPLETE, SPEC NOT COMPLETE.** The
   committed fixture `tests/fixtures/recording_report.json` is outstanding and is
   blocked on wall-clock time, not on code. Detail below. **Do not treat 27 as done.**
-- Specs 28 to 30: not started.
+- **Spec 28 - engine 3 `market_sensor`: COMPLETE.** `candles_match_kraken_ohlc` now
+  reports PASS.
+- Specs 29 and 30: not started.
 
 Phase 0 (below) is closed and green; it is kept for the record.
 
@@ -216,10 +218,32 @@ Two other things worth carrying forward:
   recording immutable, so the candle builder has to be idempotent over duplicates and
   correct **across the boundary**, not tuned to the doubled section.
 
+## Phase 2 - spec 28, what was built
+
+`src/acsoe/engines/market_sensor/` - `engine.py`, `contracts.py`, `candles.py`,
+`README.md` - plus `scripts/ohlc_fixture.py` and the committed
+`tests/fixtures/kraken/ohlc.json`. 20 tests in `tests/engines/test_market_sensor.py`.
+
+- **`bar_closed` is `(now // bar) != ((now - tick) // bar)`**, not `now % bar == 0`.
+  `context.now` carries microseconds off a real clock, so an exact-boundary test would
+  essentially never fire. The index comparison is stateless - which it has to be, since
+  `state` is fresh every tick - fires exactly once per bar, and still fires **once**
+  when the loop ran late or skipped a tick.
+- **A missing candle is reported and never invented**, and the tests assert the absence
+  separately from the gap report: no candle carries a timestamp that had no trade. A
+  forward-filled series would pass any check that only counted gaps.
+- **The in-progress bar is never published** as a candle. That is look-ahead, invariant
+  10.
+- **The trade window lives in the client, not the engine.** `recent_trades()` returns a
+  rolling window without draining it, because engine 3 rebuilds the same bar on each of
+  the fifteen ticks it spans and an engine may not carry state across cycles.
+- **`spread_pct` is `(ask - bid) / mid`** and may be negative; a pair with no quote is
+  absent rather than present with a zero spread.
+
 ## In Progress
 
-- **Spec 28 `market_sensor`, next.** Spec 27's fixture stays outstanding until the
-  recording span reaches 24 hours.
+- **Spec 29 `data_guard`, next.** Spec 27's fixture stays outstanding until the recording
+  span reaches 24 hours (about 2026-09-09T16:01Z).
 
 ## Blocked On
 

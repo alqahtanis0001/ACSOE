@@ -93,6 +93,36 @@ show_error_codes = true
 pretty = false
 
 [[tool.mypy.overrides]]
+# numpy 2.5's bundled stubs use PEP 695 `type` statements, which mypy treats as a
+# **syntax error** under `python_version = "3.11"`. A syntax error inside a
+# followed import aborts the entire run rather than producing one error, so
+# `mypy --strict src/` reported *nothing at all* the moment the first module in
+# `src/` imported `polars` — which imports numpy. That is the dangerous failure
+# mode: not a wrong answer, no answer, in the check the definition of done leans
+# on.
+#
+# `polars` is listed alongside numpy because skipping numpy alone did not work —
+# mypy still reaches the stubs through polars' own annotations — so the import has
+# to be cut one level higher up.
+#
+# Skipping the imports rather than raising `python_version`, deliberately.
+# `requires-python = ">=3.11"` and `architecture-context.md` both declare 3.11 as
+# the floor, and pinning mypy to it is the only thing that actually checks the
+# code runs there; raising it to 3.12 to satisfy a dependency's stubs would
+# silently stop checking the promise the packaging makes. The cost is real and is
+# worth stating: `polars` and `numpy` are `Any` to mypy, so a typo in a polars
+# call is not caught. `engines/market_sensor/candles.py` is the only module that
+# uses polars today and every value it produces is re-validated through a pydantic
+# `Candle`, which is what makes the trade acceptable for now.
+#
+# Three ways out, none of them A's to choose alone: bump the declared floor to
+# 3.12, pin `numpy<2.3` whose stubs parse under 3.11, or keep this. Raised with
+# the lead 2026-09-09.
+module = ["numpy", "numpy.*", "polars", "polars.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 # Third-party packages that ship no type information.
 module = [
     "duckdb.*",

@@ -281,3 +281,109 @@ not there to write one — as a first-class gap rather than as an absence of evi
 **Cost.** The digest has to reason about both kinds of break and about their
 boundaries, which is more code than counting markers. `assert_tiles` in
 `tests/clients/recorder/test_report.py` is the assertion that makes it worth it.
+
+### numpy's stubs took `mypy --strict` from "one error" to "no answer at all"
+
+**Agent:** A · **Task:** spec 28 · **Date:** 2026-09-09
+
+**What happened.** The first module in `src/` to import `polars` — `market_sensor`'s
+candle builder — turned `mypy --strict src/` into:
+
+    numpy/__init__.pyi:737: error: Type statement is only supported in Python 3.12
+    and greater  [syntax]
+    Found 1 error in 1 file (errors prevented further checking)
+
+**Why.** numpy 2.5's bundled stubs use PEP 695 `type` statements, and `pyproject.toml`
+pins `python_version = "3.11"` — the project's declared floor. mypy treats a PEP 695
+statement under a 3.11 target as a **syntax error**, and a syntax error inside a
+followed import aborts the whole run. So the check did not return a wrong answer, it
+returned **no answer**, in one of the four commands the definition of done leans on.
+That is the part worth remembering: a tool that stops checking looks a lot like a tool
+that found nothing wrong.
+
+**Fix.** `follow_imports = "skip"` for numpy — which alone did **not** work, because
+mypy still reaches the stubs through polars' own annotations, so `polars` had to be
+listed too.
+
+**Why not just raise `python_version` to 3.12**, which also makes it pass. Because
+`requires-python = ">=3.11"` and `architecture-context.md` both declare 3.11 as the
+floor, and pinning mypy to it is the only thing that actually checks the code runs
+there. Raising it to satisfy a dependency's stubs would silently stop checking the
+promise the packaging makes.
+
+**Cost, stated rather than buried.** `polars` and `numpy` are now `Any` to mypy, so a
+typo in a polars call is not caught. `engines/market_sensor/candles.py` is the only
+module using polars today and every value it produces is re-validated through a pydantic
+`Candle`, which is what makes that acceptable for now. Three ways out, none of them mine
+alone: bump the declared floor to 3.12, pin `numpy<2.3` whose stubs parse under 3.11, or
+keep this. Raised with the lead.
+
+### Decision: the OHLC fixture's trades are real; its expected bars are not Kraken's
+
+**Agent:** A · **Task:** spec 28 · **Date:** 2026-09-09
+
+**Options.** Compare built candles against Kraken's own published OHLC, or against a
+reference computation over the same recorded trades.
+
+**Chose.** The reference computation — because the first option is not available, not
+because it is better.
+
+**Because.** `scripts/record.py` subscribes to `book`, `ticker` and `trade`, so the
+archive contains **no OHLC channel** to compare against, and no live call can be made:
+the operator has rotated the key. So `tests/fixtures/kraken/ohlc.json` holds real Kraken
+v2 `trade` frames taken verbatim from `data/raw/` — 1,997 trades across three bars for
+BTC/USD, ETH/USD and SOL/USD — and the expected bars are computed by a deliberately
+naive pure-Python reduction in `scripts/ohlc_fixture.py` that shares no code with the
+`polars` implementation under test.
+
+**What that is worth, and what it is not.** It catches a bug in the bucketing, the
+grouping or the `Decimal` handling, which is what the criterion is actually for. It
+**cannot** catch a shared misunderstanding of what a candle is, because both
+implementations are mine. That limitation is written into the fixture's own
+`provenance` field rather than left for a reader to infer, and confirming these bars
+against Kraken's published OHLC is a `--live` task.
+
+**Cost.** A weaker guarantee than an independent source, stated as such in three places
+so nobody mistakes a PASS for more than it is.
+
+### Frame-level de-duplication, never trade-level
+
+**Agent:** A · **Task:** spec 28 · **Date:** 2026-09-09
+
+**What happened.** Two `record.py` processes ran concurrently from 2026-09-09T13:19:34Z,
+so part of the archive holds every frame twice. The obvious de-duplication — drop
+duplicate *trades* — is wrong, and would have been very hard to notice.
+
+**Why.** Two recorders produce byte-identical **frames**. Two genuinely identical trades
+— same price, same quantity, same second — arrive inside **one** frame, not two, and are
+a normal thing for a busy pair. De-duplicating at the trade level would therefore delete
+real volume, quietly, in proportion to how active the market was.
+
+**Fix.** `scripts/ohlc_fixture.py` de-duplicates on a SHA-256 of the frame payload plus
+its exchange timestamp, and `build_candles` does not de-duplicate at all. The archive
+itself is never edited — invariant 11 — so this happens on the way into the derived
+artefact and nowhere else.
+
+**Consequence.** The fixture was extracted from 03:00Z on 09-09, comfortably before the
+duplication began, and reports `frame_duplicates_dropped: 0` — so the de-duplication is
+in place and was not needed for this artefact. That is the right order: build it before
+the comparison, not after the comparison surprises somebody.
+
+### A native crash after a clean pass, not reproducible
+
+**Agent:** A · **Task:** spec 28 · **Date:** 2026-09-09
+
+**What happened.** `pytest tests/engines/test_market_sensor.py -q` died after the tests
+themselves had all passed, dumping a faulthandler trace whose visible frames were all
+pytest session teardown and `runpy`. I had piped to `tail`, so **I do not have the head
+of the trace** — which is the only part that names the fault.
+
+**Why it is recorded anyway.** Four immediate re-runs of the same file all exited 0 with
+20 passed, and the full suite ran clean at 983 passed. Known Risks records an
+intermittent native fault in the seed write path; this file touches no seed and no
+SQLite, so it may be a different one — but with no head to the trace I cannot say that,
+and saying it without evidence would be worse than saying nothing.
+
+**Fix.** None. Flagged to the lead. The lesson is procedural and was already in the
+brief: **capture the head of the output, not the tail.** The tail of one of these is
+always `runpy` frames and says nothing at all.
