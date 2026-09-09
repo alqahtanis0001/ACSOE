@@ -84,7 +84,8 @@ Agree the contract first, mock it, build against the mock.
 | Closed trades, for `safety`'s loss streak. **Consumed in Phase 3, produced in Phase 4 — Phase 3 reads the Phase 0 seed.** | C (19 `memory`) writes | B (17 `safety`) | `db/migrations/`, `clients/store/contracts.py` |
 | Open positions and resting orders, for `safety`'s escalation precondition. **Consumed in Phase 3, produced in Phase 4 — Phase 3 reads the Phase 0 seed.** | C (19 `memory`) writes | B (17 `safety`, 21, 22), C (console) | `db/migrations/`, `clients/store/contracts.py` |
 | Last-known-good exchange values, retained for emergency liquidation only | A (`clients/kraken/`) | B (21 `position_manager`, 22 `exit`) | `clients/kraken/contracts.py` |
-| Run record, written at startup, read for restart detection | Lead (orchestrator) | C (console) | `clients/store/contracts.py` |
+| Run record, written at startup, read for restart detection. **The console's test is whether a previous `runs` row exists, not whether two `run_id`s differ — `run_id` is UNIQUE, so they always differ.** | Lead (orchestrator) | C (console) | `clients/store/contracts.py` |
+| Persisted system mode, so the console can render Running and Frozen rather than only the idle readings. **Consumed by the console, produced in Phase 2 — Phase 1 renders the idle readings only, because no daemon runs in Phase 1 and neither other state can occur.** Written by the command reader that already owns `state["system"]["mode"]`, never inferred from the `commands` trail. | Lead (`core/` command reader) writes the value, B migrates the column it lands in | C (console) | `db/migrations/`, `clients/store/contracts.py`, `context/ui-context.md` |
 | Offline chain invocation | A owns `acsoe research`; C owns engines 20 and 23 | — | `cli/research.py` |
 | 15-minute candles | A | C | `engines/market_sensor/contracts.py` |
 | Store read and write | B | A, C | `clients/store/contracts.py` |

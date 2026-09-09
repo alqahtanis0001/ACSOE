@@ -30,9 +30,19 @@ build against from the first commit.
    - `console_focus_and_reduced_motion` — asserts a visible `:focus-visible` treatment exists
      and is not suppressed, and that a `prefers-reduced-motion: reduce` block drops the change
      flash.
-   - `console_restart_banner` — seeds two `runs` rows with different `run_id`s, and asserts the
-     status band State reads `Idle — restarted, not trading` when the mode is idle, and reads
-     plain `Idle` when the two `run_id`s match.
+   - `console_restart_banner` — seeds two `runs` rows and asserts the status band State reads
+     `Idle — restarted, not trading` when the mode is idle, then reduces the database to a
+     single `runs` row and asserts it reads plain `Idle`.
+     **This is a presence test, not a value comparison.** An earlier draft of this spec asked
+     for plain `Idle` "when the two `run_id`s match", which describes a state the schema
+     forbids: `db/migrations/0001_initial.sql` declares `run_id TEXT NOT NULL UNIQUE`, so two
+     rows always differ and the only run without a predecessor is the first one ever. The two
+     states an operator actually meets are a system waiting to be started, which is the first
+     run, and a system that stopped on its own, which is any run with a predecessor. Corrected
+     2026-09-09 after C hit it building this criterion; the authority for the rule is the
+     `## Restart is visible` section of `context/ui-context.md`, corrected in the same change.
+     The helper that reduces the database to one row needs its own test proving it really
+     leaves one row, or the negative half quietly becomes a test of something else.
 2. Every criterion seeds its own temporary database through
    `acsoe.clients.store.seed.seed_database` and builds the app with an injected `db_path`.
    **No criterion may read `data/db/acsoe.sqlite`.** `data/` is gitignored, so a criterion that

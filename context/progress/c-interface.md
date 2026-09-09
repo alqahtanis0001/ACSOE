@@ -9,7 +9,7 @@ Never edit the tracker directly.
   operator checkpoint on the shell and tokens. Spec 16 first for the same reason spec 00 was
   first in Phase 0: `verify.py --phase 1` reported `1 criteria: 1 PASS` on the current tree,
   which is `docs_vocabulary` alone claiming a green phase over an empty console. Claimed
-  2026-09-09, before any code was written.
+  2026-09-09, before any code was written. **All three are finished**; stopped at the checkpoint.
 - **Phase 0. Claimed: specs 00, 01, 02, 14, 15.** All five are finished. Built in that order —
   `scripts/verify.py` first, because nothing else in Phase 0 could be reported complete
   until it ran.
@@ -28,6 +28,26 @@ Never edit the tracker directly.
 - **Spec 14 — test harness,** `tests/conftest.py`, `tests/fixtures/` structure, network guard
   with its negative test.
 - **Spec 15 — fake Kraken client.**
+- **Spec 16 — the Phase 1 criteria in `verify.py`.** Eight registered for phase 1, each proved
+  PENDING against a console that does not answer and PASS against a fabricated subject. The
+  console's HTTP surface is named by the gate rather than discovered from the route table, and
+  the contract is printed in every PENDING line through `CONSOLE_CONTRACT`, so specs 19 to 24
+  are told what to build by the failure itself. `console_restart_banner` seeds one `runs` row
+  for its negative half rather than two matching `run_id`s, which the schema forbids — see the
+  open question below.
+- **Spec 17 — the console read layer.** `console/reader.py`, `views.py` and `format.py`, with
+  `create_app` gaining injected `db_path` and `clock` while staying call-compatible with A's
+  `cli/console.py`. The connection is read-only via a `ReadOnlyStore(StoreClient)` subclass that
+  overrides only where the connection comes from, so B's directory is untouched and the screens
+  still compose from B's existing reads; a real `INSERT`, a real `UPDATE` and `write_run` are
+  each proved to raise. Staleness is decided against the injected clock on both sides of the
+  threshold, never wall time.
+- **Spec 18 — tokens, stylesheet and the page shell.** `templates/index.html`, `static/tokens.css`
+  and `static/console.css`, with IBM Plex self-hosted so the page makes zero external requests.
+  Every hex lives in the `:root` block and nowhere else, the 3px amber frame appears under live
+  and no border at all under paper, `.num` is the only tabular-figure rule, focus is visibly
+  ringed, and the reduced-motion block drops the flash. Four of the five PASSing Phase 1
+  criteria are the gate on this spec.
 
 ## Three properties of the criteria worth carrying forward
 
@@ -53,13 +73,19 @@ and a later "simplification" would break the gate without saying so.
 
 ## In Progress
 
-- Nothing.
+- Nothing. Specs 16, 17 and 18 are complete and self-tested. **Stopped at the operator
+  checkpoint that `PHASE-1-TASKS.md` places after 18** — the operator reviews the shell and
+  tokens before six more specs are built on them. Spec 19 is not begun and is not claimed.
 
 ## Blocked On
 
-- Nothing.
+- Not blocked. One dependency to flag rather than a block: **spec 19's status band cannot render
+  its State field until the Running/Frozen question below is answered.** The rest of 19 — the
+  band's other fields, the open-positions region, the restart banner — is buildable today.
 
-## Open Questions — both resolved
+## Open Questions
+
+### Phase 0 — both resolved
 
 - **Config key names for the `safety` thresholds.** The lead fixed the names and the operator
   supplied the values on 2026-09-08. `seed_fixtures_present` reads them and asserts the seed is
@@ -71,6 +97,78 @@ and a later "simplification" would break the gate without saying so.
   table gained a qualifier column, and the row now reads ``eight`` qualified by `machine
   learning`, `non-ML` or `engines`. The parser reads that column as data, so no term-specific
   rule entered the checker.
+
+### Phase 1 — three open
+
+Full accounts in `docs/build-log/phase-1/c-interface.md`. All three are for the lead and the
+operator; none is blocking the work I have done, and I have not acted on any of them.
+
+- **`runs.run_id` is UNIQUE, so the "two `run_id`s match" state cannot exist.** Spec 16 asks
+  `console_restart_banner` to assert plain `Idle` "when the two `run_id`s match", and
+  `ui-context.md` describes the same comparison as "the current `run_id` and the `run_id` of the
+  previous row". `db/migrations/0001_initial.sql` declares `run_id TEXT NOT NULL UNIQUE`, so no
+  database can ever hold two rows carrying the same value — two rows always differ, and the only
+  row without a predecessor is the first ever run. The comparison the operator actually meets is
+  a **presence** test, not a value test: no previous row means a system waiting to be started;
+  a previous row means a system that stopped on its own. My criterion and my reader both
+  implement the presence rule, and the criterion reduces the database to one `runs` row for its
+  negative half. **What I am asking for:** the wording in spec 16 and in `ui-context.md` to say
+  "a previous run exists" rather than "the `run_id`s differ". Both files are the lead's; I have
+  not touched either. No code change follows from the answer — the behaviour is already right.
+
+- **The console cannot tell Running from Frozen, and no store read exists that would let it.**
+  The status band has a State field. `ui-context.md` fixes the two idle readings — `Idle` and
+  `Idle — restarted, not trading` — but the daemon also has `running` and `frozen`, and nothing
+  the console can read distinguishes them. Mode lives only in `state["system"]` in the daemon's
+  memory; a daemon always starts `idle` and only reaches `running` through an `activate` command;
+  `runs.mode` is paper/live/replay, which is a different thing entirely. I rendered the two idle
+  readings and stopped rather than guess. Two ways out, and both cost something:
+
+  1. **Derive it from the `commands` table, scoped to the current run.** The one trace a running
+     daemon leaves is the command row it claimed: `claim_command` stamps `claimed_at` and
+     `claimed_by_run_id`. If the console could read the most recent command claimed by the latest
+     `run_id`, it could say that the last effect this run applied was an `activate` (Running) or
+     a `freeze` (Frozen), and Idle when the run has claimed nothing. **Cost.** `StoreClient`
+     exposes `pending_commands()` and `claimed_unconsumed_commands()` and no read for claimed
+     history, so this is a new method in `clients/store/client.py` and `contracts.py` — B's
+     directory, therefore a small task for B and a change to a phase that was planned with one
+     teammate. It also needs an index: `commands` is indexed on `created_at` for the pending and
+     unconsumed partials only, and nothing indexes `claimed_by_run_id`. And it is *inference*,
+     not fact — the console would reconstruct a mode from a command history rather than read the
+     mode itself, so it is only ever as correct as the assumption that every mode transition
+     leaves a claimed command row. Any transition that does not — and I cannot prove from here
+     that none exists — makes the band confidently wrong, which is worse than the band being
+     silent.
+  2. **Have the daemon persist the mode where the console can read it.** `state["system"]["mode"]`
+     is written in exactly one place, the command reader in `core/`; that writer would also write
+     the value to the store, on a column of the current `runs` row or a small single-row state
+     table. The console then reads the mode as a fact and the band is right by construction, with
+     no inference and no new index. **Cost.** It is the more invasive of the two by a distance: a
+     schema change, which is a migration through B under rule 4 plus the lead's approval, *and*
+     an edit in `core/`, which is lead-only under rule 2. It also puts a store write on the
+     daemon's mode transition, and a write that fails or lags leaves the console showing a mode
+     the daemon has already left — a smaller failure than option 1's, since it is staleness
+     rather than a wrong reading, but it is not free either.
+
+  **What I am asking for:** which of the two, or an instruction to leave the State field showing
+  only the idle readings for Phase 1 and defer the rest. I have not opened B's directory, have
+  not proposed a schema change, and have not invented a third reading. This reaches the operator
+  at the spec 18 checkpoint deliberately, rather than being discovered inside spec 19, which is
+  the screen that would otherwise have had to guess.
+
+- **The cycle feed full-scans `block_records` because it cannot anchor its window on the clock.**
+  `StoreClient.block_records_in_window` takes an explicit `start_ts`/`end_ts`, and the obvious
+  window — the last N hours from the injected clock — returns nothing at all against B's seed,
+  whose timestamps are fixed constants with no relationship to wall time. The feed rendered empty
+  and read as a bug in the screen. My reader therefore asks for the full `ts` range and does the
+  ordering and limiting itself, which is correct against seeded and live data alike and keeps
+  `ts` as the ordering key that `architecture-context.md` requires. **Cost:** one full scan of
+  `block_records` per feed render. That is fine at Phase 1 volumes, where the table is a seed,
+  and it is not fine once engine 19 `memory` is writing a block record per tick per guard in
+  Phase 4. **What would replace it:** a most-recent-N read on B's surface — `block_records`
+  ordered by `ts` descending with a limit, no window at all — which is a new method in
+  `clients/store/client.py` and so B's to write, not mine to reach across for. Not urgent; the
+  right time is whenever B next has work on the store client, and before Phase 4 fills the table.
 
 ## Escalations To Lead — both resolved
 
@@ -121,34 +219,42 @@ and a later "simplification" would break the gate without saying so.
 
 Paste the real output of your last run. Never report a task complete without it.
 
+Last run 2026-09-09, after spec 18, on the tree carrying 16, 17 and 18.
+
 ```
 $ .venv/Scripts/python.exe -m pytest tests/ -q
-528 passed in 17.27s
+641 passed in 21.11s
 
 $ .venv/Scripts/python.exe -m mypy --strict src/
-Success: no issues found in 29 source files
+Success: no issues found in 32 source files
 
 $ .venv/Scripts/python.exe -m ruff check src/
 All checks passed!
 
-$ .venv/Scripts/python.exe scripts/verify.py --phase 0
-PASS    docs_vocabulary              14 files scanned, 9 retired terms, no hit
-PASS    orchestrator_empty_registry  one tick completed against 0 registered engines; empty chains are valid, state["system"]["mode"]='idle'
-PASS    db_migrates_from_empty       fresh database migrated to all 9 documented tables
-PASS    seed_fixtures_present        all six fixtures present: outage run 18 ticks over 2 run_ids (11 double-blocker), 2 open position(s), 2 resting order(s), drawdown 0.2000017843760037115020877199, losing streak 8, 23 ERROR blocks in the window, 33 trades / 46 rejections
-PASS    record_sample_valid          25 lines valid against the recorder schema; kinds present: gap, session, tick
-PASS    toolchain_green              pytest, mypy --strict and ruff all green (python.exe)
-PASS    is_gate_matches_registry     0 engines registered; 0 mismatches
+$ .venv/Scripts/python.exe scripts/verify.py --phase 1
+ACSOE verify - phase 1
+repo: C:\Users\saad2\Documents\GitHub\ACSOE
 
-7 criteria: 7 PASS, 0 FAIL, 0 PENDING
-Phase 0 is green: every criterion PASS, zero PENDING.
+PASS    docs_vocabulary                     14 files scanned, 9 retired terms, no hit
+PENDING console_renders_seeded_screens      not routed yet: status band and open positions (/api/state); cycle feed (/api/feed); history (/api/history); research views (/api/research)
+PENDING console_websocket_pushes_on_change  no WebSocket endpoint at /ws yet - handshake answered with websocket.close (expected: acsoe.console.app.create_app(config, *, db_path=None, clock=None) serving GET / (spec 18), GET /api/state, /api/feed, /api/history, /api/research (specs 19-22), WS /ws (spec 23), POST /api/command/{activate|freeze|close_all} (spec 24))
+PENDING console_commands_write_rows         no command endpoint yet: POST /api/command/activate (expected: acsoe.console.app.create_app(config, *, db_path=None, clock=None) serving GET / (spec 18), GET /api/state, /api/feed, /api/history, /api/research (specs 19-22), WS /ws (spec 23), POST /api/command/{activate|freeze|close_all} (spec 24))
+PASS    console_live_frame_amber            live renders a 3px var(--live) frame and paper declares no border anywhere
+PASS    console_tokens_no_raw_hex           11 hex values, all inside the src/acsoe/console/static/tokens.css token block; 8 console files scanned
+PASS    console_tabular_figures             17 numeric cell(s) carry `.num`, and `.num` is the only tabular-figure rule
+PASS    console_focus_and_reduced_motion    2 visible `:focus-visible` rule(s); the reduced-motion block drops the flash
+PENDING console_restart_banner              the status band is not routed yet (GET /api/state is a 404)
+
+9 criteria: 5 PASS, 0 FAIL, 4 PENDING
+Phase 1 is not green: 4 PENDING. Mid-phase the bar is no FAIL, so this is expected.
 ```
 
-**Phase 0 is green.** My earlier note said it was not green until `toolchain_green`'s
-non-determinism was settled. It has been settled in the only way available: investigated,
-closed without a root cause, recorded as a known risk in the tracker, and mitigated by the
-crash-aware retry above. A crash is still reported in the PASS line, so the phase does not go
-green by hiding it.
+**This meets the mid-phase bar and nothing more.** No FAIL, which is what `run-protocol.md`
+step 4 asks of a single task; Phase 1 is not green and must not be recorded as green. The four
+PENDING criteria are exactly the ones whose subjects are specs 19 to 24 — the three console
+routes, the WebSocket, the command endpoint and the status band — and all six of those specs sit
+behind the operator checkpoint after 18. Phase 0's criteria are unaffected; `docs_vocabulary`
+registers on every phase and still PASSes here.
 
 ## Notes For Next Session
 

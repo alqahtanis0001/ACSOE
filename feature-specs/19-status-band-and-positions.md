@@ -16,22 +16,33 @@ database.
    and the power control. Balance comes from `latest_equity_snapshot`; Mode from `config.mode`;
    State from the reader's restart-aware state; Data age from the store watermark measured
    against `console.stale_after_ms`.
-3. **State reads `Idle — restarted, not trading`** when the reader reports a changed `run_id`
-   and an idle mode, and keeps reading it until the operator activates or freezes. Text only,
-   no colour — amber is reserved for live mode, and the words have to carry the meaning anyway.
-   A system waiting to be started and a system that stopped on its own are not the same event
-   and must not look the same.
-4. The open-positions region renders **only when at least one open position exists**. Columns:
+3. **State reads `Idle — restarted, not trading`** when the current run **has a previous `runs`
+   row** and the mode is idle, and keeps reading it until the operator activates or freezes.
+   Text only, no colour — amber is reserved for live mode, and the words have to carry the
+   meaning anyway. A system waiting to be started and a system that stopped on its own are not
+   the same event and must not look the same. It is a presence test: `run_id` is UNIQUE, so
+   asking whether two `run_id`s differ describes a state the schema forbids.
+4. **The State field renders the two idle readings and nothing else this phase.** `running` and
+   `frozen` live only in `state["system"]["mode"]` in the daemon's memory and nothing the
+   console can read distinguishes them. That is honest in Phase 1 — no daemon runs, the console
+   renders the seed, and neither state can occur. The operator ruled on 2026-09-09 that the fix
+   lands in **Phase 2**, where the command reader in `core/` that already owns the mode also
+   persists it, and the console reads it as a fact. See the `## Restart is visible` section of
+   `context/ui-context.md` and the seam row in `context/ownership.md`. **Do not derive the mode
+   from the `commands` trail** — that was considered and rejected, because a transition leaving
+   no claimed row makes the band confidently wrong, and for the element answering *is this safe*
+   silent beats wrong.
+5. The open-positions region renders **only when at least one open position exists**. Columns:
    pair, quantity, entry, last, unrealised, target, stop, timeout. Every numeric cell carries
    spec 18's `.num` class; numbers are right-aligned within their column.
-5. Percentages are explicitly signed with U+2212 for negatives, through spec 17's
+6. Percentages are explicitly signed with U+2212 for negatives, through spec 17's
    `format.py`. Colour reinforces the sign; it is never the only signal.
-6. Any figure older than `console.stale_after_ms` renders at 50% opacity with its age beside it.
+7. Any figure older than `console.stale_after_ms` renders at 50% opacity with its age beside it.
    Stale data must look stale. **The age comes from the clock injected into `create_app`, never
    from a direct read of wall time** — spec 17 item 6. A test that renders a figure and waits for
    it to age is a race; a test that hands the app a `FixedClock` and moves it is deterministic,
    and it can sit exactly on both sides of the threshold.
-7. The band is fixed and never scrolls. The positions region scrolls with the rest of the page.
+8. The band is fixed and never scrolls. The positions region scrolls with the rest of the page.
 
 ## Scope Limits
 
@@ -51,8 +62,11 @@ database.
 - Against the seeded database the band renders every field, and the positions region renders the
   seeded open position; against a database with no open positions the region is absent entirely,
   not an empty table.
-- Two tests on the State field: differing `run_id`s with idle mode renders
-  `Idle — restarted, not trading`; matching `run_id`s renders plain `Idle`.
+- Two tests on the State field, both presence tests: a run **with** a previous `runs` row and an
+  idle mode renders `Idle — restarted, not trading`; a database holding a **single** `runs` row
+  renders plain `Idle`. Not "matching `run_id`s" — `run_id` is UNIQUE and that state cannot exist.
+- One test asserting the State field never renders `Running` or `Frozen` this phase, so the
+  Phase 2 deferral is enforced rather than remembered.
 - Staleness is tested with an injected `FixedClock`, not by sleeping: with the clock set one
   microsecond inside `console.stale_after_ms` the figure renders normally, and one microsecond
   outside it renders at 50% opacity with its age shown. Neither test reads wall time, and

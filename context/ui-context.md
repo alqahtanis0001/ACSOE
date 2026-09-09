@@ -98,9 +98,21 @@ Stillness becomes information. This is the single most-viewed screen state in th
 
 A daemon always starts `idle` and never restores its mode, so a crash at 3am leaves a system that is up, watching its open positions, and not trading. That is the safe behaviour, but it is silent: the status band would read `Idle`, which is also what it reads before the operator has ever pressed Activate.
 
-The comparison is made **server-side in SQLite**, not from anything the console remembers: the console is a separate process with no memory across its own restarts. It reads the current `run_id` and the `run_id` of the previous row in the `runs` table. When those differ and the mode is `idle`, the State field reads `Idle — restarted, not trading`, and keeps reading it until the operator activates or freezes. Text only, no colour: amber is reserved for live mode, and the sign has to carry the meaning anyway.
+The comparison is made **server-side in SQLite**, not from anything the console remembers: the console is a separate process with no memory across its own restarts. It reads the `runs` table and asks whether the current run **has a previous row at all**. When it does and the mode is `idle`, the State field reads `Idle — restarted, not trading`, and keeps reading it until the operator activates or freezes. Text only, no colour: amber is reserved for live mode, and the sign has to carry the meaning anyway.
+
+**It is a presence test, not a value comparison, and the schema is why.** `db/migrations/0001_initial.sql` declares `run_id TEXT NOT NULL UNIQUE`, so no database can ever hold two rows carrying the same `run_id`: two rows always differ, and the only run without a predecessor is the first one ever. An earlier wording here asked whether the current and previous `run_id`s *differ*, which describes a state the schema forbids and would have made the negative half of the check impossible to build. Corrected 2026-09-09 after C hit it building `console_restart_banner`.
 
 The two states are not the same event and must not look the same. One is a system waiting to be started; the other is a system that stopped on its own.
+
+### The other two readings, and when they arrive
+
+The daemon also has `running` and `frozen`, and **the Phase 1 console cannot render either.** Mode lives only in `state["system"]["mode"]` in the daemon's memory; it is never restored from the store, and `runs.mode` is paper/live/replay, a different axis entirely. Nothing the console can read distinguishes a running daemon from a frozen one.
+
+For Phase 1 that is honest rather than incomplete: no daemon runs at all, the console renders the Phase 0 seed, and neither state can occur. **It stops being honest in Phase 2**, when a daemon first runs and a band reading `Idle` over a running system would be actively wrong.
+
+**The fix is committed to Phase 2, and it is not inference.** The command reader in `src/acsoe/core/` is already the single writer of `state["system"]["mode"]`; that same writer persists the value where the console can read it, and the console reads the mode as a fact. Deriving the mode instead from the trail of claimed `commands` rows was considered and **rejected**: it reconstructs a mode from a command history, so it is only ever as correct as the assumption that every transition leaves a claimed row, and a transition that leaves none makes the band confidently wrong. For the one element whose job is to answer *is this safe*, silent beats wrong. Staleness is the acceptable failure mode here; a false reading is not.
+
+Until then the State field renders the two idle readings and nothing else. It never guesses, and it never shows a mode it cannot read.
 
 ## Motion
 
