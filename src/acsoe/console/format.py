@@ -39,14 +39,22 @@ from typing import Final
 from acsoe.clients.store.contracts import from_micros
 
 __all__ = [
+    "ABSENT",
+    "DIRECTION_FLAT",
+    "DIRECTION_NEGATIVE",
+    "DIRECTION_POSITIVE",
     "MINUS_SIGN",
     "NO_REASON_RECORDED",
     "OUTCOME_WORDS",
     "PERCENT_PLACES",
     "REASON_PROSE",
+    "direction",
     "format_age",
     "format_clock_time",
+    "format_engine_name",
+    "format_metric",
     "format_money",
+    "format_optional_pct",
     "format_outcome",
     "format_rate_pct",
     "format_signed_pct",
@@ -113,6 +121,46 @@ OUTCOME_WORDS: Final[Mapping[str, str]] = {
 #: ``reason`` is a sentence or a code that leaked into the column; it is never
 #: used to *derive* prose.
 _CODE_LIKE: Final = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)+$")
+
+#: What a cell shows when the row does not carry the value. An em dash, which
+#: reads as *absent*; a zero in a numeric column reads as a measured result, and
+#: a `scout` rejection that never reached the cost gate has no net edge to report.
+ABSENT: Final = "\N{EM DASH}"
+
+#: The three directions a signed figure can have. These are the class names the
+#: stylesheet keys its 2px rule off — the **sign** in the text carries the meaning
+#: and the colour only reinforces it, so a red-green colourblind operator loses
+#: nothing by never seeing them.
+DIRECTION_POSITIVE: Final = "pos"
+DIRECTION_NEGATIVE: Final = "neg"
+DIRECTION_FLAT: Final = "flat"
+
+
+def direction(value: Decimal | None) -> str:
+    """Which way a signed figure points, as a class name.
+
+    Zero is :data:`DIRECTION_FLAT` and not "positive". A flat outcome is neither
+    a gain nor a loss, and colouring it green would overstate it — which is the
+    same reason the palette's positive and negative are muted in the first place.
+    """
+    if value is None or not value.is_finite() or value == 0:
+        return DIRECTION_FLAT
+    return DIRECTION_NEGATIVE if value < 0 else DIRECTION_POSITIVE
+
+
+def format_engine_name(name: str) -> str:
+    """An engine's identifier as the operator reads it: ``data_guard`` -> "data guard".
+
+    Not title-cased. The engines are named after what they do, and "Data Guard"
+    reads like a product while "data guard" reads like a part of the system —
+    which matches the sentence-case rule in ``ui-context.md``.
+    """
+    return name.strip().replace("_", " ")
+
+
+def format_optional_pct(value: Decimal | None, *, places: int = PERCENT_PLACES) -> str:
+    """A signed percentage, or :data:`ABSENT` when the row does not carry one."""
+    return ABSENT if value is None else format_signed_pct(value, places=places)
 
 
 def operator_reason(reason_code: str, reason: str = "") -> str:
@@ -184,8 +232,21 @@ def format_rate_pct(value: float | None, *, places: int = PERCENT_PLACES) -> str
     rather than as zero.
     """
     if value is None:
-        return "\N{EM DASH}"
+        return ABSENT
     return format(value * 100, "." + str(places) + "f") + "%"
+
+
+def format_metric(value: float | None, *, places: int = PERCENT_PLACES) -> str:
+    """A leaderboard statistic that is not a percentage — Sharpe, deflated Sharpe, Brier.
+
+    ``float`` is correct here for the same reason as :func:`format_rate_pct`: these
+    are statistics, never money. A negative one keeps its proper minus sign so the
+    column still aligns, and ``None`` reads as absent rather than as zero — an
+    unscored model and a model that scored 0.00 are not the same thing.
+    """
+    if value is None:
+        return ABSENT
+    return signed(format(value, "." + str(places) + "f"))
 
 
 def signed(text: str) -> str:

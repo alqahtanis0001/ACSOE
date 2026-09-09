@@ -80,6 +80,54 @@ design a view for data that arrives in Phase 5.
 verified now, so building one would have meant a criterion that could not honestly pass. The
 empty state is the verifiable option as well as the truthful one.
 
+### The seed-path crash is not a pydantic bug, and it does not need the full suite
+
+**Agent:** Lead · **Task:** Phase 1, after the second IDE crash · **Date:** 2026-09-09
+
+**What happened.** A `--phase 0` run mid-phase reported `6 PASS, 1 FAIL`. I re-ran before
+capturing which criterion failed — a straightforward mistake, and it cost the evidence. Three
+re-runs were clean. Rather than leave it at "probably the known flake", I reproduced it
+deliberately: four consecutive full-suite runs produced one segmentation fault, exit 139.
+
+**Why it matters.** The Known Risks entry recorded this fault as living in `seed.py` →
+`write_trade` / `write_position` → pydantic `model_dump`. The captured trace does not match:
+
+```
+Windows fatal exception: access violation
+  client.py line 194 in _insert
+  client.py line 532 in write_equity_snapshot
+  seed.py   line 844 in _write_equity
+  seed.py   line 409 in build
+  seed.py   line 347 in seed_database
+  test_seed.py line 100 in seeded
+```
+
+The innermost frame is `sqlite3`'s C extension inside `StoreClient._insert`, not pydantic's.
+`_insert` is plain parameter-bound SQL. So the fault has now been seen inside **two unrelated C
+extensions in the same process**, which is the shape of memory corruption rather than of a
+library defect — and it means the pydantic hypothesis the entry was built around is wrong.
+
+**Fix.** None. This is diagnosis, not repair, and the repair would land in B's `clients/store/`.
+Two further findings, both cheap and both narrowing:
+
+- **The full suite is not required.** `tests/clients/store/test_seed.py` alone faulted 1 run in
+  8. Test ordering and cross-test interaction are not prerequisites, so the reproduction is much
+  cheaper than the entry assumed.
+- **Pytest may be required, but I did not prove it.** `seed_database` in a bare loop survived
+  1,120 consecutive seeds with no fault. That sounds decisive and is not: `test_seed.py` collects
+  77 tests against a function-scoped fixture, so those 8 runs did roughly 480 seeds for 1 fault,
+  and 1,120 clean seeds is worth only about two expected faults at that rate — p ≈ 0.1. I record
+  it as the cheapest open lead, not as a result.
+
+**Consequence.** Corrected the Known Risks entry, which had the wrong signature and an
+understated blast radius. Also worth stating plainly: at a ~20% per-run crash rate, the
+`toolchain_green` single retry fails about 4% of the time, which is exactly how often a spurious
+FAIL should be expected — the mitigation works as designed and is simply not sufficient alone. My
+own error is the more useful lesson: **capture the trace before re-running.** A flake you cannot
+produce evidence for is indistinguishable from a defect you have not understood, and I spent a
+report's worth of credibility asserting the first without being able to show the second was
+false.
+
 ### Decision: the status band stays silent about Running and Frozen until Phase 2
 
 **Agent:** Lead · **Task:** spec 19, checkpoint after spec 18 · **Date:** 2026-09-09

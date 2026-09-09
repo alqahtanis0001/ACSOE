@@ -45,9 +45,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from acsoe.console.payloads import (
+    feed_payload,
+    history_payload,
+    research_payload,
+    state_payload,
+)
 from acsoe.console.reader import ConsoleReader
 from acsoe.platform.clock import Clock, SystemClock
 from acsoe.platform.paths import runtime_paths
@@ -209,5 +215,41 @@ def create_app(
     @app.get("/", response_class=HTMLResponse)
     def page() -> HTMLResponse:
         return HTMLResponse(render_page(str(config.mode)))
+
+    # Every screen endpoint below is `async def`, and that is not a style choice.
+    # FastAPI runs a *synchronous* endpoint in a worker thread from a pool, so two
+    # requests can reach one `sqlite3.Connection` from two different threads and
+    # sqlite3 raises. The reader holds one connection for the life of the process,
+    # so the connection stays on the event-loop thread by keeping every reader
+    # touch on it. The reads are small and local; a blocking call of that size on
+    # the loop is cheaper than a connection per request or a lock around one.
+    #
+    # They return `JSONResponse` rather than the view models themselves for a
+    # sharper reason: FastAPI serialises a returned object through
+    # `jsonable_encoder`, which renders a `Decimal` by calling `float()` on it.
+    # Every money field would have lost precision on the way out, silently. See
+    # `console/payloads.py`.
+
+    @app.get("/api/state")
+    async def api_state() -> JSONResponse:
+        """The status band and the open-positions region. Spec 19."""
+        return JSONResponse(
+            state_payload(reader.status_band(mode=str(config.mode)), reader.positions())
+        )
+
+    @app.get("/api/feed")
+    async def api_feed() -> JSONResponse:
+        """The cycle feed, and the empty state that is the main state. Spec 20."""
+        return JSONResponse(feed_payload(reader.feed(), reader.feed_summary()))
+
+    @app.get("/api/history")
+    async def api_history() -> JSONResponse:
+        """Closed trades and past rejections. Spec 21."""
+        return JSONResponse(history_payload(reader.history()))
+
+    @app.get("/api/research")
+    async def api_research() -> JSONResponse:
+        """The leaderboard, and the SHAP pane's honest empty state. Spec 22."""
+        return JSONResponse(research_payload(reader.research()))
 
     return app

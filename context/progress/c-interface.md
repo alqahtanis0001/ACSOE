@@ -5,6 +5,10 @@ Never edit the tracker directly.
 
 ## Current Task
 
+- **Phase 1. Claimed: specs 19, 20, 21, 22, 23, 24** — the operator's checkpoint after 18 has
+  been held and cleared, and all three rulings below are folded into the specs. Claimed
+  2026-09-09, before any code was written, in the order `PHASE-1-TASKS.md` sets: 19, 20, 21, 22,
+  then 23 and 24.
 - **Phase 1. Claimed: specs 16, 17, 18** — in that order, and stopping after 18 for the
   operator checkpoint on the shell and tokens. Spec 16 first for the same reason spec 00 was
   first in Phase 0: `verify.py --phase 1` reported `1 criteria: 1 PASS` on the current tree,
