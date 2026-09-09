@@ -142,10 +142,19 @@ and a later "simplification" would break the gate without saying so.
   learning`, `non-ML` or `engines`. The parser reads that column as data, so no term-specific
   rule entered the checker.
 
-### Phase 1 — three open
+### Phase 1 — three raised at the spec-18 checkpoint; one now answered
 
 Full accounts in `docs/build-log/phase-1/c-interface.md`. All three are for the lead and the
 operator; none is blocking the work I have done, and I have not acted on any of them.
+
+**The second — Running versus Frozen — was answered on 2026-09-09 and is left below verbatim
+rather than deleted, because the reasoning behind the rejected option is the part that matters
+later.** The operator chose neither of my two options as stated: the fix lands in **Phase 2**,
+where the command reader in `core/` that already owns `state["system"]["mode"]` also persists it
+and the console reads the mode as a fact. Deriving it from the claimed-`commands` trail was
+rejected outright — a transition that leaves no claimed row makes the band confidently wrong,
+and for the one element whose job is to answer *is this safe*, silent beats wrong. The Phase 1
+console renders the two idle readings and nothing else, and the suite enforces that.
 
 - **`runs.run_id` is UNIQUE, so the "two `run_id`s match" state cannot exist.** Spec 16 asks
   `console_restart_banner` to assert plain `Idle` "when the two `run_id`s match", and
@@ -285,7 +294,20 @@ operator; none is blocking the work I have done, and I have not acted on any of 
    **Lead's answer: deferred to Phase 1, deliberately.** Widening the gate is a change to what
    every phase asserts and it lands better at a phase boundary than at a phase close; the four
    findings are recorded here so they are not rediscovered.
-4. **Two stale docstrings of mine, fixed.** A flagged both. `tests/conftest.py`'s `paper_config`
+4. **A fifth site for the intermittent native fault, captured rather than shrugged off.** The
+   first full-suite run of 2026-09-09's second session reported `1 failed, 640 passed`, in
+   `tests/platform/test_config.py::test_a_missing_required_key_is_refused`, with
+   `TypeError: object of type 'ScalarEvent' has no len()` raised out of pyyaml's own
+   `parser.py:118`. That file alone then passed 82/82 and two subsequent full-suite runs passed
+   641/641 and 707/707. The suite has no randomised ordering — neither `pytest-randomly` nor
+   `pytest-xdist` is installed — so the same code ran in the same order three times and
+   disagreed with itself once. The tracker's Known Risks entry is already re-opened and already
+   records the fault inside `pydantic-core` and inside `sqlite3`'s C extension; a bogus
+   `TypeError` out of pure-Python pyyaml is a third unrelated site, consistent with the
+   memory-corruption reading and inconsistent with a pyyaml bug. **Full trace in
+   `docs/build-log/phase-1/c-interface.md`, captured before the re-run.** Not root-caused, not
+   in my paths, and the tracker entry is the lead's — escalated rather than edited.
+5. **Two stale docstrings of mine, fixed.** A flagged both. `tests/conftest.py`'s `paper_config`
    still said the OPERATOR REQUIRED nulls were left as nulls; the file now carries none, all nine
    supplied. `verify.py`'s `KEY_MAX` comment said four of the five `safety` keys were written as
    null — it was three, and the same sentence wrongly implied only the error-rate window was ever
@@ -295,14 +317,14 @@ operator; none is blocking the work I have done, and I have not acted on any of 
 
 Paste the real output of your last run. Never report a task complete without it.
 
-Last run 2026-09-09, after spec 18, on the tree carrying 16, 17 and 18.
+Last run 2026-09-09, after specs 23 and 24, on the tree carrying all nine of my Phase 1 specs.
 
 ```
 $ .venv/Scripts/python.exe -m pytest tests/ -q
-641 passed in 21.11s
+707 passed in 34.30s
 
 $ .venv/Scripts/python.exe -m mypy --strict src/
-Success: no issues found in 32 source files
+Success: no issues found in 35 source files
 
 $ .venv/Scripts/python.exe -m ruff check src/
 All checks passed!
@@ -312,25 +334,27 @@ ACSOE verify - phase 1
 repo: C:\Users\saad2\Documents\GitHub\ACSOE
 
 PASS    docs_vocabulary                     14 files scanned, 9 retired terms, no hit
-PENDING console_renders_seeded_screens      not routed yet: status band and open positions (/api/state); cycle feed (/api/feed); history (/api/history); research views (/api/research)
-PENDING console_websocket_pushes_on_change  no WebSocket endpoint at /ws yet - handshake answered with websocket.close (expected: acsoe.console.app.create_app(config, *, db_path=None, clock=None) serving GET / (spec 18), GET /api/state, /api/feed, /api/history, /api/research (specs 19-22), WS /ws (spec 23), POST /api/command/{activate|freeze|close_all} (spec 24))
-PENDING console_commands_write_rows         no command endpoint yet: POST /api/command/activate (expected: acsoe.console.app.create_app(config, *, db_path=None, clock=None) serving GET / (spec 18), GET /api/state, /api/feed, /api/history, /api/research (specs 19-22), WS /ws (spec 23), POST /api/command/{activate|freeze|close_all} (spec 24))
+PASS    console_renders_seeded_screens      all 5 screens answered over a seeded database
+PASS    console_websocket_pushes_on_change  pushed 524ms after the watermark moved, inside the 1000ms budget
+PASS    console_commands_write_rows         one correct unclaimed row each for activate, freeze, close_all
 PASS    console_live_frame_amber            live renders a 3px var(--live) frame and paper declares no border anywhere
-PASS    console_tokens_no_raw_hex           11 hex values, all inside the src/acsoe/console/static/tokens.css token block; 8 console files scanned
-PASS    console_tabular_figures             17 numeric cell(s) carry `.num`, and `.num` is the only tabular-figure rule
+PASS    console_tokens_no_raw_hex           11 hex values, all inside the src/acsoe/console/static/tokens.css token block; 12 console files scanned
+PASS    console_tabular_figures             21 numeric cell(s) carry `.num`, and `.num` is the only tabular-figure rule
 PASS    console_focus_and_reduced_motion    2 visible `:focus-visible` rule(s); the reduced-motion block drops the flash
-PENDING console_restart_banner              the status band is not routed yet (GET /api/state is a 404)
+PASS    console_restart_banner              a changed run_id reads the restart banner; a first start reads plain `Idle`
 
-9 criteria: 5 PASS, 0 FAIL, 4 PENDING
-Phase 1 is not green: 4 PENDING. Mid-phase the bar is no FAIL, so this is expected.
+9 criteria: 9 PASS, 0 FAIL, 0 PENDING
+Phase 1 is green: every criterion PASS, zero PENDING.
 ```
 
-**This meets the mid-phase bar and nothing more.** No FAIL, which is what `run-protocol.md`
-step 4 asks of a single task; Phase 1 is not green and must not be recorded as green. The four
-PENDING criteria are exactly the ones whose subjects are specs 19 to 24 — the three console
-routes, the WebSocket, the command endpoint and the status band — and all six of those specs sit
-behind the operator checkpoint after 18. Phase 0's criteria are unaffected; `docs_vocabulary`
-registers on every phase and still PASSes here.
+**This meets the phase-close bar for my nine specs**, which is every criterion PASS and zero
+PENDING. Whether Phase 1 is *marked* green is the lead's call after review, not mine, and I have
+not touched `context/progress-tracker.md`.
+
+The suite grew from 641 to 707 in this session: 66 new tests across
+`tests/console/test_payloads.py`, `test_research.py`, `test_websocket.py` and
+`test_commands.py`, plus the widened assertions in `test_app.py` and `test_page.py`. Two of the
+641 were failing on the tree I picked up and are fixed; see the entries in the build log.
 
 ## Notes For Next Session
 
@@ -340,3 +364,16 @@ registers on every phase and still PASSes here.
   not literal even with a quoted delimiter: a `\b` written into a regex arrived as a raw
   backspace byte, and `\n` inside a test string arrived as a real newline and broke the file.
   Use a direct file write for anything containing escapes.
+- The heredoc hazard above bit again this session, in the other direction: a Windows path
+  written into a heredoc'd Python string raised
+  `SyntaxError: (unicode error) 'unicodeescape' codec can't decode bytes ... truncated \UXXXXXXXX
+  escape`, because the path segment reached Python as a literal backslash-U. Same rule, wider
+  than the note said: **write the script to a file first.** It applies to any backslash, not
+  only to regex escapes.
+- Phase 1's console surface is now complete and `tests/console/test_app.py` asserts the route
+  set exhaustively. From here that assertion changes meaning — it stops tracking progress and
+  starts guarding the surface, so a Phase 2 route has to be added there deliberately.
+- The Phase 2 mode question is already answered and already has a home: the command reader in
+  `core/` persists `state["system"]["mode"]` and the console reads it as a fact. When it lands,
+  `views.IDLE_READINGS` and the test asserting the State field never leaves that tuple are the
+  two places that change, and `console/reader.py:status_band` is the third.

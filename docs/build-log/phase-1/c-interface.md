@@ -571,7 +571,7 @@ E               TypeError: object of type 'ScalarEvent' has no len()
 ```
 
 `tests/platform/test_config.py` alone then passed 82/82, and two subsequent full-suite runs
-passed 641/641 and 705/705.
+passed 641/641 and 707/707.
 
 **Why it is recorded here rather than shrugged off.** The suite has no randomised ordering —
 `pytest-randomly` and `pytest-xdist` are both absent — so the same code ran in the same order
