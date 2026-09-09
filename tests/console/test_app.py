@@ -208,16 +208,17 @@ def test_the_console_reads_exactly_one_config_key(seeded_db: Path, seed_clock: A
 # --------------------------------------------------------------------------- #
 
 
-def test_spec_17_adds_no_route_beyond_health(console_app: Any) -> None:
-    """Spec 17's Scope Limits: no HTML, no CSS, no WebSocket, no command path.
+def test_the_console_exposes_nothing_beyond_the_page_and_its_assets(console_app: Any) -> None:
+    """Scope limits through spec 18, made executable.
 
-    The page is spec 18, the four screen payloads are 19 to 22, the socket is 23
-    and the three commands are 24. A route appearing here ahead of its spec is the
-    failure this asserts against. `/openapi.json` is off too — a schema browser on
-    a read-only operator instrument is surface with no reader.
+    The page and `/static` are spec 18. The four screen payloads are specs 19 to
+    22, the socket is 23 and the three commands are 24 — none of them exist yet,
+    and a route appearing here ahead of its spec is the failure this asserts
+    against. `/openapi.json` is off too: a schema browser on a read-only operator
+    instrument is surface with no reader.
     """
     paths = {getattr(route, "path", None) for route in console_app.routes}
-    assert paths == {"/health"}
+    assert paths == {"/", "/health", "/static"}
 
 
 def test_the_console_constructs_no_exchange_client_and_reads_no_credential() -> None:

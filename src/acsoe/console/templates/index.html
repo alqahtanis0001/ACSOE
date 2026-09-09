@@ -1,0 +1,195 @@
+<!doctype html>
+<!--
+  The console. One page, the only page.
+
+  `data-mode` on the root element is the single thing the server substitutes: it
+  carries "paper", "live" or "replay", and console.css keys the 3px amber frame
+  off `html[data-mode="live"]` and off nothing else. The file is checked in with
+  "paper" so it is a valid, openable page on its own and so the substitution has
+  exactly one site.
+
+  Spec 18 is structure and style only. Every region below is empty on purpose:
+  the status band is spec 19, the cycle feed 20, history 21, the research views
+  22, the WebSocket 23 and the three commands 24. There is no JavaScript here at
+  all — the pane switcher is CSS on :target, which is keyboard reachable and
+  bookmarkable without any.
+
+  Nothing on this page is fetched from a third party. The two stylesheets and the
+  four font files are served from this process; the page renders with no network.
+-->
+<html lang="en" data-mode="paper">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ACSOE console</title>
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/console.css">
+</head>
+<body>
+  <a class="skip-link" href="#live">Skip to the live view</a>
+
+  <!-- Status band. Fixed, never scrolls, always visible. It answers the primary
+       question in under two seconds: is this safe, and what is it doing? -->
+  <header class="band" data-region="status-band">
+    <div class="band__field band__field--balance">
+      <span class="band__label" id="label-balance">Balance</span>
+      <span class="band__figure num" data-field="balance" aria-labelledby="label-balance"></span>
+    </div>
+
+    <div class="band__field">
+      <span class="band__label" id="label-mode">Mode</span>
+      <span class="band__value" data-field="mode" aria-labelledby="label-mode">Paper</span>
+    </div>
+
+    <div class="band__field">
+      <span class="band__label" id="label-state">State</span>
+      <span class="band__value" data-field="state" aria-labelledby="label-state">Idle</span>
+    </div>
+
+    <div class="band__field">
+      <span class="band__label" id="label-data-age">Data age</span>
+      <span class="band__value num" data-field="data-age" aria-labelledby="label-data-age"></span>
+    </div>
+
+    <div class="band__field band__field--actions">
+      <div class="actions">
+        <!-- Buttons say what happens, and an action keeps its name through the
+             whole flow: Freeze produces the state Frozen. They are disabled
+             until spec 24 wires them to the command table, rather than looking
+             live and silently doing nothing. -->
+        <button class="button" type="button" data-command="activate" disabled>Activate</button>
+        <button class="button" type="button" data-command="freeze" disabled>Freeze</button>
+        <button class="button" type="button" data-command="close_all" disabled>Close all positions</button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="nav" aria-label="Views">
+    <a class="nav__link" href="#live">Live</a>
+    <a class="nav__link" href="#history">History</a>
+    <a class="nav__link" href="#research">Research</a>
+  </nav>
+
+  <!-- Live: open positions, then the cycle feed. -->
+  <main class="pane pane--default" id="live" tabindex="-1" aria-label="Live">
+    <section class="panel" data-region="positions">
+      <div class="panel__head">
+        <h2>Open positions</h2>
+        <span class="panel__count" data-field="position-count"></span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <caption>Rendered only when a position is open.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Pair</th>
+              <th scope="col" class="num">Quantity</th>
+              <th scope="col" class="num">Entry</th>
+              <th scope="col" class="num">Last</th>
+              <th scope="col" class="num">Target</th>
+              <th scope="col" class="num">Stop</th>
+              <th scope="col" class="num">Unrealised</th>
+              <th scope="col" class="num">Change</th>
+            </tr>
+          </thead>
+          <tbody data-rows="positions"></tbody>
+        </table>
+      </div>
+      <p class="empty" data-empty="positions">Nothing is open.</p>
+    </section>
+
+    <section class="panel" data-region="feed">
+      <div class="panel__head">
+        <h2>Cycle feed</h2>
+        <span class="panel__count" data-field="feed-count"></span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <caption>Newest first. One row per candidate refused and per tick blocked.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Time</th>
+              <th scope="col">Pair</th>
+              <th scope="col">Outcome</th>
+              <th scope="col">Reason</th>
+            </tr>
+          </thead>
+          <tbody data-rows="feed"></tbody>
+        </table>
+      </div>
+      <!-- The empty state is the main state. When nothing qualified, this says
+           what the system actually did rather than "No results". -->
+      <p class="empty" data-empty="feed">Nothing has run yet.</p>
+    </section>
+  </main>
+
+  <!-- History: closed trades and past rejections. Spec 21. -->
+  <main class="pane" id="history" tabindex="-1" aria-label="History">
+    <section class="panel" data-region="history">
+      <div class="panel__head">
+        <h2>History</h2>
+        <span class="panel__count" data-field="history-count"></span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <caption>Closed trades and refused candidates, newest first.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Time</th>
+              <th scope="col">Pair</th>
+              <th scope="col">Outcome</th>
+              <th scope="col" class="num">Quantity</th>
+              <th scope="col" class="num">Entry</th>
+              <th scope="col" class="num">Exit</th>
+              <th scope="col" class="num">Result</th>
+              <th scope="col" class="num">Change</th>
+              <th scope="col">Reason</th>
+            </tr>
+          </thead>
+          <tbody data-rows="history"></tbody>
+        </table>
+      </div>
+      <p class="empty" data-empty="history">No trade has closed and nothing has been refused.</p>
+    </section>
+  </main>
+
+  <!-- Research: the leaderboard, and the SHAP pane's empty state. Spec 22. -->
+  <main class="pane" id="research" tabindex="-1" aria-label="Research">
+    <section class="panel" data-region="leaderboard">
+      <div class="panel__head">
+        <h2>Leaderboard</h2>
+        <span class="panel__count" data-field="leaderboard-count"></span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <caption>Trained model versions, newest first.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Model</th>
+              <th scope="col">Version</th>
+              <th scope="col" class="num">Trades</th>
+              <th scope="col" class="num">Win rate</th>
+              <th scope="col" class="num">Sharpe</th>
+              <th scope="col" class="num">Deflated</th>
+              <th scope="col" class="num">Net</th>
+              <th scope="col">Promoted</th>
+            </tr>
+          </thead>
+          <tbody data-rows="leaderboard"></tbody>
+        </table>
+      </div>
+      <p class="empty" data-empty="leaderboard">No model has been trained.</p>
+    </section>
+
+    <section class="panel" data-region="shap">
+      <div class="panel__head">
+        <h2>Explanations</h2>
+      </div>
+      <p class="empty" data-empty="shap">
+        Per-decision feature attribution arrives with the predictor in Phase 5.
+        Nothing is computed yet, so there is nothing here to show.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

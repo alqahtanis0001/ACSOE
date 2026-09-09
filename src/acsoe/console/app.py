@@ -45,6 +45,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from acsoe.console.reader import ConsoleReader
 from acsoe.platform.clock import Clock, SystemClock
@@ -53,11 +55,53 @@ from acsoe.platform.paths import runtime_paths
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from acsoe.core.contracts import Config
 
-__all__ = ["DATABASE_FILENAME", "console_detail", "create_app", "default_db_path", "health_payload"]
+__all__ = [
+    "DATABASE_FILENAME",
+    "MODE_PLACEHOLDER",
+    "STATIC_DIR",
+    "TEMPLATE_PATH",
+    "console_detail",
+    "create_app",
+    "default_db_path",
+    "health_payload",
+    "render_page",
+]
 
 
 #: The database file name, fixed by B's layout in ``architecture-context.md``.
 DATABASE_FILENAME = "acsoe.sqlite"
+
+#: The one page, and the assets it draws from. Both are shipped inside the
+#: package, so ``acsoe console`` serves them from wherever it was installed.
+TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "index.html"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+#: The single substitution the server makes in the template.
+#:
+#: Not a template engine. ``jinja2`` is not in the stack table of
+#: ``architecture-context.md`` and adding a dependency is an escalation, not a
+#: convenience — and one attribute does not need one. The placeholder is the
+#: *real default value* rather than a ``{{ mode }}`` marker, so
+#: ``templates/index.html`` stays a valid page that opens in a browser on its own.
+MODE_PLACEHOLDER = 'data-mode="paper"'
+
+
+def render_page(mode: str) -> str:
+    """The page, with the root element told which mode the daemon is in.
+
+    ``console.css`` keys the 3px amber frame off ``html[data-mode="live"]`` and
+    off nothing else, so this one attribute is the whole of the live-mode
+    treatment. A mode the template does not expect still substitutes cleanly —
+    the frame simply does not appear, which is the correct behaviour for
+    ``replay``.
+    """
+    markup = TEMPLATE_PATH.read_text(encoding="utf-8")
+    if markup.count(MODE_PLACEHOLDER) != 1:
+        raise RuntimeError(
+            f"templates/index.html must carry {MODE_PLACEHOLDER!r} exactly once; "
+            f"found {markup.count(MODE_PLACEHOLDER)}"
+        )
+    return markup.replace(MODE_PLACEHOLDER, f'data-mode="{mode}"')
 
 
 def default_db_path() -> Path:
@@ -153,8 +197,17 @@ def create_app(
     # handle without running a full server lifespan.
     app.state.reader = reader
 
+    # The stylesheets and the four self-hosted font files. Served from inside the
+    # package: no CDN, no npm, no build step, and the page renders with the
+    # machine offline.
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return health_payload(config, reader)
+
+    @app.get("/", response_class=HTMLResponse)
+    def page() -> HTMLResponse:
+        return HTMLResponse(render_page(str(config.mode)))
 
     return app

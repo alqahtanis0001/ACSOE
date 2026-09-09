@@ -1,0 +1,85 @@
+/*
+ * Design tokens. The palette table of context/ui-context.md, declared once.
+ *
+ * THIS :root BLOCK IS THE ONLY PLACE IN THE CONSOLE WHERE A RAW HEX MAY APPEAR.
+ * scripts/verify.py enforces that with `console_tokens_no_raw_hex`, which scans
+ * every .css, .html, .js and .py file under src/acsoe/console/ and fails on a hex
+ * literal anywhere else. A colour written into a component is a colour nobody can
+ * retune, and it is how a reserved colour leaks out of its reservation.
+ *
+ * A cool slate ground, not black. Deliberately warmer and less absolute than the
+ * usual near-black trading theme, because this screen is stared at for hours and
+ * pure black plus neon is fatiguing.
+ *
+ * --live is RESERVED. It appears nowhere in the interface but the live-mode frame
+ * and the mode word beside it. Not for warnings, not for charts, not for hover
+ * states. That reservation is what makes it read instantly: amber means real
+ * money is at risk right now.
+ */
+
+:root {
+  /* Surfaces. Separation comes from the hairline and the surface step; there
+     are no shadows anywhere in this interface. */
+  --ground: #12161A;
+  --surface: #1A2027;
+  --raised: #232B33;
+  --line: #2E3840;
+
+  /* Text. --text-3 measures 3.8:1 against --ground, which is below WCAG AA for
+     normal text, so it is used only on non-text elements and never for a label
+     an operator has to read. --text-2 is 7.4:1 and is the muted text colour. */
+  --text: #E4E9ED;
+  --text-2: #9AA7B2;
+  --text-3: #66757F;
+
+  /* Outcome. Deliberately muted: this system's outcomes are fractions of a
+     percent, and bright green and red would make a 0.3% gain look like a
+     jackpot. Used as a rule beside a figure rather than as the figure's own
+     colour — the sign carries the meaning, colour reinforces it, and at 13px
+     neither of these clears AA as text. */
+  --pos: #4E9A6B;
+  --neg: #C2604F;
+
+  /* Reserved. Live mode only. */
+  --live: #D9A441;
+
+  /* Interactive: links, the focus ring, the pane switcher. 5.3:1 on --ground. */
+  --accent: #5B8FB9;
+
+  /* Type. Two faces, both self-hosted; see console.css. The fallbacks are named
+     so a missing font file degrades to the right *kind* of face rather than to
+     whatever the browser defaults to. */
+  --font-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+
+  --size-figure: 32px;   /* status band figure, mono 500 */
+  --size-heading: 16px;  /* section heading, sans 500 */
+  --size-body: 14px;     /* body and labels, sans 400 */
+  --size-number: 13px;   /* table numbers, mono 400 */
+  --size-detail: 13px;   /* secondary detail, sans 400 */
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+
+  /* Radius encodes depth, not decoration. */
+  --radius-inline: 4px;
+  --radius-panel: 8px;
+  --radius-row: 0;
+
+  /* Spacing. A four-step scale; anything outside it is a decision, not a nudge. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+
+  /* The one permitted motion: a 200ms background flash on a value that has just
+     changed. Dropped entirely under prefers-reduced-motion. */
+  --flash-duration: 200ms;
+
+  /* The live frame. 3px, and only ever in --live. */
+  --frame-width: 3px;
+
+  /* The narrowest window the layout must stay usable in. */
+  --min-width: 1024px;
+}

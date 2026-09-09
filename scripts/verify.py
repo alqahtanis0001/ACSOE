@@ -2083,6 +2083,37 @@ def check_console_commands_write_rows(ctx: VerifyContext) -> Outcome:
 
 _FRAME_SELECTORS = ("html", "body", ":root", ".frame", ".viewport", "[data-mode")
 _BORDER_PROPERTIES = ("border", "border-width", "border-style", "border-color")
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+_VAR_REFERENCE = re.compile(r"var\(\s*(--[\w-]+)\s*\)")
+
+
+def css_root_tokens(text: str) -> dict[str, str]:
+    """The custom properties declared on `:root`, so a `var()` can be resolved.
+
+    Without this the criterion would be asserting that `console.css` contains the
+    literal `3px` - which would force a raw measurement out of `tokens.css` and
+    into a component, for exactly the reason `ui-context.md` says a raw hex must
+    not go there. A token is the right way to write the frame width; the check
+    has to be able to read one.
+    """
+    tokens: dict[str, str] = {}
+    for rule in css_rules(text):
+        if rule.selector.strip().split(",")[0].strip().lower() != ":root":
+            continue
+        for name, value in css_declarations(rule.block):
+            if name.startswith("--"):
+                tokens[name] = value
+    return tokens
+
+
+def resolve_css_vars(value: str, tokens: dict[str, str], *, depth: int = 4) -> str:
+    """Substitute `var(--x)` from `tokens`, a few levels deep. Unknown names stay."""
+    for _ in range(depth):
+        replaced = _VAR_REFERENCE.sub(lambda m: tokens.get(m.group(1), m.group(0)), value)
+        if replaced == value:
+            break
+        value = replaced
+    return value
 
 
 def _frame_border_rules(rules: Sequence[CssRule]) -> list[CssRule]:
@@ -2134,15 +2165,24 @@ def check_console_live_frame_amber(ctx: VerifyContext) -> Outcome:
                 return failed("GET / in " + mode + " mode answered " + str(response.status))
             rendered[mode] = response.text
 
+    # An HTML comment naming the live selector is documentation, not a live page.
+    # The assertion is about the attribute the browser sees.
+    markup = {mode: _HTML_COMMENT.sub(" ", text) for mode, text in rendered.items()}
+
     problems: list[str] = []
-    if 'data-mode="live"' not in rendered["live"]:
+    if 'data-mode="live"' not in markup["live"]:
         problems.append('the live page does not carry data-mode="live"')
-    if 'data-mode="paper"' not in rendered["paper"]:
+    if 'data-mode="paper"' not in markup["paper"]:
         problems.append('the paper page does not carry data-mode="paper"')
-    if 'data-mode="live"' in rendered["paper"]:
+    if 'data-mode="live"' in markup["paper"]:
         problems.append("the paper page claims live mode")
 
     all_rules = [rule for text in stylesheets.values() for rule in css_rules(text)]
+    tokens: dict[str, str] = {}
+    for text in stylesheets.values():
+        tokens.update(css_root_tokens(text))
+    live_colour = tokens.get("--live")
+
     border_rules = _frame_border_rules(all_rules)
     if not border_rules:
         return pending("no frame border is declared in the stylesheet yet")
@@ -2154,7 +2194,11 @@ def check_console_live_frame_amber(ctx: VerifyContext) -> Outcome:
         )
     live_rules = [r for r in border_rules if r not in stray]
     if not any(
-        "3px" in value and "--live" in value
+        "3px" in resolve_css_vars(value, tokens)
+        and (
+            "--live" in value
+            or (live_colour is not None and live_colour in resolve_css_vars(value, tokens))
+        )
         for rule in live_rules
         for _, value in css_declarations(rule.block)
     ):
@@ -2183,8 +2227,31 @@ _ROOT_BLOCK_SELECTORS = (":root", "html", ":root,html")
 CONSOLE_SCANNED_SUFFIXES = (".css", ".html", ".js", ".py")
 
 
+def _blank_css_comments(text: str) -> str:
+    """Replace every CSS comment with spaces, keeping the string the same length.
+
+    Length-preserving on purpose: the caller compares *character offsets* against
+    the spans this produces, so deleting the comments would shift every offset
+    after the first one and the token block would be found in the wrong place.
+    Newlines are kept so line numbers in a failure message still point at the
+    right line.
+    """
+    def blank(match: re.Match[str]) -> str:
+        return "".join(c if c == "\n" else " " for c in match.group(0))
+
+    return _CSS_COMMENT.sub(blank, text)
+
+
 def _token_block_spans(text: str) -> list[tuple[int, int]]:
-    """Character spans of the `:root` declaration blocks in `tokens.css`."""
+    """Character spans of the `:root` declaration blocks in `tokens.css`.
+
+    Comments are blanked first. The file opens with a long comment explaining why
+    this block is the one exception, and without blanking, the selector that
+    `finditer` sees for the first rule is that entire comment followed by
+    `:root` - which matches nothing, and every token in the file is then reported
+    as a raw hex outside the block.
+    """
+    text = _blank_css_comments(text)
     spans: list[tuple[int, int]] = []
     for match in re.finditer(r"([^{}]*)\{", text):
         selector = match.group(1).strip().replace(" ", "").lower()
