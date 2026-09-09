@@ -241,3 +241,19 @@ finished. So they do not count toward Phase 2's gate, and **Phase 3 stays closed
 green and all three are wired to A's real client.** The risk is that "built" gets mistaken for
 "done" at the Phase 2 close; the tracker and the task list both say so explicitly, and the Phase 3
 criteria will judge them against the real client regardless.
+
+### Why the order book had to be recorded from day one
+
+**Agent:** Lead · **Date:** 2026-09-09
+
+Kraken publishes free historical archives going back years, so price history is available at any time. But those archives contain only open, high, low, close and volume. No bid, no ask, no spread, no order book depth.
+
+That data exists only in the moment. Nobody sells it. If you were not listening at 03:14 last night, that spread is gone permanently.
+
+The cost engine computes fees + spread + slippage. Fees come from Kraken's API. Spread and slippage can only come from the order book.
+
+Without the recording: engine 10's cost gate cannot be backtested, which is the project's central contribution; engine 9 order_book has nothing to read; and any backtest would have to assume zero spread, which would flatter results and make them worthless.
+
+Why 24 hours and not one: spreads are much wider at 4am than during European trading hours. A recording covering only a working day would report costs lower than they are. The 24-hour requirement forces a full daily cycle, quiet overnight periods included, so the friction estimate is honest.
+
+It is the only input to the cost model that money cannot buy back later, which is why scripts/record.py has been running since Phase 0 and why the criterion insists on a clean unbroken day.
