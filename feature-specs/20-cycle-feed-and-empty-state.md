@@ -49,8 +49,14 @@ actually did each tick — including, and especially, when it did nothing.
 
 - Against the seeded database the feed renders both rejection rows and candidate-less block
   rows, newest first.
-- A seed spanning two `run_id`s with reused `cycle_id` values orders correctly by `ts`, with no
-  interleaving — one test asserting exactly this.
+- **The ordering test must be able to fail.** Against the two-run seed with reused `cycle_id`
+  values, assert both halves: that ordering by `ts` produces the correct sequence, **and that
+  ordering the same rows by `cycle_id` produces a demonstrably different one**. Compute the
+  `cycle_id` ordering in the test and assert the two sequences differ, so the fixture is proven
+  to discriminate. A test that only checks the `ts` ordering looks right would pass just as
+  happily against a seed where both orderings coincide — at which point it asserts nothing and
+  the bug it exists to catch walks straight through it. Same reasoning as B's Phase 0 overlap
+  fixture: a fixture that cannot fail is not a fixture.
 - A tick where two guards blocked renders as one tick, not two.
 - Against a migrated-but-empty database the empty state renders and states what the system did,
   and the string "No results" appears nowhere.

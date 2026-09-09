@@ -10,12 +10,15 @@ is the layer every screen spec above it renders.
 
 ## Implementation
 
-1. Replace the placeholder in `src/acsoe/console/app.py`. `create_app` gains a keyword-only
-   `db_path: Path | None = None`, defaulting to `runtime_paths().db / "acsoe.sqlite"` from
-   `acsoe.platform.paths`. **The signature stays call-compatible with `create_app(config)`** so
-   Agent A's `src/acsoe/cli/console.py` needs no change — it is A's file and must not be edited.
-   The injected path is what lets a test and `scripts/verify.py` point the console at a seeded
-   temporary database.
+1. Replace the placeholder in `src/acsoe/console/app.py`. `create_app` gains two keyword-only
+   parameters: `db_path: Path | None = None`, defaulting to
+   `runtime_paths().db / "acsoe.sqlite"` from `acsoe.platform.paths`, and
+   `clock: Clock | None = None`, defaulting to `SystemClock()` from `acsoe.platform.clock`.
+   **The signature stays call-compatible with `create_app(config)`** so Agent A's
+   `src/acsoe/cli/console.py` needs no change — it is A's file and must not be edited. The
+   injected path is what lets a test and `scripts/verify.py` point the console at a seeded
+   temporary database; the injected clock is what makes staleness deterministic instead of a
+   race against wall time.
 2. The health payload's `console` field changes from `"placeholder"` to `"ready"`, and `phase`
    from `0` to `1`. That field exists so an operator can tell the two apart in one look.
 3. Create `src/acsoe/console/reader.py` — the only module in the console that touches
@@ -32,7 +35,12 @@ is the layer every screen spec above it renders.
    own restarts, so this may never be derived from anything the browser or the app remembers.
 6. Staleness: every figure carries its age against `config.get("console.stale_after_ms")`, and
    the view model exposes `age_ms` and `is_stale`. Read the threshold from config, never a
-   literal.
+   literal. **Age is computed from the injected clock's `now()`, never from
+   `datetime.now()`, `time.time()` or any other direct read of wall time.** A staleness test
+   against wall time is a race that passes on a fast machine and fails on a slow one; with a
+   `FixedClock` the boundary is exact and a test can sit one microsecond either side of it.
+   This is the same rule engines follow via `context.now` — the console is a different process,
+   but the reason is identical.
 7. Create `src/acsoe/console/format.py` — the string side of the number rules from
    `ui-context.md`: percentages always explicitly signed, a proper minus sign (−, U+2212) and
    never a hyphen, and money rendered at the precision of the stored `Decimal` without
@@ -41,6 +49,13 @@ is the layer every screen spec above it renders.
    is read-only except for the three commands, and spec 24 opens its own narrow read-write
    connection for the `commands` table alone. Making that structural rather than a convention
    is what keeps it true.
+9. **Prove the read-only connection is actually read-only by attempting a write.** Add a
+   negative test that issues a real `INSERT` and a real `UPDATE` through the reader's connection
+   and asserts SQLite raises on each. Asserting that the URI string contains `mode=ro`, or that
+   the connection was *opened* read-only, proves only that the code says what it meant to do — a
+   typo in the URI, a fallback path that quietly reopens read-write, or a future refactor would
+   all still pass. Same reasoning as spec 14's network guard: a guard that has never been shown
+   to fire is not a guard, it is a comment.
 
 ## Scope Limits
 
@@ -66,7 +81,11 @@ is the layer every screen spec above it renders.
   migrated-but-empty database, raising in neither case.
 - Two tests on restart detection: differing `run_id`s with an idle mode yields
   `Idle — restarted, not trading`; matching `run_id`s yields plain `Idle`.
-- A write attempted on the reader's connection is refused by SQLite.
+- A negative test **attempts** a real `INSERT` and a real `UPDATE` on the reader's connection and
+  asserts SQLite raises on each. Checking the URI or the open mode does not satisfy this.
+- Staleness is computed from the injected clock: with a `FixedClock`, one figure one microsecond
+  inside `console.stale_after_ms` is fresh and one microsecond outside it is stale — both
+  asserted, and neither test reads wall time.
 - A percentage formats as `+0.62%` / `−1.50%` with U+2212, and no money value round-trips
   through `float`.
 - `pytest tests/ -q` · `mypy --strict src/` · `ruff check src/` · `python scripts/verify.py --phase 1`

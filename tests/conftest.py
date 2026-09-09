@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -155,6 +156,42 @@ def migrated_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "acsoe.sqlite"
     migrations.apply_migrations(db_path)
     return db_path
+
+
+@pytest.fixture
+def seed_fixtures(tmp_path: Path) -> Any:
+    """B's seed generator run into a temporary database, with its named fixtures.
+
+    Returns the `SeedFixtures` object rather than the path, because `seed_now` is
+    on it and every console test that touches staleness needs a clock anchored to
+    the seed rather than to wall time. `.db_path` is on it too.
+
+    Never under `data/`: `data/` is gitignored and no test or criterion may depend
+    on anything inside it.
+    """
+    seed = pytest.importorskip(
+        "acsoe.clients.store.seed", reason="the seed generator does not exist yet"
+    )
+    return seed.seed_database(tmp_path / "acsoe.sqlite")
+
+
+@pytest.fixture
+def seeded_db(seed_fixtures: Any) -> Path:
+    """Just the path, for a test that does not care which fixtures are in it."""
+    path: Path = seed_fixtures.db_path
+    return path
+
+
+@pytest.fixture
+def seed_clock(seed_fixtures: Any) -> FixedClock:
+    """A clock standing exactly at the seed's own last moment.
+
+    The seeded timestamps have no relationship to wall time, so a console test
+    that used the real clock would find every figure hours stale and would be
+    asserting against the gap between the fixture and today rather than against
+    the console.
+    """
+    return FixedClock(datetime.fromtimestamp(seed_fixtures.seed_now / 1_000_000, tz=UTC))
 
 
 @pytest.fixture

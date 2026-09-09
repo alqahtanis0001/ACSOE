@@ -4,7 +4,9 @@
 
 ## Current Phase
 
-**Phase 0 — Structure. Green and closed**, verified 2026-09-08: 7 criteria, 7 PASS, 0 FAIL, 0 PENDING. All 16 feature specs built, all three teammates and the lead reporting nothing outstanding. **Phase 1 — Interface is next**, and is almost entirely C.
+**Phase 1 — Interface. In progress**, opened 2026-09-09. Phase 0 was re-verified green at the gate before opening it: 7 criteria, 7 PASS, 0 FAIL, 0 PENDING. Nine specs written and approved by the operator with four additions; **C is the only teammate running this phase**, and A and B have no Phase 1 work.
+
+*Phase 0 — Structure. Green and closed*, verified 2026-09-08: 7 criteria, 7 PASS, 0 FAIL, 0 PENDING. All 16 feature specs built, all three teammates and the lead reporting nothing outstanding.
 
 ## Current Goal
 
@@ -18,8 +20,8 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 
 | Phase | Status | Verified |
 |---|---|---|
-| 0 — Structure | **Green** | 2026-09-08 — 7 PASS, 0 FAIL, 0 PENDING |
-| 1 — Interface | Ready | — |
+| 0 — Structure | **Green** | 2026-09-08 — 7 PASS, 0 FAIL, 0 PENDING; re-verified 2026-09-09 at the Phase 1 gate, same result |
+| 1 — Interface | **In progress** | Opened 2026-09-09. Mid-phase the bar is no FAIL; PENDING is expected |
 | 2 — Data spine | Blocked on 1 | — |
 | 3 — Economics | Blocked on 2 | — |
 | 4 — Memory and replay | Blocked on 3 | — |
@@ -45,12 +47,37 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 
 ## In Progress
 
-Nothing. Phase 0 is closed; Phase 1 is not yet started.
+**Phase 1 — Interface.** Nine specs, 16 to 24, all owned by C. The shared task list is `feature-specs/PHASE-1-TASKS.md`.
+
+| Spec | Title | Owner | State |
+|---|---|---|---|
+| 16 | Phase 1 criteria in `verify.py` | C | Assigned |
+| 17 | Console read layer and database wiring | C | Assigned |
+| 18 | Design tokens, stylesheet and page shell | C | Assigned |
+| 19 | Status band and open positions | C | Not started — behind the checkpoint |
+| 20 | Cycle feed and the empty state | C | Not started — behind the checkpoint |
+| 21 | History screen | C | Not started — behind the checkpoint |
+| 22 | Research views | C | Not started — behind the checkpoint |
+| 23 | WebSocket watermark push | C | Not started — behind the checkpoint |
+| 24 | Activate, Freeze and Close all | C | Not started — behind the checkpoint |
+
+**Operator checkpoint after spec 18.** C stops when the shell and tokens land and reports before starting 19. The operator wants to see the foundation before six more specs are built on it.
+
+**Ordering.** 16 first: `--phase 1` reported `1 criteria: 1 PASS` and called the phase green against an empty tree, because `docs_vocabulary` was the only criterion registered. A gate asserts nothing until its criteria exist. Then 17 (the read layer every screen renders) and 18 (the shell every screen styles); then 19 to 22 as sibling screens; then 23 and 24 over finished screens.
+
+**The four operator additions at approval**, all binding and folded into the specs:
+
+1. **Spec 22 stands** — the SHAP pane is an empty state naming Phase 5. Do not design a view for data that arrives four phases from now.
+2. **Spec 20's ordering test must be able to fail** — assert that ordering by `ts` gives a different sequence than ordering by `cycle_id` would, not just that the `ts` ordering looks right.
+3. **Spec 19's staleness reads the injected clock**, never wall time, or the test is a race.
+4. **Spec 17's read-only connection is proven by attempting a write**, not by trusting the `mode=ro` in the URI.
+
+**A and B have no Phase 1 work, and no filler was invented.** Checked before the phase opened: A's `cli/console.py`, `ConsoleConfig` and `platform/paths.py` already provide everything the console entry point needs, and every store read the console requires already exists on `StoreClient`. Phase 1 consumes B's Phase 0 surface, which is why the console is built against the seeded schema at all. Spec 17 keeps `create_app(config)` call-compatible so a phase with no A in it needs no A change.
 
 ## Next Up
 
-- **Phase 1 — Interface**, almost entirely C: the console against the seeded database, per the criteria in `ai-workflow-rules.md`.
-- **Before C starts:** `ui-context.md` specifies the status band, open positions and the cycle feed. History, the research views, the leaderboard and the SHAP view are named in the Phase 1 criteria and have **no design in any context file**, and their upstream engines do not exist until Phase 4 and Phase 5. That is a scope question for the operator, not something C should resolve by inventing a screen.
+- **The rest of Phase 1** — specs 19 to 24, released after the operator reviews the shell.
+- **Phase 2 — Data spine** once Phase 1's gate is green: engines 1, 2, 3 and 4, the historical OHLCVT loader, and the recorder engine superseding `scripts/record.py`.
 - **Deferred from Phase 0, deliberately:** widening `TOOLCHAIN` beyond `src/`. `mypy --strict scripts/` reports 2 errors in `verify.py` and `ruff check tests/` reports 2 violations, none reachable by the gate that implements them. Changing what the gate asserts belongs at a phase boundary.
 - **A's standing instruction:** `scripts/record.py` should be left running from now on. Order-book and spread history cannot be recovered retroactively, and Phase 2's `recording_report.json` criterion needs a continuous span of at least 24 hours.
 
@@ -81,6 +108,7 @@ Settled with evidence. Do not relitigate. Changing one requires the operator, no
 ## Open Questions
 
 - None blocking. The nine operator-required values are set; see below.
+- **Resolved 2026-09-09 — the console screens with no design.** History, the research views, the leaderboard and the SHAP view are named in the Phase 1 criteria and designed in no context file. Split in two at planning: history and the leaderboard have no design but do have data in the Phase 0 seed, and `ui-context.md` already grants an undesigned screen the cycle feed's table treatment, so specs 21 and 22 build them under it. The SHAP view has neither design nor data — `rejections.shap_ref` points at a Parquet artefact the training pipeline does not write until Phase 5 — so spec 22 renders an honest empty state and bans a placeholder chart. Put to the operator at approval rather than decided silently; the operator confirmed the empty state stands.
 
 ## Operator-chosen starting values (2026-09-08)
 

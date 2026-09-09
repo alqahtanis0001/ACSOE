@@ -100,12 +100,18 @@ def test_docs_vocabulary_is_registered_in_every_phase(verify_module: ModuleType)
         assert "docs_vocabulary" in names, phase
 
 
-def test_phase_zero_registers_the_six_criteria_and_nothing_from_later_phases(
+def test_each_phase_registers_its_own_criteria_and_no_others(
     verify_module: ModuleType,
 ) -> None:
-    """Spec 00 scope limit: later phases add their own."""
-    phase0 = {c.name for c in verify_module._REGISTRY[0]}
-    assert phase0 == {
+    """Spec 00 scope limit: a phase's criteria belong to that phase alone.
+
+    Phase 0 is closed and its seven are frozen here. Phase 1 added the eight
+    console criteria of spec 16; phases 2 to 8 are still unwritten and carry only
+    `docs_vocabulary`, which registers everywhere. The point of asserting the
+    whole registry rather than one phase is that adding a criterion to the wrong
+    phase is silent - it would simply never run, or run a phase too early.
+    """
+    assert {c.name for c in verify_module._REGISTRY[0]} == {
         "docs_vocabulary",
         "orchestrator_empty_registry",
         "db_migrates_from_empty",
@@ -114,7 +120,18 @@ def test_phase_zero_registers_the_six_criteria_and_nothing_from_later_phases(
         "toolchain_green",
         "is_gate_matches_registry",
     }
-    for phase in range(1, verify_module.MAX_PHASE + 1):
+    assert {c.name for c in verify_module._REGISTRY[1]} == {
+        "docs_vocabulary",
+        "console_renders_seeded_screens",
+        "console_websocket_pushes_on_change",
+        "console_commands_write_rows",
+        "console_live_frame_amber",
+        "console_tokens_no_raw_hex",
+        "console_tabular_figures",
+        "console_focus_and_reduced_motion",
+        "console_restart_banner",
+    }
+    for phase in range(2, verify_module.MAX_PHASE + 1):
         assert {c.name for c in verify_module._REGISTRY[phase]} == {"docs_vocabulary"}
 
 

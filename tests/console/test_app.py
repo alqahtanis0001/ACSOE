@@ -1,4 +1,4 @@
-"""The Phase 0 console placeholder starts and answers a health check. Spec 09.
+"""The console application object. Specs 09 and 17.
 
 Driven through the **ASGI interface directly**, not through
 `fastapi.testclient.TestClient`. That is not a stylistic preference. `TestClient`
@@ -11,43 +11,60 @@ and the second is a truer test anyway: it exercises the real routing, the real
 endpoint function and the real JSON encoder, with no HTTP client and no socket
 anywhere in the path.
 
-What is deliberately asserted here is as much about what the console *is not* as
-what it is. The console holds no credentials and can never place an order
-(`ui-context.md`), so the placeholder having no write route and no client
-construction is a property worth a test rather than a comment.
+What is asserted here is as much about what the console *is not* as what it is.
+The console holds no credentials and can never place an order (`ui-context.md`),
+so its inability to reach the exchange is a property worth a test rather than a
+comment — and after spec 17 it also opens a database, which makes the *read-only*
+half of that property worth asserting from the application's side as well as the
+reader's.
 """
 
 from __future__ import annotations
 
+import inspect
 import json
+import sqlite3
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from acsoe.console.app import PLACEHOLDER_DETAIL, create_app, health_payload
+from acsoe.console.app import create_app, default_db_path, health_payload
+
+STALE_AFTER_MS = 120_000
 
 
 class _StubConfig:
     """The narrowest thing satisfying the `Config` Protocol.
 
     Written here rather than reusing the `paper_config` fixture on purpose: this
-    test must run on a tree where `config/default.yaml` is absent, and it proves
-    `create_app` needs nothing from the configuration but `mode`. If a later
-    change made the console read a threshold at construction time, this stub would
-    raise `KeyError` and say which key.
+    test must run on a tree where `config/default.yaml` is absent, and it pins
+    exactly which keys `create_app` is allowed to read. A console that started
+    reading a threshold it was not given would raise `KeyError` here and say which
+    key, rather than picking up a default nobody chose.
     """
+
+    #: Every key `create_app` may look up. One entry, deliberately.
+    ALLOWED = {"console.stale_after_ms": STALE_AFTER_MS}
 
     def __init__(self, mode: str = "paper") -> None:
         self._mode = mode
+        self.asked: list[str] = []
 
     @property
     def mode(self) -> Any:
         return self._mode
 
     def get(self, dotted_key: str, /) -> Any:
-        raise KeyError(
-            f"the Phase 0 console placeholder must not read config; it asked for {dotted_key!r}"
-        )
+        self.asked.append(dotted_key)
+        try:
+            return self.ALLOWED[dotted_key]
+        except KeyError:
+            raise KeyError(
+                f"the console may not read {dotted_key!r}; console.port, "
+                "console.poll_interval_ms and console.stale_after_ms are the three keys "
+                "it has, and only the lead adds a fourth"
+            ) from None
 
 
 async def _asgi_get(app: Any, path: str) -> tuple[int, dict[str, Any]]:
@@ -82,83 +99,175 @@ async def _asgi_get(app: Any, path: str) -> tuple[int, dict[str, Any]]:
     return status, json.loads(body) if body else {}
 
 
+@pytest.fixture
+def console_app(seeded_db: Path, seed_clock: Any) -> Any:
+    app = create_app(_StubConfig(), db_path=seeded_db, clock=seed_clock)
+    try:
+        yield app
+    finally:
+        app.state.reader.close()
+
+
+# --------------------------------------------------------------------------- #
+# The entry point A owns must keep working unchanged
+# --------------------------------------------------------------------------- #
+
+
+def test_create_app_is_still_callable_with_config_alone() -> None:
+    """Spec 17's whole reason for making both new parameters keyword-only.
+
+    `src/acsoe/cli/console.py` calls `create_app(config)` and is Agent A's file.
+    If this signature stopped accepting one positional argument, Phase 1 would
+    require an edit in A's directory — which is an escalation, not a refactor.
+    """
+    signature = inspect.signature(create_app)
+    parameters = list(signature.parameters.values())
+    assert parameters[0].name == "config"
+    assert parameters[0].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    for name in ("db_path", "clock"):
+        parameter = signature.parameters[name]
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        assert parameter.default is None
+
+
+def test_a_s_entry_point_builds_the_app_without_touching_a_database(tmp_path: Path) -> None:
+    """`acsoe console` must start on a machine where the daemon has never run.
+
+    The database file does not exist yet on a fresh clone — `data/` is gitignored
+    — so the reader connects lazily. Building the application eagerly against a
+    missing file would tie the entry point's liveness to B's schema having been
+    migrated, and an operator would meet a stack trace instead of a health check.
+    """
+    app = create_app(_StubConfig(), db_path=tmp_path / "never-created.sqlite")
+    try:
+        assert app.state.reader.db_path.exists() is False
+    finally:
+        app.state.reader.close()
+
+
+def test_the_default_database_path_comes_from_platform_paths() -> None:
+    """Resolved through `pathlib`, never assembled from string concatenation.
+
+    The target OS is Windows and a hardcoded `data/db/acsoe.sqlite` is a defect
+    waiting for a path with a space in it.
+    """
+    assert default_db_path().name == "acsoe.sqlite"
+    assert default_db_path().parent.name == "db"
+
+
+# --------------------------------------------------------------------------- #
+# Health
+# --------------------------------------------------------------------------- #
+
+
 @pytest.mark.asyncio
-async def test_health_is_served() -> None:
-    """Spec 09's whole Phase 0 requirement: it starts and serves a health response."""
-    status, body = await _asgi_get(create_app(_StubConfig()), "/health")
+async def test_health_reports_ready_and_phase_one(console_app: Any) -> None:
+    """The one field an operator looks at to tell this from the Phase 0 placeholder."""
+    status, body = await _asgi_get(console_app, "/health")
     assert status == 200
     assert body["status"] == "ok"
     assert body["mode"] == "paper"
-    assert body["console"] == "placeholder"
-    assert body["detail"] == PLACEHOLDER_DETAIL
+    assert body["console"] == "ready"
+    assert body["phase"] == 1
 
 
 @pytest.mark.asyncio
-async def test_health_reports_the_configured_mode() -> None:
+async def test_health_reports_the_configured_mode(seeded_db: Path, seed_clock: Any) -> None:
     """The mode comes from the injected config, never from an environment read.
 
     A console that reported a mode of its own could disagree with the daemon about
-    whether real money is at risk, which is the one thing the status band exists to
-    say. `trading-invariants.md` rule 1 keeps the switches in `platform/`; this only
-    echoes what it was handed.
+    whether real money is at risk, which is the one thing the status band exists
+    to say. `trading-invariants.md` rule 1 keeps the switches in `platform/`; this
+    only echoes what it was handed.
     """
-    _, body = await _asgi_get(create_app(_StubConfig(mode="replay")), "/health")
+    app = create_app(_StubConfig(mode="replay"), db_path=seeded_db, clock=seed_clock)
+    try:
+        _, body = await _asgi_get(app, "/health")
+    finally:
+        app.state.reader.close()
     assert body["mode"] == "replay"
 
 
-def test_health_payload_reads_only_the_mode() -> None:
-    """`_StubConfig.get` raises, so any other config read fails loudly here."""
-    assert health_payload(_StubConfig())["mode"] == "paper"
+def test_the_console_reads_exactly_one_config_key(seeded_db: Path, seed_clock: Any) -> None:
+    """`console.stale_after_ms` and nothing else, at construction time.
 
-
-def test_the_placeholder_exposes_nothing_but_health() -> None:
-    """Scope Limits, made executable.
-
-    The Phase 1 console has a status band, a cycle feed, a WebSocket and three
-    command endpoints. None of them are Phase 0 work, and a route appearing here
-    ahead of its phase is the failure this asserts against. `/openapi.json` is off
-    too — a schema browser on a read-only placeholder is surface with no reader.
+    `_StubConfig.get` raises on anything else, so a console that started reading a
+    fourth key — which only the lead may add — fails here and names it.
     """
-    app = create_app(_StubConfig())
-    paths = {getattr(route, "path", None) for route in app.routes}
+    config = _StubConfig()
+    app = create_app(config, db_path=seeded_db, clock=seed_clock)
+    try:
+        assert config.asked == ["console.stale_after_ms"]
+        assert health_payload(config, app.state.reader)["console"] == "ready"
+    finally:
+        app.state.reader.close()
+
+
+# --------------------------------------------------------------------------- #
+# Scope limits, made executable
+# --------------------------------------------------------------------------- #
+
+
+def test_spec_17_adds_no_route_beyond_health(console_app: Any) -> None:
+    """Spec 17's Scope Limits: no HTML, no CSS, no WebSocket, no command path.
+
+    The page is spec 18, the four screen payloads are 19 to 22, the socket is 23
+    and the three commands are 24. A route appearing here ahead of its spec is the
+    failure this asserts against. `/openapi.json` is off too — a schema browser on
+    a read-only operator instrument is surface with no reader.
+    """
+    paths = {getattr(route, "path", None) for route in console_app.routes}
     assert paths == {"/health"}
 
 
-def test_the_console_constructs_no_client_and_opens_no_database() -> None:
-    """The console holds no credentials and cannot place an order.
+def test_the_console_constructs_no_exchange_client_and_reads_no_credential() -> None:
+    """The console holds no credentials and can never place an order.
 
-    That is a property of the process, so the cheapest way to keep it true is for
-    the module to import nothing that could reach the exchange or the command
-    table. Asserted on the module's own import statements rather than on runtime
-    behaviour, because behaviour only proves the path was not taken *this* time,
+    That is a property of the *process*, so the cheapest way to keep it true is
+    for the package to import nothing that could reach the exchange or the
+    environment. Asserted on the import statements rather than on runtime
+    behaviour, because behaviour only proves the path was not taken this time
     while an absent import proves it cannot be taken at all.
+
+    Spec 17 legitimately adds `acsoe.clients.store` and `acsoe.platform`, which
+    the Phase 0 placeholder had to do without. `acsoe.clients.kraken`, `os` and
+    the credential surface are still forbidden, and `sqlite3` may appear only in
+    `reader.py`, which is the one module allowed to hold a connection.
     """
     import ast
-    import pathlib
 
-    import acsoe.console.app as module
+    import acsoe.console as package
 
-    source = pathlib.Path(str(module.__file__)).read_text(encoding="utf-8")
-    imported: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            imported.add(node.module)
-
-    forbidden = {
-        name
-        for name in imported
-        if name.startswith(("acsoe.clients", "acsoe.platform")) or name in {"sqlite3", "os"}
-    }
-    assert forbidden == set(), (
-        f"the Phase 0 console placeholder must not import {sorted(forbidden)}: "
-        "it opens no database, constructs no exchange client and reads no environment"
-    )
+    directory = Path(str(package.__file__)).parent
+    offences: list[str] = []
+    for path in sorted(directory.glob("*.py")):
+        imported: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                imported.add(node.module)
+        for name in sorted(imported):
+            if name.startswith("acsoe.clients.kraken") or name in {"os", "dotenv", "httpx"}:
+                offences.append(f"{path.name}: {name}")
+            if name == "sqlite3" and path.name != "reader.py":
+                offences.append(f"{path.name}: sqlite3 outside reader.py")
+    assert offences == [], offences
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_path_is_a_404_not_a_crash() -> None:
+async def test_an_unknown_path_is_a_404_not_a_crash(console_app: Any) -> None:
     """A liveness check aimed at the wrong path must not take the process down."""
-    status, _ = await _asgi_get(create_app(_StubConfig()), "/status-band")
+    status, _ = await _asgi_get(console_app, "/status-band")
     assert status == 404
+
+
+def test_the_application_cannot_write_to_the_database(console_app: Any) -> None:
+    """Asserted from the application's side as well as the reader's.
+
+    `app.state.reader` is the console's only handle on the database, so proving
+    the write is refused *here* is proving it for the process rather than for one
+    module.
+    """
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        console_app.state.reader.store.connection.execute("DELETE FROM commands")

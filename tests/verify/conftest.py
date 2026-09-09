@@ -525,3 +525,278 @@ def write_record_sample(root: Path, lines: tuple[str, ...]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
+
+
+# --------------------------------------------------------------------------- #
+# The Phase 1 console criteria. Spec 16.
+# --------------------------------------------------------------------------- #
+#
+# The fabricated console is a **plain ASGI application**, not a FastAPI one. That
+# is deliberate: the criteria drive the application the way uvicorn does rather
+# than through an HTTP client, so the minimal subject that satisfies them is an
+# ASGI callable and nothing more. Fabricating a FastAPI app would smuggle a
+# framework into the assertion and quietly make these tests depend on Starlette's
+# routing behaving the way the real console's does.
+
+#: A seed carrying two `runs` rows with different `run_id`s and an empty
+#: `commands` table - the two tables the console criteria actually read. It is
+#: not a stand-in for B's seed generator, which Phase 0 already gates.
+CONSOLE_SEED_MODULE = '''
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+
+BASE_TS = 1_800_000_000_000_000
+
+
+@dataclass(frozen=True)
+class SeedFixtures:
+    db_path: Path
+    seed_now: int
+
+
+def seed_database(db_path, *, seed=0):
+    db_path = Path(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS runs (
+                id INTEGER PRIMARY KEY,
+                run_id TEXT NOT NULL UNIQUE,
+                mode TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                ended_at INTEGER,
+                updated_at INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS commands (
+                id INTEGER PRIMARY KEY,
+                command TEXT NOT NULL,
+                source TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                claimed_at INTEGER,
+                consumed_at INTEGER,
+                updated_at INTEGER NOT NULL);
+            """
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO runs VALUES (1, 'run-a', 'paper', ?, ?, ?)",
+            (BASE_TS, BASE_TS + 60, BASE_TS + 60),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO runs VALUES (2, 'run-b', 'paper', ?, NULL, ?)",
+            (BASE_TS + 120, BASE_TS + 120),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return SeedFixtures(db_path=db_path, seed_now=BASE_TS + 120)
+'''
+
+
+#: `{stamp}` is spliced into the command INSERT so a test can drive the
+#: claimed/consumed assertion red without a second copy of the module.
+CONSOLE_APP_MODULE = '''
+import asyncio
+import json
+import sqlite3
+from pathlib import Path
+
+RESTART = "Idle \\u2014 restarted, not trading"
+
+PAGE = (
+    '<!doctype html><html data-mode="{{mode}}">'
+    '<head><link rel="stylesheet" href="/static/console.css"></head>'
+    '<body><a href="#feed">Cycle feed</a><table>'
+    '<tr><th class="num">Balance</th></tr>'
+    '<tr><td class="num">1000.00</td></tr>'
+    '</table></body></html>'
+)
+
+
+class _Reader:
+    """Opened through a `mode=ro` URI, as spec 17 requires of the real one."""
+
+    def __init__(self, db_path):
+        self.db_path = Path(db_path)
+        self.closed = False
+
+    def _connect(self):
+        return sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True)
+
+    def state_text(self):
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT run_id FROM runs ORDER BY started_at DESC, id DESC LIMIT 2"
+            ).fetchall()
+        finally:
+            conn.close()
+        if len(rows) >= 2 and rows[0][0] != rows[1][0]:
+            return RESTART
+        return "Idle"
+
+    def watermark(self):
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT MAX(updated_at) FROM runs").fetchone()
+        finally:
+            conn.close()
+        return int(row[0] or 0)
+
+    def close(self):
+        self.closed = True
+
+
+class _State:
+    pass
+
+
+class _App:
+    def __init__(self, config, db_path):
+        self.config = config
+        self.db_path = Path(db_path)
+        self.state = _State()
+        self.state.reader = _Reader(db_path)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket":
+            await self._websocket(scope, receive, send)
+        else:
+            await self._http(scope, send)
+
+    async def _respond(self, send, status, body, content_type):
+        await send(
+            {{
+                "type": "http.response.start",
+                "status": status,
+                "headers": [(b"content-type", content_type.encode())],
+            }}
+        )
+        await send({{"type": "http.response.body", "body": body}})
+
+    async def _http(self, scope, send):
+        path = scope["path"]
+        if scope["method"] == "POST" and path.startswith("/api/command/"):
+            await self._command(send, path.rsplit("/", 1)[-1])
+            return
+        if scope["method"] != "GET":
+            await self._respond(send, 405, b"{{}}", "application/json")
+            return
+        if path == "/":
+            body = PAGE.format(mode=str(self.config.mode)).encode()
+            await self._respond(send, 200, body, "text/html; charset=utf-8")
+            return
+        if path == "/api/state":
+            payload = {{"state": self.state.reader.state_text(), "balance": "1000.00"}}
+            body = json.dumps(payload, ensure_ascii=False).encode()
+            await self._respond(send, 200, body, "application/json")
+            return
+        if path in ("/api/feed", "/api/history", "/api/research"):
+            await self._respond(send, 200, b'{{"rows": []}}', "application/json")
+            return
+        await self._respond(send, 404, b"{{}}", "application/json")
+
+    async def _command(self, send, name):
+        if name not in ("activate", "freeze", "close_all"):
+            await self._respond(send, 404, b"{{}}", "application/json")
+            return
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO commands (command, source, created_at, claimed_at, "
+                "consumed_at, updated_at) VALUES (?, 'console', 1, {stamp}, {stamp}, 1)",
+                (name,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        await self._respond(
+            send, 200, json.dumps({{"command": name}}).encode(), "application/json"
+        )
+
+    async def _websocket(self, scope, receive, send):
+        message = await receive()
+        if message["type"] != "websocket.connect":
+            return
+        if scope["path"] != "/ws":
+            await send({{"type": "websocket.close", "code": 1000}})
+            return
+        await send({{"type": "websocket.accept"}})
+        seen = self.state.reader.watermark()
+        interval = int(self.config.get("console.poll_interval_ms")) / 1000
+        while True:
+            await asyncio.sleep(min(interval, 0.02))
+            current = self.state.reader.watermark()
+            if current != seen:
+                await send(
+                    {{"type": "websocket.send", "text": json.dumps({{"watermark": current}})}}
+                )
+                return
+
+
+def create_app(config, *, db_path=None, clock=None):
+    return _App(config, db_path)
+'''
+
+
+TOKENS_CSS = """\
+:root {
+  --ground: #12161A;
+  --surface: #1A2027;
+  --text: #E4E9ED;
+  --live: #D9A441;
+  --accent: #5B8FB9;
+}
+"""
+
+CONSOLE_CSS = """\
+body { background: var(--ground); color: var(--text); }
+html[data-mode="live"] { border: 3px solid var(--live); }
+.num { font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.flash { animation: flash 200ms ease-out 1; }
+@media (prefers-reduced-motion: reduce) {
+  .flash { animation: none; }
+}
+"""
+
+
+def fabricate_console(
+    root: Path,
+    *,
+    tokens_css: str = TOKENS_CSS,
+    console_css: str = CONSOLE_CSS,
+    app_module: str | None = None,
+    command_stamp: str = "NULL",
+) -> None:
+    """Write a minimal console - app, seed, tokens and stylesheet - into `root`.
+
+    `command_stamp` is spliced into the `commands` INSERT so a test can make the
+    console stamp `claimed_at`/`consumed_at` itself and prove
+    `console_commands_write_rows` goes red on it. A console that marked its own
+    command consumed would let a kill switch be swallowed without ever being
+    applied, which is the failure the criterion exists to catch.
+    """
+    source = app_module if app_module is not None else CONSOLE_APP_MODULE
+    fabricate_package(
+        root,
+        {
+            "acsoe.console.app": source.format(stamp=command_stamp),
+            "acsoe.clients.store.seed": CONSOLE_SEED_MODULE,
+        },
+    )
+    static = root / "src" / "acsoe" / "console" / "static"
+    static.mkdir(parents=True, exist_ok=True)
+    (static / "tokens.css").write_text(tokens_css, encoding="utf-8")
+    (static / "console.css").write_text(console_css, encoding="utf-8")
+
+
+@pytest.fixture
+def console_tree(tree_with_harness: Path) -> Path:
+    """A tree carrying the documents, `tests/`, `config/` and a fabricated console.
+
+    `tree_with_harness` rather than `unbuilt_tree`: every console criterion builds
+    its `Config` out of `tests.harness.doubles`, which reads `config/default.yaml`.
+    """
+    fabricate_console(tree_with_harness)
+    return tree_with_harness

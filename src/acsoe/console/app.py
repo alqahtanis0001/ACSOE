@@ -1,103 +1,160 @@
-"""The console application object — a **Phase 0 placeholder**.
+"""The console application object.
 
-`acsoe console` (Agent A, `cli/console.py`) imports `create_app` from here and hands
-the resulting object to uvicorn. Spec 09 fixes what that object has to do in Phase 0
-and nothing more: *"In Phase 0 the app is a placeholder; C builds it in Phase 1. It
-must start and serve a health response."*
+``acsoe console`` (Agent A, ``cli/console.py``) imports :func:`create_app` from
+here and hands the resulting object to uvicorn. **The signature stays
+call-compatible with ``create_app(config)``**: the two new parameters are
+keyword-only and both default, so A's entry point needs no change and is not
+edited.
 
-So this module is deliberately, aggressively small. Everything `ui-context.md`
-describes — the status band, open positions, the cycle feed, the WebSocket that
-pushes on a moving `updated_at` watermark, and the three commands — is **Phase 1**
-and is not started here. Building any of it now would exceed spec 09's Scope Limits,
-and it would be built against a database seeded by work that is still landing.
+Spec 17 builds the *read layer* and nothing above it. There is deliberately no
+markup, no stylesheet, no WebSocket and no write route in this file yet — those
+are specs 18 to 24. What changed from the Phase 0 placeholder is that the
+application now opens a database and can answer questions about it:
 
-What this placeholder deliberately does *not* do, and why each one matters:
+* ``db_path`` is injected, defaulting to ``runtime_paths().db / "acsoe.sqlite"``.
+  That default is the real one an operator gets; the injection is what lets a
+  test and ``scripts/verify.py`` point the console at a seeded temporary database
+  instead. ``data/`` is gitignored, so a check that could only read the default
+  path could not pass on a fresh clone.
+* ``clock`` is injected, defaulting to :class:`~acsoe.platform.clock.SystemClock`.
+  Staleness is computed from it and never from wall time. Engines follow the same
+  rule through ``context.now``; the console is a different process, but a
+  staleness test against ``datetime.now()`` is a race either way.
 
-* **It opens no database connection.** The console is a separate process sharing
-  only SQLite with the daemon; opening that file at import time would make
-  `acsoe console` fail on a fresh clone that has not migrated yet, and would tie
-  the entry point's liveness to B's schema.
-* **It constructs no exchange client and reads no credential.** `ui-context.md`:
-  "The console holds no credentials and can never place an order." That is a
-  security property of the process, so the cheapest way to keep it true is for the
-  console package to never import `clients/kraken/` at all.
-* **It exposes no write path.** The three commands write rows to the `commands`
-  table. There is no such endpoint here, so this process cannot change the
-  daemon's state by any route.
+Two properties of the Phase 0 placeholder are kept, because they are security
+properties of the process rather than conveniences:
 
-The health payload's shape is not arbitrary: `status`, `mode` and `console` match
-Agent A's fallback `build_placeholder_app` key-for-key, so the entry point behaves
-identically whether or not this module exists. `console` reads `"placeholder"` in
-Phase 0 and becomes `"ready"` when the Phase 1 console lands, which gives an
-operator one field to look at to tell the two apart.
+* **It constructs no exchange client and reads no credential.**
+  ``ui-context.md``: "The console holds no credentials and can never place an
+  order." The cheapest way to keep that true is for this package never to import
+  ``clients/kraken/`` at all.
+* **It cannot write to the database.** The reader's connection is opened
+  ``mode=ro``; see ``console/reader.py``. Spec 24 will add one narrow read-write
+  path for the ``commands`` table and nothing else.
+
+The health payload's ``console`` field reads ``"ready"`` from Phase 1 onward, and
+``phase`` reads ``1``. That is the one field an operator looks at to tell a
+running console from the placeholder that preceded it.
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI
 
+from acsoe.console.reader import ConsoleReader
+from acsoe.platform.clock import Clock, SystemClock
+from acsoe.platform.paths import runtime_paths
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from acsoe.core.contracts import Config
 
-__all__ = ["PLACEHOLDER_DETAIL", "create_app", "health_payload"]
+__all__ = ["DATABASE_FILENAME", "console_detail", "create_app", "default_db_path", "health_payload"]
 
 
-PLACEHOLDER_DETAIL = (
-    "Phase 0 placeholder. The console entry point starts and answers a health "
-    "check; the status band, positions, cycle feed, WebSocket and commands are "
-    "Phase 1."
-)
+#: The database file name, fixed by B's layout in ``architecture-context.md``.
+DATABASE_FILENAME = "acsoe.sqlite"
 
 
-def health_payload(config: Config) -> dict[str, Any]:
-    """The body of `GET /health`.
+def default_db_path() -> Path:
+    """Where the daemon's database lives when nothing was injected.
+
+    Resolved through ``platform/paths.py`` rather than assembled here, because
+    the target OS is Windows and a hardcoded ``data/db/acsoe.sqlite`` is a string
+    concatenation waiting for a path with a space in it.
+    """
+    return runtime_paths().db / DATABASE_FILENAME
+
+
+def console_detail(reader: ConsoleReader) -> str:
+    """One line an operator can read to see what this process is attached to."""
+    return (
+        f"Read-only console over {reader.db_path}. "
+        f"Figures older than {reader.stale_after_ms}ms render stale."
+    )
+
+
+def health_payload(config: Config, reader: ConsoleReader) -> dict[str, Any]:
+    """The body of ``GET /health``.
 
     Split out from the route so a test can assert the payload without standing up
-    an HTTP server, and so the *only* configuration this module touches is visible
-    in one place: `config.mode`, and nothing else.
-
-    `mode` is included because it is the one fact an operator checking liveness
-    actually needs. It is read through the `Config` Protocol rather than an
+    an HTTP server. ``mode`` is read through the `Config` Protocol rather than an
     environment variable, so it can never disagree with what the daemon loaded.
-    Reporting it here is not a live-mode switch: `trading-invariants.md` rule 1
-    requires all three switches through `platform/live_guard.py`, and this console
-    reads a value it can neither set nor promote.
+    Reporting it is not a live-mode switch: ``trading-invariants.md`` rule 1 keeps
+    all three switches in ``platform/live_guard.py``, and this console reads a
+    value it can neither set nor promote.
     """
     return {
         "status": "ok",
         "mode": config.mode,
-        "console": "placeholder",
-        "phase": 0,
-        "detail": PLACEHOLDER_DETAIL,
+        "console": "ready",
+        "phase": 1,
+        "detail": console_detail(reader),
     }
 
 
-def create_app(config: Config) -> FastAPI:
+def create_app(
+    config: Config,
+    *,
+    db_path: Path | None = None,
+    clock: Clock | None = None,
+) -> FastAPI:
     """Build the console application.
 
-    A factory rather than a module-level `app` object on purpose. A module-level
-    instance would be constructed at import time, which means `import
-    acsoe.console.app` — something `mypy`, `ruff` and any Phase 1 test will do —
-    would build an application before a validated `Config` exists. The factory also
-    lets a test pass a fake `Config` without touching `config/default.yaml`.
+    A factory rather than a module-level ``app`` object on purpose. A module-level
+    instance would be constructed at import time, which means ``import
+    acsoe.console.app`` — something ``mypy``, ``ruff`` and every test will do —
+    would build an application, and open a database, before a validated `Config`
+    exists.
 
-    `docs_url` and `redoc_url` are off. The console is a local operator instrument,
-    not a public API, and an interactive schema browser on a read-only placeholder
-    is surface with no reader.
+    The reader is constructed here but **connects lazily**: ``acsoe console`` must
+    start and answer a health check on a machine where the daemon has never run
+    and the database file does not exist yet. Failing at construction would make
+    the entry point's liveness depend on B's schema having been migrated.
+
+    ``docs_url`` and ``redoc_url`` are off. The console is a local operator
+    instrument, not a public API.
     """
+    reader = ConsoleReader(
+        default_db_path() if db_path is None else Path(db_path),
+        clock=SystemClock() if clock is None else clock,
+        stale_after_ms=int(config.get("console.stale_after_ms")),
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        """Close the database when the server stops.
+
+        A lifespan handler rather than `@app.on_event("shutdown")`, which FastAPI
+        deprecates. It matters on Windows more than elsewhere: SQLite holds the
+        file open until the connection is closed, and a console that leaked its
+        reader would leave the daemon's database locked after the process that
+        was only *reading* it had gone.
+        """
+        try:
+            yield
+        finally:
+            reader.close()
+
     app = FastAPI(
         title="ACSOE console",
-        version="0",
-        summary="Phase 0 placeholder. The operator console is built in Phase 1.",
+        version="1",
+        summary="Local read-only operator console.",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=lifespan,
     )
+    # Held on `app.state` so a test or `scripts/verify.py` can release the file
+    # handle without running a full server lifespan.
+    app.state.reader = reader
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return health_payload(config)
+        return health_payload(config, reader)
 
     return app

@@ -27,7 +27,10 @@ database.
 5. Percentages are explicitly signed with U+2212 for negatives, through spec 17's
    `format.py`. Colour reinforces the sign; it is never the only signal.
 6. Any figure older than `console.stale_after_ms` renders at 50% opacity with its age beside it.
-   Stale data must look stale.
+   Stale data must look stale. **The age comes from the clock injected into `create_app`, never
+   from a direct read of wall time** — spec 17 item 6. A test that renders a figure and waits for
+   it to age is a race; a test that hands the app a `FixedClock` and moves it is deterministic,
+   and it can sit exactly on both sides of the threshold.
 7. The band is fixed and never scrolls. The positions region scrolls with the rest of the page.
 
 ## Scope Limits
@@ -50,6 +53,9 @@ database.
   not an empty table.
 - Two tests on the State field: differing `run_id`s with idle mode renders
   `Idle — restarted, not trading`; matching `run_id`s renders plain `Idle`.
-- A figure older than `console.stale_after_ms` renders at 50% opacity with its age shown.
+- Staleness is tested with an injected `FixedClock`, not by sleeping: with the clock set one
+  microsecond inside `console.stale_after_ms` the figure renders normally, and one microsecond
+  outside it renders at 50% opacity with its age shown. Neither test reads wall time, and
+  neither sleeps.
 - Every numeric cell carries the tabular-figure class; a negative percentage renders with U+2212.
 - `pytest tests/ -q` · `mypy --strict src/` · `ruff check src/` · `python scripts/verify.py --phase 1`

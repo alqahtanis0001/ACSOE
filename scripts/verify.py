@@ -22,6 +22,7 @@ Owner: C - Interface and models. Specs 00, 01, 02.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import importlib
 import importlib.util
@@ -29,10 +30,12 @@ import inspect
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -1498,6 +1501,1000 @@ def check_is_gate_matches_registry(ctx: VerifyContext) -> Outcome:
 
 
 # --------------------------------------------------------------------------- #
+# Phase 1 - the console. Spec 16.
+# --------------------------------------------------------------------------- #
+#
+# Eight criteria, all PENDING on the tree they were written against, exactly as
+# the seven Phase 0 criteria were. The subjects are specs 17 to 24.
+#
+# Two rules cut across all eight and are the reason several of them look longer
+# than the sentence in the spec:
+#
+# * **No criterion may read `data/`, `logs/` or `models/`.** They are gitignored,
+#   so a criterion that depends on one cannot pass on a fresh clone. Every
+#   criterion that needs rows seeds its own temporary database through B's
+#   `seed_database` and hands the path to `create_app(config, db_path=...)`.
+# * **No criterion may need a browser, a headless engine or a network fetch.**
+#   The four static criteria read `static/` and `templates/` off disk; the four
+#   dynamic ones drive the application through the ASGI interface the way uvicorn
+#   does, with no HTTP client and no socket anywhere in the path.
+
+CONSOLE_PACKAGE = Path("src") / "acsoe" / "console"
+CONSOLE_STATIC = CONSOLE_PACKAGE / "static"
+CONSOLE_TEMPLATES = CONSOLE_PACKAGE / "templates"
+TOKENS_CSS = CONSOLE_STATIC / "tokens.css"
+
+#: What the console has to expose for these criteria to check anything. Named in
+#: one place so a PENDING message can say what is missing rather than only that
+#: something is.
+CONSOLE_CONTRACT = (
+    "expected: acsoe.console.app.create_app(config, *, db_path=None, clock=None) "
+    "serving GET / (spec 18), GET /api/state, /api/feed, /api/history, /api/research "
+    "(specs 19-22), WS /ws (spec 23), POST /api/command/{activate|freeze|close_all} "
+    "(spec 24)"
+)
+
+#: The page and the four screen payloads. `/api/state` carries both the status
+#: band and the open-positions region - they are one screen in `ui-context.md`.
+CONSOLE_SCREENS = (
+    ("/", "the page shell"),
+    ("/api/state", "status band and open positions"),
+    ("/api/feed", "cycle feed"),
+    ("/api/history", "history"),
+    ("/api/research", "research views"),
+)
+
+CONSOLE_COMMANDS = ("activate", "freeze", "close_all")
+
+#: `ui-context.md`: the State field when the daemon's `run_id` has changed and the
+#: mode is idle. The em dash is part of the string the operator reads, so it is
+#: matched literally - but it is never *printed* into a criterion message, because
+#: this script's stdout is a Windows console and cp1252 cannot encode it.
+RESTART_STATE_TEXT = "Idle — restarted, not trading"
+
+#: The same string as a JSON payload might carry it. Starlette encodes with
+#: `ensure_ascii=False`, so the literal form is what actually arrives; the escaped
+#: form is accepted too so the criterion does not turn into an assertion about
+#: which JSON encoder a later spec happened to pick.
+RESTART_STATE_ESCAPED = RESTART_STATE_TEXT.replace("—", "\\u2014")
+
+KEY_POLL_INTERVAL = "console.poll_interval_ms"
+
+WS_ACCEPT_TIMEOUT_S = 10.0
+
+
+@contextlib.contextmanager
+def console_workspace() -> Iterator[Path]:
+    """A temporary directory that is removed best-effort.
+
+    Not `TemporaryDirectory`. SQLite on Windows keeps the file handle open until
+    the connection is closed, and a console application that holds a reader open
+    one moment longer than the criterion does turns cleanup into a
+    `PermissionError` - which `run_criterion` would report as a FAIL of the
+    console rather than of the temporary directory. The database is a throwaway;
+    failing to delete it is not a verdict about anything.
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="acsoe-verify-console-"))
+    try:
+        yield tmp
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def seeded_console_db(directory: Path) -> tuple[Path | None, Outcome | None]:
+    """Seed a throwaway database. Must be called inside `root_import_path`."""
+    seed_mod, problem = try_import("acsoe.clients.store.seed")
+    if seed_mod is None:
+        return None, problem or pending("acsoe.clients.store.seed does not exist yet")
+    seed_fn, missing = module_attr(seed_mod, "seed_database")
+    if seed_fn is None:
+        return None, pending(missing)
+    db_path = directory / "acsoe.sqlite"
+    seed_fn(db_path)
+    if not db_path.is_file():
+        return None, failed("seed_database created no database file")
+    return db_path, None
+
+
+def console_config(mode: str | None = None) -> tuple[Any, Outcome | None]:
+    """A `Config` for the console, optionally with `mode` overridden.
+
+    Built from the shared test double rather than from `platform/config.py` on
+    purpose. `platform/config.py` refuses `mode: live` until Phase 8 and that
+    refusal is not to be weakened to make a criterion convenient, so
+    `console_live_frame_amber` fabricates its live config here instead of editing
+    `config/default.yaml`.
+    """
+    module, problem = try_import("tests.harness.doubles")
+    if module is None:
+        return None, problem
+    loader, missing = module_attr(module, "load_default_config")
+    if loader is None:
+        return None, pending("test doubles unavailable: " + missing)
+    config = loader()
+    if mode is None:
+        return config, None
+    cls, missing = module_attr(module, "MappingConfig")
+    if cls is None:
+        return None, pending("test doubles unavailable: " + missing)
+    data = dict(config.as_dict())
+    data["mode"] = mode
+    return cls(data), None
+
+
+def console_app(
+    config: Any, db_path: Path
+) -> tuple[Any, Outcome | None]:
+    """Build the console over a seeded database. Inside `root_import_path`.
+
+    The `db_path` keyword is what makes every criterion here able to run on a
+    fresh clone: without it the console would open `data/db/acsoe.sqlite`, which
+    is gitignored and may not exist.
+    """
+    module, problem = try_import("acsoe.console.app")
+    if module is None:
+        return None, problem or pending("acsoe.console.app does not exist yet")
+    factory, missing = module_attr(module, "create_app")
+    if factory is None:
+        return None, pending(missing + " (" + CONSOLE_CONTRACT + ")")
+    try:
+        parameters = inspect.signature(factory).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if "db_path" not in parameters:
+        return None, pending(
+            "acsoe.console.app.create_app does not accept `db_path` yet (" + CONSOLE_CONTRACT + ")"
+        )
+    return factory(config, db_path=db_path), None
+
+
+def close_console(app: Any) -> None:
+    """Release whatever the application is holding the database open with."""
+    reader = getattr(getattr(app, "state", None), "reader", None)
+    closer = getattr(reader, "close", None)
+    if callable(closer):
+        with contextlib.suppress(Exception):
+            closer()
+
+
+# --- driving an ASGI application without an HTTP client -------------------- #
+
+
+@dataclass(frozen=True)
+class AsgiResponse:
+    status: int
+    body: bytes
+
+    @property
+    def text(self) -> str:
+        return self.body.decode("utf-8", errors="replace")
+
+
+def _http_scope(method: str, path: str) -> dict[str, Any]:
+    headers = [(b"host", b"console.verify")]
+    if method != "GET":
+        headers.append((b"content-length", b"0"))
+    return {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": headers,
+        "client": ("verify", 0),
+        "server": ("console.verify", 80),
+    }
+
+
+async def _call_asgi(app: Any, method: str, path: str) -> AsgiResponse:
+    sent: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    await app(_http_scope(method, path), receive, send)
+    status = next((m["status"] for m in sent if m["type"] == "http.response.start"), 0)
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    return AsgiResponse(int(status), body)
+
+
+def asgi_request(app: Any, method: str, path: str) -> AsgiResponse:
+    """One request, driven the way uvicorn drives it.
+
+    Deliberately not `fastapi.testclient.TestClient`: it subclasses `httpx.Client`,
+    and the repository's network guard patches `httpx.Client.send` for every test -
+    so a criterion exercised under pytest would raise before reaching the
+    in-process transport. Calling the application directly also exercises the real
+    routing, endpoint and encoder with no socket anywhere in the path.
+    """
+    return asyncio.run(_call_asgi(app, method, path))
+
+
+@dataclass(frozen=True)
+class WsProbe:
+    """What a WebSocket probe saw. `accepted` False means there is no endpoint."""
+
+    accepted: bool
+    pushed: bool
+    elapsed_ms: float
+    detail: str
+
+
+async def _probe_websocket(
+    app: Any, path: str, *, on_open: Callable[[], None], budget_s: float
+) -> WsProbe:
+    inbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    outbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    async def receive() -> dict[str, Any]:
+        return await inbound.get()
+
+    async def send(message: dict[str, Any]) -> None:
+        await outbound.put(message)
+
+    scope: dict[str, Any] = {
+        "type": "websocket",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "scheme": "ws",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"console.verify")],
+        "client": ("verify", 0),
+        "server": ("console.verify", 80),
+        "subprotocols": [],
+    }
+
+    await inbound.put({"type": "websocket.connect"})
+    task = asyncio.ensure_future(app(scope, receive, send))
+    try:
+        try:
+            first = await asyncio.wait_for(outbound.get(), timeout=WS_ACCEPT_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            return WsProbe(False, False, 0.0, "the application never answered the handshake")
+        if first.get("type") != "websocket.accept":
+            return WsProbe(False, False, 0.0, "handshake answered with " + str(first.get("type")))
+
+        on_open()
+        started = time.monotonic()
+        while True:
+            remaining = budget_s - (time.monotonic() - started)
+            if remaining <= 0:
+                return WsProbe(True, False, budget_s * 1000, "no push inside the budget")
+            try:
+                message = await asyncio.wait_for(outbound.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                return WsProbe(True, False, budget_s * 1000, "no push inside the budget")
+            elapsed_ms = (time.monotonic() - started) * 1000
+            if message.get("type") == "websocket.send":
+                return WsProbe(True, True, elapsed_ms, "pushed")
+            if message.get("type") == "websocket.close":
+                return WsProbe(True, False, elapsed_ms, "the endpoint closed the socket")
+    finally:
+        await inbound.put({"type": "websocket.disconnect", "code": 1000})
+        task.cancel()
+        # `CancelledError` is a BaseException, so `suppress(Exception)` does not
+        # catch it and the cancellation the probe itself asked for would surface
+        # as a criterion that raised. An endpoint that never returns is the normal
+        # case here - a push loop is supposed to run until the socket closes.
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+
+def probe_websocket(app: Any, path: str, *, on_open: Callable[[], None], budget_s: float) -> WsProbe:
+    return asyncio.run(_probe_websocket(app, path, on_open=on_open, budget_s=budget_s))
+
+
+# --- reading the stylesheet without a browser ------------------------------ #
+
+_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+
+
+@dataclass(frozen=True)
+class CssRule:
+    at_context: str  # the enclosing at-rule preludes, joined; "" at top level
+    selector: str
+    block: str
+
+
+def css_rules(text: str) -> list[CssRule]:
+    """Every declaration block in a stylesheet, with its enclosing at-rules.
+
+    A deliberately small brace scanner rather than a CSS parser. It has to do
+    exactly two things these criteria depend on: keep a rule's selector attached
+    to its declarations, and keep the `@media (prefers-reduced-motion: reduce)`
+    prelude attached to the rules inside it. Anything more would be a dependency
+    this project has not declared.
+    """
+    stripped = _CSS_COMMENT.sub(" ", text)
+    rules: list[CssRule] = []
+
+    def scan(chunk: str, context: str) -> None:
+        position = 0
+        while True:
+            opened = chunk.find("{", position)
+            if opened == -1:
+                return
+            prelude = chunk[position:opened].strip()
+            depth = 1
+            index = opened + 1
+            while index < len(chunk) and depth:
+                if chunk[index] == "{":
+                    depth += 1
+                elif chunk[index] == "}":
+                    depth -= 1
+                index += 1
+            body = chunk[opened + 1 : index - 1]
+            if prelude.startswith("@"):
+                inner = (context + " " + prelude).strip()
+                if "{" in body:
+                    scan(body, inner)
+                else:
+                    rules.append(CssRule(context, prelude, body))
+            else:
+                rules.append(CssRule(context, prelude, body))
+            position = index
+
+    scan(stripped, "")
+    return rules
+
+
+def css_declarations(block: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for statement in block.split(";"):
+        if ":" not in statement:
+            continue
+        name, _, value = statement.partition(":")
+        pairs.append((name.strip().lower(), value.strip()))
+    return pairs
+
+
+def console_stylesheets(root: Path) -> dict[Path, str]:
+    directory = root / CONSOLE_STATIC
+    if not directory.is_dir():
+        return {}
+    return {
+        path.relative_to(root): path.read_text(encoding="utf-8")
+        for path in sorted(directory.rglob("*.css"))
+    }
+
+
+# --------------------------------------------------------------------------- #
+# console_renders_seeded_screens
+# --------------------------------------------------------------------------- #
+
+
+def check_console_renders_seeded_screens(ctx: VerifyContext) -> Outcome:
+    """Every screen answers over a seeded database.
+
+    A screen that raises, 500s or returns an empty body is a FAIL. A screen that
+    is not routed at all is PENDING - that is specs 19 to 22 not having landed,
+    which is orderly progress rather than a defect.
+    """
+    with root_import_path(ctx.root), console_workspace() as tmp:
+        db_path, early = seeded_console_db(tmp)
+        if db_path is None:
+            return early or pending("no seeded database")
+        config, early = console_config()
+        if config is None:
+            return early or pending("no config to build the console with")
+        app, early = console_app(config, db_path)
+        if app is None:
+            return early or pending("the console application does not exist yet")
+
+        absent: list[str] = []
+        problems: list[str] = []
+        answered: list[str] = []
+        try:
+            for path, screen in CONSOLE_SCREENS:
+                try:
+                    response = asgi_request(app, "GET", path)
+                except Exception as exc:  # a raising screen is a FAIL, never a crash
+                    problems.append(screen + " (" + path + ") raised " + type(exc).__name__)
+                    continue
+                if response.status == 404:
+                    absent.append(screen + " (" + path + ")")
+                elif response.status != 200:
+                    problems.append(screen + " (" + path + ") answered " + str(response.status))
+                elif not response.body.strip():
+                    problems.append(screen + " (" + path + ") returned an empty body")
+                else:
+                    answered.append(screen)
+        finally:
+            close_console(app)
+
+    if problems:
+        return failed("; ".join(problems))
+    if absent:
+        return pending("not routed yet: " + "; ".join(absent))
+    return passed("all " + str(len(answered)) + " screens answered over a seeded database")
+
+
+# --------------------------------------------------------------------------- #
+# console_websocket_pushes_on_change
+# --------------------------------------------------------------------------- #
+
+
+def check_console_websocket_pushes_on_change(ctx: VerifyContext) -> Outcome:
+    """A push arrives within twice `console.poll_interval_ms` of a database change.
+
+    The budget is read from config, never hardcoded: `ui-context.md` makes the
+    poll interval configuration and a criterion carrying its own copy of 500 would
+    stop testing the console the moment the operator retuned it.
+    """
+    config_data, problem = load_config(ctx.root)
+    if config_data is None:
+        return problem or pending("config/default.yaml does not exist yet")
+    poll_ms = config_get(config_data, KEY_POLL_INTERVAL)
+    if poll_ms is _CONFIG_MISSING:
+        return pending("config key `" + KEY_POLL_INTERVAL + "` is not defined yet")
+    if poll_ms is None:
+        return pending("the operator has not set `" + KEY_POLL_INTERVAL + "`")
+    budget_ms = int(poll_ms) * 2
+
+    with root_import_path(ctx.root), console_workspace() as tmp:
+        db_path, early = seeded_console_db(tmp)
+        if db_path is None:
+            return early or pending("no seeded database")
+        config, early = console_config()
+        if config is None:
+            return early or pending("no config to build the console with")
+        app, early = console_app(config, db_path)
+        if app is None:
+            return early or pending("the console application does not exist yet")
+
+        def move_the_watermark() -> None:
+            conn = sqlite3.connect(db_path)
+            try:
+                row = conn.execute("SELECT MAX(updated_at) FROM runs").fetchone()
+                conn.execute(
+                    "UPDATE runs SET updated_at = ? WHERE run_id = "
+                    "(SELECT run_id FROM runs ORDER BY started_at DESC LIMIT 1)",
+                    (int(row[0] or 0) + 1_000_000,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+        try:
+            probe = probe_websocket(
+                app, "/ws", on_open=move_the_watermark, budget_s=budget_ms / 1000
+            )
+        finally:
+            close_console(app)
+
+    if not probe.accepted:
+        return pending(
+            "no WebSocket endpoint at /ws yet - " + probe.detail + " (" + CONSOLE_CONTRACT + ")"
+        )
+    if not probe.pushed:
+        return failed(
+            "the watermark moved and nothing was pushed within "
+            + str(budget_ms)
+            + "ms (2 x "
+            + KEY_POLL_INTERVAL
+            + "="
+            + str(poll_ms)
+            + "): "
+            + probe.detail
+        )
+    return passed(
+        "pushed "
+        + format(probe.elapsed_ms, ".0f")
+        + "ms after the watermark moved, inside the "
+        + str(budget_ms)
+        + "ms budget"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# console_commands_write_rows
+# --------------------------------------------------------------------------- #
+
+
+def _command_rows(db_path: Path) -> list[tuple[Any, ...]]:
+    conn = sqlite3.connect(db_path)
+    try:
+        return list(
+            conn.execute(
+                "SELECT id, command, source, claimed_at, consumed_at FROM commands ORDER BY id"
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+
+
+def check_console_commands_write_rows(ctx: VerifyContext) -> Outcome:
+    """Activate, Freeze and Close-all each write exactly one correct row.
+
+    `source = 'console'`, and both `claimed_at` and `consumed_at` null: the
+    console announces an intention, and the daemon's reader is the only thing that
+    may mark one claimed or consumed. A console that stamped either would let a
+    command be swallowed without ever being applied.
+    """
+    with root_import_path(ctx.root), console_workspace() as tmp:
+        db_path, early = seeded_console_db(tmp)
+        if db_path is None:
+            return early or pending("no seeded database")
+        config, early = console_config()
+        if config is None:
+            return early or pending("no config to build the console with")
+        app, early = console_app(config, db_path)
+        if app is None:
+            return early or pending("the console application does not exist yet")
+
+        problems: list[str] = []
+        written: list[str] = []
+        try:
+            for name in CONSOLE_COMMANDS:
+                before = _command_rows(db_path)
+                response = asgi_request(app, "POST", "/api/command/" + name)
+                if response.status == 404:
+                    return pending(
+                        "no command endpoint yet: POST /api/command/"
+                        + name
+                        + " ("
+                        + CONSOLE_CONTRACT
+                        + ")"
+                    )
+                after = _command_rows(db_path)
+                seen = {row[0] for row in before}
+                added = [row for row in after if row[0] not in seen]
+                if response.status not in (200, 201, 202):
+                    problems.append(name + " answered " + str(response.status))
+                if len(added) != 1:
+                    problems.append(name + " wrote " + str(len(added)) + " rows, expected 1")
+                    continue
+                _, command, source, claimed_at, consumed_at = added[0]
+                if command != name:
+                    problems.append(name + " wrote command=" + repr(command))
+                if source != "console":
+                    problems.append(name + " wrote source=" + repr(source))
+                if claimed_at is not None or consumed_at is not None:
+                    problems.append(
+                        name
+                        + " wrote claimed_at="
+                        + repr(claimed_at)
+                        + " consumed_at="
+                        + repr(consumed_at)
+                        + ", both must be null"
+                    )
+                written.append(name)
+        finally:
+            close_console(app)
+
+    if problems:
+        return failed("; ".join(problems))
+    return passed("one correct unclaimed row each for " + ", ".join(written))
+
+
+# --------------------------------------------------------------------------- #
+# console_live_frame_amber
+# --------------------------------------------------------------------------- #
+
+_FRAME_SELECTORS = ("html", "body", ":root", ".frame", ".viewport", "[data-mode")
+_BORDER_PROPERTIES = ("border", "border-width", "border-style", "border-color")
+
+
+def _frame_border_rules(rules: Sequence[CssRule]) -> list[CssRule]:
+    """Rules that put a border on the page frame itself."""
+    found: list[CssRule] = []
+    for rule in rules:
+        selector = rule.selector.lower()
+        if not any(token in selector for token in _FRAME_SELECTORS):
+            continue
+        for name, value in css_declarations(rule.block):
+            if name in _BORDER_PROPERTIES and value.lower() not in ("none", "0", "0px"):
+                found.append(rule)
+                break
+    return found
+
+
+def check_console_live_frame_amber(ctx: VerifyContext) -> Outcome:
+    """The one bold move: a 3px `--live` frame in live, and no border in paper.
+
+    Checked from both ends. The served markup has to say which mode it is in, and
+    the stylesheet has to be the *only* place a frame border is declared and has
+    to declare it under the live selector alone - because a border applied
+    unconditionally, or a second border rule somewhere else, would put amber on a
+    paper screen and `ui-context.md` reserves amber for real money at risk.
+    """
+    stylesheets = console_stylesheets(ctx.root)
+    if not stylesheets:
+        return pending(CONSOLE_STATIC.as_posix() + " holds no stylesheet yet")
+
+    with root_import_path(ctx.root), console_workspace() as tmp:
+        db_path, early = seeded_console_db(tmp)
+        if db_path is None:
+            return early or pending("no seeded database")
+        rendered: dict[str, str] = {}
+        for mode in ("live", "paper"):
+            config, early = console_config(mode)
+            if config is None:
+                return early or pending("no config to build the console with")
+            app, early = console_app(config, db_path)
+            if app is None:
+                return early or pending("the console application does not exist yet")
+            try:
+                response = asgi_request(app, "GET", "/")
+            finally:
+                close_console(app)
+            if response.status == 404:
+                return pending("the page is not served yet (GET / is a 404)")
+            if response.status != 200:
+                return failed("GET / in " + mode + " mode answered " + str(response.status))
+            rendered[mode] = response.text
+
+    problems: list[str] = []
+    if 'data-mode="live"' not in rendered["live"]:
+        problems.append('the live page does not carry data-mode="live"')
+    if 'data-mode="paper"' not in rendered["paper"]:
+        problems.append('the paper page does not carry data-mode="paper"')
+    if 'data-mode="live"' in rendered["paper"]:
+        problems.append("the paper page claims live mode")
+
+    all_rules = [rule for text in stylesheets.values() for rule in css_rules(text)]
+    border_rules = _frame_border_rules(all_rules)
+    if not border_rules:
+        return pending("no frame border is declared in the stylesheet yet")
+    stray = [r for r in border_rules if 'data-mode="live"' not in r.selector.replace("'", '"')]
+    if stray:
+        problems.append(
+            "a frame border is declared outside the live selector: "
+            + "; ".join(r.selector for r in stray[:3])
+        )
+    live_rules = [r for r in border_rules if r not in stray]
+    if not any(
+        "3px" in value and "--live" in value
+        for rule in live_rules
+        for _, value in css_declarations(rule.block)
+    ):
+        problems.append("the live frame is not a 3px border in var(--live)")
+
+    if problems:
+        return failed("; ".join(problems))
+    return passed(
+        "live renders a 3px var(--live) frame and paper declares no border anywhere"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# console_tokens_no_raw_hex
+# --------------------------------------------------------------------------- #
+
+#: A CSS colour literal. The trailing guard stops `#E4E9ED` matching inside a
+#: longer word, and the leading guard is what keeps `href="#feed"` out of the
+#: results: `feed` is four hex digits, so a bare pattern flags every fragment
+#: link whose id happens to be spelled in a-f. A colour in CSS is never preceded
+#: by a quote; a fragment reference always is.
+_HEX_LITERAL = re.compile(r"(?<![\"'])#([0-9A-Fa-f]{3,8})(?![0-9A-Za-z_-])")
+
+_ROOT_BLOCK_SELECTORS = (":root", "html", ":root,html")
+
+CONSOLE_SCANNED_SUFFIXES = (".css", ".html", ".js", ".py")
+
+
+def _token_block_spans(text: str) -> list[tuple[int, int]]:
+    """Character spans of the `:root` declaration blocks in `tokens.css`."""
+    spans: list[tuple[int, int]] = []
+    for match in re.finditer(r"([^{}]*)\{", text):
+        selector = match.group(1).strip().replace(" ", "").lower()
+        if selector.split(",")[0] not in _ROOT_BLOCK_SELECTORS:
+            continue
+        depth = 1
+        index = match.end()
+        while index < len(text) and depth:
+            if text[index] == "{":
+                depth += 1
+            elif text[index] == "}":
+                depth -= 1
+            index += 1
+        spans.append((match.end(), index))
+    return spans
+
+
+def check_console_tokens_no_raw_hex(ctx: VerifyContext) -> Outcome:
+    """Tokens only, declared once. `tokens.css`'s `:root` block is the one exception.
+
+    `ui-context.md`: "Never use a raw hex in a component. Tokens only, declared
+    once on `:root`." A hex that reaches a component is a colour nobody can
+    retune, and it is how a reserved colour leaks out of its reservation.
+    """
+    directory = ctx.root / CONSOLE_PACKAGE
+    if not directory.is_dir():
+        return pending(CONSOLE_PACKAGE.as_posix() + " does not exist yet")
+    files = [
+        path
+        for path in sorted(directory.rglob("*"))
+        if path.is_file() and path.suffix.lower() in CONSOLE_SCANNED_SUFFIXES
+    ]
+    if not files:
+        return pending(CONSOLE_PACKAGE.as_posix() + " holds nothing to scan yet")
+
+    tokens_path = ctx.root / TOKENS_CSS
+    hits: list[str] = []
+    tokens_declared = 0
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        allowed = _token_block_spans(text) if path == tokens_path else []
+        for match in _HEX_LITERAL.finditer(text):
+            if any(start <= match.start() < end for start, end in allowed):
+                tokens_declared += 1
+                continue
+            line = text.count("\n", 0, match.start()) + 1
+            hits.append(path.relative_to(ctx.root).as_posix() + ":" + str(line) + ": " + match.group(0))
+
+    if hits:
+        shown = "; ".join(hits[:8])
+        more = " (+" + str(len(hits) - 8) + " more)" if len(hits) > 8 else ""
+        return failed(str(len(hits)) + " raw hex literal(s) outside the token block: " + shown + more)
+    if not tokens_path.is_file():
+        return pending(TOKENS_CSS.as_posix() + " does not exist yet")
+    if tokens_declared == 0:
+        return pending(TOKENS_CSS.as_posix() + " declares no token yet")
+    return passed(
+        str(tokens_declared)
+        + " hex values, all inside the "
+        + TOKENS_CSS.as_posix()
+        + " token block; "
+        + str(len(files))
+        + " console files scanned"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# console_tabular_figures
+# --------------------------------------------------------------------------- #
+
+_CELL = re.compile(r"<(t[dh])\b([^>]*)>(.*?)</\1>", re.S | re.I)
+_CLASS_ATTR = re.compile(r"class\s*=\s*[\"']([^\"']*)[\"']", re.I)
+_TAGS = re.compile(r"<[^>]+>")
+#: A cell whose text is a figure: digits, with an optional sign, separators, a
+#: percent or a currency letter group. The proper minus sign is U+2212, which is
+#: what `ui-context.md` requires in numeric output.
+_NUMERIC_TEXT = re.compile("^[+−-]?[0-9][0-9\\s.,:]*%?$")
+
+
+def check_console_tabular_figures(ctx: VerifyContext) -> Outcome:
+    """`font-variant-numeric: tabular-nums` on every numeric element, one mechanism.
+
+    Three assertions, none of which needs a browser:
+
+    1. The stylesheet resolves a tabular-figure class - `.num` - to
+       `font-variant-numeric: tabular-nums`.
+    2. That class is the **only** place `tabular-nums` is declared. Two mechanisms
+       is how one column quietly stops being tabular.
+    3. Every table cell in the served markup whose text is a figure carries it.
+
+    The residual limit is stated rather than hidden: cells built client-side are
+    covered by the convention that a cell copies its column header's classes, and
+    the header is server-rendered and checked here.
+    """
+    stylesheets = console_stylesheets(ctx.root)
+    if not stylesheets:
+        return pending(CONSOLE_STATIC.as_posix() + " holds no stylesheet yet")
+
+    rules = [(rel, rule) for rel, text in stylesheets.items() for rule in css_rules(text)]
+    tabular = [
+        (rel, rule)
+        for rel, rule in rules
+        for name, value in css_declarations(rule.block)
+        if name == "font-variant-numeric" and "tabular-nums" in value.lower()
+    ]
+    if not tabular:
+        return pending("no `font-variant-numeric: tabular-nums` rule exists yet")
+    selectors = {rule.selector.strip() for _, rule in tabular}
+    if selectors != {".num"}:
+        return failed(
+            "tabular figures are declared on " + ", ".join(sorted(selectors)) + ", not on `.num` alone"
+        )
+
+    with root_import_path(ctx.root), console_workspace() as tmp:
+        db_path, early = seeded_console_db(tmp)
+        if db_path is None:
+            return early or pending("no seeded database")
+        config, early = console_config()
+        if config is None:
+            return early or pending("no config to build the console with")
+        app, early = console_app(config, db_path)
+        if app is None:
+            return early or pending("the console application does not exist yet")
+        try:
+            response = asgi_request(app, "GET", "/")
+        finally:
+            close_console(app)
+
+    if response.status == 404:
+        return pending("the page is not served yet (GET / is a 404)")
+    if response.status != 200:
+        return failed("GET / answered " + str(response.status))
+
+    markup = response.text
+    marked = 0
+    unmarked: list[str] = []
+    for match in _CELL.finditer(markup):
+        classes = set()
+        attr = _CLASS_ATTR.search(match.group(2))
+        if attr:
+            classes = set(attr.group(1).split())
+        if "num" in classes:
+            marked += 1
+            continue
+        text = _TAGS.sub("", match.group(3)).strip()
+        if text and _NUMERIC_TEXT.match(text):
+            unmarked.append(text[:24])
+
+    if unmarked:
+        return failed(
+            str(len(unmarked)) + " numeric cell(s) without the `num` class: " + ", ".join(unmarked[:6])
+        )
+    if marked == 0:
+        return pending("no column carries the `num` class yet")
+    return passed(
+        str(marked)
+        + " numeric cell(s) carry `.num`, and `.num` is the only tabular-figure rule"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# console_focus_and_reduced_motion
+# --------------------------------------------------------------------------- #
+
+_SUPPRESSED = ("none", "0", "0px", "hidden")
+
+
+def check_console_focus_and_reduced_motion(ctx: VerifyContext) -> Outcome:
+    """The quality floor: a visible focus ring, and reduced motion honoured.
+
+    Both are asserted as *presence and non-suppression*. A `:focus-visible` rule
+    that sets `outline: none` and nothing else is worse than no rule at all,
+    because it looks like the requirement was met.
+    """
+    stylesheets = console_stylesheets(ctx.root)
+    if not stylesheets:
+        return pending(CONSOLE_STATIC.as_posix() + " holds no stylesheet yet")
+
+    rules = [rule for text in stylesheets.values() for rule in css_rules(text)]
+
+    focus_rules = [r for r in rules if ":focus-visible" in r.selector.lower()]
+    if not focus_rules:
+        return pending("no `:focus-visible` rule exists yet")
+
+    visible = False
+    suppressed: list[str] = []
+    for rule in focus_rules:
+        for name, value in css_declarations(rule.block):
+            low = value.strip().lower()
+            if name in ("outline", "outline-width", "outline-style", "box-shadow"):
+                if low in _SUPPRESSED:
+                    suppressed.append(rule.selector.strip() + " { " + name + ": " + value + " }")
+                else:
+                    visible = True
+    if suppressed:
+        return failed("the focus ring is suppressed: " + "; ".join(suppressed[:3]))
+    if not visible:
+        return failed(
+            "`:focus-visible` exists but declares no visible outline or box-shadow"
+        )
+
+    reduced = [r for r in rules if "prefers-reduced-motion" in r.at_context.lower()]
+    if not reduced:
+        return pending("no `@media (prefers-reduced-motion: reduce)` block exists yet")
+    drops_motion = any(
+        name in ("animation", "animation-name", "animation-duration", "transition", "transition-duration")
+        and (value.strip().lower() in ("none", "0s", "0ms") or "0.01ms" in value.lower())
+        for rule in reduced
+        for name, value in css_declarations(rule.block)
+    )
+    if not drops_motion:
+        return failed(
+            "the reduced-motion block does not drop the change flash - no animation or "
+            "transition is set to none"
+        )
+
+    return passed(
+        str(len(focus_rules))
+        + " visible `:focus-visible` rule(s); the reduced-motion block drops the flash"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# console_restart_banner
+# --------------------------------------------------------------------------- #
+
+
+def _keep_only_latest_run(db_path: Path) -> int:
+    """Leave one `runs` row, so the current run has no predecessor.
+
+    `runs.run_id` is `NOT NULL UNIQUE` in `db/migrations/0001_initial.sql`, so two
+    rows carrying the *same* `run_id` is a state the schema forbids and no
+    criterion can fabricate. The equivalent branch - and the one an operator
+    actually meets - is the first ever start, where there is no previous row to
+    differ from. That is what this builds.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "DELETE FROM runs WHERE run_id <> "
+            "(SELECT run_id FROM runs ORDER BY started_at DESC, id DESC LIMIT 1)"
+        )
+        conn.commit()
+        return int(conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def check_console_restart_banner(ctx: VerifyContext) -> Outcome:
+    """`Idle - restarted, not trading` when the daemon's `run_id` has changed.
+
+    The comparison is made server-side in SQLite, per `ui-context.md`: the console
+    is a separate process with no memory across its own restarts, so it may never
+    be derived from anything the browser or the app remembers.
+    """
+    with root_import_path(ctx.root), console_workspace() as tmp:
+        config, early = console_config()
+        if config is None:
+            return early or pending("no config to build the console with")
+
+        bodies: dict[str, str] = {}
+        for label in ("restarted", "first-start"):
+            directory = tmp / label
+            directory.mkdir(parents=True, exist_ok=True)
+            db_path, early = seeded_console_db(directory)
+            if db_path is None:
+                return early or pending("no seeded database")
+            if label == "first-start":
+                remaining = _keep_only_latest_run(db_path)
+                if remaining != 1:
+                    return failed("could not reduce the seed to a single run row")
+            else:
+                runs = sqlite3.connect(db_path).execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+                if int(runs) < 2:
+                    return failed("the seed carries " + str(runs) + " run rows, expected at least 2")
+
+            app, early = console_app(config, db_path)
+            if app is None:
+                return early or pending("the console application does not exist yet")
+            try:
+                response = asgi_request(app, "GET", "/api/state")
+            finally:
+                close_console(app)
+            if response.status == 404:
+                return pending("the status band is not routed yet (GET /api/state is a 404)")
+            if response.status != 200:
+                return failed("GET /api/state answered " + str(response.status))
+            bodies[label] = response.text
+
+    def says_restarted(body: str) -> bool:
+        return RESTART_STATE_TEXT in body or RESTART_STATE_ESCAPED in body
+
+    problems: list[str] = []
+    if not says_restarted(bodies["restarted"]):
+        problems.append(
+            "two runs with different run_ids and an idle mode did not read the restart banner"
+        )
+    if says_restarted(bodies["first-start"]):
+        problems.append("a first start with no previous run still read the restart banner")
+    if "Idle" not in bodies["first-start"]:
+        problems.append("a first start does not read plain `Idle`")
+
+    if problems:
+        return failed("; ".join(problems))
+    return passed(
+        "a changed run_id reads the restart banner; a first start reads plain `Idle`"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Registration
 # --------------------------------------------------------------------------- #
 
@@ -1512,6 +2509,21 @@ register(0, Criterion("seed_fixtures_present", check_seed_fixtures_present))
 register(0, Criterion("record_sample_valid", check_record_sample_valid))
 register(0, Criterion("toolchain_green", check_toolchain_green))
 register(0, Criterion("is_gate_matches_registry", check_is_gate_matches_registry))
+
+# Phase 1 only - the console. Spec 16, registered before the console it judges so
+# that specs 17 to 24 have a gate to build against from the first commit. Every
+# one of these reports PENDING until its subject lands, which is what stops
+# `--phase 1` claiming a green phase over an empty console.
+register(1, Criterion("console_renders_seeded_screens", check_console_renders_seeded_screens))
+register(
+    1, Criterion("console_websocket_pushes_on_change", check_console_websocket_pushes_on_change)
+)
+register(1, Criterion("console_commands_write_rows", check_console_commands_write_rows))
+register(1, Criterion("console_live_frame_amber", check_console_live_frame_amber))
+register(1, Criterion("console_tokens_no_raw_hex", check_console_tokens_no_raw_hex))
+register(1, Criterion("console_tabular_figures", check_console_tabular_figures))
+register(1, Criterion("console_focus_and_reduced_motion", check_console_focus_and_reduced_motion))
+register(1, Criterion("console_restart_banner", check_console_restart_banner))
 
 
 # --------------------------------------------------------------------------- #

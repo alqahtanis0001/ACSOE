@@ -5,7 +5,12 @@ Never edit the tracker directly.
 
 ## Current Task
 
-- **Claimed: specs 00, 01, 02, 14, 15.** All five are finished. Built in that order —
+- **Phase 1. Claimed: specs 16, 17, 18** — in that order, and stopping after 18 for the
+  operator checkpoint on the shell and tokens. Spec 16 first for the same reason spec 00 was
+  first in Phase 0: `verify.py --phase 1` reported `1 criteria: 1 PASS` on the current tree,
+  which is `docs_vocabulary` alone claiming a green phase over an empty console. Claimed
+  2026-09-09, before any code was written.
+- **Phase 0. Claimed: specs 00, 01, 02, 14, 15.** All five are finished. Built in that order —
   `scripts/verify.py` first, because nothing else in Phase 0 could be reported complete
   until it ran.
 
