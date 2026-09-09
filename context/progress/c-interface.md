@@ -8,7 +8,10 @@ Never edit the tracker directly.
 - **Phase 1. Claimed: specs 19, 20, 21, 22, 23, 24** — the operator's checkpoint after 18 has
   been held and cleared, and all three rulings below are folded into the specs. Claimed
   2026-09-09, before any code was written, in the order `PHASE-1-TASKS.md` sets: 19, 20, 21, 22,
-  then 23 and 24.
+  then 23 and 24. **All six are finished.** The session that built 19 to 22 was killed by an IDE
+  crash before it wrote its two files or finished the tests those files' docstrings claimed; 23
+  and 24 were not begun. Both gaps are closed and the backfill is in
+  `docs/build-log/phase-1/c-interface.md`.
 - **Phase 1. Claimed: specs 16, 17, 18** — in that order, and stopping after 18 for the
   operator checkpoint on the shell and tokens. Spec 16 first for the same reason spec 00 was
   first in Phase 0: `verify.py --phase 1` reported `1 criteria: 1 PASS` on the current tree,
@@ -52,6 +55,36 @@ Never edit the tracker directly.
   and no border at all under paper, `.num` is the only tabular-figure rule, focus is visibly
   ringed, and the reduced-motion block drops the flash. Four of the five PASSing Phase 1
   criteria are the gate on this spec.
+- **Specs 19 to 22 — the four screens.** The status band and the open-positions region
+  (`GET /api/state`), the cycle feed and its empty state (`/api/feed`), the history screen
+  (`/api/history`) and the research views (`/api/research`). `console/payloads.py` was added
+  under all four: FastAPI's `jsonable_encoder` renders a `Decimal` by calling `float()` on it,
+  so returning a view model would have floated every money field on the way out, silently. Every
+  payload emits strings and integers only and the routes return `JSONResponse`, which
+  short-circuits the encoder. The history screen is **two tables**, so `reader.history()`
+  returns a `HistoryView` carrying `.trades` and `.rejections`; that shape change is what left
+  the two stale tests below. The SHAP pane is an empty state with no `rows` key and no `chart`
+  key, per the operator's ruling.
+- **Spec 23 — the WebSocket watermark push.** `console/websocket.py` and
+  `static/console.js`. The server reads the baseline watermark **before** accepting the
+  handshake — reading it after leaves a window in which a write lands first and is never seen to
+  move — then polls `console.poll_interval_ms`, read from config on **every** iteration, and
+  pushes only when the value has changed. Nothing is pushed on connect: the page's first content
+  is a one-time fetch of the four `GET` endpoints on the socket's `open` event, which keeps
+  "did a push happen?" able to tell a working watermark from a broken one. The push payload is
+  built from the same view models as the endpoints, so the two transports cannot disagree. A
+  dropped socket is a visible state that reconnects with doubling backoff; the page never polls
+  the API on a timer. Neither `500` nor `120000` is a literal anywhere in the package, asserted
+  on the parsed AST for Python and by grep for JavaScript and markup.
+- **Spec 24 — Activate, Freeze and Close all.** `console/commands.py` and
+  `POST /api/command/{name}` for exactly three names; anything else is a 404 that writes no row.
+  Each writes one `CommandRow` with `source = console` and `claimed_at`, `claimed_by_run_id` and
+  `consumed_at` all null. The write path has its own connection, narrowed by a
+  `sqlite3.set_authorizer` that refuses every write to every table but `commands` — so the
+  scope limit is enforced by the database rather than by discipline — and spec 17's reader stays
+  `mode=ro`. `close_all` is confirmed by a step that restates the action **by its own name**;
+  the button still reads `Close all positions` throughout. The response says the command was
+  *recorded*, never that the mode changed.
 
 ## Three properties of the criteria worth carrying forward
 
@@ -77,15 +110,22 @@ and a later "simplification" would break the gate without saying so.
 
 ## In Progress
 
-- Nothing. Specs 16, 17 and 18 are complete and self-tested. **Stopped at the operator
-  checkpoint that `PHASE-1-TASKS.md` places after 18** — the operator reviews the shell and
-  tokens before six more specs are built on them. Spec 19 is not begun and is not claimed.
+- Nothing. All nine of my Phase 1 specs — 16, 17, 18, 19, 20, 21, 22, 23, 24 — are complete and
+  self-tested, and `scripts/verify.py --phase 1` reports **9 PASS, 0 FAIL, 0 PENDING**.
+- **Two test modules that spec 19-22 docstrings claimed and did not have** are now written.
+  `console/payloads.py` said `tests/console/test_payloads.py` asserts no JSON float anywhere in
+  an encoded body, and `_shap_payload` said `tests/console/test_research.py` fails on a `rows`
+  or `chart` key. Neither file existed — the IDE crash landed between writing the module and
+  writing its tests. Both exist now and assert what was claimed.
 
 ## Blocked On
 
-- Not blocked. One dependency to flag rather than a block: **spec 19's status band cannot render
-  its State field until the Running/Frozen question below is answered.** The rest of 19 — the
-  band's other fields, the open-positions region, the restart banner — is buildable today.
+- Not blocked. Nothing in Phase 1 is waiting on another agent.
+- The Running/Frozen dependency below is **answered**: the operator ruled on 2026-09-09 that the
+  fix lands in Phase 2, where the command reader in `core/` that already owns
+  `state["system"]["mode"]` also persists it and the console reads it as a fact. The State field
+  renders the two idle readings for Phase 1 and `tests/console/test_reader.py` asserts it never
+  leaves that tuple, so the deferral is enforced by the suite rather than remembered.
 
 ## Open Questions
 
@@ -173,6 +213,38 @@ operator; none is blocking the work I have done, and I have not acted on any of 
   ordered by `ts` descending with a limit, no window at all — which is a new method in
   `clients/store/client.py` and so B's to write, not mine to reach across for. Not urgent; the
   right time is whenever B next has work on the store client, and before Phase 4 fills the table.
+
+### Phase 1 — two more, opened while building 23 and 24
+
+- **`StoreClient` does not expose the command reader the orchestrator calls, so no daemon wired
+  to the real store would read a command at all.** `Orchestrator._consume_commands` reaches for
+  `store.claim_pending_commands(run_id=..., now=...)` and
+  `store.mark_command_consumed(command, now=...)`. `StoreClient` has `pending_commands()`,
+  `claim_command(command_id, *, claimed_at, run_id)` and
+  `mark_command_consumed(command_id, *, consumed_at)` — different names, different shapes. The
+  only implementation of the orchestrator's shape anywhere in the repository is a test double in
+  `tests/core/test_orchestrator.py`. The orchestrator reaches for them through `getattr` and, on
+  finding neither, logs `commands_skipped` at debug level and continues, so the failure is
+  silent. **This does not affect Phase 1** — the console writes the row and the row is correct,
+  which is all spec 24 asks — and `tests/console/test_commands.py` proves the round trip through
+  the real reader across a thin adapter that does nothing but rename. **It affects Phase 2**,
+  which is the first phase where a daemon runs and therefore the first phase where a command
+  the operator presses has to reach it. **What I am asking for:** a decision on which side the
+  rename belongs — two new methods on `StoreClient` (B's file) or an adapter in `core/` (the
+  lead's). I have edited neither and have not proposed a schema change; no column is missing and
+  no migration is involved.
+
+- **Widening the toolchain gate beyond `src/`, carried forward from Phase 0 and now due.** The
+  lead deferred it to Phase 1 deliberately as a phase-boundary decision, and Phase 1 is now at
+  its boundary. Unchanged since it was recorded: `mypy --strict scripts/` reports 2 errors in
+  `verify.py` and `ruff check tests/` reports 3 — the 2 already recorded plus `RUF001` on
+  `tests/console/test_format.py:25`, where the constant `U2212 = "−"` **must** be the U+2212
+  glyph, because it is the fixture that would otherwise start passing on a pasted hyphen. That
+  third one argues the widening needs a `noqa` policy alongside it rather than being a
+  straight switch. Related and separate: **`toolchain_green` is registered for Phase 0 only, so
+  from Phase 1 onward the phase gate does not run the tests at all** — a suite can be red while
+  `--phase 1` reports 0 FAIL, which is exactly what happened on the tree this session picked up.
+  I have not changed the registration; the lead is raising it with the operator.
 
 ## Escalations To Lead — both resolved
 

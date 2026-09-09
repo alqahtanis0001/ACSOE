@@ -365,6 +365,82 @@ td.neg {
 }
 
 /* --------------------------------------------------------------------------
+ * Notices, and the confirmation step
+ * --------------------------------------------------------------------------
+ * Three things that only ever say what happened: what a command wrote, that the
+ * socket is down, and what `Close all positions` is about to do.
+ *
+ * None of them is amber. --live is reserved for the live-mode frame and appears
+ * nowhere else in the interface; that reservation is the only reason it reads
+ * instantly. A disconnected socket is a state, not real money at risk, so it
+ * gets the hairline and the muted text like everything else.
+ */
+
+.notice {
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: var(--size-body);
+}
+
+.notice:empty {
+  display: none;
+}
+
+.notice--warn {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.confirm__question {
+  color: var(--text);
+  font-size: var(--size-body);
+  max-width: 62ch;
+}
+
+/* --------------------------------------------------------------------------
+ * The cycle feed's empty state
+ * --------------------------------------------------------------------------
+ * Stillness as information. Each stage is a label and a figure on one line, so
+ * the four read as a pipeline rather than as a paragraph; a stage the store does
+ * not record shows the sentence saying so in place of the figure.
+ */
+
+.summary {
+  padding-top: var(--space-3);
+  max-width: 62ch;
+}
+
+.summary__headline {
+  color: var(--text);
+  font-size: var(--size-body);
+  padding-bottom: var(--space-2);
+}
+
+.summary__stages {
+  list-style: none;
+}
+
+.summary__stages li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: var(--size-detail);
+}
+
+/* --------------------------------------------------------------------------
  * Quality floor
  * --------------------------------------------------------------------------
  * Not optional, and not announced in the UI.

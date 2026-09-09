@@ -28,7 +28,14 @@ from pydantic import ValidationError
 from acsoe.clients.store.contracts import RunMode, RunRow
 from acsoe.console.format import MINUS_SIGN
 from acsoe.console.reader import ConsoleReader, ReadOnlyStore, open_readonly_connection
-from acsoe.console.views import IDLE, IDLE_RESTARTED, PositionView, StatusBand
+from acsoe.console.views import (
+    IDLE,
+    IDLE_RESTARTED,
+    PositionView,
+    RejectionRowView,
+    StatusBand,
+    TradeRowView,
+)
 from acsoe.platform.clock import FixedClock
 
 STALE_AFTER_MS = 120_000
@@ -344,7 +351,11 @@ def test_every_screen_is_populated_against_the_seed(
 
     assert len(seeded_reader.positions()) == len(seed_fixtures.open_positions)
     assert seeded_reader.feed()
-    assert seeded_reader.history()
+    # `HistoryView` is a pydantic model and is truthy whether or not it holds a
+    # row, so a bare `assert seeded_reader.history()` would pass against an empty
+    # database. Both tables are asserted individually.
+    assert seeded_reader.history().trades
+    assert seeded_reader.history().rejections
     assert len(seeded_reader.leaderboard()) <= seed_fixtures.leaderboard_count
     assert seeded_reader.watermark() > 0
 
@@ -354,7 +365,12 @@ def test_every_screen_is_empty_against_an_empty_database(empty_reader: ConsoleRe
     time is not broken, it is telling the truth."""
     assert empty_reader.positions() == ()
     assert empty_reader.feed() == ()
-    assert empty_reader.history() == ()
+    # Two tables, not one: `history()` returns a `HistoryView`, so an empty
+    # history is two empty tuples rather than one. Both are asserted, because a
+    # `HistoryView` compares unequal to `()` whatever it holds and an assertion
+    # against `()` would have been a shape check dressed as an emptiness check.
+    assert empty_reader.history().trades == ()
+    assert empty_reader.history().rejections == ()
     assert empty_reader.leaderboard() == ()
     assert empty_reader.watermark() == 0
 
@@ -378,9 +394,37 @@ def test_the_feed_honours_its_limit(seeded_reader: ConsoleReader) -> None:
 def test_history_carries_trades_and_rejections_newest_first(
     seeded_reader: ConsoleReader,
 ) -> None:
-    rows = seeded_reader.history()
-    assert [r.ts for r in rows] == sorted((r.ts for r in rows), reverse=True)
-    assert {row.kind for row in rows} == {"trade", "rejection"}
+    """Two tables, each newest-first, on its own ordering key.
+
+    Spec 21 is two tables rather than one interleaved list, so `history()` returns
+    a `HistoryView` and the ordering has to be asserted on both halves — an
+    earlier version of this test iterated the view itself, which walks pydantic's
+    fields and not any row, and so asserted nothing about either table.
+
+    The keys differ and that is why both are checked. A trade is ordered by
+    `closed_at`, never `opened_at`: a trade opened earlier can close later, and
+    the store orders on `closed_at` for exactly that reason. A rejection is
+    ordered by `ts`.
+
+    The distinctness guard above each ordering assertion is what gives it teeth. A
+    column of identical timestamps is sorted ascending and descending at once, so
+    without it a reader that returned rows in insertion order would pass.
+    """
+    history = seeded_reader.history()
+
+    assert all(isinstance(row, TradeRowView) for row in history.trades)
+    assert all(isinstance(row, RejectionRowView) for row in history.rejections)
+
+    closed_at = [row.closed_at for row in history.trades]
+    rejected_at = [row.ts for row in history.rejections]
+
+    assert len(set(closed_at)) > 1, "seed must carry trades closing at different times"
+    assert len(set(rejected_at)) > 1, "seed must carry rejections at different times"
+
+    assert closed_at == sorted(closed_at, reverse=True)
+    assert rejected_at == sorted(rejected_at, reverse=True)
+    assert closed_at != sorted(closed_at)
+    assert rejected_at != sorted(rejected_at)
 
 
 def test_a_position_view_renders_every_figure_as_a_string_too(

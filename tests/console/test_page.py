@@ -336,16 +336,33 @@ def test_the_page_links_only_to_assets_this_process_serves() -> None:
         assert (STATIC_DIR / href.removeprefix("/static/")).is_file(), href
 
 
-def test_the_page_carries_no_script(
+def test_the_page_carries_exactly_one_script_and_no_inline_handler(
 ) -> None:
-    """Spec 18 adds no JavaScript. The socket is spec 23 and the commands are 24.
+    """Spec 23 adds `console.js` and nothing else may follow it.
 
-    The pane switcher is CSS on `:target`, which is keyboard reachable and
-    bookmarkable without any.
+    One script tag, `src`-ed from `/static`, deferred, and empty — an inline body
+    would be markup the stylesheet-and-script separation cannot check and the
+    served page would carry logic the file on disk does not. No `on*` attribute
+    anywhere: an inline handler is a second place behaviour lives, and it is the
+    one place a Content-Security-Policy could never allow.
+
+    The pane switcher stays CSS on `:target`, which is keyboard reachable and
+    bookmarkable without any script, so a page whose script failed to load still
+    navigates. What it does not do is offer a command: the three buttons carry
+    `disabled` in the served markup and `console.js` enables them.
     """
-    markup = TEMPLATE_PATH.read_text(encoding="utf-8").lower()
-    assert "<script" not in markup
-    assert "onclick" not in markup
+    markup = TEMPLATE_PATH.read_text(encoding="utf-8")
+    scripts = re.findall(r"<script\b([^>]*)>(.*?)</script>", markup, re.S)
+    assert len(scripts) == 1, scripts
+    attributes, body = scripts[0]
+    assert 'src="/static/console.js"' in attributes
+    assert "defer" in attributes
+    assert body.strip() == ""
+    assert not re.search(r"\son[a-z]+\s*=", markup, re.I)
+    commands = [a for a in re.findall(r"<button\b([^>]*)>", markup) if "data-command" in a]
+    assert len(commands) == 3, commands
+    for attributes in commands:
+        assert "disabled" in attributes, attributes
 
 
 # --------------------------------------------------------------------------- #

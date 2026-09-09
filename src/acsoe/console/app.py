@@ -44,10 +44,17 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from acsoe.console.commands import (
+    COMMAND_NAMES,
+    RECORDED_MESSAGE,
+    UNKNOWN_COMMAND_MESSAGE,
+    CommandWriter,
+    command_label,
+)
 from acsoe.console.payloads import (
     feed_payload,
     history_payload,
@@ -55,6 +62,7 @@ from acsoe.console.payloads import (
     state_payload,
 )
 from acsoe.console.reader import ConsoleReader
+from acsoe.console.websocket import watermark_socket
 from acsoe.platform.clock import Clock, SystemClock
 from acsoe.platform.paths import runtime_paths
 
@@ -169,15 +177,22 @@ def create_app(
     ``docs_url`` and ``redoc_url`` are off. The console is a local operator
     instrument, not a public API.
     """
+    resolved_db = default_db_path() if db_path is None else Path(db_path)
+    resolved_clock = SystemClock() if clock is None else clock
     reader = ConsoleReader(
-        default_db_path() if db_path is None else Path(db_path),
-        clock=SystemClock() if clock is None else clock,
+        resolved_db,
+        clock=resolved_clock,
         stale_after_ms=int(config.get("console.stale_after_ms")),
     )
+    # The console's only write path, and a second connection rather than a
+    # widening of the first. Spec 17's reader stays `mode=ro`; this one is
+    # read-write and refuses every table but `commands` through a SQLite
+    # authorizer. Both connect lazily.
+    writer = CommandWriter(resolved_db, clock=resolved_clock)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        """Close the database when the server stops.
+        """Close both databases when the server stops.
 
         A lifespan handler rather than `@app.on_event("shutdown")`, which FastAPI
         deprecates. It matters on Windows more than elsewhere: SQLite holds the
@@ -189,6 +204,7 @@ def create_app(
             yield
         finally:
             reader.close()
+            writer.close()
 
     app = FastAPI(
         title="ACSOE console",
@@ -202,6 +218,7 @@ def create_app(
     # Held on `app.state` so a test or `scripts/verify.py` can release the file
     # handle without running a full server lifespan.
     app.state.reader = reader
+    app.state.command_writer = writer
 
     # The stylesheets and the four self-hosted font files. Served from inside the
     # package: no CDN, no npm, no build step, and the page renders with the
@@ -251,5 +268,51 @@ def create_app(
     async def api_research() -> JSONResponse:
         """The leaderboard, and the SHAP pane's honest empty state. Spec 22."""
         return JSONResponse(research_payload(reader.research()))
+
+    @app.websocket("/ws")
+    async def ws(socket: WebSocket) -> None:
+        """Push a payload whenever the store watermark moves. Spec 23.
+
+        One-directional and read-only. `config` is passed rather than a captured
+        interval, because `console/websocket.py` reads
+        `console.poll_interval_ms` on every iteration — an operator who retunes
+        the file gets the new cadence on an already-open socket, and neither
+        number is ever written as a literal.
+        """
+        await watermark_socket(socket, reader=reader, config=config, mode=str(config.mode))
+
+    @app.post("/api/command/{name}")
+    async def api_command(name: str) -> JSONResponse:
+        """The console's only write. Spec 24.
+
+        Exactly three names; anything else is a 404 that writes no row. The
+        response says the command was **recorded**, not that the mode changed —
+        the mode changes when the orchestrator claims the row at the top of its
+        next tick. There is no confirmation parameter here on purpose: the
+        confirmation for `close_all` is a step in the interface, and a server that
+        demanded a token would be a second gate on the kill switch.
+        """
+        if name not in COMMAND_NAMES:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "unknown_command",
+                    "message": UNKNOWN_COMMAND_MESSAGE.format(
+                        name=name, names=", ".join(COMMAND_NAMES)
+                    ),
+                },
+            )
+        row = writer.append(name)
+        return JSONResponse(
+            status_code=201,
+            content={
+                "status": "recorded",
+                "command": row.command,
+                "label": command_label(name),
+                "id": row.id,
+                "created_at": row.created_at,
+                "message": RECORDED_MESSAGE.format(label=command_label(name)),
+            },
+        )
 
     return app

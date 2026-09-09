@@ -8,14 +8,15 @@
   "paper" so it is a valid, openable page on its own and so the substitution has
   exactly one site.
 
-  Spec 18 is structure and style only. Every region below is empty on purpose:
-  the status band is spec 19, the cycle feed 20, history 21, the research views
-  22, the WebSocket 23 and the three commands 24. There is no JavaScript here at
-  all — the pane switcher is CSS on :target, which is keyboard reachable and
-  bookmarkable without any.
+  Every region below is empty in the served markup and filled by console.js from
+  the payloads the server pushes. That is spec 23: the server polls the store
+  watermark at console.poll_interval_ms and pushes only when it moves; the page
+  never polls. The pane switcher stays CSS on :target — keyboard reachable and
+  bookmarkable without any script — so the one script here is only ever the data.
 
-  Nothing on this page is fetched from a third party. The two stylesheets and the
-  four font files are served from this process; the page renders with no network.
+  Nothing on this page is fetched from a third party. The two stylesheets, the
+  one script and the four font files are served from this process; the page
+  renders with no network.
 -->
 <html lang="en" data-mode="paper">
 <head>
@@ -24,6 +25,7 @@
   <title>ACSOE console</title>
   <link rel="stylesheet" href="/static/tokens.css">
   <link rel="stylesheet" href="/static/console.css">
+  <script src="/static/console.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#live">Skip to the live view</a>
@@ -34,6 +36,10 @@
     <div class="band__field band__field--balance">
       <span class="band__label" id="label-balance">Balance</span>
       <span class="band__figure num" data-field="balance" aria-labelledby="label-balance"></span>
+      <!-- Rule 5: a figure past console.stale_after_ms fades to 50% and shows its
+           age beside it. The verdict and the text are computed server-side against
+           the injected clock; the page only applies them. -->
+      <span class="age" data-age="balance"></span>
     </div>
 
     <div class="band__field">
@@ -54,15 +60,40 @@
     <div class="band__field band__field--actions">
       <div class="actions">
         <!-- Buttons say what happens, and an action keeps its name through the
-             whole flow: Freeze produces the state Frozen. They are disabled
-             until spec 24 wires them to the command table, rather than looking
-             live and silently doing nothing. -->
+             whole flow: Freeze produces the state Frozen. Each writes one row to
+             the commands table; none of them applies an effect. They carry
+             `disabled` in the served markup and console.js enables them, so a
+             page whose script failed to load offers nothing rather than offering
+             a button that silently does nothing. -->
         <button class="button" type="button" data-command="activate" disabled>Activate</button>
         <button class="button" type="button" data-command="freeze" disabled>Freeze</button>
         <button class="button" type="button" data-command="close_all" disabled>Close all positions</button>
       </div>
     </div>
   </header>
+
+  <!-- close_all ends exposure, so it is confirmed. The confirmation restates the
+       action BY ITS OWN NAME and never renames it: the button above still reads
+       `Close all positions` while this is open, and this asks about the same
+       words. A `Confirm` / `Are you sure?` step would be a different action as
+       far as the operator is concerned. -->
+  <div class="confirm" data-region="confirm" role="alertdialog" aria-labelledby="confirm-question" hidden>
+    <p class="confirm__question" id="confirm-question" data-field="confirm-question"></p>
+    <div class="actions">
+      <button class="button" type="button" data-confirm="yes">Close all positions</button>
+      <button class="button" type="button" data-confirm="no">Cancel</button>
+    </div>
+  </div>
+
+  <!-- What happened after a command was written. It says the command was
+       *recorded*, never that the mode changed — the mode changes when the
+       orchestrator claims the row at the top of its next tick, and the status
+       band shows it when it does. -->
+  <p class="notice" data-field="command-message" role="status"></p>
+
+  <!-- A dropped socket is a visible state, not a silently frozen screen. Hidden
+       while the socket is up; the page never falls back to polling the API. -->
+  <p class="notice notice--warn" data-field="connection" role="status" hidden></p>
 
   <nav class="nav" aria-label="Views">
     <a class="nav__link" href="#live">Live</a>
@@ -118,24 +149,40 @@
         </table>
       </div>
       <!-- The empty state is the main state. When nothing qualified, this says
-           what the system actually did rather than "No results". -->
+           what the system actually did rather than "No results". It is rendered
+           whether or not there are rows: it is a statement of what the system
+           did, and it stays true when a handful of rows are showing. -->
       <p class="empty" data-empty="feed">Nothing has run yet.</p>
+      <div class="summary" data-region="feed-summary">
+        <p class="summary__headline" data-field="feed-headline"></p>
+        <!-- A stage the store does not record shows what it is rather than a
+             zero. A zero in a column of counts reads as a result — "no pair
+             entered the universe" — when the truth is that nobody counted. -->
+        <ul class="summary__stages" data-rows="feed-stages"></ul>
+      </div>
     </section>
   </main>
 
-  <!-- History: closed trades and past rejections. Spec 21. -->
+  <!-- History: closed trades and past rejections. Spec 21.
+
+       Two tables, not one. A closed trade carries a quantity, an exit price and
+       two fees; a refused candidate carries an expected move and a hurdle and
+       never had a quantity at all. One table would have meant a row of blank
+       cells for whichever kind each column did not belong to, and the ordering
+       key is not even the same column — a trade orders by closed_at, because a
+       trade opened earlier can close later, and a rejection by ts. -->
   <main class="pane" id="history" tabindex="-1" aria-label="History">
-    <section class="panel" data-region="history">
+    <section class="panel" data-region="trades">
       <div class="panel__head">
-        <h2>History</h2>
-        <span class="panel__count" data-field="history-count"></span>
+        <h2>Closed trades</h2>
+        <span class="panel__count" data-field="trade-count"></span>
       </div>
       <div class="table-scroll">
         <table>
-          <caption>Closed trades and refused candidates, newest first.</caption>
+          <caption>Newest first, by the time each position closed.</caption>
           <thead>
             <tr>
-              <th scope="col">Time</th>
+              <th scope="col">Closed</th>
               <th scope="col">Pair</th>
               <th scope="col">Outcome</th>
               <th scope="col" class="num">Quantity</th>
@@ -143,13 +190,38 @@
               <th scope="col" class="num">Exit</th>
               <th scope="col" class="num">Result</th>
               <th scope="col" class="num">Change</th>
+            </tr>
+          </thead>
+          <tbody data-rows="trades"></tbody>
+        </table>
+      </div>
+      <p class="empty" data-empty="trades">No trade has closed.</p>
+    </section>
+
+    <section class="panel" data-region="rejections">
+      <div class="panel__head">
+        <h2>Refused candidates</h2>
+        <span class="panel__count" data-field="rejection-count"></span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <caption>Newest first. The counterfactual record: what was considered and turned down.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Time</th>
+              <th scope="col">Pair</th>
+              <th scope="col">Refused by</th>
+              <th scope="col" class="num">Expected move</th>
+              <th scope="col" class="num">Friction</th>
+              <th scope="col" class="num">Net edge</th>
+              <th scope="col" class="num">Hurdle</th>
               <th scope="col">Reason</th>
             </tr>
           </thead>
-          <tbody data-rows="history"></tbody>
+          <tbody data-rows="rejections"></tbody>
         </table>
       </div>
-      <p class="empty" data-empty="history">No trade has closed and nothing has been refused.</p>
+      <p class="empty" data-empty="rejections">Nothing has been refused.</p>
     </section>
   </main>
 

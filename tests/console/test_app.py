@@ -212,10 +212,14 @@ def test_the_console_exposes_nothing_beyond_the_page_and_its_assets(console_app:
     """Scope limits, made executable, and updated as each spec lands.
 
     The page and `/static` are spec 18; the four screen payloads are specs 19 to
-    22. **The set is exhaustive on purpose**: a route appearing here ahead of its
-    spec is the failure this asserts against, and the only way to add one is to
-    add it here too and say which spec it belongs to. `/openapi.json` is off: a
-    schema browser on a read-only operator instrument is surface with no reader.
+    22; `/ws` is spec 23 and `/api/command/{name}` is spec 24. **The set is
+    exhaustive on purpose**: a route appearing here ahead of its spec is the
+    failure this asserts against, and the only way to add one is to add it here
+    too and say which spec it belongs to. `/openapi.json` is off: a schema browser
+    on a read-only operator instrument is surface with no reader.
+
+    Phase 1 closes with this set complete, so from here the assertion changes
+    meaning: it stops tracking progress and starts guarding the surface.
     """
     paths = {getattr(route, "path", None) for route in console_app.routes}
     assert paths == {
@@ -226,7 +230,27 @@ def test_the_console_exposes_nothing_beyond_the_page_and_its_assets(console_app:
         "/api/feed",
         "/api/history",
         "/api/research",
+        "/ws",
+        "/api/command/{name}",
     }
+
+
+def test_there_is_exactly_one_write_route_and_it_is_the_command_table(
+    console_app: Any,
+) -> None:
+    """`ui-context.md`: the page is read-only except for three commands.
+
+    Asserted on the method rather than on the path, because a `POST` added
+    somewhere else would keep the path set above honest and still be a second
+    write path. `GET` and `HEAD` are the only other methods anything answers.
+    """
+    writing = {
+        (getattr(route, "path", None), method)
+        for route in console_app.routes
+        for method in (getattr(route, "methods", None) or set())
+        if method not in {"GET", "HEAD"}
+    }
+    assert writing == {("/api/command/{name}", "POST")}
 
 
 def test_the_console_constructs_no_exchange_client_and_reads_no_credential() -> None:
@@ -240,28 +264,67 @@ def test_the_console_constructs_no_exchange_client_and_reads_no_credential() -> 
 
     Spec 17 legitimately adds `acsoe.clients.store` and `acsoe.platform`, which
     the Phase 0 placeholder had to do without. `acsoe.clients.kraken`, `os` and
-    the credential surface are still forbidden, and `sqlite3` may appear only in
-    `reader.py`, which is the one module allowed to hold a connection.
+    the credential surface are still forbidden — spec 24 asks for exactly this
+    assertion in as many words — and `sqlite3` may appear only in the two modules
+    that hold a connection: `reader.py`, which is read-only, and `commands.py`,
+    which is read-write and refuses every table but `commands`.
+    """
+    offences: list[str] = []
+    for path, imported in sorted(_console_imports().items()):
+        for name in sorted(imported):
+            if name.startswith("acsoe.clients.kraken") or name in {"os", "dotenv", "httpx"}:
+                offences.append(f"{path}: {name}")
+            if name == "sqlite3" and path not in _CONNECTION_MODULES:
+                offences.append(f"{path}: sqlite3 outside {sorted(_CONNECTION_MODULES)}")
+    assert offences == [], offences
+
+
+#: The only two modules allowed to hold a database connection. `reader.py` is the
+#: read-only one from spec 17; `commands.py` is the narrow read-write one from
+#: spec 24. A third would be a third thing to prove cannot write the wrong table.
+_CONNECTION_MODULES = {"reader.py", "commands.py"}
+
+
+def _console_imports() -> dict[str, set[str]]:
+    """Every module name imported by each file of the console package.
+
+    Read off the import statements rather than at runtime, because behaviour only
+    proves the path was not taken this time while an absent import proves it
+    cannot be taken at all.
     """
     import ast
 
     import acsoe.console as package
 
     directory = Path(str(package.__file__)).parent
-    offences: list[str] = []
+    imports: dict[str, set[str]] = {}
     for path in sorted(directory.glob("*.py")):
-        imported: set[str] = set()
+        found: set[str] = set()
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Import):
-                imported.update(alias.name for alias in node.names)
+                found.update(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                imported.add(node.module)
+                found.add(node.module)
+        imports[path.name] = found
+    return imports
+
+
+def test_the_console_package_imports_nothing_from_the_kraken_client() -> None:
+    """Spec 24 asks for this one on its own, and it is worth having on its own.
+
+    The console holds no credentials and can never place an order. That is a
+    property of the *process*, and the cheapest way to keep it true is for the
+    package never to import the thing that could reach the exchange — including
+    transitively through a module that looks innocent. Every file is checked, not
+    just `commands.py`, because the write path is not the only place a client
+    could be constructed.
+    """
+    reaching: list[str] = []
+    for path, imported in sorted(_console_imports().items()):
         for name in sorted(imported):
-            if name.startswith("acsoe.clients.kraken") or name in {"os", "dotenv", "httpx"}:
-                offences.append(f"{path.name}: {name}")
-            if name == "sqlite3" and path.name != "reader.py":
-                offences.append(f"{path.name}: sqlite3 outside reader.py")
-    assert offences == [], offences
+            if "kraken" in name.lower():
+                reaching.append(f"{path}: {name}")
+    assert reaching == [], reaching
 
 
 @pytest.mark.asyncio

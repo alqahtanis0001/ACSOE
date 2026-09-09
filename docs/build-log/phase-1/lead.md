@@ -80,6 +80,33 @@ design a view for data that arrives in Phase 5.
 verified now, so building one would have meant a criterion that could not honestly pass. The
 empty state is the verifiable option as well as the truthful one.
 
+### The Phase 1 gate reported no failures while the suite was red
+
+**Agent:** Lead · **Task:** Phase 1 review, third crash · **Date:** 2026-09-09
+
+**What happened.** Checking the tree after the third IDE crash, `scripts/verify.py --phase 1`
+reported `7 PASS, 0 FAIL, 2 PENDING`. `pytest tests/ -q` on the same tree reported
+`2 failed, 639 passed`.
+
+**Why.** Nothing in the report was wrong. `toolchain_green` — the criterion that runs `pytest`,
+`mypy --strict` and `ruff` as subprocesses — is registered for Phase 0 only. `docs_vocabulary` is
+registered for every phase; `toolchain_green` is not. No Phase 1 criterion makes any claim about
+the test suite, so a red suite is invisible to `--phase 1` by construction.
+
+**Fix.** None yet, deliberately, and none by me. The obvious change is to register
+`toolchain_green` for every phase, but that alters what every phase asserts, which the Phase 0
+close already established belongs at a phase boundary and to the operator. `scripts/verify.py` is
+also C's file. Recorded as an open question in the tracker and raised with the operator; C was
+told explicitly not to change the registration.
+
+**Consequence.** This matters more than it looks, because "a phase is done when
+`verify.py --phase N` passes every criterion" is the project's stated definition of done, and for
+every phase after 0 that definition currently cannot see a broken test suite. It was caught only
+because run-protocol step 4 makes each agent run all four commands by hand — a procedure followed
+by a person, not a gate. Worth noting the interaction with the entry below: registering
+`toolchain_green` everywhere would also spread the intermittent seed-path crash across every
+phase's gate, so the two decisions should be taken together rather than separately.
+
 ### The seed-path crash is not a pydantic bug, and it does not need the full suite
 
 **Agent:** Lead · **Task:** Phase 1, after the second IDE crash · **Date:** 2026-09-09

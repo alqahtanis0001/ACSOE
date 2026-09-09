@@ -54,12 +54,16 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 | 16 | Phase 1 criteria in `verify.py` | C | **Done**, verified |
 | 17 | Console read layer and database wiring | C | **Done**, verified |
 | 18 | Design tokens, stylesheet and page shell | C | **Done**, verified |
-| 19 | Status band and open positions | C | Released |
-| 20 | Cycle feed and the empty state | C | Released |
-| 21 | History screen | C | Released |
-| 22 | Research views | C | Released |
-| 23 | WebSocket watermark push | C | Released |
-| 24 | Activate, Freeze and Close all | C | Released |
+| 19 | Status band and open positions | C | Substantially done — `console_restart_banner` PASSes both directions |
+| 20 | Cycle feed and the empty state | C | Substantially done — screen answers over the seed |
+| 21 | History screen | C | Substantially done — two stale tests to reconcile, see below |
+| 22 | Research views | C | Substantially done — screen answers over the seed |
+| 23 | WebSocket watermark push | C | In progress |
+| 24 | Activate, Freeze and Close all | C | In progress |
+
+**Gate at the third crash, 2026-09-09: 7 PASS, 0 FAIL, 2 PENDING.** `console_renders_seeded_screens` passes with all five screens answering over a seeded database and `console_restart_banner` passes in both directions, so 19 to 22 are built. The two PENDING are specs 23 and 24. `mypy --strict src/` clean across 33 files, `ruff check src/` clean.
+
+**Two failing tests were open at that point, both C's own**, in `tests/console/test_reader.py`: `test_every_screen_is_empty_against_an_empty_database` and `test_history_carries_trades_and_rejections_newest_first`. Spec 21 needs two tables, so `reader.history()` now returns a `HistoryView` carrying `.trades` and `.rejections` rather than a flat tuple, and both tests still assume the old shape. Handed back to C with the diagnosis and an explicit instruction not to make them pass by weakening what they assert.
 
 **Operator checkpoint after spec 18 — held and cleared 2026-09-09.** The gate read 5 PASS, 0 FAIL, 4 PENDING, the four PENDING being exactly the criteria whose subjects are specs 19 to 24. The lead re-verified independently after an IDE crash killed C's session mid-phase: 641 tests pass, `mypy --strict src/` and `ruff check src/` clean, the console serves its page with zero third-party requests, and both stylesheets serve locally. Specs 19 to 24 released after the operator ruled on the three questions below.
 
@@ -115,7 +119,8 @@ Settled with evidence. Do not relitigate. Changing one requires the operator, no
 
 ## Open Questions
 
-- None blocking. The nine operator-required values are set; see below.
+- **Open, for the operator at the Phase 1 boundary — `toolchain_green` is registered for Phase 0 only, so from Phase 1 onward the gate never runs the tests.** Found 2026-09-09: `scripts/verify.py --phase 1` reported `7 PASS, 0 FAIL, 2 PENDING` while `pytest` was reporting `2 failed, 639 passed`. Nothing in the report was wrong — no Phase 1 criterion makes a claim about the suite — but "a phase is done when `verify.py --phase N` passes every criterion" is the project's definition of done, and for every phase after 0 that definition currently cannot see a red suite. Run-protocol step 4 covers the gap by making each agent run all four commands themselves, which is why this was caught, but it depends on a person following a procedure rather than on the gate. **The obvious fix is to register `toolchain_green` for every phase, exactly as `docs_vocabulary` already is.** It is a change to what every phase asserts, so it belongs at a phase boundary and to the operator, not mid-phase and not to an agent — the same reasoning that deferred widening `TOOLCHAIN` beyond `src/` out of Phase 0. Note the two interact: registering it for every phase also spreads the intermittent seed-path crash across every phase's gate, so the crash question above should be settled first or at the same time.
+- None otherwise blocking. The nine operator-required values are set; see below.
 - **Resolved 2026-09-09 — the console screens with no design.** History, the research views, the leaderboard and the SHAP view are named in the Phase 1 criteria and designed in no context file. Split in two at planning: history and the leaderboard have no design but do have data in the Phase 0 seed, and `ui-context.md` already grants an undesigned screen the cycle feed's table treatment, so specs 21 and 22 build them under it. The SHAP view has neither design nor data — `rejections.shap_ref` points at a Parquet artefact the training pipeline does not write until Phase 5 — so spec 22 renders an honest empty state and bans a placeholder chart. Put to the operator at approval rather than decided silently; the operator confirmed the empty state stands.
 
 ## Operator-chosen starting values (2026-09-08)
