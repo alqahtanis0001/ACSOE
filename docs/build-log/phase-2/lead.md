@@ -257,3 +257,125 @@ Without the recording: engine 10's cost gate cannot be backtested, which is the 
 Why 24 hours and not one: spreads are much wider at 4am than during European trading hours. A recording covering only a working day would report costs lower than they are. The 24-hour requirement forces a full daily cycle, quiet overnight periods included, so the friction estimate is honest.
 
 It is the only input to the cost model that money cannot buy back later, which is why scripts/record.py has been running since Phase 0 and why the criterion insists on a clean unbroken day.
+
+### The recording window: 76.2% over the whole archive, 99.98% over the clean day
+
+**Agent:** Lead · **Task:** spec 27, phase close · **Date:** 2026-09-10
+
+**What happened.** The clean 24-hour run finished at `2026-09-10T14:15:30Z` and
+`scripts/recording_report.py` was run twice against the same untouched archive: once over
+everything on disk, and once windowed to the clean run.
+
+```
+full archive   2026-09-08T16:01:22Z -> 2026-09-10T15:15:44Z   47.24h
+               18 segments, 17 gaps, 17,870,629 lines
+               recorded 36.00h  missing 11.24h  recorded_fraction 0.7620
+
+clean window   2026-09-09T14:15:29Z -> 2026-09-10T14:19:59Z   24.07h
+               10 segments,  9 gaps, 11,924,857 lines
+               recorded 24.07h  missing 20.25s  recorded_fraction 0.9998
+```
+
+**Why the full-archive number is so much worse, and why it is not a recording defect.** Almost
+all of the missing 11.24 hours is a **single ten-hour silence** from `2026-09-08T16:02:17Z` to
+`2026-09-09T02:04:19Z` — 36,122 seconds of the 40,471 missing, 89% of the total — when no
+recorder was running at all. The rest is the **disk-full outage** and its aftermath: the
+recorder logging `OSError: [Errno 28] No space left on device` at `2026-09-09T13:06:37Z`, and
+the 736s, 1258s and 583s silences either side of it that are processes dying and being
+restarted. **Both causes predate the clean run**, which starts at `2026-09-09T14:15:29Z`, an
+hour after the disk incident. Neither is a property of the recorder; both are properties of the
+machine it was running on during the days the phase was being built.
+
+**Why windowing is legitimate and not a thumb on the scale.** The window is applied to the
+**report**, never to the archive. `--from` / `--to` select which frames the digest is computed
+over; nothing is deleted, rewritten, backfilled or interpolated, and the raw JSONL on disk is
+byte-identical before and after. That is invariant 11 exactly as written — *recorded data is
+immutable, corrections belong in a derived layer with the original preserved* — and the digest
+is that derived layer. The check that proves it: the full archive reports 9 gaps at or after
+the clean-run start, and the windowed report contains those same 9 gaps and no others. The
+window is a pure selection over one immutable input.
+
+**And the full-archive report is kept as evidence, not discarded.**
+`tests/fixtures/recording_report_full_archive.json` is committed beside
+`tests/fixtures/recording_report.json`. A phase that closes on a 24-hour window while quietly
+binning the report showing 47 hours at 76% is doing something this project would refuse if it
+saw anyone else do it. Both artefacts are in the tree, the criterion judges the window, and
+anybody reading the fixture directory sees both numbers.
+
+**The part that belongs in the dissertation, and it is the eighth instance.** Until this week
+`recording_span_continuous` **could not tell the two reports apart.** It required a span of at
+least 24 hours, an exact tiling of segments and gaps, and a non-empty `cause` on every gap. The
+full archive satisfies all three: 47 hours is more than 24, the tiling is exact, and every one
+of the 17 gaps carries a cause — including the ten-hour hole, which is honestly described as
+*"the recorder was not running"*. So the archive that is 76% recorded and the archive that is
+99.98% recorded **tiled identically, carried causes identically, and would have passed
+identically.** The word *continuous* in the phase row did no work at all.
+
+What closed it is a `recorded_fraction` floor, now set at **0.98** and enforced. The criterion
+prints the measured fraction beside the floor — `99.98% of the span actually recorded, floor
+98%` — so the number the gate turned on is in the output rather than buried in the code. The
+floor was deliberately not set back when the defect was found: the only archive available then
+was 49% recorded, and any floor chosen to admit it would have fixed the bar at the number we
+happened to have rather than at one anybody would choose. Setting it against a clean run is
+what made 0.98 a principled number instead of a rationalised one.
+
+**This is the eighth instance this phase of a check whose output resembles the claim while the
+claim is untrue** — after the mypy abort behind a numpy stub error, `ignore_errors=True` turning
+"do not fail" into "say nothing", the `b'"gap"'` payload match, the fabricated `EngineContext`
+that agreed with the mistake it was meant to catch, `recording_span_continuous` measuring
+elapsed time and calling it continuity, `guard_blockers == []` standing in for "empty registry"
+in three separate files, and C's shallow-copy regression test that passed with the defect it
+was written to catch deliberately reverted. **Eight in one phase, and not one of the eight was
+caught by running the test suite.** They were caught by reading source before building against
+it, by making a green test go red on purpose, and — this one — by dry-running an artefact
+before depositing it.
+
+The generalisation the phase has earned: **a gate that is satisfied by the shape of the evidence
+rather than by its content will accept fabricated evidence of the right shape.** Tiling, causes
+and elapsed time are all shape. `recorded_fraction` is content, and it is the only one of the
+four that could tell a good day from a bad one.
+
+### The intermittent fault beat the retry twice at the close, and a `tail` pipe nearly hid one
+
+**Agent:** Lead · **Task:** phase close · **Date:** 2026-09-10
+
+**What happened.** Closing the phase meant running the gates again after every documentation change — roughly **twenty gate runs in one session**, plus three direct full-suite runs. **Four runs reported FAIL: two on Phase 2, one on Phase 0, one on Phase 1.** Every one was the intermittent fault. None was a defect. The tree did not change between them, and by the end the only staged changes were Markdown.
+
+**The failing tests were different every time, and scattered across unrelated files.** That is the tell: a real defect lands in the same place twice.
+
+```
+RETRIED AFTER CRASH: pytest CRASHED: the process died with 3221226505
+(0xC0000409 STACK_BUFFER_OVERRUN) [...] the retry was clean
+```
+
+```
+FAIL  toolchain_green   pytest exit 1:
+ERROR tests/clients/store/test_seed.py::test_a_tick_with_two_blockers_contributes_one_to_the_outage
+1074 passed, 1 error in 49.72s
+(the first attempt crashed: the process died with 3221225477 (0xC0000005 ACCESS_VIOLATION))
+```
+
+```
+FAIL  toolchain_green   pytest exit 1:
+ERROR tests/engines/test_exchange.py::test_a_pair_removed_from_the_fixture_disappears_from_state
+FAILED tests/platform/test_record_format.py::test_sample_contains_no_secret_shaped_key
+1 failed, 1073 passed, 1 error in 48.16s
+```
+
+```
+FAIL  toolchain_green   pytest exit 1:
+ERROR tests/cli/test_entrypoints.py::test_the_console_port_comes_from_config_and_never_from_a_constant
+1074 passed, 1 error in 47.33s
+```
+
+**Proved spurious rather than assumed spurious.** All three named tests were run together in isolation and passed in 0.72 seconds. The staged diff at that moment contained no source file, no test file and no fixture — only the tracker and these build logs. The tree that failed and the tree that passed were the same bytes. Three further full-suite runs gave `1075 passed`, `1075 passed`, and one native crash.
+
+**The one that should worry a reader most.** `test_sample_contains_no_secret_shaped_key` is the test asserting that no credential was committed into the recorder sample. A spurious FAIL there reads as a leaked secret in a public repository — the most alarming sentence this suite is capable of producing — and it was false. **A fault that can fabricate that verdict can fabricate any verdict, in either direction**, which is the real reason this belongs in the limitations chapter rather than on a risk register.
+
+**Why the crash-then-verdict shape is the important one.** The first attempt crashed, the retry ran, and **the retry returned a verdict rather than a crash** — 1074 passed with one ERROR, in `test_seed.py`, which is this fault's original recorded site from Phase 0. The mitigation retries a crash once and never retries a verdict, so the gate reported FAIL. That is the policy working as designed, not failing: **a rule that retries verdicts is a rule that retries real defects until they pass.** B recorded the first instance of this shape earlier in the phase; this is the second, and it is now a thing that happens rather than a thing that happened once.
+
+**The mistake worth recording, which is mine.** The run that produced the first of the two FAILs was piped through `tail -3`. It printed `9 criteria: 8 PASS, 1 FAIL, 0 PENDING` and nothing else — **no criterion name, no message, no crash status.** Known Risks has said since Phase 1 to capture the full output, head included, and never to use a `tail` pipe. I wrote part of that warning and then did the thing it warns against, at the phase boundary, on the one run where the evidence mattered. The FAIL was only diagnosable because it recurred three runs later and was captured in full the second time. **If it had not recurred, this phase would have closed with an unexplained FAIL in its history and no way to tell whether it was the fault or a defect.**
+
+**Fix.** None in code, and deliberately so. The evidence needed to tell this fault from a real failure is already in the criterion's output — both FAILs named the native crash in the same message — so nothing needs to be added; it needs to be *read*. What changes is the Known Risks entry, which now carries the captured output of both shapes and states plainly that a `toolchain_green` FAIL on this machine is not evidence of a defect until its full line has been read.
+
+**Consequence for the dissertation.** This is the entry that moves the fault out of the risk register and into the limitations chapter. It is no longer a hazard that might affect the evidence; it demonstrably affected the evidence-gathering at every phase boundary, including this one, and the honest statement is that **every phase gate in this project is a retried measurement taken on hardware with a known intermittent fault.** What keeps that from undermining the results is narrow and worth stating precisely: all five sites the fault has been seen at — pydantic-core, `sqlite3`, pyyaml, CPython's `ast`, and the seed generator — are in the seed generator, the test harness and the verifier. **None is in a code path that runs in production.** The corruption is in the apparatus that gathers the evidence, not in the system being evidenced, and the four clean runs of the same gate in the same session are what make the PASS reproducible rather than lucky.
