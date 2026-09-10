@@ -63,6 +63,15 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
 - Every log line inside the loop carries `cycle_id` and `run_id`.
 - Log the decision, not the narration. `gate_blocked engine=cost net_edge=-0.0021` beats "checking if the trade is profitable".
 - **Never log an API key, a signature, or a nonce.** Redact at the client layer, not at the call site.
+- **Never name a field after the credential it describes.** `SECRET_KEY_TOKENS` matches on
+  substrings of the field *name*, so it cannot distinguish a credential from a statement about
+  one: `credentialed` and `api_key_present` are both redacted, and they are the two names anyone
+  reaches for first. There is no name for a boolean "do we have a key" that reads naturally and
+  survives the redactor, so **name the consequence instead** — `private_calls_enabled`. It is the
+  better field anyway, because an operator can act on "the private calls will not answer" and
+  cannot act on "there is no key in the environment". The redactor is right in both cases; the
+  field name was wrong. This failure is silent by construction: the line still appears, still
+  looks well-formed, and carries `<redacted>` where the answer should be.
 
 ## Testing
 

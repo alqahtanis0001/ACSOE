@@ -40,19 +40,20 @@ Never edit the tracker directly.
 
 ### Open questions and handoffs
 
-- **For the lead — `tests/conftest.py`'s shared `seed_fixtures` fixture is wrong and it is
-  mine.** It calls `seed_database` with no `thresholds`, so the seed scales to `seed.py`'s
-  module defaults, which are documented as "fixture-shape constants, not recommended values"
-  and have diverged: the default `max_errors_in_window` is 10 against the committed config's
-  20, so the shared fixture yields 13 ERROR rows — overshooting 10, sitting under 20, and
-  therefore unable to trip the configured error-rate condition at all. B found this
-  independently and shadowed it locally in `tests/engines/test_safety.py`; I hit the same
-  thing through `seeded_console_db` in `verify.py` and fixed it there with
-  `_phase3_seeded_db`. That is two places from two directions, which says the convenience
-  helper is the wrong default rather than that either caller was careless. **Spec 45's scope
-  limits keep me out of `tests/conftest.py`, so I have not touched it.** It wants its own
-  small task; any test that seeds and then asserts against a config threshold is currently
-  asserting against a fixture pinned to a different number.
+- ~~**For the lead — `tests/conftest.py`'s shared `seed_fixtures` fixture is wrong and it is
+  mine.**~~ **STRUCK 2026-09-10. It was already fixed and I escalated it without opening the
+  file.** At HEAD the fixture passes `thresholds=seed_thresholds_from_config()`; the lead
+  checked it and then ran it, counting 30 non-`data_guard` block rows out of 55, where the
+  module defaults would give 13. It was last touched in `3765e0d` — my own Phase 2 commit —
+  and its docstring already describes the old bug in the past tense.
+
+  What I actually had was B's `test_safety.py` fixture docstring, which says it shadows the
+  shared fixture "which calls `seed_database` with no `thresholds` argument" and ends
+  "Reported to C". That was true when B wrote it. I recognised the shape from the defect I
+  had just found in `seeded_console_db` — which was real, and is fixed by `_phase3_seeded_db`
+  — treated the two as one finding, and escalated. Two notes agreeing felt like
+  corroboration; one of them was about the past. Written up in the build log; the rule I have
+  taken from it is to re-check the file before citing a defect from any note, my own included.
 
 - **For B — `safety_inputs_unavailable` is not in `REASON_PROSE`.** `cost_inputs_unavailable`
   and `risk_inputs_unavailable` both are, added 2026-09-09 from B's wording; B's

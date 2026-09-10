@@ -161,9 +161,13 @@ paste — it asserts the raising behaviour while the key is absent and asserts
 - **Spec 25 — Kraken REST and WebSocket clients: COMPLETE.**
 - **Spec 26 — engine 1 `exchange`: COMPLETE**, pending only the lead's `bootstrap.py`
   registration, which is batched with 27 to 29 by instruction.
-- **Spec 27 — engine 2 `market_data_recorder`: CODE COMPLETE, SPEC NOT COMPLETE.** The
-  committed fixture `tests/fixtures/recording_report.json` is outstanding and is
-  blocked on wall-clock time, not on code. Detail below. **Do not treat 27 as done.**
+- **Spec 27 — engine 2 `market_data_recorder`: COMPLETE.** The committed fixture
+  `tests/fixtures/recording_report.json` landed on 2026-09-10 from the *clean* run —
+  `2026-09-09T14:15:29Z` to `2026-09-10T14:20:00Z`, 86,649 seconds recorded, a 24.1h
+  span tiled by 10 segments and 9 accounted breaks, 99.98% recorded against a 98%
+  floor. `--phase 2` is 9 PASS / 0 FAIL / 0 PENDING and Phase 2 is closed. It was
+  blocked on wall-clock time and never on code, which is why the refusal in
+  `scripts/recording_report.py` was mechanical rather than remembered.
 - **Spec 28 - engine 3 `market_sensor`: COMPLETE.** `candles_match_kraken_ohlc` now
   reports PASS.
 - **Spec 30 - historical OHLCVT loader: COMPLETE.** `historical_loader_reports_gaps`
@@ -344,18 +348,19 @@ Built and green: `src/acsoe/clients/recorder/` (`contracts.py`, `writer.py`,
 `scripts/recording_report.py`. 26 tests in `tests/clients/recorder/`, 13 in
 `tests/engines/test_market_data_recorder.py`.
 
-**Outstanding: `tests/fixtures/recording_report.json`.** The real archive holds
-**21h24m** — `2026-09-08T16:01:22Z` to `2026-09-09T13:25:41Z` — with a ~10-hour hole
-between 09-08T16:02 and 09-09T02:04 where no recorder was running. C's criterion needs
-24 hours. The span crosses 24h at about **2026-09-09T16:01Z** provided
-`scripts/record.py` keeps running.
+**`tests/fixtures/recording_report.json` — LANDED 2026-09-10, from the clean run.**
+`2026-09-09T14:15:29Z` to `2026-09-10T14:20:00Z`, 86,649 seconds recorded, tiled by 10
+segments and 9 accounted breaks, 99.98% recorded against a 98% floor.
+`recording_span_continuous` PASSes and Phase 2 closed at 9 PASS / 0 FAIL / 0 PENDING.
 
-**A report built from this archive now would be truthful and would still FAIL**, which
-is worse than the PENDING the criterion reports. PENDING means "the subject does not
-exist yet", which is true; FAIL would mean "it exists and is wrong", which is not.
+*Kept for the record, because the reasoning is what mattered:* the earlier archive held
+21h24m with a ~10-hour hole where no recorder was running, and **a report built from it
+would have been truthful and would still have FAILed** — which is worse than the
+PENDING the criterion was reporting. PENDING means "the subject does not exist yet",
+which was true; FAIL would mean "it exists and is wrong", which was not.
 `scripts/recording_report.py` refuses to write a digest under `--min-hours` (default
-24) so the refusal is mechanical rather than remembered, and there is deliberately no
-flag that fabricates a span. Regenerating it later is one command.
+24), so the refusal was mechanical rather than remembered, and there is deliberately no
+flag that fabricates a span.
 
 Two other things worth carrying forward:
 
@@ -446,35 +451,20 @@ Two other things worth carrying forward:
 
 ## Blocked On
 
-- **Spec 27's fixture: a clean 24-hour recording, running now.** Operator ruling
-  2026-09-09: do **not** deposit on the old archive. It was 49% recorded and contained a
-  disk outage we caused ourselves, which is contaminated evidence for the phase whose
-  subject is the data spine.
+**Nothing.** Both Phase 2 blockers cleared on 2026-09-10 and both are struck below.
 
-  ```
-  clean run session start : 2026-09-09T14:15:29.997349Z
-  24 hours complete at    : 2026-09-10T14:15:30Z
-  disk when started       : 165G free, 83% used
-  ```
-
-  **The next session runs one command** once that moment has passed:
-
-  ```
-  .venv/Scripts/python.exe scripts/recording_report.py --write
-  .venv/Scripts/python.exe scripts/verify.py --phase 2
-  ```
-
-  `recording_report.py` **refuses to write below 24 hours** and prints the numbers
-  instead, so it cannot be run too early by accident. Check first that exactly one
-  recorder is alive — and note that Windows lists it as a **parent and a child with
-  identical command lines**, which is one recorder, not two. That confusion cost an hour
-  today; see the correction entry in the build log.
-
-  If the recorder died in the meantime, the span is broken and the 24 hours restarts.
-  `python scripts/recording_report.py` with no `--write` prints every gap and its cause,
-  which is how to tell.
-- **Spec 29's criterion: the operator's `data_guard.max_data_age_s`.** PENDING, not
-  FAIL, and correctly so.
+- ~~**Spec 27's fixture: a clean 24-hour recording.**~~ **CLEARED.** The clean run
+  completed and `tests/fixtures/recording_report.json` is committed —
+  `2026-09-09T14:15:29Z` to `2026-09-10T14:20:00Z`. Operator ruling 2026-09-09 held:
+  do not deposit on the old archive, which was 49% recorded and contained a disk outage
+  we caused ourselves, and which would have been contaminated evidence for the phase
+  whose subject is the data spine. One thing worth keeping from it: Windows lists the
+  recorder as a **parent and a child with identical command lines**, which is one
+  recorder and not two. That confusion cost an hour; the correction entry is in the
+  Phase 2 build log.
+- ~~**Spec 29's criterion: the operator's `data_guard.max_data_age_s`.**~~ **CLEARED.**
+  Supplied; `data_guard_blocks_bad_data` PASSes and Phase 2 closed at 9 PASS / 0 FAIL /
+  0 PENDING.
 - **Nothing else.** `bootstrap.py` registration **landed**: the lead registered engines
   1 to 4 after C repointed `orchestrator_empty_registry`, and `console_shows_live_rows`
   is now PASS - "a tick of exchange, market_data_recorder, market_sensor, data_guard
@@ -486,44 +476,28 @@ Two other things worth carrying forward:
   `test_the_offline_chain_is_not_in_bootstrap` asserted things true only while the
   registry was empty. Both repointed. Detail in the build log.
 
-## Known gap I own but have not closed
+## Known gaps I own
 
-**CLOSED 2026-09-10 by spec 39.** Kept below for the record, and it is worth reading
-against what actually happened, because the note was wrong in two ways.
+**None. The Phase 2 gap here — `cli/engine.py` passing a `Clients()` of three
+`None`s — was closed by spec 39 on 2026-09-10 and the note is struck.**
 
-It was wrong about the **blocker**: it says the gap is blocked on `market_data.pairs`
-and `market_data.book_depth`, and offers two ways forward that both assume those keys
-ought to exist. The operator ruled that neither key exists — the universe is computed
-per tick, a Locked Decision — so the subscription set is *derived* in engine 2 from
-`state["exchange"]`, and the book depth is the recorder's own parameter. I leaned to
-"refuse to start without the keys", which would have been the wrong answer to a
-question that turned out not to be a question. Recorded rather than deleted: the
-reasoning was sound given what I believed, and what was missing was a ruling, not an
-argument.
+The note said the gap was blocked on `market_data.pairs` and `market_data.book_depth`
+and offered two ways forward, and **both were wrong, because both assumed those keys
+ought to exist.** Spec 37's Locked Decision retired the question: the universe is
+computed per tick, so neither key exists and neither is going to. The subscription
+scope is *derived* in engine 2 from `state["exchange"]`, and the book depth is the
+recorder's own parameter. My stated lean — "have `acsoe engine` refuse to start
+without the keys" — would have been a confident answer to a question that turned out
+not to be a question, and it would have made a missing key stop the recorder.
 
-It was also wrong about the **tripwire**.
-`test_a_tick_over_the_real_registry_records_errors_rather_than_raising` did not turn
-red when the real clients landed, because it constructs the empty `Clients()` itself
-instead of going through `cli/engine.py`. See the build log.
-
-- **`cli/engine.py` still passes a `Clients()` of three `None`s**, so `acsoe engine` now
-  blocks every tick: engine 1 raises on `None.asset_pairs` and engine 4 on its missing
-  config key, both converted to `ERROR`. The tick **completes** and records both, which
-  is contract rule 7 working - the daemon does nothing useful rather than dying.
-
-  Blocked on `market_data.pairs` and `market_data.book_depth`, which do not exist. REST
-  and the recorder can be wired without them; the WebSocket stream cannot subscribe
-  without a pair list, and I will not invent one. Two ways forward, and the lead has
-  both: wire what is possible and leave the stream unstarted (engines 2 and 3 then
-  report `stream_available: false` and `data_guard` blocks, which is fail-closed), or
-  have `acsoe engine` refuse to start without the keys, which matches how the config
-  layer treats every other missing value. I lean to the second.
-
-  **The current behaviour is asserted rather than left implicit** -
-  `test_a_tick_over_the_real_registry_records_errors_rather_than_raising` pins it, so
-  wiring the real clients turns that test red and forces a deliberate rewrite. No
-  criterion depends on it: every Phase 2 criterion runs the orchestrator against C's
-  fake client, not through the CLI.
+The note also claimed a tripwire it did not have.
+`test_a_tick_over_the_real_registry_records_errors_rather_than_raising` was supposed to
+turn red when the real clients landed. It did not: it builds the empty `Clients()`
+itself instead of going through `cli/engine.py`, so it pinned a fact about a
+test-supplied value rather than about the daemon. Both errors are written up in
+`docs/build-log/phase-3/a-platform.md`; the lesson worth carrying is the second one —
+**a test whose purpose is "this goes red when X changes" has to reach X through the
+code path X lives on.**
 
 ## Open Questions
 
@@ -602,7 +576,7 @@ Paste the real output of your last run. Never report a task complete without it.
 
 ```
 $ .venv/Scripts/python.exe -m pytest tests/ -q
-1198 passed in 95.13s
+1199 passed in 77.61s
 
 $ .venv/Scripts/python.exe -m mypy --strict src/
 Success: no issues found in 68 source files
@@ -630,6 +604,18 @@ Phase 3 is not green: 2 PENDING. Mid-phase the bar is no FAIL, so this is expect
 
 Both PENDING are engine 7 `scout`, which is B's specs 43 and 44. Nothing of mine is
 outstanding in the gate.
+
+**Spec 39's acceptance was mutation-tested, per the new standard.** Twelve mutations
+across `subscription_scope`, `set_subscription` and `_apply_subscription`, applied one
+at a time and reverted. Eleven killed on the first pass. **One survived**: flipping
+`subscription_derived` to `True` on the branch where `state["exchange"]` is absent
+entirely — not a rare branch but the one *most* tests take, since every test in
+`test_market_data_recorder.py` runs engine 2 without engine 1. Excellent line coverage,
+no assertion. Closed by
+`test_engine_one_publishing_nothing_leaves_the_scope_alone_and_says_so`; twelve of
+twelve now killed. **Coverage counts executions; a mutation asks whether anything would
+object**, and re-reading the tests would never have found it, because re-reading is
+what produced them.
 
 **On reading a FAIL while three agents are working in one tree.** Several runs while I
 was finishing spec 39 reported `FAIL toolchain_green` naming a *different* pair of

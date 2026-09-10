@@ -422,3 +422,140 @@ freeze row was not being written — and that FAIL was correct and led somewhere
 to a daemon nobody had activated, then to a criterion reading the command queue instead of
 the command table. A criterion that had reported FAIL from the start would have been noise
 for the hours before that and indistinguishable from the FAIL that mattered.
+
+### Correction: `tests/conftest.py` was already fixed, and I escalated it without opening the file
+
+**Agent:** C · **Task:** spec 45, follow-up · **Date:** 2026-09-10
+
+**Correcting the entry above**, "The `safety` criteria were seeding against the seed module's
+defaults". Per rule 6 this is a new entry rather than an edit to that one.
+
+**What that entry got right, and it still stands.** `seeded_console_db` in `scripts/verify.py`
+genuinely did call `seed_database` with no `thresholds`, my three `safety` criteria genuinely
+were reading a default-scaled seed, and the fix — `_phase3_seeded_db`, taking the same
+config-derived path `seed_fixtures_present` uses — is real. I verified that one empirically:
+13 ERROR rows before, 23 after, against a configured limit of 20.
+
+**What it got wrong.** It also said the shared `seed_fixtures` fixture in `tests/conftest.py`
+had the same defect, and I raised that to the lead as its own item. It does not. At HEAD it
+reads:
+
+```python
+return seed.seed_database(tmp_path / "acsoe.sqlite", thresholds=seed_thresholds_from_config())
+```
+
+The lead checked it, then ran the fixture and counted **30 non-`data_guard` block rows out of
+55** — 13 is what the module defaults would give. `tests/conftest.py` was last touched in
+`3765e0d`, which is my own Phase 2 commit for specs 32 and 33, and its docstring already
+describes the 13-row bug in the past tense.
+
+**Why I believed otherwise.** B's `tests/engines/test_safety.py` carries a fixture whose
+docstring says it "deliberately shadows the shared `seed_fixtures` fixture in
+`tests/conftest.py`, which calls `seed_database` with no `thresholds` argument", and ends
+"Reported to C, who owns the shared fixture". That was true when B wrote it. I read it,
+recognised the shape from the defect I had just found in my own file, treated the two as one
+finding, and escalated — **without opening `tests/conftest.py`.** Two independent-looking
+reports of the same defect felt like corroboration; one of them was a note about the past.
+
+**The generalisation, and it is not really about this fixture.** A comment describing another
+agent's state goes stale silently, because nothing fails when it does. B's `cost/contracts.py`
+docstring went stale the same way in the same week — "deliberately not in C's `REASON_PROSE`
+yet; C has been asked to add it", while B's own test had been asserting the opposite for days
+— and I caught that one only because I went to action the request and looked at the file
+first. Here I did not, and the direction was reversed: B's note said a thing was broken when
+it was fixed, and mine then said the same. The lead has since seen the mirror image, a
+progress file claiming a ruling had been applied when it had not.
+
+Three notes, three drifts, in both directions, in one phase. The rule that follows is the
+lead's and I am adopting it: **re-check the file before citing a defect from any note,
+including my own.** Reading is what produced the wrong belief; only running it produced the
+right one.
+
+**Consequence.** The item is struck from `context/progress/c-interface.md` rather than left
+for the next reader to act on. No code changes — `_phase3_seeded_db` was the right fix for
+the defect that was real, and `tests/conftest.py` needs nothing.
+
+### Spec 46: the enumeration, broken on purpose, and the empty state that does not read the tally
+
+**Agent:** C · **Task:** spec 46 · **Date:** 2026-09-10
+
+**Seven codes added to `REASON_PROSE`**, all with the producing agent's wording kept
+verbatim: engine 7's six new per-exclusion codes plus `scout_inputs_unavailable`, and
+`safety_inputs_unavailable` on B's explicit yes. `below_ordermin`, `below_costmin` and
+`insufficient_quote_balance` needed nothing — `scout` reuses engine 11's codes deliberately
+rather than minting parallel ones, which is right: it is the same arithmetic and should read
+the same on screen, and two codes for one condition would give the operator two different
+sentences depending on which gate got there first.
+
+**The enumeration reads the module's attributes, not its `EXCLUSION_REASONS` tuple, and the
+difference is load-bearing.** The tuple is the exhaustive list of ways a *pair* can be
+excluded, ordered by the filter's own application order, and B deliberately keeps
+`scout_inputs_unavailable` out of it: that code is a statement about the tick rather than
+about a pair, and counting it in the tally would break `scanned == entered + sum(tally)`. A
+test enumerating only the tuple would therefore have left exactly that code unmapped — and
+it is the one an operator meets when something is *broken*, as opposed to when the market is
+merely quiet. So `declared_reason_codes` walks `vars(module)` for `REASON_*` strings, which
+covers a code whether or not B remembers to put it in the tuple, and a separate test pins
+both halves of B's arrangement: the code is in `REASON_PROSE` *and* is not in
+`EXCLUSION_REASONS`.
+
+**I broke the check before trusting it**, per the standing rule the lead added to
+`code-standards.md` today. Two ways, because they prove different things:
+
+1. Against a fabricated module carrying a code absent from the table — `unmapped()` returns
+   it, which shows the *mechanism* discriminates.
+2. By deleting the real `barriers_below_tick_size` line from `format.py` and running the
+   suite. Two tests went red with
+   `AssertionError: assert {'REASON_TICK_GRID_TOO_COARSE': 'barriers_below_tick_size'} == {}`,
+   and the entry was restored. That is the one that matters: the first test would still pass
+   against a hand-written list, and the whole argument for enumerating is what happens when a
+   code is *added*.
+
+A third test records why any of this is worth doing — `operator_reason("quote_delisted_mid_tick")`
+returns "No reason was recorded." No exception, no log line, no degraded rendering. The
+failure mode is silence in the column whose entire job is to say why.
+
+**`quote_not_provably_stable` is the one I would have got wrong**, and the test now pins the
+distinction rather than just the presence. It exists beside `crypto_quoted` on the lead's
+spec 43 ruling because a universe that shrank *by policy* and one that shrank because nobody
+supplied `trading.stable_quote_currencies` look identical from the outside, and only the
+second is a fault somebody must fix. Two codes rendering the same sentence would undo that
+ruling in the view layer, where nothing else would notice — so
+`test_the_two_crypto_quoted_codes_do_not_share_a_sentence` asserts the sentences differ and
+that the second one points at configuration rather than at the market.
+
+### Spec 46 step 5: the empty state does not read engine 7's tally, and the gap is structural
+
+**What happened.** Step 5 asks me to confirm the existing counts-based empty state reads the
+tally B publishes in `state["scout"]`, and to say so in the build log if it does not. **It
+does not.** `ConsoleReader.feed_summary` in `src/acsoe/console/reader.py:462` builds four
+stages and the first two are hardcoded absent:
+
+```python
+FeedStage(label="Pairs scanned", count=None, detail=_NOT_RECORDED),
+FeedStage(label="Entered the tradable universe", count=None, detail=_NOT_RECORDED),
+```
+
+So the screen `ui-context.md` describes as the single most-viewed state in the product —
+*"Scanned 412 pairs. 38 entered the tradable universe."* — currently renders its first two
+lines as not recorded. Per the spec's scope limits I have not touched it.
+
+**Why, and this is the part worth recording rather than the mismatch itself.** It is not a
+wiring oversight, and it is not one line. **The console is a separate process that reads
+SQLite; it never sees `state` at all.** B publishes the tally into `state["scout"]`, which
+lives in the daemon's memory for the duration of a tick. For the console to render it,
+something has to persist it — and the engine that writes engine output to the store is
+engine 19 `memory`, which is Phase 4. `feed_summary` deliberately shows `None` rather than a
+zero for exactly this reason, and its docstring says so: a zero in that column would read as
+"no pair qualified", which is a *result*, when the truth is that nobody counted. That
+judgement is right and should survive whoever wires this up.
+
+**One thing in that docstring is wrong and it is mine.** It says "the universe filter is
+engine 4 and its counts are Phase 2". The universe filter is engine **7** `scout` and it is
+Phase **3** — engine 4 is `data_guard`. I wrote that in Phase 1 when the numbering was less
+settled in my head. It is a comment rather than behaviour, and correcting it is a change to
+`console/reader.py` inside a spec whose scope limits say "do not rebuild, restyle or extend
+the empty state; report a mismatch, do not fix it inside this spec". I am reporting it here
+and to the lead rather than reaching for it, because the honest version of that fix is the
+same change that wires the tally up, and it wants to be one task in Phase 4 rather than a
+stale comment corrected now and a rewrite later.
