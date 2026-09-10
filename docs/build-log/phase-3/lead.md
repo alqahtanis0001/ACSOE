@@ -378,3 +378,58 @@ than a real client in exactly the dimension `_record_run` is about, and it made 
 unexecutable rather than merely untested. Worth stating as the sharper form: **a fixture that
 makes a branch unreachable is not weak coverage, it is zero coverage that looks like weak
 coverage.**
+
+### The regression test I wrote for the `_log` bug passed against the unfixed code
+
+**Agent:** Lead · **Task:** correcting `40dba32` · **Date:** 2026-09-10
+
+**What happened.** A reported the `_record_run` duplicate-keyword crash independently, having
+hit it by wiring the daemon up. I had already diagnosed and fixed it an hour earlier and had
+added two regression tests. A's report carried one sentence mine did not, and it is the sentence
+that matters:
+
+> It needs a real store **and** a real logger at once, and nothing had both. Every test that
+> drives the orchestrator against a real store constructs it with `logger=None`, so `_log`
+> returns before the call.
+
+I tested that against my own test by putting the duplicate keyword back:
+
+```
+mutation applied
+27 passed in 0.65s
+```
+
+**My regression test does not catch the bug it was written for.** `Orchestrator._log` opens with
+`if self._logger is None: return`, and I constructed the orchestrator without a logger, so the
+guarded call is never reached and the duplicated keyword never binds.
+
+**Why this entry is worth more than the fix it corrects.** I wrote the rule this bug is an
+instance of — *a double must be capable of exhibiting the property under test* — into
+`code-standards.md` roughly an hour before committing a test that violates it, in the commit
+that cites the rule by name. Recording that plainly rather than fixing it quietly, because a
+build log in which the lead's own work is the one clean thread is a build log nobody should
+believe, and because it is evidence for a claim the rule makes: this failure is not carelessness
+that more care would prevent. Three agents and the lead have now produced five instances in one
+phase. The shape survives *knowing about it*, which is the argument for the mechanical checks B
+and A have been writing — a source-reading guard, a mutation run — over an instruction to be
+careful.
+
+**The sharper diagnosis is A's and it is now the one on record.** I had "the store was the
+missing half". It is *two* independent absences, each making the other harmless: no real store
+in the CLI, and no real logger in the tests. Same shape as the `state["exchange"]` audit — two
+halves that pass their own tests while nothing exercises them together — and A's observation
+about how it was found is the part to keep: it was not found by a test aimed at it, but by
+wiring the real thing up, because that is the only caller holding both halves.
+
+**Fix.** Both new tests now take a real `structlog` logger through `platform/logging.get_logger`,
+and I verified the mutation is caught before reverting it. The assertion is still on the `runs`
+row rather than on "no exception", so the test fails for the right reason in both directions:
+it goes red if the logging call raises, and it goes red if `_record_run` silently records
+nothing.
+
+**Consequence.** Adding the mutation step to the rule in `code-standards.md`. "Ask whether the
+double can exhibit the property" is an instruction to imagine a failure, and this entry is
+evidence that imagining it is not reliable — including for someone who has just written the
+instruction down. Breaking the code and watching the test go red takes a minute and is not
+imaginable-away. B did exactly that on spec 41 unprompted, with three mutations reverted, and
+that is now the standard rather than the exception.

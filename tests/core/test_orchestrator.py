@@ -500,12 +500,23 @@ def test_a_tick_records_its_run_through_a_real_store_client(tmp_path: Any) -> No
     that is the state the daemon was actually in.
     """
     from acsoe.clients.store.client import StoreClient
+    from acsoe.platform.logging import get_logger
 
     store = StoreClient(str(tmp_path / "acsoe.sqlite"))
     store.migrate()
     try:
         orch = Orchestrator(
-            config=_Config(), clock=_Clock(), clients=_RealClients(store), chains=Chains()
+            config=_Config(),
+            clock=_Clock(),
+            clients=_RealClients(store),
+            chains=Chains(),
+            # A REAL logger, and it is the whole point of this test. `_log` opens with
+            # `if self._logger is None: return`, so an orchestrator built without one
+            # never reaches the logging call and cannot exhibit the bug this test exists
+            # for. The first version of this test passed against the unfixed code for
+            # exactly that reason. Two absences were hiding it — no real store in the
+            # CLI, no real logger in the tests — and a test needs both halves present.
+            logger=get_logger("acsoe.test.orchestrator"),
         )
         orch.tick()
         orch.tick()
@@ -543,11 +554,14 @@ def test_the_run_record_failure_branch_logs_instead_of_killing_the_loop(
         def set_system_mode(self, *args: Any, **kwargs: Any) -> bool:
             return False
 
+    from acsoe.platform.logging import get_logger
+
     orch = Orchestrator(
         config=_Config(),
         clock=_Clock(),
         clients=_RealClients(_RaisingStore()),
         chains=Chains(),
+        logger=get_logger("acsoe.test.orchestrator"),
     )
 
     state = orch.tick()

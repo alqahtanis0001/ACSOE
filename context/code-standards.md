@@ -82,6 +82,12 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   `FakeTime.sleep` with no `await` in it, in a test about lock contention; and a hand-built
   `state["exchange"]` that agreed with its caller, in tests about whether the caller reads the
   right keys. All four were green for a whole phase.
+- **Then break the code and watch the test go red.** Asking whether a double *can* exhibit the
+  property is an instruction to imagine a failure, and imagining it is not reliable — the lead
+  wrote the rule above and then committed a regression test that passed against the unfixed
+  code, in the commit that cited the rule. Reverse the condition, delete the guard, return the
+  wrong field; confirm the test fails; put it back. It takes a minute and it is the only step
+  that cannot be talked past. A test you have never seen fail is a claim, not a check.
 - **`pytest.raises(SomeError)` alone is a weak assertion wherever one error type has several
   causes.** Every fail-closed path in `clients/kraken/` raises `KrakenUnavailableError` on
   purpose, so the bare form cannot tell the failure you induced from one that happened first.
