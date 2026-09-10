@@ -97,6 +97,16 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   code, in the commit that cited the rule. Reverse the condition, delete the guard, return the
   wrong field; confirm the test fails; put it back. It takes a minute and it is the only step
   that cannot be talked past. A test you have never seen fail is a claim, not a check.
+- **Coverage counts executions; a mutation asks whether anything would object.** They are not
+  two measures of the same thing, and where they disagree the mutation is right. Spec 39's
+  twelve mutations killed eleven; the survivor was a branch with *excellent* line coverage —
+  every test in `test_market_data_recorder.py` ran engine 2 without engine 1, so the
+  "engine 1 published nothing" path executed constantly and nothing asserted what it reported.
+  A tick that had left the subscription alone could have claimed it recomputed it. High
+  coverage pointed the opposite way from the truth, because a line everybody runs is the line
+  nobody thinks to assert on. Run mutations as a matter of course rather than where you suspect
+  a problem: that survivor was found after two earlier mutation runs had already made the author
+  confident the area was covered.
 - **A test whose purpose is "this goes red when X changes" must reach X through the code path
   X lives on.** A tripwire built to fire when the daemon was wired to real clients stayed green
   through exactly that change, because it constructed the empty client set *itself* rather than
@@ -104,6 +114,15 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   daemon's wiring could not move it. This one passes the "can it fail?" question above: it can,
   just never for the reason it exists. Attach the tripwire to the cause, not to a local
   reproduction of the symptom.
+- **A fallback for a thing that does not exist yet needs a test that fails once it does.** The
+  shape is `try: import the real thing / except ImportError: define our own`, with nothing
+  anywhere asserting which branch ran — so the workaround stays armed long after it stopped being
+  needed, and a test importing *through* it cannot detect it. This is the decayed assertion from
+  the opposite direction: not a claim that stopped being checked, but a scaffold that stopped
+  being load-bearing and was never removed. The same applies to a fixture that returns `None` when
+  an import fails, and to `pytest.importorskip`, which re-raises an `ImportError` from inside a
+  module but **skips** a `ModuleNotFoundError` — so a dependency moving to an extra silently skips
+  every test behind it, under a reason string that is no longer true.
 - **`pytest.raises(SomeError)` alone is a weak assertion wherever one error type has several
   causes.** Every fail-closed path in `clients/kraken/` raises `KrakenUnavailableError` on
   purpose, so the bare form cannot tell the failure you induced from one that happened first.
@@ -124,7 +143,13 @@ python scripts/verify.py --phase N
 `scripts/verify.py` is the executable form of the phase exit criteria in `ai-workflow-rules.md`. Each criterion is one named check printing pass or fail. Adding a phase means adding its checks. A criterion that cannot be expressed as a check is badly written and should be rewritten, not skipped.
 
 ## Configuration
-
+ **Where several branches raise one type, the message is not a
+  nicety — it is the only thing that says which branch ran.** `parse_envelope` has three
+  refusal branches and all three raise the same type; the test *named* for the second passed
+  a non-JSON body, so it exercised the first, and the second had no test at all. Name claimed
+  one branch, input reached another, and the shared type meant nothing objected. That branch
+  is load-bearing: without it a body carrying a `result` and **no `error` key** parses as a
+  clean success, in the one function deciding whether a Kraken response succeeded.
 - One `config/default.yaml`, parsed into a pydantic `Config` at startup and passed through `EngineContext`.
 - No engine reads an environment variable directly except through the config layer.
 - Every threshold is named and configurable. No magic numbers inside engines.

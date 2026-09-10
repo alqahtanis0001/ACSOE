@@ -426,8 +426,13 @@ def test_the_daemon_builds_three_real_clients_and_needs_no_credentials(
     assert clients.store is not None
     assert clients.recorder is not None
     assert clients.kraken.subscription == ()
-    # The database is the documented one, migrated, under the temporary root.
-    assert clients.store.db_path == paths.db / DB_FILENAME
+    # The database is the documented one, migrated, under the temporary root. The
+    # name is written out as a literal rather than reused from `DB_FILENAME`:
+    # `architecture-context.md` documents the layout as `db/  acsoe.sqlite`, and an
+    # assertion built from the constant it is checking moves with it, so it could
+    # never notice the code drifting away from the document.
+    assert clients.store.db_path == paths.db / "acsoe.sqlite"
+    assert DB_FILENAME == "acsoe.sqlite"
     assert clients.store.db_path.is_file()
     close_clients(clients)
 

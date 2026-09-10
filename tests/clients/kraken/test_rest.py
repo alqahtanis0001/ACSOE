@@ -164,15 +164,42 @@ async def test_the_client_parses_a_clean_200_and_returns_the_mapped_result() -> 
     assert isinstance(pairs.pairs["BTC/USD"].ordermin, Decimal)
 
 
-def test_a_body_that_is_not_an_envelope_is_unavailable_not_a_success() -> None:
-    with pytest.raises(KrakenUnavailableError):
+def test_a_body_that_is_not_json_at_all_is_unavailable_not_a_success() -> None:
+    """Branch 1 of three: a proxy error page, an HTML maintenance notice.
+
+    Renamed. It used to be called "not an envelope", which is a *different* branch —
+    this input is not JSON, so it never reaches the envelope check. All three
+    refusals raise `KrakenUnavailableError`, so nothing about the exception said
+    which branch had run and the mislabelling left branch 2 with no test at all.
+    The message is asserted here for that reason.
+    """
+    with pytest.raises(KrakenUnavailableError) as caught:
         parse_envelope(b"<html>maintenance</html>", "balance")
+    assert "not JSON" in str(caught.value)
+
+
+def test_json_that_is_not_a_kraken_envelope_is_refused_rather_than_returned() -> None:
+    """Branch 2 of three, and the one that was untested — it is not defensive.
+
+    A body carrying a `result` and **no `error` key at all** is the dangerous shape.
+    Without this refusal it takes `payload.get("error") or []`, finds nothing to
+    object to, finds a `result`, and is returned as a **clean success**. Kraken
+    signals application errors in that array rather than in the HTTP status, so a
+    body that does not carry the array is one where we cannot know whether it was a
+    yes or a no — and invariant 3 says the absence of a "no" is never a "yes".
+
+    Found by deleting the branch and watching all 82 tests in this package pass.
+    """
+    with pytest.raises(KrakenUnavailableError) as caught:
+        parse_envelope(json.dumps({"result": {"tier": 1}}), "trade_volume")
+    assert "envelope" in str(caught.value)
 
 
 def test_an_envelope_with_neither_an_error_nor_a_result_is_refused() -> None:
-    """Neither a yes nor a no. Invariant 3: the absence of a "no" is never a "yes"."""
-    with pytest.raises(KrakenUnavailableError):
+    """Branch 3 of three. Neither a yes nor a no — invariant 3 again."""
+    with pytest.raises(KrakenUnavailableError) as caught:
         parse_envelope(json.dumps({"error": []}), "balance")
+    assert "neither a" in str(caught.value)
 
 
 # --------------------------------------------------------------------------- #

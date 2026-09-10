@@ -592,3 +592,70 @@ purpose is "this goes red when X changes" must reach X through the code path X l
 
 **Fix.** A's, and it is the right shape: the test keeps the property it genuinely does test, and
 the daemon's construction is asserted separately against `build_clients`.
+
+### The sweep paid for itself on the first finding, and the count is the point
+
+**Agent:** Lead · **Task:** reviewing A's audit · **Date:** 2026-09-10
+
+**Why the sweep was commissioned.** Five instances of the cannot-fail family had turned up in one
+phase, every one by accident, three of them by A while doing something else. A rate like that is
+evidence of a population, not of bad luck, and finding them by accident is not a plan. A swept
+the tree and returned **six findings and two clean areas**, which changes the estimate again: the
+population is larger than the accidents suggested.
+
+**The first finding is a latent defect on the live trading path and I verified it myself.**
+`parse_envelope` has three refusal branches, all raising `KrakenUnavailableError`. Branches 1 and
+3 had tests; branch 2 had none — and the test *named* for it passed `b"<html>maintenance</html>"`,
+which is not JSON, so it exercised branch 1. The name claimed one branch, the input reached
+another, and the shared exception type meant nothing objected.
+
+It is load-bearing rather than defensive. I checked what the branch actually does before accepting
+the severity: a body of `{"result": {...}}` with **no `error` key at all** is refused by it, and
+without it that body returns as a clean success — from the one function in the package deciding
+whether a Kraken response succeeded. Then I mutated A's fix rather than taking the report on
+trust:
+
+```
+if False:  # branch 2 deleted
+FAILED tests/clients/kraken/test_rest.py::test_json_that_is_not_a_kraken_envelope_is_refused_rather_than_returned
+1 failed, 82 passed
+```
+
+Exactly one test, named for the branch it guards. Restored, 83 pass.
+
+**A's sharpening of the weak-assertion rule is the transferable part**, and it is now in
+`code-standards.md`: *where several branches raise one type, the message is not a nicety — it is
+the only thing that says which branch ran.* I had written that rule this morning as "assert on the
+message", with the reason being that the wrong *cause* could fire. A found the worse version: a
+test can drift onto a *neighbouring branch* and stay green for a phase, with its own name
+disagreeing with it.
+
+**A's proposed fourth shape is genuinely not covered by the three and is now a standard:** *a
+fallback for a thing that does not exist yet needs a test that fails once it does.* The tell is
+`try: import the real thing / except ImportError: define our own`, with nothing asserting which
+branch ran — so a test importing *through* the fallback cannot detect it. It is the decayed
+assertion from the opposite direction: not a claim that stopped being checked, but a scaffold that
+stopped being load-bearing and was never removed. A demonstrated it without touching a repo file,
+by blocking `acsoe.clients.kraken` at the import system, and the harness test passed against the
+fallback classes.
+
+**The `importorskip` half is the one with scale behind it.** A expected it to mask a broken module
+and it does not — pytest re-raises an `ImportError` raised from inside a module. But a
+`ModuleNotFoundError` from inside it, which is exactly what a dependency moving to an extra
+produces, **is** skipped. About **370 test functions** — a third of the suite — sit behind a
+fixture guarded that way, and the skip reason would read "the store client does not exist yet",
+which would be false. A green run with a third of it skipped under a false reason is worse than a
+red one.
+
+**Two clean areas, reported as findings, and they should be.** The network guard was probed for a
+hole and none was found — real sockets, real httpx, `NetworkAccessError.layer` asserted so a
+half-guard is distinguishable from a whole one. And B's
+`test_the_seed_overshoots_the_operators_own_configured_limits` reads config on both sides but is
+**not** self-referential: the seed's output is the subject and the config is an independent
+reference. A said so explicitly rather than leaving it off the list. An audit that reports only
+hits gives no information about coverage, and "I looked here and it is sound" is what makes the
+six findings mean something.
+
+**A also reported four `pytest.raises` calls it checked and deliberately left**, each with the
+reason. That is the right disposition and worth naming: a sweep that fixes everything it touches
+is indistinguishable from one that fixed things that were fine.

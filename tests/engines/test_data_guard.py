@@ -272,16 +272,37 @@ def test_every_finding_is_published_not_only_the_primary_one(
 
 def test_every_reason_code_exists_in_the_consoles_prose_map() -> None:
     """A code that is not in `REASON_PROSE` renders as "No reason was recorded."
-    silently, with no error anywhere. Agreed with C on 2026-09-09."""
-    from acsoe.console.format import REASON_PROSE
+    silently, with no error anywhere. Agreed with C on 2026-09-09.
 
-    for code in (
+    **Enumerated from the engine's own module, never hand-listed.** It used to list
+    the four codes by hand, which meant a fifth code added to `contracts.py` was
+    simply not checked — the test could still fail, but not for the thing it exists
+    to catch, and the failure it was guarding against is a silent blank in the
+    console rather than an error anywhere. Spec 46 makes enumeration the rule for
+    engine 7's codes; `data_guard` predates it and this brings it into line.
+
+    Reading `contracts.__all__` rather than `dir()` is deliberate: `__all__` is the
+    module's own declaration of what it publishes, so a code that is defined and
+    deliberately not exported is out of scope here rather than a false failure.
+    """
+    from acsoe.console.format import REASON_PROSE
+    from acsoe.engines.data_guard import contracts
+
+    declared = {
+        name: getattr(contracts, name)
+        for name in contracts.__all__
+        if name.startswith("REASON_")
+    }
+    assert declared, "no REASON_* constant found; this test has stopped enumerating"
+    # The four known today, so that a code silently *disappearing* is also caught.
+    assert set(declared.values()) >= {
         REASON_STALE,
         REASON_NEGATIVE_SPREAD,
         REASON_MISSING_CANDLE,
         REASON_NO_MARKET_DATA,
-    ):
-        assert code in REASON_PROSE, code
+    }
+    for name, code in declared.items():
+        assert code in REASON_PROSE, f"{name} = {code!r} has no operator prose"
 
 
 def test_a_block_always_carries_a_reason(engine: DataGuardEngine, guard_context: Any) -> None:

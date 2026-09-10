@@ -434,8 +434,15 @@ Two other things worth carrying forward:
 - **A fourth reason code, `no_market_data`**, for the fail-closed case invariant 3
   requires. Not folded into `market_data_stale` because the prose would be a false
   sentence: there is a difference between a feed that is behind and no feed at all.
-  Agreed with C before landing, and a test derives the code list from the engine's own
-  constants so it cannot decay.
+  Agreed with C before landing. **Correction, 2026-09-10:** this used to claim "a test
+  derives the code list from the engine's own constants so it cannot decay". It did
+  not — the test hand-listed the four codes, so a fifth would simply not have been
+  checked, and the failure that guards against is a silent blank in the console rather
+  than an error anywhere. Found in the lead's sweep and fixed:
+  `test_every_reason_code_exists_in_the_consoles_prose_map` now enumerates every
+  `REASON_*` in `data_guard/contracts.__all__`, and adding a code without prose fails
+  it. The claim was worse than the gap, because a claim like that stops the next reader
+  looking.
 - **Blocking on a hole in the candle series does not contradict the loader refusing to
   invent one.** The loader governs labelling, the gate governs trading, and fail-closed
   points the opposite way in each. Stated in three places because the obvious fix for

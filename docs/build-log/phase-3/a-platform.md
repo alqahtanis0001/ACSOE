@@ -603,3 +603,206 @@ way from the truth — the line ran in most tests in the package, which is exact
 nobody thought to assert on it. **Coverage counts executions; a mutation asks whether
 anything would object.** I would not have found this by re-reading the tests, because
 re-reading is what produced them.
+
+### Sweep for the cannot-fail family: four findings, two of them mine
+
+**Agent:** A · **Task:** lead-assigned sweep · **Date:** 2026-09-10
+
+**What happened.** The lead asked for a deliberate sweep for the three shapes this
+phase has produced five instances of by accident, prioritising `tests/conftest.py` and
+`tests/harness/` because a defect in a shared fixture is multiplied across every
+agent's suite and nobody owns them as a spec. Findings below; two are mine and fixed
+here, two are C's and are reported rather than edited.
+
+**Mine, finding 1 — `data_guard`'s reason codes are hand-listed, and my own progress
+file claims they are not.** `test_every_reason_code_exists_in_the_consoles_prose_map`
+in `tests/engines/test_data_guard.py` writes out four codes by hand and asserts each is
+a key in C's `REASON_PROSE`. My Phase 2 note says "a test derives the code list from
+the engine's own constants so it cannot decay". It does not. A fifth code added to
+`data_guard/contracts.py` and not added to the list in the test is never checked, and
+`ownership.md` says exactly what happens then: the console renders "No reason was
+recorded." **silently, with no error anywhere.** Spec 46 requires enumeration rather
+than hand-listing for engine 7's codes; `data_guard` predates that rule and never got
+it. The test can fail — it just cannot fail for the thing the standard was written
+about.
+
+**Mine, finding 2 — the database filename is checked against itself.**
+`tests/cli/test_entrypoints.py` asserts `clients.store.db_path == paths.db /
+DB_FILENAME`, with `DB_FILENAME` imported from the module under test. Both sides move
+together, so the test cannot notice the constant drifting away from the layout
+`architecture-context.md` documents as `db/  acsoe.sqlite`. Low severity — the daemon
+and the console both import the constant, so they would still agree with each other —
+but it is the shape, and it is one line to fix by pinning the documented literal in the
+test.
+
+**Fix.** The reason-code test now enumerates every `REASON_*` constant declared in
+`data_guard/contracts.py` and asserts each is in `REASON_PROSE`, so adding a code
+without prose is a red test rather than a silent blank in the console. The filename
+assertion pins `"acsoe.sqlite"` as a literal with a comment naming the document it
+comes from. Both mutated to confirm they now fail for the reason they exist.
+
+**Also corrected: the progress-file claim.** It said the list was derived. It was not,
+and the claim is exactly the kind that makes a later reader stop looking.
+
+### The envelope's third refusal branch could be deleted and nothing noticed
+
+**Agent:** A · **Task:** lead-assigned sweep · **Date:** 2026-09-10
+
+**What happened.** Scanning my own paths for the weak-assertion shape — `pytest.raises`
+on a type that many causes share, with no look at the message — turned up four in
+`tests/clients/kraken/test_rest.py`. Chasing the first one found something worse than a
+weak assertion. `parse_envelope` has **three** refusal branches, all raising
+`KrakenUnavailableError`:
+
+1. the body is not JSON at all;
+2. the body is JSON but is not a Kraken envelope — no `error` key;
+3. the body is an envelope with neither an `error` nor a `result`.
+
+Branches 1 and 3 have tests. Branch 2 has none, and the test named for it —
+`test_a_body_that_is_not_an_envelope_is_unavailable_not_a_success` — passes
+`b"<html>maintenance</html>"`, which is not JSON, so it exercises branch **1**. The
+name claims one branch, the input reaches another, and the shared exception type means
+nothing about the failure distinguishes them.
+
+Confirmed by deleting branch 2 outright:
+
+```
+mutated: parse_envelope no longer refuses valid JSON that is not an envelope
+82 passed in 3.50s
+```
+
+**Why the branch is load-bearing rather than defensive.** With it gone, a body of
+`{"result": {...}}` carrying **no `error` key at all** takes `errors = payload.get("error") or []`,
+finds nothing to object to, finds a `result`, and is **returned as a clean success**.
+The envelope rule exists precisely because Kraken signals application errors in that
+array and not in the HTTP status, so a body that does not carry the array is one where
+we cannot know whether it was a yes or a no — and invariant 3 says the absence of a
+"no" is never a "yes". This is the one function in the package that decides whether a
+response is a success, and a third of its refusal logic was unexercised.
+
+**Fix.** A test that hands `parse_envelope` valid JSON carrying a `result` and no
+`error`, and asserts it raises. Deleting the branch now fails it. The misleading test
+is renamed to say which branch it actually covers — it is a good test of branch 1 and
+was only ever mislabelled — and the two of them now name their branches, so the third
+is visibly a third rather than a variation.
+
+**The generalisation.** The weak-assertion rule found this, but not the way I expected:
+the assertion being weak was the *symptom*, and the cause was that a shared exception
+type let a test drift onto a neighbouring branch without anything objecting. Where
+several branches raise one type, the message is not a nicety — it is the only thing
+that says which branch ran.
+
+### Sweep findings in the shared harness — reported to C, not edited
+
+**Agent:** A · **Task:** lead-assigned sweep · **Date:** 2026-09-10
+
+Three findings in `tests/conftest.py` and `tests/harness/`, which are C's. Recorded
+here because the sweep is mine and the reasoning should not live only in a message.
+They share one mechanism: **a fallback that fires silently when an import fails**, so
+the failure mode is not a red test but a green suite that has quietly stopped testing.
+
+**1. `tests/harness/fake_kraken.py` — the error classes fall back, and the test named
+for catching that cannot.** The harness does `from acsoe.clients.kraken import
+KrakenError, KrakenAPIError, KrakenUnavailableError` inside a `try`, and on `ImportError`
+defines its own three classes. That was right in Phase 1, when the real ones did not
+exist. `test_configured_transport_failure_raises_the_real_error_type` exists to prove
+the fake raises *the real client's* type across the handover — and it imports
+`KrakenError` **from the harness**, i.e. from whichever branch ran. Both sides move
+together.
+
+Simulated the fallback by blocking `acsoe.clients.kraken` at the import system and
+importing the harness fresh — no repo file touched:
+
+```
+fallback active: tests.harness.fake_kraken.KrakenError
+pytest.raises(KrakenUnavailableError) caught it : True
+assert isinstance(caught.value, KrakenError)    : True
+```
+
+The test passes against the fallback. Today the real branch is live —
+`fake_kraken.KrakenError is acsoe.clients.kraken.errors.KrakenError` is `True` — and
+nothing anywhere asserts that. One line fixes it: `assert KrakenError is
+RealKrakenError`, importing the real one directly.
+
+**2. `tests/harness/doubles.py::migrated_store` returns `None` on
+`ModuleNotFoundError`.** It is what `build_verify_doubles` uses to give
+`scripts/verify.py` a store. If the store client ever fails to import, the doubles come
+back with `store=None` and the criteria run against a client bundle with no store — the
+exact `Clients()`-of-`None`s shape that made `Orchestrator._record_run` unexecutable for
+a whole phase, and the criteria would still report PASS.
+
+**3. `pytest.importorskip` in `tests/conftest.py` skips on `ModuleNotFoundError`
+raised from *inside* the module.** Worth stating precisely, because the first half of
+this is reassuring and the second is not. An `ImportError` from inside a module is
+**re-raised** by pytest 9.1.1 — I checked, expecting the opposite — so a broken module
+fails loudly. A `ModuleNotFoundError` from inside it, which is what a dependency moving
+to an extra produces, is **skipped**. **370 test functions**, about a third of the
+suite, depend on a fixture guarded that way (`store`, `seeded_db`, `seed_fixtures`,
+`migrated_db`, `seed_clock`, `fake_clients_with_store`, `engine_context`,
+`verify_module`). They would vanish, the suite would be green, and the skip reason
+would read "the store client does not exist yet" — which would be false and would send
+the reader in the wrong direction.
+
+**What the three have in common, and it is not "imports".** Each was written when the
+thing it falls back from genuinely did not exist yet, and each was correct then. None
+has an assertion that the *real* branch is the live one, so none of them notices when
+its own reason for existing has expired. **A fallback for a thing that does not exist
+yet needs a test that fails once it does.** That is the same defect as a decayed
+assertion, arriving from the opposite direction: not a claim that stopped being
+checked, but a workaround that stopped being needed and stayed armed.
+
+### Two more in `tests/conftest.py`, and one of them reintroduces the bug it was written to prevent
+
+**Agent:** A · **Task:** lead-assigned sweep, second pass · **Date:** 2026-09-10
+
+The lead cleared `seed_fixtures` empirically and nothing else in the file. Going
+through the rest fixture by fixture found two more of the same family, both verified
+rather than reasoned about.
+
+**7. `seed_thresholds_from_config` swallows a *renamed* key exactly as it deliberately
+swallows a present-and-null one — and that is the drift it exists to stop.** It reads
+five `safety.*` values out of the committed config and injects them into
+`SeedThresholds`, with `except KeyError: continue` around each. Its own docstring
+recounts why it exists: the seed's default `max_errors_in_window` was 10 while the
+operator had set 20, the seed overshot the wrong limit, and "a Phase 3 test of engine
+17's error-rate input against it found the condition untripped and **failed pointing at
+the engine**".
+
+The docstring then draws a careful distinction — a key that is *present and null* is
+left to default, because "the operator has not decided yet" must not become a number
+this file invented. That is right. But `Config.get` raises `KeyError` for **absent** as
+well, and `continue` cannot tell the two apart. Simulated a rename:
+
+```
+configured max_errors_in_window  : 20
+after the rename                 : 10 (silently the seed's own default)
+```
+
+So renaming or removing a `safety.*` key puts the fixture straight back into the state
+that produced the original defect, by a different door, with nothing raised and nothing
+warned. The distinction the docstring makes is real and the code does not implement it:
+absent and null need different handling, and only one of them is a legitimate default.
+
+**8. `engine_context` skips silently if `EngineContext` is ever renamed, taking 44
+tests with it.** It does `importorskip("acsoe.core.contracts")`, then
+`getattr(contracts, "EngineContext", None)` and `pytest.skip` if that is `None`. Both
+guards were correct when `core/contracts.py` did not exist. It does now. If the class
+were renamed, every one of **44 test functions across 7 files** — `test_cost`,
+`test_data_guard`, `test_exchange`, `test_market_data_recorder`, `test_market_sensor`,
+`test_risk`, `test_scout`, i.e. every engine any of us has written — would report
+skipped, and the suite would be green.
+
+`paper_config` has the same shape and I am rating it lower rather than reporting it
+flat: it skips when `config/default.yaml` is missing, which is 45 more test functions,
+but a missing config file fails loudly elsewhere — `test_config.py` reads it with
+`read_text()` and would raise `FileNotFoundError`. The skip would be noise beside a real
+failure rather than silence.
+
+**All five harness findings are one rule and I would state it this way:** a fallback for
+a thing that does not exist *yet* has an expiry date, and nothing in the code records
+it. `try: import real / except: define our own`, `getattr(mod, "Name", None)` then skip,
+`except KeyError: continue` — each was correct when written and each is now a silent
+branch that fires on a condition that should be impossible. **The fix is never to delete
+the fallback; it is to add the assertion that the fallback is unreachable.** One line
+saying "the real branch is the live one" converts a silent workaround into a tripwire
+for the day someone breaks the thing it used to stand in for.
