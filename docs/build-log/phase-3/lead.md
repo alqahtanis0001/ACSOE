@@ -97,3 +97,86 @@ still remembered from before the crash while it still had it. Whatever was not
 remembered is gone, and it is gone in the way this project has already decided is
 worst: a bug that was fixed and not recorded is a bug that never happened.
 
+
+### Assessing the tree after the crash: three deterministic clusters, none of them the intermittent fault
+
+**Agent:** Lead · **Task:** phase 3 wave 1 resumption · **Date:** 2026-09-10
+
+**What happened.** The session moved to a standalone terminal, which removes the IDE-crash
+mechanism entirely — `claude` is no longer a child of the IDE process. On resumption
+`verify.py --phase 3` reported `FAIL toolchain_green`, with 23 failed / 1052 passed and two
+ruff errors. `mypy --strict src/` was clean across 68 files. The 23 failures sort into three
+clusters, and every one of them reproduces in isolation, so the standing "re-run the named
+test before you believe it" advice does not apply to any of them. Recording that up front
+because the previous crash cost time in exactly the opposite direction.
+
+**Cluster 1 — A, spec 38, seven failures plus both ruff errors.** `KrakenRestClient` now
+takes its two TTLs at construction and `_require_ttl` raises `KrakenUnavailableError` when
+one is `None`. `build_client` in `tests/clients/kraken/test_rest.py` predates that change and
+passes neither, so six `test_rest.py` tests and one in `test_secrets.py` fail on a missing
+TTL rather than on anything they are about. The implementation half of spec 38 landed; the
+existing-test half did not. Both ruff errors are `RUF100` unused-`noqa` on the two
+`assert cached is not None` narrowing lines in `rest.py` — `S101` is not enabled, so the
+suppression suppresses nothing.
+
+**Cluster 2 — B, spec 40, fifteen failures.** `engines/cost/{contracts,engine}.py` are
+rewritten against engine 1's real contract: `exchange.fee_tier.maker_fee_pct` /
+`taker_fee_pct`, and `failed_fetches` read for the operator sentence only. The docstring
+correcting "ratified" to "assumed" is written and is good. `tests/engines/test_cost.py` is
+untouched — `build_state` still hand-builds `exchange.fees.maker_pct` and
+`exchange.fallbacks_used` — so every cost test now blocks with `cost_inputs_unavailable`.
+This is the audit's own subject appearing as a red suite, which is the correct direction: the
+old fixtures agreed with the old engine and hid the mismatch for a phase; the new engine
+disagrees with them loudly. The remaining half is the larger one, because spec 40 requires
+the fixtures rebuilt from engine 1's output rather than repointed.
+
+**Cluster 3 — mine, and the alarm that caught it is A's.** See the decision entry below.
+
+**Why it matters that the clusters are clean.** A crash that leaves a half-edited tree looks
+like a hundred unrelated defects, and the recovery section of `PHASE-3-TASKS.md` was written
+after the last one for that reason. It held: config loaded first try, both TTL keys resolved,
+mypy was clean, and the three clusters map one-to-one onto the three agents' claimed specs
+with nothing left over. Nothing needed root-causing that was not simply unfinished.
+
+### Decision: the `Operator-chosen` marker stays a claim about trading behaviour, so `cache_ttl_s` loses it
+
+**Agent:** Lead · **Task:** spec 37 step 4, follow-up · **Date:** 2026-09-10
+
+**What happened.** `test_the_file_marks_exactly_these_ten_keys_as_the_operator_s` failed with
+one extra item in the set scanned from the file: `cache_ttl_s`. The YAML block I pasted from
+spec 37's appendix carries `# Operator-chosen 2026-09-10`, verbatim as the appendix has it
+and as step 4 asks for in as many words — "both marked operator-chosen 2026-09-10".
+
+**Options.** Add `kraken.cache_ttl_s` to `OPERATOR_REQUIRED_KEYS` in the two test files that
+declare it, or remove the marker from the YAML.
+
+**Chose.** Removed the marker, and replaced it with an explicit provenance line naming the
+lead and the spec, so the key still says where its value came from.
+
+**Because.** The marker is not decoration; `config/default.yaml`'s own header defines it, and
+the definition is narrow: a marked key is one "the context files name but never specify"
+whose value "is trading behaviour, so the lead may not invent one". A cache TTL is neither.
+The `kraken:` section header says of itself, three lines above the block I pasted, that
+everything in it "is OUR OWN self-imposed request budget and timeout, chosen by the lead" —
+and `rest_capacity`, `rest_refill_per_s` and `rest_timeout_s` all sit there unmarked. The
+appendix comment says the same thing about these two keys specifically: "OUR OWN re-fetch
+interval". Spec 37 step 4 contradicted its own block, and I wrote both.
+
+**The tie-breaker is what A built the test for.** Its docstring says the shipped file's nulls
+used to be the tenth-key alarm, and that with zero nulls "the lead can now add a tenth *and
+supply it*, and nothing would notice". This is that case, on the first occasion it arose,
+firing on the lead, within hours. Bumping the list to match the file is the one response that
+converts the alarm into a rubber stamp — it would pass on any tenth key the lead marked for
+any reason, including the one the test exists to catch. The list is the fixed thing and the
+file is what gets checked against it.
+
+**Cost, and it is real.** `OPERATOR_REQUIRED_KEYS` stays at ten, so nothing in the refusal
+machinery names `kraken.cache_ttl_s`, and an agent editing 300 or 60 would not be stopped by
+that list. It would still be stopped by `_refuse_nulls` if the key were emptied, and the
+values are now attributed in the file itself. If the operator's view is that they chose 300
+and 60 rather than the lead, the reversal is one line in each of two test files and this entry
+is what it should be read against — but it should be a deliberate answer, not a list bumped to
+silence a failing test.
+
+**Consequence.** Spec 37's step 4 and its appendix both still say "operator-chosen". Per rule
+6 I have not edited them; this entry is the correction, and step 4 is the wrong half.

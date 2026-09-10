@@ -95,7 +95,7 @@ kraken:                          # Client tuning. Requested by A, spec 25.
   rest_timeout_s: 10             # HTTP timeout. An order of magnitude above a healthy round
                                  # trip, short enough that a hung socket cannot outlive the
                                  # one-minute loop tick.
-  cache_ttl_s:                   # Operator-chosen 2026-09-10. How long a fetched snapshot may
+  cache_ttl_s:                   # Lead-chosen 2026-09-10, spec 37. How long a fetched snapshot may
                                  # price a decision before it must be fetched again. OUR OWN
                                  # re-fetch interval, not a claim about anything Kraken
                                  # publishes or permits.

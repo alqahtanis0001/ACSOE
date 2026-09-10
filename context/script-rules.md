@@ -86,7 +86,23 @@ When the lead closes a phase, add a summary at the top of that phase's file:
 
 ## Rules
 
-1. Write the entry when you fix the thing, not at the end of the session.
+1. **Write the entry when you have diagnosed the problem, before you write the fix.** Not
+   after the fix, not at the end of the task, not at the end of the session. This is a rule
+   and not advice, and it is the one rule here with a mechanism behind it: the diagnosis is
+   the only part of a fix that exists solely in your head. The code survives on disk whatever
+   happens to the session. The reasoning that found it does not.
+
+   The moment you know *why* something is broken, stop and write **What happened** and
+   **Why**. Then fix it, then come back and write **Fix**. An entry that stops after **Why**
+   is worth keeping; a perfect fix with no entry is a bug that never happened.
+
+   This is not hypothetical and it is not about crashes alone. Phase 1 lost work to three IDE
+   crashes. Phase 3 wave 1 was interrupted with three agents mid-task and every build log an
+   empty stub, while every progress file survived — because progress files are written before
+   the work and logs were being written after it. The habit, not the crash, is the defect: the
+   natural moment to write an entry *feels* like the end, and the end is the one moment that
+   is not guaranteed to arrive. A context limit, a machine fault, a reassignment or simply
+   finishing late all take the same thing.
 2. Use plain language. Someone reading this in six months has forgotten the code.
 3. Be specific — name the file, the function, the endpoint, the exact wrong behaviour.
 4. Record failures honestly, including your own wrong turns. A build log with no mistakes in it is a build log nobody will believe.
