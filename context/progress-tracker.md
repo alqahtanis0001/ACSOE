@@ -205,6 +205,21 @@ runs is the line nobody thinks to assert on.
 
 - **Phase 3 — economics. Unblocked and not yet planned.** It opens with two things, in this order. First, **wire B's engines 10 `cost`, 11 `risk` and 17 `safety` to A's real Kraken client**: all three were built during the Phase 2 overlap against a mock and the Phase 0 seed, they did not count toward Phase 2's gate, and *built* is not *done* — the Phase 3 criteria judge them against the real client. Second, **engine 7 `scout`**, which needs a real tradable universe and was deliberately left out of the overlap because it depends on data rather than on a contract.
 - **~~Engine 17's `CONDITION_ACTION` table is still unratified~~ — RATIFIED 2026-09-10.** The drawdown and loss-streak limits **freeze**; `close_all` is reserved for the invariant 14 data-outage escalation and for the operator's own button. Written into invariant 14 by spec 37, applied to the table by spec 42. B held on it for four specs and was right to.
+- **The ranking score inside engine 7 `scout` is absent on purpose and is a recorded absence
+  rather than a design.** Spec 44 asked for one candidate per tick and deliberately did not say
+  how to choose it; ordering is alphabetical over the whole universe, which is a placeholder that
+  cannot be mistaken for a judgement. No agent invented one, and B held the line on it through two
+  specs. **Phase 5 closes it**, and `rank_universe` in `engines/scout/contracts.py` is the single
+  named seam to edit — it exists as a separate function for that reason and for no other. Recorded
+  here at B's request because spec 44 step 3 asks for it and the tracker is the lead's file.
+
+  The blind spot found while proving it is worth carrying with it: the engine builds its scan set
+  as `sorted(set(rules) | set(quotes))`, so `rank_universe` is always handed an already-ordered
+  sequence, and a ranking that merely preserved arrival order still answers alphabetically end to
+  end. Whoever replaces the placeholder must test `rank_universe` **directly** on input where
+  arrival order and the intended order disagree on every element; an end-to-end fixture cannot see
+  the difference.
+
 - **~~`cli/engine.py` and its three `None` clients, blocked on `market_data.pairs` and `market_data.book_depth`~~ — RULED 2026-09-10, and the answer is that neither key exists.** They stay undefaulted. The subscription set is derived per tick from the pairs whose quote currency the account actually holds, in engine 2, from `state["exchange"]`; the tradable universe is engine 7's and is a different question. `acsoe engine` does **not** refuse to start without credentials — paper mode is the default and must run on a fresh clone, and the gates block on their own. Spec 39.
 - **~~Phase 2 carries a debt from Phase 1~~ — PAID, 2026-09-10.** The status band gained its `Running` and `Frozen` readings in Phase 2 as required. B added the column (spec 31), the lead wrote the run record and the mode write in `core/`, and C's reader takes the mode as a fact rather than inferring it (spec 32). `console_reads_persisted_mode` PASSes against a real daemon driving a real store. Kept here struck through rather than deleted, because a debt that is quietly removed from a list is indistinguishable from one that was never recorded.
 - **Before Phase 4:** replace the cycle feed's full scan of `block_records` with a most-recent-N read on B's store surface. Harmless while the table holds a seed; engine 19 `memory` starts writing a row per guard per tick in Phase 4, which is when it stops being harmless.
