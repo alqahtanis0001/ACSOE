@@ -89,12 +89,45 @@ async def test_every_value_is_injectable(fake_kraken: FakeKrakenClient) -> None:
     assert book.spread == Decimal("1.0")
 
 
+def test_the_harness_is_using_the_real_error_types_not_its_own_fallbacks() -> None:
+    """The assertion the test below needs and did not have. Found by A, 2026-09-10.
+
+    `fake_kraken.py` imports the three error classes from `acsoe.clients.kraken` and
+    defines its own on `ImportError` — correct when written, because `clients/kraken/`
+    was Phase 2 and this harness is Phase 0. The fallback is still reachable today:
+    `tests/verify/` drives criteria against fabricated trees carrying `tests/` and no
+    `src/`, and the harness imports there with no real client to find.
+
+    So the fallback stays. What was missing is anything noticing **which branch is
+    live**, and the test below cannot: it imports `KrakenError` from the harness, so
+    against the fallback both sides move together and it passes while asserting
+    nothing about the real client. A simulated the fallback by blocking
+    `acsoe.clients.kraken` at the import system and confirmed the whole test still
+    passes against classes that are not the real error type.
+
+    That is the same shape as a mock agreeing with its caller, and it is the third
+    time this project has found it. One identity check settles it.
+    """
+    from acsoe.clients.kraken import KrakenAPIError as RealAPIError
+    from acsoe.clients.kraken import KrakenError as RealError
+    from acsoe.clients.kraken import KrakenUnavailableError as RealUnavailable
+
+    assert KrakenError is RealError
+    assert KrakenAPIError is RealAPIError
+    assert KrakenUnavailableError is RealUnavailable
+
+
 @pytest.mark.asyncio
 async def test_configured_transport_failure_raises_the_real_error_type(
     fake_kraken: FakeKrakenClient,
 ) -> None:
     """Same type the real client raises, so a fail-closed test keeps asserting on
-    the same exception across the Phase 2 handover."""
+    the same exception across the Phase 2 handover.
+
+    "The real error type" is only true because the test above asserts it. On its own
+    this test is satisfied by the harness's fallback classes, which are not the real
+    ones — see that test for why, and do not delete it thinking it is a tautology.
+    """
     fake_kraken.fail("balance")
     with pytest.raises(KrakenUnavailableError) as caught:
         await fake_kraken.balance()

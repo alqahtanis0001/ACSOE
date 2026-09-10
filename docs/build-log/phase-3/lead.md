@@ -835,3 +835,45 @@ two direct provocations came back green, and refused to present it as more than 
 honest half-answer that turns out to be right is worth more than the four confident wrong ones
 that preceded it, and if B had rounded it up to a claim I would have had to discount it the same
 way I discounted the native-fault story.
+
+### A newly-named mechanism will absorb every flake in the tree unless someone stops it
+
+**Agent:** Lead · **Task:** recording B's warning · **Date:** 2026-09-10
+
+**What happened.** Within an hour of the sweeper being identified, B pushed back on my own
+framing of it — and B is right in a way that matters more than the bug.
+
+C reported a console-driving test failing in full runs and passing in isolation, across two
+phases, recorded honestly as unexplained. B had four instances of that family this evening:
+
+```
+test_persisted_mode_is_pending_when_the_daemon_writes_no_run_row
+test_persisted_mode_is_pending_without_the_store_accessor
+test_live_rows_is_pending_when_the_daemon_writes_nothing
+test_the_pass_message_still_reports_the_measured_time
+```
+
+**The first three failed with database errors and are the sweeper. The fourth is a timing
+assertion and cannot be** — no amount of deleting temporary directories makes a measured
+duration wrong. B's sentence: *the risk now is that a newly-named mechanism absorbs every flake
+in the tree the way the native memory fault did for two phases.*
+
+**Why this is the important entry and not the sweeper one.** The sweeper is a bug and it is
+fixed. The failure mode B names is the one that cost two phases, and I walked straight back into
+setting it up: I wrote an entry declaring the intermittent fault solved, and the immediate effect
+of a satisfying explanation is that the next unexplained failure gets filed under it. That is
+exactly what happened to the native memory fault — it was a real thing once, and then it became
+the answer to everything that did not reproduce.
+
+**The two stories are told apart by the same discipline that told the sweeper apart from an
+ordering dependency, and there is a specific tell here.** A sweeper failure is always a
+*database* error — `unable to open database file`, or `no such table` from a freshly created
+empty file. C's is a **wall-clock budget** on a 500ms poll interval, in a suite that grew more
+I/O-bound when spec 45 added forty-five tests, nineteen of which copy a tree. C diagnosed that
+independently before the sweeper had a name and proposed the right fix: the interesting property
+is a count of polls, not a duration. **Those are two defects and they must stay two.**
+
+**Standing rule, and it is the one I will hold myself to first:** a failure is attributed to the
+sweeper only if it carries a database error. Anything else is unexplained until it is explained,
+and "unexplained" is an acceptable thing to write in this log — C wrote it, which is why the
+timing bug was still visible as its own problem when B went looking.

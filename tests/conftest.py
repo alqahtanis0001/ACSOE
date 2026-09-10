@@ -49,6 +49,79 @@ VERIFY_SCRIPT = REPO_ROOT / "scripts" / "verify.py"
 
 
 # --------------------------------------------------------------------------- #
+# Skipping for the right reason
+# --------------------------------------------------------------------------- #
+#
+# Found by A on 2026-09-10, sweeping for tests that cannot fail. `pytest.importorskip`
+# is right about a module that has not been written yet and wrong about one that is
+# written and broken, and it cannot tell them apart: a `ModuleNotFoundError` raised
+# from *inside* a module - a dependency moved to an extra, an optional import added -
+# is caught by the same handler as the module's own absence, and the run reports a
+# skip carrying a reason that is now false.
+#
+# The scale is what makes it worth a helper rather than a note. **About 370 test
+# functions**, roughly a third of the suite, reach one of the fixtures below. All of
+# them would vanish, the suite would report green, and the skip reason would say "the
+# store client does not exist yet" - pointing whoever read it away from the real
+# cause. A green suite that has quietly stopped testing is the worst shape this
+# project keeps finding, and it is the shape spec 45's induced failures exist to
+# catch one layer up.
+#
+# `scripts/verify.py`'s `try_import` already draws exactly this distinction for
+# exactly this reason, and has since Phase 0. The tests should not be looser than the
+# gate that judges them.
+
+
+def require_module(name: str, *, reason: str) -> ModuleType:
+    """Import `name`, skipping **only** when `name` itself is what is missing.
+
+    A `ModuleNotFoundError` naming anything else is re-raised, so a module that
+    exists and cannot import fails loudly and says why, rather than skipping with a
+    reason about work that was finished months ago.
+    """
+    try:
+        return importlib.import_module(name)
+    except ModuleNotFoundError as exc:
+        missing = exc.name or name
+        if missing == name or name.startswith(missing + "."):
+            pytest.skip(reason)
+        raise
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Fail the whole run once, up front, if a module the shared fixtures need is
+    written but unimportable.
+
+    Without this the same fault surfaces as several hundred separate errors, which is
+    loud but unreadable, and every one of them is a fixture failing rather than the
+    thing that actually broke. One `UsageError` naming the module and the real
+    exception is what a person can act on.
+
+    A module that genuinely does not exist is **not** an error here: several suites
+    run against trees where a package has not been written yet, and skipping is the
+    right answer for those. Only "it is on disk and it will not import" aborts.
+    """
+    for dotted in (
+        "acsoe.core.contracts",
+        "acsoe.clients.store.client",
+        "acsoe.clients.store.migrations",
+        "acsoe.clients.store.seed",
+    ):
+        try:
+            importlib.import_module(dotted)
+        except ModuleNotFoundError as exc:
+            missing = exc.name or dotted
+            if missing == dotted or dotted.startswith(missing + "."):
+                continue  # not written yet; the fixtures skip, correctly
+            raise pytest.UsageError(
+                f"{dotted} exists but cannot be imported: it needs {missing!r}, which "
+                "this interpreter does not have. Left to the fixtures this would have "
+                "been several hundred silent skips reporting that the store does not "
+                "exist yet, which is not true and is not the problem."
+            ) from exc
+
+
+# --------------------------------------------------------------------------- #
 # The network guard
 # --------------------------------------------------------------------------- #
 
@@ -151,7 +224,7 @@ def migrated_db(tmp_path: Path) -> Path:
     Never under `data/`: `data/` is gitignored and no criterion or test may depend
     on anything inside it.
     """
-    migrations = pytest.importorskip(
+    migrations = require_module(
         "acsoe.clients.store.migrations", reason="db/migrations/ runner does not exist yet"
     )
     db_path = tmp_path / "acsoe.sqlite"
@@ -186,7 +259,7 @@ def seed_fixtures(tmp_path: Path) -> Any:
     Never under `data/`: `data/` is gitignored and no test or criterion may depend
     on anything inside it.
     """
-    seed = pytest.importorskip(
+    seed = require_module(
         "acsoe.clients.store.seed", reason="the seed generator does not exist yet"
     )
     return seed.seed_database(tmp_path / "acsoe.sqlite", thresholds=seed_thresholds_from_config())
@@ -201,7 +274,9 @@ def seed_thresholds_from_config() -> Any:
     thing and is deliberately left to `SeedThresholds` to default, because "the
     operator has not decided yet" must not become a number this file invented.
     """
-    seed = pytest.importorskip("acsoe.clients.store.seed")
+    seed = require_module(
+        "acsoe.clients.store.seed", reason="the seed generator does not exist yet"
+    )
     if not (REPO_ROOT / "config" / "default.yaml").is_file():
         return seed.SeedThresholds()
     config = load_default_config()
@@ -264,7 +339,7 @@ def seed_clock(seed_fixtures: Any) -> FixedClock:
 @pytest.fixture
 def store(migrated_db: Path) -> Iterator[Any]:
     """B's real store client against the migrated temporary database."""
-    client_module = pytest.importorskip(
+    client_module = require_module(
         "acsoe.clients.store.client", reason="the store client does not exist yet"
     )
     client = client_module.StoreClient(migrated_db)
@@ -300,7 +375,7 @@ def engine_context(fixed_clock: FixedClock, paper_config: MappingConfig, fake_cl
     in `engine-contracts.md` and adding one is an escalation to the operator, not
     something a test fixture invents.
     """
-    contracts = pytest.importorskip(
+    contracts = require_module(
         "acsoe.core.contracts", reason="core/contracts.py does not exist yet"
     )
     engine_context_cls = getattr(contracts, "EngineContext", None)

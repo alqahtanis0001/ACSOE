@@ -193,11 +193,38 @@ def fresh_state() -> dict[str, Any]:
 
 
 def migrated_store(db_path: Path) -> Any:
-    """B's real store client against a migrated database, or None if unavailable."""
+    """B's real store client against a migrated database, or `None` if not written yet.
+
+    **`None` means "the store client does not exist", and nothing else.** That
+    distinction is the whole of this function's care, and it was not being made:
+    `except ModuleNotFoundError` caught the module's own absence *and* a missing
+    dependency raised from inside it, so a store that existed and would not import
+    came back as `None` — indistinguishable from Phase 0.
+
+    Why that matters, from A's sweep on 2026-09-10: `build_verify_doubles` hands this
+    to `scripts/verify.py`, so criteria would tick an orchestrator against a client
+    bundle with no store and **still report PASS**. It is the shape that made
+    `Orchestrator._record_run` unexecutable for a whole phase — `cli/engine.py` passed
+    three `None`s, and two lines with a duplicate keyword sat there uncatchable until
+    spec 39 wired a real store. A fixture that makes a branch unreachable is zero
+    coverage wearing the costume of weak coverage.
+
+    `None` is kept for the genuinely-absent case rather than raising, because several
+    criteria are meant to run on trees with no store: `data_guard_blocks_bad_data`
+    judges an engine that never touches one. Making the store mandatory turned
+    eighteen of those green and correct tests into PENDING, which is the same defect
+    pointed the other way. The narrow `except` is what separates the two, and it is
+    the same discrimination `require_module` in `tests/conftest.py` and `try_import`
+    in `scripts/verify.py` both draw.
+    """
     try:
         from acsoe.clients.store.client import StoreClient
-    except ModuleNotFoundError:
-        return None
+    except ModuleNotFoundError as exc:
+        target = "acsoe.clients.store.client"
+        missing = exc.name or target
+        if missing == target or target.startswith(missing + "."):
+            return None
+        raise
     client = StoreClient(db_path)
     client.migrate()
     return client

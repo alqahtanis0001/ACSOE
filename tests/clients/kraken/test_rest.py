@@ -452,3 +452,92 @@ async def test_the_nonce_strictly_increases_under_a_clock_that_stands_still() ->
     nonces = [client._nonce]
     await client.balance()
     assert client._nonce > nonces[0]
+
+
+# --------------------------------------------------------------------------- #
+# The shapes the exchange should never send
+#
+# Every refusal below raises `KrakenUnavailableError`, so each asserts the
+# message: the type alone cannot say which branch ran, and a test that drifts
+# onto a neighbouring branch stays green while its own name disagrees with it.
+# All six were found by disabling the branch and watching nothing object.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_money_field_that_arrives_as_a_float_is_refused() -> None:
+    """The precision guard at the boundary, and it was the least tested thing here.
+
+    `json.loads` produces a Python float for any unquoted JSON number, so an
+    unquoted `0.0026` in a Kraken response arrives already rounded. By the time a
+    float reaches a validator the precision is gone and accepting it launders the
+    defect — `code-standards.md` opens its money section with that rule. The client
+    refuses rather than coercing, and this is what says so.
+    """
+    with pytest.raises(KrakenUnavailableError) as caught:
+        map_trade_volume(
+            {**fixture("trade_volume")["result"], "maker_fee_pct": 0.0026},
+            fetched_at=0,
+        )
+    assert "float" in str(caught.value)
+    assert "maker_fee_pct" in str(caught.value)
+
+
+def test_a_money_field_that_is_not_a_number_is_refused() -> None:
+    """Distinct from the float case and from a *missing* field.
+
+    Invisible through `map_asset_pairs`, which catches this per pair and drops the
+    pair — so removing the raise produces the same observable outcome by a different
+    route. Asserted against `map_trade_volume`, where the failure reaches the caller.
+    """
+    with pytest.raises(KrakenUnavailableError) as caught:
+        map_trade_volume(
+            {**fixture("trade_volume")["result"], "volume_30d": "not-a-number"},
+            fetched_at=0,
+        )
+    assert "not a decimal number" in str(caught.value)
+
+
+def test_asset_pairs_that_is_not_a_mapping_is_refused() -> None:
+    """Kraken answering with a list where a map belongs."""
+    with pytest.raises(KrakenUnavailableError) as caught:
+        map_asset_pairs([{"pair": "BTC/USD"}], fetched_at=0)
+    assert "not a mapping" in str(caught.value)
+
+
+def test_asset_pairs_where_no_pair_is_usable_raises_rather_than_returning_an_empty_map() -> None:
+    """An empty universe must arrive as a failure, never as a successful empty answer.
+
+    A pair with an incomplete rule set is dropped — that is deliberate, so one
+    delisted symbol cannot take the universe down. When *every* pair is dropped the
+    result is not "no pairs are tradable", it is "this fetch told us nothing", and
+    the two must not look alike: an empty `PairRulesSnapshot` returned as a success
+    propagates as an empty subscription scope and an empty tradable universe, which
+    is a system that has silently stopped trading and reports nothing wrong.
+    """
+    with pytest.raises(KrakenUnavailableError) as caught:
+        map_asset_pairs({"BROKEN/USD": {"base": "BROKEN", "quote": "USD"}}, fetched_at=0)
+    assert "no pair" in str(caught.value)
+
+
+def test_a_malformed_book_level_is_refused() -> None:
+    """A level that is not a `[price, volume]` pair. Absent is never zero."""
+    with pytest.raises(KrakenUnavailableError) as caught:
+        map_order_book(
+            {"BTC/USD": {"bids": [["1", "1"]], "asks": [["2"]]}},
+            pair="BTC/USD",
+            depth=10,
+            fetched_at=0,
+        )
+    assert "malformed" in str(caught.value)
+
+
+def test_an_error_field_that_is_not_a_list_is_refused() -> None:
+    """`{"error": "boom"}` — the envelope's fourth branch, and the last untested one.
+
+    A truthiness test on `payload["error"]` would treat a non-empty *string* as a
+    populated error array and happen to do the right thing, and would treat `""` as
+    success. Neither is a decision anyone made. The shape is checked instead.
+    """
+    with pytest.raises(KrakenUnavailableError) as caught:
+        parse_envelope(json.dumps({"error": "boom", "result": {}}), "balance")
+    assert "was not a list" in str(caught.value)
