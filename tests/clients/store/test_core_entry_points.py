@@ -257,7 +257,11 @@ def test_the_two_failures_are_distinguishable_by_type(store: StoreClient) -> Non
     store.start_run("run-a", mode="paper", started_at=1_000)
 
     assert store.set_system_mode("run-missing", "running", at=2_000) is False
-    with pytest.raises(StoreError):
+    # `match=` rather than the bare form: `StoreError` is raised from four places in this
+    # client, so the bare assertion cannot tell the failure induced here from one that
+    # happened first. `code-standards.md` gained that rule on 2026-09-10 after A found the
+    # same shape in `clients/kraken/`, where every fail-closed path raises one type.
+    with pytest.raises(StoreError, match="unknown system mode"):
         store.set_system_mode("run-a", "nonsense", at=2_000)
 
 

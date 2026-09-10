@@ -26,6 +26,7 @@ __all__ = [
     "BOUNDARY_SOURCE",
     "CONDITION_ACTION",
     "DATA_GUARD_ENGINE",
+    "ESCALATING_CONDITION",
     "LOSS_STREAK_SCAN_LIMIT",
     "REASON_INPUTS_UNAVAILABLE",
     "SafetyAction",
@@ -33,6 +34,9 @@ __all__ = [
     "SafetyCondition",
     "SafetyReadings",
     "SafetyThresholds",
+    "command_for",
+    "escalating_conditions",
+    "strongest",
 ]
 
 #: Engine 4's registry name, as it appears in `block_records.blocked_by`.
@@ -90,36 +94,42 @@ _ACTION_RANK: Final[Mapping[SafetyAction, int]] = {
     SafetyAction.CLOSE_ALL: 2,
 }
 
-#: **The policy table. PROVISIONAL — awaiting a lead ruling, escalated 2026-09-09.**
+#: **The policy table. Ruled by the operator on 2026-09-10 and written into invariant 14
+#: by spec 37; applied here by spec 42.** No longer provisional, and no longer this
+#: engine's reading of a contradiction.
 #:
-#: `trading-invariants.md` §14 and `feature-specs/36` cannot both be satisfied by the
-#: Phase 0 seed, and the disagreement is exactly about this mapping:
+#: `CLOSE_ALL` is reserved for invariant 14's data-outage escalation and for the
+#: operator's own Close all button. Nothing else in this table may reach it, and adding a
+#: condition that does is an escalation rather than an edit.
 #:
-#: - §14 says `safety` escalates — sets `close_intent`, i.e. writes `close_all` — on
-#:   "its configured drawdown and loss-streak limits are breached" or "a sustained data
-#:   outage", when there are open positions or resting entry orders.
-#: - Spec 36's Check When Done says "it **freezes** on the seeded drawdown".
+#: **The distinction is what the condition is a statement about**, and it is invariant
+#: 14's to state rather than this module's to restate — the short form, so a reader here
+#: knows there is a reason and where to find it: a drawdown or a losing streak is a
+#: statement about *past* trades, so liquidating on one realises a paper loss on the
+#: system's own authority at the moment it has least evidence it is reading the market
+#: correctly. A sustained outage is a statement about *present* knowledge, and unknown
+#: exposure is worse than a bad fill. Freeze stops new positions while the manage chain
+#: keeps watching the open ones, and the operator decides whether to liquidate.
 #:
-#: The seed carries drawdown 0.2000 against a 0.10 limit, a streak of 8 against 5, **and**
-#: 2 open positions and 2 resting entry orders — every precondition §14 names. So under
-#: §14 the seeded drawdown emits `close_all`; under spec 36 it emits `freeze`.
+#: The error rate freezes for a related but separate reason: it is an engine-health
+#: problem rather than account exposure, and liquidating an account because the system is
+#: throwing exceptions would be the breaker causing the loss it exists to prevent.
 #:
-#: **Implemented reading, pending the ruling:** spec 36's "freezes" is the loose one.
-#: `close_all` also sets the mode to `frozen`, so a `close_all` on the seeded drawdown
-#: *is* freezing on the drawdown, and spec 36's real claim is its second half — that a
-#: command appears on a tick where the opportunity chain never ran. This reading makes
-#: §14 literal, and §14 is a trading invariant, which outranks a spec's wording.
-#:
-#: The error rate maps to `FREEZE` because §14 does not list it among the escalation
-#: conditions at all: it is an engine-health problem, not account exposure, and
-#: liquidating an account because the system is throwing exceptions would be the breaker
-#: causing the loss it exists to prevent.
+#: Two rows changed on 2026-09-10 — `DRAWDOWN` and `LOSS_STREAK`, both from `CLOSE_ALL`.
+#: `ERROR_RATE` and `DATA_OUTAGE` were already as ruled.
 CONDITION_ACTION: Final[Mapping[SafetyCondition, SafetyAction]] = {
-    SafetyCondition.DRAWDOWN: SafetyAction.CLOSE_ALL,
-    SafetyCondition.LOSS_STREAK: SafetyAction.CLOSE_ALL,
+    SafetyCondition.DRAWDOWN: SafetyAction.FREEZE,
+    SafetyCondition.LOSS_STREAK: SafetyAction.FREEZE,
     SafetyCondition.ERROR_RATE: SafetyAction.FREEZE,
     SafetyCondition.DATA_OUTAGE: SafetyAction.CLOSE_ALL,
 }
+
+#: The one condition permitted to escalate, named rather than inferred from the table
+#: above. Read by :func:`escalating_conditions` and asserted by the tests, so "nothing but
+#: the outage reaches `close_all`" is a property the code states rather than one a reader
+#: has to check by eye. Invariant 14, and spec 42's scope limit in as many words: "do not
+#: make `close_all` reachable from any condition other than the data outage".
+ESCALATING_CONDITION: Final = SafetyCondition.DATA_OUTAGE
 
 #: Whether each threshold trips **at** its configured value or only **above** it, and the
 #: sentence that fixes it. Written out because an off-by-one in a circuit breaker fires it
@@ -148,8 +158,34 @@ BOUNDARY_SOURCE: Final[Mapping[SafetyCondition, str]] = {
 
 
 def strongest(actions: tuple[SafetyAction, ...]) -> SafetyAction:
-    """The most severe action among those asked for. Empty means :data:`SafetyAction.NONE`."""
+    """The most severe action among those asked for. Empty means :data:`SafetyAction.NONE`.
+
+    **One tick emits at most one command, and it is the strongest one.** Spec 42 step 6:
+    when several conditions trip together the more severe action wins and the two are not
+    both emitted. A drawdown and a data outage on the same tick emit `close_all`, not
+    `freeze` and not both.
+
+    Ranked rather than ordered, deliberately. `_ACTION_RANK` is a decision someone took;
+    the order `SafetyCondition` happens to be declared in is not, and a table that relied
+    on it would silently change behaviour the next time a condition was added in the
+    middle. `max` with an explicit key cannot be reordered into being wrong.
+    """
     return max(actions, key=lambda action: _ACTION_RANK[action], default=SafetyAction.NONE)
+
+
+def escalating_conditions(tripped: tuple[SafetyCondition, ...]) -> tuple[SafetyCondition, ...]:
+    """Those of `tripped` that asked for a `close_all`.
+
+    Used for the suppression sentence, which an operator reads when the breaker did
+    nothing. "No open position and no resting entry order" is only half an answer — the
+    useful half names *which* condition wanted to liquidate, because after the ruling that
+    is always the data outage and never the drawdown a reader might assume.
+    """
+    return tuple(
+        condition
+        for condition in tripped
+        if CONDITION_ACTION[condition] is SafetyAction.CLOSE_ALL
+    )
 
 
 def command_for(action: SafetyAction) -> CommandName | None:
@@ -217,6 +253,14 @@ class SafetyAssessment(BaseModel):
     the console and the log, but emits nothing." The assessment is the record of the
     *evaluation*; the command row is the record of the *decision*, and research needs
     both.
+
+    **`action` is what the tripped conditions asked for, not necessarily what was
+    emitted.** They differ on a fall-through: invariant 14, ruled 2026-09-10, says a
+    suppressed escalation emits the strongest action that is not suppressed instead of
+    emitting nothing — so a tick can record `action: close_all` alongside
+    `command_emitted: freeze`, with `suppressed_because` naming the escalation that could
+    not happen. That is the one case where all three are set, and it is deliberate:
+    collapsing them would lose the fact that a liquidation was wanted and refused.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

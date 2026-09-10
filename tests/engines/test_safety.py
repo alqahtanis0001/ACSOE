@@ -44,6 +44,7 @@ from acsoe.clients.store.contracts import (
 from acsoe.core.contracts import EngineContext, EngineStatus
 from acsoe.engines.safety.contracts import (
     CONDITION_ACTION,
+    ESCALATING_CONDITION,
     REASON_INPUTS_UNAVAILABLE,
     SafetyAction,
     SafetyCondition,
@@ -474,9 +475,42 @@ def test_errors_outside_the_window_are_not_counted(
 # --------------------------------------------------------------------------- #
 
 
+def outage_tick(
+    store: StoreClient, paper_config: Any, fake_clients: Any, **kwargs: Any
+) -> Any:
+    """One tick standing just past the outage limit. The only condition that escalates.
+
+    Rewritten under spec 42. These three tests used a deep drawdown to reach the
+    `close_all` branch, which the operator's 2026-09-10 ruling closed off: a drawdown now
+    emits `freeze`, so a drawdown fixture no longer exercises the escalation precondition
+    at all and the tests were passing on the wrong branch. Exposure gates exactly one
+    condition now, and the fixture has to be that condition.
+    """
+    limit = paper_config.get("safety.max_consecutive_data_blocks")
+    run_id, cycle_id = write_outage(store, limit)
+    return run_safety(
+        store,
+        paper_config,
+        fake_clients,
+        run_id=run_id,
+        cycle_id=cycle_id,
+        now_micros=2_000_000_000,
+        trading_blocked_by="data_guard",
+        **kwargs,
+    )
+
+
 def test_exposure_permits_the_escalation_on_the_seed(
     seeded_store: StoreClient, seed_fixtures: Any, paper_config: Any, fake_clients: Any
 ) -> None:
+    """The seed carries both halves: an outage past the limit, and something to close.
+
+    `cycle_id=1` is load-bearing here and is the opposite choice from the drawdown tests
+    below. A fresh `run_id` at cycle 1 is treated as the first tick after a restart, so the
+    walk is allowed to cross into the seeded runs and picks up their 18-tick outage — which
+    is exactly the property being tested. At cycle 2 the adjacency check breaks and the
+    stored count is zero.
+    """
     result = run_safety(
         seeded_store,
         paper_config,
@@ -486,6 +520,7 @@ def test_exposure_permits_the_escalation_on_the_seed(
         now_micros=seed_fixtures.seed_now,
     )
 
+    assert SafetyCondition.DATA_OUTAGE.value in result.data["tripped"]
     assert result.data["open_positions"] == len(seed_fixtures.open_positions)
     assert result.data["resting_entry_orders"] == len(seed_fixtures.resting_entry_orders)
     assert result.data["command_emitted"] == CommandName.CLOSE_ALL.value
@@ -494,21 +529,23 @@ def test_exposure_permits_the_escalation_on_the_seed(
 def test_no_exposure_suppresses_the_escalation(
     calm: StoreClient, paper_config: Any, fake_clients: Any
 ) -> None:
-    """The pass half for both exposure inputs. A drawdown deep enough to escalate, and
-    nothing open — so the assessment still records the breach and no `close_all` is
-    written, because liquidating an account with nothing in it is a command with no
-    effect."""
-    write_equity(calm, equity="500.00", peak="1000.00", ts=2_000)
+    """The pass half for both exposure inputs. An outage past the limit and nothing open,
+    so the assessment still records the breach and no `close_all` is written — liquidating
+    an account with nothing in it is a command with no effect.
 
-    result = run_safety(
-        calm, paper_config, fake_clients, run_id=RUN, cycle_id=1, now_micros=3_000
-    )
+    The suppression sentence has to name the condition, not just the absence. After the
+    ruling a suppressed `close_all` is always the data outage and never the drawdown a
+    reader might assume, and an operator seeing "the breaker did nothing" needs to know
+    which.
+    """
+    result = outage_tick(calm, paper_config, fake_clients)
 
-    assert SafetyCondition.DRAWDOWN.value in result.data["tripped"]
+    assert SafetyCondition.DATA_OUTAGE.value in result.data["tripped"]
     assert result.data["open_positions"] == 0
     assert result.data["resting_entry_orders"] == 0
     assert result.data["command_emitted"] is None
     assert "no open position" in (result.data["suppressed_because"] or "")
+    assert SafetyCondition.DATA_OUTAGE.value in (result.data["suppressed_because"] or "")
     assert safety_commands(calm) == ()
 
 
@@ -518,12 +555,9 @@ def test_a_resting_entry_order_alone_is_exposure(
     """Invariant 14 counts entry orders: "an outage with no position but a live post-only
     buy is still exposure waiting to happen". Left on the book through a blackout it can
     open a position into a market the system has already declared untrustworthy."""
-    write_equity(calm, equity="500.00", peak="1000.00", ts=2_000)
     write_resting_entry_order(calm, userref=4242)
 
-    result = run_safety(
-        calm, paper_config, fake_clients, run_id=RUN, cycle_id=1, now_micros=3_000
-    )
+    result = outage_tick(calm, paper_config, fake_clients)
 
     assert result.data["open_positions"] == 0
     assert result.data["resting_entry_orders"] == 1
@@ -533,12 +567,9 @@ def test_a_resting_entry_order_alone_is_exposure(
 def test_an_open_position_alone_is_exposure(
     calm: StoreClient, paper_config: Any, fake_clients: Any
 ) -> None:
-    write_equity(calm, equity="500.00", peak="1000.00", ts=2_000)
     write_open_position(calm, "p-1")
 
-    result = run_safety(
-        calm, paper_config, fake_clients, run_id=RUN, cycle_id=1, now_micros=3_000
-    )
+    result = outage_tick(calm, paper_config, fake_clients)
 
     assert result.data["command_emitted"] == CommandName.CLOSE_ALL.value
 
@@ -805,6 +836,308 @@ def test_no_data_blocks_is_the_pass_half(
 
 
 # --------------------------------------------------------------------------- #
+# The ruled policy table — spec 42
+#
+# The operator ruled on 2026-09-10: three conditions freeze, one liquidates. Each of the
+# four gets a block half and a pass half **with the emitted command asserted**, because a
+# table-driven test that asserted only "a row was written" would pass identically against
+# the pre-ruling table, where drawdown and loss streak both escalated.
+#
+# Each condition is tripped in isolation on a fresh database rather than on the seed. The
+# seed trips all four at once, so a command emitted against it says nothing about which
+# condition produced it — and after the ruling that is the entire question.
+# --------------------------------------------------------------------------- #
+
+
+def exposed(store: StoreClient) -> StoreClient:
+    """Exposure present: one open position and one resting entry order.
+
+    Every freeze test runs against this, which is the point. Invariant 14's escalation
+    precondition is satisfied, so an implementation that still mapped these conditions to
+    `close_all` would liquidate — and the assertion that it emits `freeze` instead is
+    therefore about the ruling rather than about the precondition.
+    """
+    write_open_position(store, "p-exposed")
+    write_resting_entry_order(store, userref=9001)
+    return store
+
+
+def test_a_breached_drawdown_freezes_and_does_not_liquidate(
+    calm: StoreClient, paper_config: Any, fake_clients: Any
+) -> None:
+    """Ruled 2026-09-10. A drawdown is a statement about *past* trades: the data is
+    trustworthy and the positions are being managed, so liquidating realises a paper loss
+    on the system's own authority at the moment it has least evidence it is reading the
+    market correctly. Freeze stops new positions and the operator decides."""
+    write_equity(exposed(calm), equity="500.00", peak="1000.00", ts=2_000)
+
+    result = run_safety(
+        calm, paper_config, fake_clients, run_id=RUN, cycle_id=1, now_micros=3_000
+    )
+
+    assert result.data["tripped"] == [SafetyCondition.DRAWDOWN.value]
+    assert result.data["command_emitted"] == CommandName.FREEZE.value
+    assert [row.command for row in safety_commands(calm)] == [CommandName.FREEZE.value]
+
+
+def test_a_breached_loss_streak_freezes_and_does_not_liquidate(
+    calm: StoreClient, paper_config: Any, fake_clients: Any
+) -> None:
+    """Ruled 2026-09-10, and for the same reason as the drawdown: a losing streak is a
+    statement about trades that have already closed."""
+    for index in range(5):
+        write_trade(exposed(calm), f"t-{index}", pnl="-10.00", closed_at=1_000 + index)
+
+    result = run_safety(
+        calm, paper_config, fake_clients, run_id=RUN, cycle_id=1, now_micros=2_000
+    )
+
+    assert result.data["tripped"] == [SafetyCondition.LOSS_STREAK.value]
+    assert result.data["command_emitted"] == CommandName.FREEZE.value
+    assert [row.command for row in safety_commands(calm)] == [CommandName.FREEZE.value]
+
+
+def test_a_breached_error_rate_freezes_and_does_not_liquidate(
+    calm: StoreClient, paper_config: Any, fake_clients: Any
+) -> None:
+    """Unchanged by the ruling and asserted anyway. Invariant 14 never listed the error
+    rate as an escalation condition: it is an engine-health problem rather than account
+    exposure, and liquidating because the system is throwing exceptions would be the
+    breaker causing the loss it exists to prevent."""
+    now = 3_600 * 1_000_000 * 2
+    for index in range(20):
+        write_error_block(exposed(calm), cycle_id=index + 1, ts=now - 1_000 * (index + 1))
+
+    result = run_safety(
+        calm, paper_config, fake_clients, run_id=RUN, cycle_id=100, now_micros=now
+    )
+
+    assert result.data["tripped"] == [SafetyCondition.ERROR_RATE.value]
+    assert result.data["command_emitted"] == CommandName.FREEZE.value
+    assert [row.command for row in safety_commands(calm)] == [CommandName.FREEZE.value]
+
+
+def test_a_sustained_outage_liquidates(
+    calm: StoreClient, paper_config: Any, fake_clients: Any
+) -> None:
+    """The one condition that still escalates. Invariant 14: a sustained outage is a
+    statement about *present* knowledge — the system no longer knows what it holds or what
+    it is worth — and unknown exposure is worse than a bad fill."""
+    result = outage_tick(exposed(calm), paper_config, fake_clients)
+
+    assert result.data["tripped"] == [SafetyCondition.DATA_OUTAGE.value]
+    assert result.data["command_emitted"] == CommandName.CLOSE_ALL.value
+    assert [row.command for row in safety_commands(calm)] == [CommandName.CLOSE_ALL.value]
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [c for c in SafetyCondition if c is not SafetyCondition.DATA_OUTAGE],
+)
+def test_the_pass_half_of_each_freeze_condition_emits_nothing(
+    calm: StoreClient, paper_config: Any, fake_clients: Any, condition: SafetyCondition
+) -> None:
+    """The pass halves, together, because they are the same assertion three times:
+    nothing tripped, nothing emitted, nothing written. The `calm` fixture is a database in
+    which none of the four conditions holds, so a pass half that started passing for the
+    wrong reason would have to be a condition silently ceasing to be evaluated."""
+    result = run_safety(
+        calm, paper_config, fake_clients, run_id=RUN, cycle_id=1, now_micros=3_000
+    )
+
+    assert condition.value not in result.data["tripped"]
+    assert result.data["command_emitted"] is None
+    assert result.blocks_trading is False
+    assert safety_commands(calm) == ()
+
+
+def test_the_pass_half_of_the_outage_emits_nothing(
+    calm: StoreClient, paper_config: Any, fake_clients: Any
+) -> None:
+    """The outage's pass half is its own test because its boundary is the only strictly
+    greater one, and because it is the only condition whose pass half needs exposure
+    present to be worth anything — otherwise it would be indistinguishable from the
+    precondition suppressing it."""
+    limit = paper_config.get("safety.max_consecutive_data_blocks")
+    run_id, cycle_id = write_outage(exposed(calm), limit - 1)
+
+    result = run_safety(
+        calm,
+        paper_config,
+        fake_clients,
+        run_id=run_id,
+        cycle_id=cycle_id,
+        now_micros=2_000_000_000,
+        trading_blocked_by="data_guard",
+    )
+
+    assert result.data["consecutive_data_blocks"] == limit
+    assert SafetyCondition.DATA_OUTAGE.value not in result.data["tripped"]
+    assert result.data["command_emitted"] is None
+    assert safety_commands(calm) == ()
+
+
+def test_a_drawdown_and_an_outage_together_liquidate_rather_than_freeze(
+    calm: StoreClient, paper_config: Any, fake_clients: Any
+) -> None:
+    """Spec 42 step 6: the more severe action wins and the two are not both emitted.
+
+    This is the case the ruling created. Before it, every condition that could co-occur
+    with the outage also escalated, so "the strongest wins" was never observable. Now a
+    tick can genuinely ask for both, and it must produce exactly one `close_all` row —
+    carrying **both** conditions in its reason, because the row is the permanent record of
+    the decision and "drawdown *and* an outage" is a materially different account state.
+    """
+    write_equity(exposed(calm), equity="500.00", peak="1000.00", ts=2_000)
+
+    result = outage_tick(calm, paper_config, fake_clients)
+    rows = safety_commands(calm)
+
+    assert set(result.data["tripped"]) == {
+        SafetyCondition.DRAWDOWN.value,
+        SafetyCondition.DATA_OUTAGE.value,
+    }
+    assert result.data["command_emitted"] == CommandName.CLOSE_ALL.value
+    assert [row.command for row in rows] == [CommandName.CLOSE_ALL.value]
+    assert SafetyCondition.DRAWDOWN.value in (rows[0].reason or "")
+    assert SafetyCondition.DATA_OUTAGE.value in (rows[0].reason or "")
+
+
+def test_the_seeded_drawdown_freezes_and_emits_no_close_all(
+    seeded_store: StoreClient, seed_fixtures: Any, paper_config: Any, fake_clients: Any
+) -> None:
+    """Spec 42's headline assertion, and the one the pre-ruling table could not satisfy.
+
+    The seed carries a drawdown of 0.20 against a 0.10 limit, a streak of 8 against 5,
+    **and** two open positions and two resting entry orders — every precondition invariant
+    14 names for an escalation. Under the old table that emitted `close_all`. Under the
+    ruling it freezes, and the absence of the liquidation is asserted rather than implied.
+
+    `cycle_id=2` is load-bearing and is the opposite choice from the escalation tests.
+    The seed also carries an 18-tick outage, and a *cycle-1* anchor under a fresh `run_id`
+    is treated as the first tick after a restart, so the walk crosses into the seeded runs
+    and picks it up — which would emit `close_all` for a reason that has nothing to do
+    with the drawdown. At cycle 2 the adjacency check breaks immediately, the stored count
+    is zero, and what remains is exactly the account-state conditions.
+
+    `trading_blocked_by="data_guard"` is the tick on which the opportunity chain is
+    skipped entirely — no candidate, no `scout`, no `cost`, no `risk`. The breaker still
+    acts, which is why it is a guard rather than the last link of the opportunity chain.
+    """
+    result = run_safety(
+        seeded_store,
+        paper_config,
+        fake_clients,
+        run_id=RUN,
+        cycle_id=2,
+        now_micros=seed_fixtures.seed_now,
+        trading_blocked_by="data_guard",
+    )
+    rows = safety_commands(seeded_store)
+
+    assert result.data["stored_data_blocks"] == 0, "the seeded outage must not be in scope"
+    assert result.data["consecutive_data_blocks"] == 1, "this tick's own block, and only it"
+    assert SafetyCondition.DATA_OUTAGE.value not in result.data["tripped"]
+    assert SafetyCondition.DRAWDOWN.value in result.data["tripped"]
+    assert result.data["open_positions"] > 0, "the escalation precondition is satisfied"
+    assert result.data["resting_entry_orders"] > 0
+
+    assert result.data["command_emitted"] == CommandName.FREEZE.value
+    assert [row.command for row in rows] == [CommandName.FREEZE.value]
+    assert CommandName.CLOSE_ALL.value not in [row.command for row in rows]
+
+
+def test_a_suppressed_close_all_falls_through_to_the_freeze_that_was_due(
+    calm: StoreClient, paper_config: Any, fake_clients: Any
+) -> None:
+    """**Ruled by the operator on 2026-09-10 and written into invariant 14.**
+
+    Raised as an open question while implementing spec 42, escalated rather than patched
+    because it is a change to what the breaker does, and ruled the way it was recommended:
+    "when the winning action is suppressed, `safety` emits the strongest action that is not
+    suppressed, rather than emitting nothing."
+
+    The case: a drawdown is breached, a data outage is running, and the account has nothing
+    open and nothing resting. `close_all` is the strongest action so it wins; it is then
+    suppressed for want of anything to close; and the drawdown's `freeze` must still be
+    emitted. More bad conditions producing less action is the wrong direction for a circuit
+    breaker, and it is the one shape the rule exists to forbid.
+
+    The operator's earlier ruling on `CONDITION_ACTION` is what made this reachable. Under
+    the old table every condition that could co-occur with the outage also escalated, so a
+    suppressed `close_all` could only ever swallow another `close_all` — the same command,
+    so nothing was lost.
+
+    **Both halves of the emission are asserted.** The `freeze` row is written, *and*
+    `suppressed_because` still names the escalation that could not happen: a tick that
+    suppressed one action and emitted another is the one case where both are true, and an
+    operator reading "it froze" needs to know the outage wanted to liquidate and could not.
+    """
+    write_equity(calm, equity="500.00", peak="1000.00", ts=2_000)
+    with_only_drawdown = run_safety(
+        calm, paper_config, fake_clients, run_id=RUN, cycle_id=1, now_micros=3_000
+    )
+    assert with_only_drawdown.data["command_emitted"] == CommandName.FREEZE.value
+
+    # Clear the row above so the second half is judged on what *this* tick emitted.
+    calm.connection.execute("DELETE FROM commands")
+    calm.connection.commit()
+
+    with_the_outage_too = outage_tick(calm, paper_config, fake_clients)
+
+    assert set(with_the_outage_too.data["tripped"]) == {
+        SafetyCondition.DRAWDOWN.value,
+        SafetyCondition.DATA_OUTAGE.value,
+    }
+    assert with_the_outage_too.data["command_emitted"] == CommandName.FREEZE.value, (
+        "the suppressed close_all must not swallow the drawdown's freeze"
+    )
+    assert [row.command for row in safety_commands(calm)] == [CommandName.FREEZE.value]
+
+    suppressed = with_the_outage_too.data["suppressed_because"] or ""
+    assert SafetyCondition.DATA_OUTAGE.value in suppressed
+    assert "no open position" in suppressed
+
+    assert with_the_outage_too.blocks_trading is True
+    assert with_the_outage_too.status is EngineStatus.BLOCK
+
+
+def test_the_fall_through_does_not_fire_when_the_outage_is_the_only_condition(
+    calm: StoreClient, paper_config: Any, fake_clients: Any
+) -> None:
+    """The other direction, so the ruling is pinned in both.
+
+    A suppressed `close_all` with nothing else tripped has no lesser action to fall through
+    to, and must emit nothing rather than inventing a `freeze` the account state does not
+    justify. Without this, "emit the strongest action that is not suppressed" could be
+    implemented as "always freeze if you cannot liquidate", which would freeze a healthy
+    account on an outage it had no exposure to.
+    """
+    result = outage_tick(calm, paper_config, fake_clients)
+
+    assert result.data["tripped"] == [SafetyCondition.DATA_OUTAGE.value]
+    assert result.data["command_emitted"] is None
+    assert safety_commands(calm) == ()
+
+
+def test_nothing_but_the_outage_can_reach_close_all() -> None:
+    """The scope limit, asserted rather than trusted to review.
+
+    Spec 42: "do not make `close_all` reachable from any condition other than the data
+    outage". Enumerated over the enum rather than hand-listed, so a condition added later
+    has to be considered here instead of quietly inheriting whatever it was mapped to.
+    """
+    escalating = {
+        condition
+        for condition, action in CONDITION_ACTION.items()
+        if action is SafetyAction.CLOSE_ALL
+    }
+
+    assert escalating == {ESCALATING_CONDITION}
+    assert ESCALATING_CONDITION is SafetyCondition.DATA_OUTAGE
+
+
+# --------------------------------------------------------------------------- #
 # The breaker is not gated behind the other gates
 # --------------------------------------------------------------------------- #
 
@@ -860,46 +1193,95 @@ def test_it_evaluates_while_frozen(
 # --------------------------------------------------------------------------- #
 
 
-def test_no_second_command_while_the_condition_persists(
+def test_no_second_close_all_while_the_outage_persists(
     seeded_store: StoreClient, seed_fixtures: Any, paper_config: Any, fake_clients: Any
 ) -> None:
-    """Spec 36, asserted across several ticks.
+    """The `close_all` half of spec 42's idempotency check, asserted across several ticks.
 
-    It runs every tick, so without this a sustained drawdown appends a freeze row every
-    sixty seconds forever and re-triggers a liquidation already under way. The first tick
-    emits; the rest see `close_intent` set — which is what the orchestrator does with the
-    row at the top of the next tick — and emit nothing while still evaluating and still
-    publishing the assessment.
+    It runs every tick, so without this a sustained outage re-triggers a liquidation
+    already under way. The first tick emits; the rest see `close_intent` set — which is
+    what the orchestrator does with the row at the top of the next tick — and emit nothing
+    while still evaluating and still publishing the assessment.
+
+    Every tick anchors at `cycle_id=1` under a different `run_id`. That is not tidiness:
+    the outage only counts from a cycle-1 anchor, because the walk treats cycle 1 as the
+    first tick after a restart and is allowed to cross into the seeded runs. Anchoring at
+    2, 3, 4 the way an earlier version of this test did makes the outage stop tripping
+    entirely, and the test then asserts idempotency of a condition that is not tripped.
+
+    **The later ticks are `frozen`, not `running`, and that became load-bearing with the
+    fall-through ruling.** `close_intent` is set by the command reader, which sets the mode
+    to `frozen` in the same step — so `running` plus `close_intent` is a state the
+    orchestrator cannot produce. An earlier version of this test held the mode at `running`
+    and went red the moment a suppressed `close_all` began falling through to a `freeze`:
+    correctly, because against that fixture a freeze genuinely was due. The seed trips the
+    drawdown as well as the outage, so both suppressions have to hold for nothing to be
+    emitted, and both are asserted.
     """
-    first = run_safety(
-        seeded_store,
-        paper_config,
-        fake_clients,
-        run_id=RUN,
-        cycle_id=1,
-        now_micros=seed_fixtures.seed_now,
-    )
-
-    later = [
+    ticks = [
         run_safety(
+            seeded_store,
+            paper_config,
+            fake_clients,
+            run_id=f"{RUN}-{index}",
+            cycle_id=1,
+            now_micros=seed_fixtures.seed_now + index,
+            close_intent=index > 0,
+            mode="running" if index == 0 else "frozen",
+        )
+        for index in range(5)
+    ]
+
+    assert ticks[0].data["command_emitted"] == CommandName.CLOSE_ALL.value
+    assert [tick.data["command_emitted"] for tick in ticks[1:]] == [None, None, None, None]
+    assert len(safety_commands(seeded_store)) == 1, "one row for one condition, not five"
+    for tick in ticks[1:]:
+        assert tick.data["tripped"] != [], "it still evaluates while suppressed"
+        assert tick.blocks_trading is True, "it still blocks while suppressed"
+        suppressed = tick.data["suppressed_because"] or ""
+        assert "close_intent" in suppressed, "the escalation is suppressed"
+        assert "already" in suppressed, "and so is the freeze it fell through to"
+
+
+def test_no_second_freeze_while_the_drawdown_persists(
+    seeded_store: StoreClient, seed_fixtures: Any, paper_config: Any, fake_clients: Any
+) -> None:
+    """The `freeze` half, and spec 42 requires the two separately.
+
+    This is load-bearing in a way it was not before the ruling. Three of the four
+    conditions now emit `freeze`, so a drawdown persisting across a thousand ticks is the
+    common path rather than the rare one, and it must produce exactly one row.
+
+    The mode transition is modelled rather than held fixed, because that is what makes the
+    suppression work: `safety` writes the row, the orchestrator consumes it at the top of
+    the next tick and sets the mode to `frozen`, and every later tick is suppressed because
+    freezing a frozen system changes nothing. Holding the mode at `running` across all five
+    ticks would be asserting against a state the orchestrator cannot produce — and it would
+    fail, correctly, because five running ticks in drawdown genuinely are five freezes.
+    """
+    ticks = []
+    mode = "running"
+    for cycle in range(2, 7):
+        result = run_safety(
             seeded_store,
             paper_config,
             fake_clients,
             run_id=RUN,
             cycle_id=cycle,
             now_micros=seed_fixtures.seed_now + cycle,
-            close_intent=True,
+            mode=mode,
         )
-        for cycle in (2, 3, 4, 5)
-    ]
+        ticks.append(result)
+        if result.data["command_emitted"] == CommandName.FREEZE.value:
+            mode = "frozen"  # what the orchestrator does with the row on the next tick
 
-    assert first.data["command_emitted"] == CommandName.CLOSE_ALL.value
-    assert [tick.data["command_emitted"] for tick in later] == [None, None, None, None]
-    assert len(safety_commands(seeded_store)) == 1, "one row for one condition, not five"
-    for tick in later:
-        assert tick.data["tripped"] != [], "it still evaluates while suppressed"
+    assert ticks[0].data["command_emitted"] == CommandName.FREEZE.value
+    assert [tick.data["command_emitted"] for tick in ticks[1:]] == [None, None, None, None]
+    assert len(safety_commands(seeded_store)) == 1, "one row for one drawdown, not five"
+    for tick in ticks[1:]:
+        assert SafetyCondition.DRAWDOWN.value in tick.data["tripped"]
         assert tick.blocks_trading is True, "it still blocks while suppressed"
-        assert "close_intent" in (tick.data["suppressed_because"] or "")
+        assert "already" in (tick.data["suppressed_because"] or "")
 
 
 def test_a_freeze_is_not_re_emitted_when_the_system_is_not_running(

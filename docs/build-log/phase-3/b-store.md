@@ -340,11 +340,173 @@ adjacency check breaks immediately.
 **Fix.** The drawdown-freezes tests anchor at `cycle_id=2` and say why in the test docstring;
 the outage tests keep `cycle_id=1`, where crossing the restart is the property being tested. So
 the two conditions are separated by the fixture rather than by hoping they do not overlap, and
-`test_the_seeded_drawdown_emits_a_freeze_and_no_close_all` is a real absence rather than a
-coincidence.
+`test_the_seeded_drawdown_freezes_and_emits_no_close_all` is a real absence rather than a
+coincidence. The four conditions also each got a block and a pass test **in isolation on a
+fresh database**, because on the seed all four trip at once and a command emitted against it
+says nothing about which condition produced it — which after the ruling is the entire question.
 
 **Consequence.** The blind spot is in the *test anchor*, not in the store method — the method's
 docstring already states the restart-crossing rule and calls its residual over-count out
 explicitly. What it does not say, and what cost me a probe to establish, is that the rule makes
 `cycle_id=1` a special anchor for *any* fresh `run_id`, which is the shape every test in this
 file happened to use.
+
+### A guard-chain test counted pending commands, so it could not have failed
+
+**Agent:** B · **Task:** spec 42 · **Date:** 2026-09-10
+
+**What happened.** `test_safety_guard_chain.py`'s helper read the emitted commands through
+`store.pending_commands()`. The assertion it fed was "one liquidation, not one per tick" —
+across two real orchestrator ticks. It passed. It would also have passed against an engine that
+emitted a `close_all` on every single tick.
+
+**Why.** The orchestrator claims and consumes a command at the top of the next tick, which is
+the behaviour the test exists to exercise. So by the end of tick two the row `safety` wrote on
+tick one is no longer pending, and `pending_commands()` returns an empty tuple whether the
+engine emitted one row or fifty. The assertion was `len(rows) <= 1` against a list that was
+always empty.
+
+This is the shape `code-standards.md` has just been amended to name — a double or a reading
+that cannot exhibit the property under test — arriving through the *query* rather than through
+a fake. Nothing here was mocked; the store was real, the orchestrator was real, and the reading
+was still incapable of failing.
+
+**Fix.** The helper reads every row off the `commands` table with `source = 'safety'`, claimed
+or not, and the assertion is now an equality on the sequence of commands rather than a bound on
+a count. It caught a second thing immediately: what the second tick suppresses is the *freeze*,
+not the `close_all` I had predicted in the docstring. `cycle_id` is 2 on that tick, the outage
+walk breaks at the adjacency check, and the outage stops tripping — so drawdown and loss streak
+are what remain, and they are suppressed because the mode is already `frozen`.
+
+**Consequence, and it is the Phase 3 / Phase 4 boundary rather than a fixture artefact.** In a
+running system tick 1's `data_guard` block would be written to `block_records` by engine 19
+`memory` in the manage chain, and tick 2 would find it and continue the outage. Engine 19 is
+Phase 4 and is not in this chain, so nothing records the tick and the count does not carry. The
+test now says that in as many words instead of asserting a suppression reason that happens to
+be right for the wrong reason.
+
+**The deferred check came back clean.** The reason I deferred registration in Phase 2 was that
+`safety` in the guard chain runs on every tick of `orchestrator_empty_registry` and
+`commands_round_trip`, both against a real store, and "on an empty database nothing should
+trip" had "should" doing the work. It does not trip: no equity snapshot reads as *no drawdown
+measurable* rather than as zero or as a division by zero, and `safety` does not appear among
+`state["guard_blockers"]`. That is the finding spec 47 needs and it is better had here.
+
+### OPEN QUESTION: a suppressed `close_all` swallows a co-occurring `freeze`
+
+**Agent:** B · **Task:** spec 42 · **Date:** 2026-09-10 · **Status: escalated, not fixed.**
+
+**What happens.** `_emit` takes the strongest action among the tripped conditions and emits at
+most one row — spec 42 step 6, "the more severe action wins and the two are not both emitted",
+which is correct on its face. But the `close_all` branch has two suppressions of its own (no
+exposure, and `close_intent` already set), and when the strongest action is suppressed
+**nothing is emitted at all**, including the `freeze` a co-occurring drawdown, loss streak or
+error rate would have emitted on its own.
+
+Concretely: drawdown breached, no open position and no resting entry order, and a data outage
+also running. Drawdown alone emits `freeze`. Drawdown *plus* the outage emits nothing, because
+`close_all` wins and is then suppressed for want of anything to close. More bad conditions
+produce less action, which is the wrong direction.
+
+**Why it matters more after the ruling than before.** Under the pre-ruling table every
+condition that could co-occur with the outage also escalated, so a suppressed `close_all` could
+only ever swallow another `close_all` — the same command, so nothing was lost. The operator's
+2026-09-10 ruling made three conditions emit `freeze`, and a suppressed `close_all` now
+swallows a genuinely different command. The defect did not change; its reachability did.
+
+**The bound, stated so this is not read as more urgent than it is.** `safety` returns `BLOCK`
+on every tick where any condition is tripped, so the opportunity chain is stopped regardless
+and nothing new is opened. What is lost is the *persistence*: the mode never goes `frozen`, so
+the console shows a running system and the block is re-derived every tick rather than recorded
+once.
+
+**Not fixed, deliberately.** The obvious fix is "emit the strongest action that is not
+suppressed", which is one line — and it is a change to what the breaker does, so it is the
+operator's call and not mine. I am recommending that reading.
+
+**What spec 42 added is the case, not the fix.**
+`test_a_suppressed_close_all_currently_swallows_a_co_occurring_freeze` pins the current
+behaviour, names itself an open question in its docstring, and asserts the bound as well as the
+gap — so the escalation now has something executable attached rather than a description. If the
+operator rules the other way, that test is the one that changes.
+
+### RULED: a suppressed escalation must not swallow a freeze that was independently due
+
+**Agent:** B · **Task:** spec 42 · **Date:** 2026-09-10 · **Supersedes the OPEN QUESTION above.**
+
+**What happened.** The operator ruled on the open question recorded above and spec 37's successor
+edit wrote it into invariant 14, committed as `db50392`:
+
+> **A suppressed escalation never swallows a freeze that was independently due.** `safety` emits
+> at most one command per tick and the more severe action wins — but `close_all` has its own
+> suppressions: it is not written when there is no exposure to close, or when `close_intent` is
+> already set. **When the winning action is suppressed, `safety` emits the strongest action that
+> is not suppressed**, rather than emitting nothing.
+
+**Why it is a change to behaviour and not a bug fix.** Spec 42 step 6 — "the more severe action
+wins and the two are not both emitted" — is unrepealed and still true. One command per tick, and
+no `freeze` alongside a `close_all` that actually emitted. What the ruling answers is the case
+step 6 did not cover: what happens when the winner is suppressed. Emitting nothing was a
+defensible reading of the literal spec, which is why I implemented it and escalated rather than
+patching it.
+
+**Fix.** *(pending — implementing the fall-through now, then mutating it to confirm the test
+watches it.)*
+
+**Fix.** `_emit`'s `close_all` branch now records *why* it was suppressed rather than returning
+immediately, and hands off to `_fall_through`, which picks the strongest action among the
+conditions that did **not** ask for `CLOSE_ALL` and re-enters `_emit` with it. Re-entering
+rather than duplicating the freeze suppression is deliberate: a second copy of "only while the
+mode is `running`" is a second place for it to drift. The re-entry is bounded at one further
+call, because the lesser action is chosen from a set that excludes `CLOSE_ALL` by construction,
+so the branch that got there cannot be reached again.
+
+One contract change, and it is the honest one: on a fall-through the assessment carries **both**
+`command_emitted` and `suppressed_because`. Everywhere else exactly one is set. A tick that
+suppressed one action and emitted another genuinely did both, and an operator reading "it froze"
+needs to know the outage wanted to liquidate and could not. `SafetyAssessment.action` still
+records what the conditions *asked* for, so a fall-through tick reads `action: close_all`,
+`command_emitted: freeze`, and the sentence naming the escalation that could not happen.
+
+**Both boundaries are tested, because the ruling can be over-implemented as easily as
+under-implemented.** "Emit the strongest action that is not suppressed" reads a lot like "always
+freeze if you cannot liquidate", and that second reading would freeze a healthy account over an
+outage it had no exposure to. So there is a test for the fall-through firing and a test for it
+*not* firing when the outage is the only condition tripped.
+
+**Mutated both, per the lead's instruction, and each was caught by exactly the test written for
+it.** Removing the fall-through reddens
+`test_a_suppressed_close_all_falls_through_to_the_freeze_that_was_due` and nothing else; making
+it fire unconditionally reddens `test_the_fall_through_does_not_fire_when_the_outage_is_the_only
+_condition` and `test_no_exposure_suppresses_the_escalation`. The engine is restored and the
+suite is green.
+
+**One existing test had to change, and the reason is the same defect in a different place.**
+`test_no_second_close_all_while_the_outage_persists` passed `close_intent=True` with the default
+`mode="running"` — a state the orchestrator cannot produce, because the command reader sets both
+in the same step. It went red the moment the fall-through landed, correctly: against that
+fixture a freeze genuinely was due. Setting the mode to `frozen` alongside `close_intent` makes
+it the state the orchestrator actually produces, and the test now asserts *both* suppressions
+rather than one. That is the second time in this spec a fixture has been holding a state the
+system cannot reach — the first was the freeze idempotency test — and both times the new
+behaviour is what exposed it rather than review.
+
+### Correction: the faithful-replay property is not invariant 10
+
+**Agent:** B · **Task:** spec 41, follow-up · **Date:** 2026-09-10
+
+The decision entry above on `replay` mode cites invariant 10 for the property that a replayed
+tick must reproduce the live one. That citation is wrong. **Invariant 10 is "No look-ahead,
+ever"**, which is a different rule about features and labels. The property I meant is stated in
+`src/acsoe/core/contracts.py` — "what makes replay faithful and look-ahead structurally
+impossible" — and in invariant 9, which injects the clock for that reason.
+
+Recorded as a new entry rather than by editing the old one, per rule 6. It matters because the
+entry is addressed to whoever builds replay in Phase 4, and a wrong citation sends them to a
+rule that does not answer their question.
+
+The lead also supplied a fact that shrinks the deferred cost I recorded there:
+`platform/config.py` **refuses `mode: replay` at load** — "Phase 0 accepts mode: paper only;
+replay is built in Phase 4". So no tick can reach that branch today in any mode but paper, and
+the divergence I was worried about cannot occur before Phase 4 builds replay and decides
+deliberately. The ruling stands: keep `!= "paper"`.

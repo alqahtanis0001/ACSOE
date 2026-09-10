@@ -48,6 +48,12 @@ exercises replay. One line and one constant to reverse; full reasoning in the bu
 - **Spec 42** — apply the ratified `CONDITION_ACTION` and prove `safety` in a real guard
   chain. `src/acsoe/engines/safety/{contracts,engine}.py`, `README.md`,
   `tests/engines/test_safety.py`, `tests/engines/test_safety_guard_chain.py`.
+  ***Complete, all four gates green 2026-09-10.*** The ruled table is applied — **it was
+  not, despite the note below saying it was; see the build log.** `ESCALATING_CONDITION`
+  names the one condition that may reach `close_all` and a test enumerates the table
+  against it. 46 tests in `test_safety.py` and 5 in the new guard-chain file, which drives
+  the real `Orchestrator` over engines 1, 2, 3, 4, 17 against a real `StoreClient` on an
+  empty database and on the seed.
 
 Specs 43 and 44 (`scout`) are the lead's second wave and are not claimed here yet.
 
@@ -72,14 +78,37 @@ market correctly. A sustained outage is a statement about *present* knowledge, a
 exposure is worse than a bad fill.
 
 Two of the four rows changed. `ERROR_RATE` and `DATA_OUTAGE` were already as ruled.
-Applied in spec 42 on 2026-09-10.
+
+**Applied in the code on 2026-09-10, verified.** An earlier version of this line claimed
+the same thing while `engines/safety/contracts.py` still carried the pre-ruling table
+under a heading reading PROVISIONAL. It was written in the same edit that *claimed* spec
+42, and this file has no way to distinguish a claim from a completion — so the note
+described work that had not happened. The build log carries the account.
+
+**Changed how I use this file as a result: a spec is marked complete here only after its
+four gates are green, never in the edit that claims it.**
 
 **Ratified earlier and unchanged:** the `BOUNDARY_SOURCE` table beside it, fixing whether
 each threshold trips *at* its limit or *above* it, each with the sentence in the documents
 that fixes it. Drawdown, loss streak and error rate trip at the limit; the outage is the
 only strictly-greater one.
 
-## OPEN QUESTION — a suppressed `close_all` swallows a co-occurring `freeze`
+## CLOSED — a suppressed `close_all` swallowed a co-occurring `freeze`, ruled 2026-09-10
+
+**The operator ruled the way it was recommended, and invariant 14 now says so** (committed
+`db50392`): *"When the winning action is suppressed, `safety` emits the strongest action
+that is not suppressed"*, rather than emitting nothing. Implemented under spec 42 as a
+fall-through in `_emit`, with both directions tested — it fires when a lesser action was
+genuinely due, and does **not** fire when the outage is the only condition tripped, because
+"always freeze if you cannot liquidate" would freeze a healthy account over an outage it had
+no exposure to. Both mutations confirmed caught.
+
+Spec 42 step 6 is unrepealed: still one command per tick, still no `freeze` alongside a
+`close_all` that actually emitted. Only the fall-through is new.
+
+The original statement is kept below, because the reasoning is what the ruling was made on.
+
+---
 
 **Raised 2026-09-10 while implementing spec 42. Not invented behaviour: the literal spec
 is implemented and this is the case it does not cover.**
@@ -105,6 +134,8 @@ rather than recorded once.
 **I have not fixed it.** The obvious fix is "emit the strongest action that is not
 suppressed", which would be one line, and it is a change to what the breaker does — so it
 is the operator's, not mine. Recommending that reading.
+
+*(Ruled that way on 2026-09-10 and implemented under spec 42. See the heading above.)*
 
 ## `core/`'s two writes — landed, primitives only
 
@@ -237,11 +268,12 @@ Nothing of mine is outstanding. Spec 11 unblocked 12, which unblocked 13, in tha
 
 ## For the lead — two things, neither of them mine to fix
 
-1. **`core/` must now call `store.set_system_mode(run_id, mode, at=now)`** from the
-   command reader, after the transition is applied to `state["system"]["mode"]` and not
-   before. It returns `False` for an unknown `run_id`; log it, do not raise. Until that
-   call exists the column stays NULL and the console renders idle, which is correct but
-   is spec 31 only half-delivered.
+1. ~~**`core/` must now call `store.set_system_mode(run_id, mode, at=now)`** from the
+   command reader.~~ **DONE and this note is struck, 2026-09-10.** The lead wired
+   `_persist_mode` at the command reader and asserted in `tests/core/` that the
+   `system_mode` column staying NULL on an idle daemon is *correct* — a mode never entered
+   is a mode never recorded — so that it does not get "fixed" later. Spec 31 is fully
+   delivered.
 2. **An intermittent Windows teardown fault outside my paths.** The first `--phase 0`
    run reported `FAIL toolchain_green — ERROR tests/cli/test_entrypoints.py::
    test_console_refuses_an_unset_operator_key | 722 passed, 1 error`. An `ERROR`, not a
@@ -329,6 +361,23 @@ suspected and is out of scope, and the gate now retries a crash once. Full accou
 becomes mine again if the fault appears outside this write path, or if the gate starts
 reporting `CRASH -` after its retry — which would mean the rate has moved and the mitigation no
 longer holds.
+
+## The one-type-many-causes shape, audited in my own lane — 2026-09-10
+
+The lead asked whether `StoreError` in `clients/store/` has the shape A found in
+`clients/kraken/`, where every fail-closed path raises one type so `pytest.raises(That)`
+cannot tell the induced failure from one that happened first.
+
+**Audited: four `raise StoreError` sites, so the shape is present but small.** They are the
+non-finite money refusal, an unknown run mode, a duplicate `run_id`, and an unknown system
+mode. Three of the four assertions already used `match=`; one did not —
+`test_the_two_failures_are_distinguishable_by_type` — and it is now `match="unknown system
+mode"`. That test is about `False`-versus-raise rather than about the cause, so it was not
+wrong, but the bare form would have been satisfied by any of the four.
+
+Nothing else in my lane raises one type from many places. `MissingInputError` in the three
+engines is per-module and every assertion on it goes through `reason_code`, which is the
+generalisation the standard actually asks for: **assert the reason, not only the `BLOCK`.**
 
 ## Blocked on
 

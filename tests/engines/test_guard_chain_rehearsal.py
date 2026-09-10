@@ -114,7 +114,7 @@ def test_only_the_first_blocker_is_primary_and_every_blocker_is_recorded(
     assert state["guard_blockers"][0]["status"] == EngineStatus.BLOCK
 
 
-def test_an_unset_threshold_becomes_ERROR_and_the_tick_still_completes(
+def test_an_unset_threshold_becomes_the_error_status_and_the_tick_still_completes(
     paper_config: MappingConfig, fixed_clock: Any, fake_clients: Any
 ) -> None:
     """The state the tree is actually in until the operator supplies the key.

@@ -29,6 +29,13 @@ and a sustained outage would re-trigger a liquidation already under way. It stil
 evaluates and still publishes its assessment on those ticks — the assessment is the record
 of the evaluation, the command row is the record of the decision, and research needs both.
 
+**Three of the four conditions freeze; only the data outage liquidates.** Ruled by the
+operator on 2026-09-10 and written into invariant 14 by spec 37. The table is
+:data:`CONDITION_ACTION` and the reasoning belongs to invariant 14, not here. What belongs
+here is the consequence for this module: `freeze` idempotency is now the common path
+rather than the rare one, and a tick that trips several conditions emits exactly one row —
+the strongest action, so drawdown plus outage is a `close_all` and never a `freeze`.
+
 ## The outage arithmetic, which is off by one in the obvious reading
 
 Engine 4 `data_guard` runs *before* this engine in the guard chain, so the current tick's
@@ -78,6 +85,7 @@ from acsoe.engines.safety.contracts import (
     SafetyReadings,
     SafetyThresholds,
     command_for,
+    escalating_conditions,
     strongest,
 )
 
@@ -283,17 +291,34 @@ class SafetyEngine(BaseEngine):
     ) -> tuple[str | None, str | None]:
         """Write the command row, but only when it would change the system's state.
 
+        **At most one row per tick, and it is the strongest action.** `strongest` has
+        already collapsed several tripped conditions into one action before this method
+        sees it, so a tick that is both in drawdown and mid-outage emits `close_all` and
+        not `freeze`, and never both. Spec 42 step 6.
+
         Three suppressions, each from `engine-contracts.md` or invariant 14:
 
         - **`freeze` only while the mode is `running`.** Freezing a frozen or idle system
-          changes nothing and appends a row every sixty seconds forever.
+          changes nothing and appends a row every sixty seconds forever. After the
+          2026-09-10 ruling three of the four conditions emit `freeze`, so this is now the
+          common path rather than the rare one.
         - **`close_all` only when there is exposure** — an open position or a resting
           entry order. Invariant 14 gates escalation on exactly that, and liquidating an
           account with nothing open is a command with no effect.
         - **`close_all` only when `close_intent` is not already set.** Re-emitting
           re-triggers a liquidation already under way.
 
-        Returns `(command emitted, why it was suppressed)`, exactly one of which is set.
+        The suppression sentences name the condition that wanted to act, not just the
+        action. An operator reading "the breaker did nothing" needs to know *which*
+        condition was suppressed, and after the ruling the answer for a `close_all` is
+        always the data outage and never the drawdown they might assume.
+
+        **A suppressed `close_all` falls through** to the strongest action that is not
+        suppressed rather than emitting nothing — invariant 14, ruled 2026-09-10. See
+        :meth:`_fall_through`.
+
+        Returns `(command emitted, why it was suppressed)`. Exactly one is set, except on a
+        fall-through, where both are: that tick suppressed one action and emitted another.
         """
         command = command_for(action)
         if command is None:
@@ -304,12 +329,25 @@ class SafetyEngine(BaseEngine):
         close_intent = bool(system.get("close_intent")) if isinstance(system, dict) else False
 
         if action is SafetyAction.FREEZE and mode != "running":
-            return None, f"mode is already {mode!r}; a freeze would change nothing"
+            return None, (
+                f"{self._named(tripped)} would freeze, but the mode is already {mode!r}; "
+                "a freeze would change nothing"
+            )
         if action is SafetyAction.CLOSE_ALL:
+            escalating = self._named(escalating_conditions(tripped))
+            blocked_by: str | None = None
             if not readings.has_exposure:
-                return None, "no open position and no resting entry order to close"
-            if close_intent:
-                return None, "close_intent is already set; a liquidation is under way"
+                blocked_by = (
+                    f"{escalating} would escalate, but there is no open position and no "
+                    "resting entry order to close"
+                )
+            elif close_intent:
+                blocked_by = (
+                    f"{escalating} would escalate, but close_intent is already set; a "
+                    "liquidation is under way"
+                )
+            if blocked_by is not None:
+                return self._fall_through(context, state, blocked_by, readings, tripped)
 
         now_micros = to_micros(context.now)
         store = self._store(context)
@@ -326,6 +364,58 @@ class SafetyEngine(BaseEngine):
         return command.value, None
 
     # ------------------------------------------------------------------ prose
+
+    def _fall_through(
+        self,
+        context: EngineContext,
+        state: State,
+        blocked_by: str,
+        readings: SafetyReadings,
+        tripped: tuple[SafetyCondition, ...],
+    ) -> tuple[str | None, str | None]:
+        """The escalation was suppressed. Emit the strongest action that is not.
+
+        **Ruled by the operator on 2026-09-10 and written into invariant 14:** "a suppressed
+        escalation never swallows a freeze that was independently due". The case it answers:
+        a drawdown is breached, a data outage is running, and the account has nothing open
+        and nothing resting. `close_all` wins, is suppressed for want of anything to close,
+        and before the ruling *nothing at all* was emitted — including the `freeze` the
+        drawdown would have emitted on its own. More bad conditions producing less action is
+        the wrong direction for a circuit breaker.
+
+        It does not repeal spec 42 step 6. Still one command per tick, still no `freeze`
+        alongside a `close_all` that actually emitted; only the fall-through is new.
+
+        **The re-entry is bounded at one further call.** The lesser action is chosen from
+        the conditions that did *not* ask for `CLOSE_ALL`, so the branch that got here
+        cannot be reached again — and re-entering `_emit` rather than duplicating the freeze
+        suppression is deliberate: a second copy of "only while the mode is `running`" is a
+        second place for it to drift.
+
+        Returns both values when the fall-through emits, which is the one case where both
+        are set: the tick genuinely suppressed one action and emitted another, and an
+        operator reading "it froze" needs to know the outage wanted to liquidate and could
+        not.
+        """
+        lesser = strongest(
+            tuple(
+                CONDITION_ACTION[condition]
+                for condition in tripped
+                if CONDITION_ACTION[condition] is not SafetyAction.CLOSE_ALL
+            )
+        )
+        if lesser is SafetyAction.NONE:
+            return None, blocked_by
+        emitted, also_suppressed = self._emit(context, state, lesser, readings, tripped)
+        if emitted is None:
+            return None, f"{blocked_by}; and {also_suppressed}"
+        return emitted, blocked_by
+
+    def _named(self, conditions: tuple[SafetyCondition, ...]) -> str:
+        """Conditions as an operator-readable list, or a placeholder if somehow empty."""
+        if not conditions:
+            return "no condition"
+        return " and ".join(condition.value for condition in conditions)
 
     def _command_reason(self, tripped: tuple[SafetyCondition, ...]) -> str:
         """Why the system stopped itself, on the audit row.

@@ -167,10 +167,12 @@ REASON_SPREAD_WIDER_THAN_MOVE: Final = "spread_wider_than_move"
 #: Fail-closed: an input this gate needs was absent or unparseable. Invariant 3 — "a gate
 #: that cannot reach its data blocks", and "absence of a 'no' is never a 'yes'".
 #:
-#: Deliberately **not** in C's `REASON_PROSE` yet; C has been asked to add it. Until then
-#: the console still renders this correctly, because `operator_reason` prefers the row's
-#: own prose whenever it is a sentence rather than a bare code, and the reason this
-#: engine writes for it always is one.
+#: **In C's `REASON_PROSE` since 2026-09-09**, and asserted by
+#: `test_every_reason_code_this_engine_emits_is_renderable_by_the_console`. An earlier
+#: version of this comment said C had been asked to add it and had not yet; that was true
+#: when written and stale by the time anyone read it. Corrected 2026-09-10 after C pointed
+#: at it — a comment describing another agent's state is a comment that goes out of date
+#: silently, which is why the test rather than the note is what holds the seam.
 REASON_INPUTS_UNAVAILABLE: Final = "cost_inputs_unavailable"
 
 # --------------------------------------------------------------------------- #

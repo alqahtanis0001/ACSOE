@@ -84,6 +84,56 @@ still evaluates, still blocks, and still publishes its assessment: the assessmen
 record of the *evaluation*, the command row is the record of the *decision*, and research
 needs both.
 
+**The freeze suppression is now the common path rather than the rare one.** Three of the
+four conditions emit `freeze` after the 2026-09-10 ruling, and a drawdown persisting across
+a thousand ticks must still produce exactly one row. What makes it converge is the
+orchestrator: `safety` writes the row, the command reader consumes it at the top of the next
+tick and sets the mode to `frozen`, and every later tick is suppressed because freezing a
+frozen system changes nothing.
+
+**The exposure precondition now guards one condition.** With drawdown and loss streak
+freezing, the `close_all` branch is reached by the data outage alone, so the suppression
+sentences name the condition and not just the absence — an operator reading "the breaker did
+nothing" needs to know that it was the outage that wanted to liquidate, and not the drawdown
+they might assume.
+
+### A suppressed escalation never swallows a freeze that was independently due
+
+**Ruled by the operator on 2026-09-10 and written into invariant 14.** When the winning
+action is suppressed, `safety` emits **the strongest action that is not suppressed** rather
+than emitting nothing.
+
+The case: a drawdown is breached, a data outage is running, and the account has nothing open
+and nothing resting. `close_all` wins, is then suppressed for want of anything to close, and
+before the ruling *nothing at all* was emitted — including the `freeze` the drawdown would
+have emitted on its own. **More bad conditions producing less action is the wrong direction
+for a circuit breaker**, and it is the one shape this rule exists to forbid.
+
+It does **not** repeal "the more severe action wins and the two are not both emitted". Still
+one command per tick, still no `freeze` alongside a `close_all` that actually emitted; only
+the fall-through is new.
+
+Two boundaries on it, and both are tested:
+
+- **It falls through to a lesser action that was genuinely due, never to one invented for
+  the occasion.** An outage suppressed with no other condition tripped emits nothing.
+  "Always freeze if you cannot liquidate" would freeze a healthy account over an outage it
+  had no exposure to.
+- **The lesser action keeps its own suppression.** A fall-through `freeze` is still only
+  written while the mode is `running`, because the reason it exists — freezing a frozen
+  system changes nothing — is untouched by which route reached it.
+
+On a fall-through the assessment carries **both** `command_emitted` and
+`suppressed_because`, which is the one case where both are set: the tick suppressed one
+action and emitted another, and an operator reading "it froze" needs to know the outage
+wanted to liquidate and could not.
+
+**What was being lost before the ruling was persistence, not blocking.** `BLOCK` fired
+either way, so the opportunity chain was stopped and nothing new was opened. But the mode
+never reached `frozen`, the console rendered a running system, and the block was re-derived
+every tick instead of recorded once. A breaker whose state cannot be read is a breaker the
+operator cannot act on.
+
 A resting post-only buy counts as exposure. Left on the book through a blackout it can open
 a position into a market the system has already declared untrustworthy.
 
@@ -92,15 +142,44 @@ a position into a market the system has already declared untrustworthy.
 `contracts.py` carries two tables rather than branches, because they are the part a person
 rules on and the rest is mechanism:
 
-- **`CONDITION_ACTION`** — which command each tripped condition emits. **Provisional**:
-  `trading-invariants.md` §14 and `feature-specs/36` disagree about whether a drawdown
-  breach freezes or escalates, and the Phase 0 seed satisfies every precondition §14 names,
-  so no fixture can make both true. Escalated to the lead on 2026-09-09; the implemented
-  reading treats spec 36's "freezes" as the loose one, since `close_all` also sets the mode
-  to `frozen` and §14 is a trading invariant. The error rate maps to `FREEZE` because §14
-  does not list it among the escalation conditions at all — it is an engine-health problem,
-  not account exposure, and liquidating because the system is throwing exceptions would be
-  the breaker causing the loss it exists to prevent.
+- **`CONDITION_ACTION`** — which command each tripped condition emits. **Ruled by the
+  operator on 2026-09-10**, written into invariant 14 by spec 37, and applied here by spec
+  42. No longer provisional.
+
+  | Condition | Action |
+  |---|---|
+  | `DRAWDOWN` | `freeze` |
+  | `LOSS_STREAK` | `freeze` |
+  | `ERROR_RATE` | `freeze` |
+  | `DATA_OUTAGE` | `close_all` |
+
+  **`close_all` is reserved for the invariant 14 data-outage escalation and for the
+  operator's own Close all button.** Nothing else may reach it;
+  `ESCALATING_CONDITION` names the one condition that does, and a test enumerates the
+  table against it so a condition added later has to be considered rather than quietly
+  inheriting a mapping.
+
+  The reasoning is invariant 14's and is not restated here beyond the sentence a reader
+  needs: a drawdown or a losing streak is a statement about *past* trades, so liquidating
+  on one realises a paper loss on the system's own authority at the moment it has least
+  evidence it is reading the market correctly; a sustained outage is a statement about
+  *present* knowledge, and unknown exposure is worse than a bad fill. Freeze stops new
+  positions while the manage chain keeps watching the open ones, and the operator decides
+  whether to liquidate. The error rate freezes for a related but separate reason: it is an
+  engine-health problem rather than account exposure, and liquidating because the system is
+  throwing exceptions would be the breaker causing the loss it exists to prevent.
+
+  **Two conditions on one tick emit one row, and it is the stronger action.** A tick that
+  is both in drawdown and mid-outage emits `close_all`, not `freeze`, and never both. That
+  is `strongest()` over an explicit rank rather than the order `SafetyCondition` happens to
+  be declared in — a table that relied on declaration order would silently change behaviour
+  the next time a condition was added in the middle. The row still carries *every* tripped
+  condition in its reason, because "drawdown *and* an outage" is a materially different
+  account state from either alone and the row is what survives.
+
+  **This case only became observable with the ruling.** Before it, every condition that
+  could co-occur with the outage also escalated, so "the strongest wins" could never be
+  distinguished from "they all do the same thing".
 - **`BOUNDARY_SOURCE`** — whether each threshold trips *at* its limit or *above* it, with
   the sentence in the documents that fixes it. Three trip at the limit; the outage is the
   only one that is strictly greater, because invariant 14 says "more than" and spec 36 says
