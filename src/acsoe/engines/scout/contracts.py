@@ -45,7 +45,7 @@ somebody needs to fix.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from decimal import ROUND_DOWN, Decimal
 from typing import Any, Final
 
@@ -54,6 +54,7 @@ from pydantic import BaseModel, ConfigDict
 from acsoe.clients.store.contracts import Money
 
 __all__ = [
+    "CANDIDATE_FIELD",
     "EXCHANGE_BALANCES_KEY",
     "EXCHANGE_KEY",
     "EXCHANGE_PAIR_RULES_KEY",
@@ -73,6 +74,7 @@ __all__ = [
     "REASON_BELOW_COSTMIN",
     "REASON_BELOW_ORDERMIN",
     "REASON_CRYPTO_QUOTED",
+    "REASON_EMPTY_UNIVERSE",
     "REASON_INPUTS_UNAVAILABLE",
     "REASON_INSUFFICIENT_QUOTE_BALANCE",
     "REASON_NO_FX_RATE",
@@ -84,7 +86,9 @@ __all__ = [
     "SCOUT_KEY",
     "PairFacts",
     "ScoutUniverse",
+    "rank_universe",
     "round_down_to_lot",
+    "select_candidate",
 ]
 
 # --------------------------------------------------------------------------- #
@@ -110,6 +114,18 @@ SCOUT_KEY: Final = "scout"
 #: side, with no literal anywhere to drift, which is a better answer than the constant it
 #: replaced and better than the alias. Settled 2026-09-10.
 PAIRS_FIELD: Final = "pairs"
+
+#: Where the single candidate lives: `state["scout"]["pair"]`.
+#:
+#: **Fixed by the cross-chain key table in `engine-contracts.md` and not renameable.**
+#: Engines 10 `cost` and 11 `risk` read it directly — `cost/contracts.py` names the same
+#: path in its own `CANDIDATE_PAIR_PATH` — so a rename here is a silent block on every live
+#: tick in two other engines, which is precisely the failure the Phase 3 audit was about.
+#:
+#: **Absent, never null, when there is no candidate.** A `pair` key holding `None` is a key
+#: a consumer can read and a `_require` can mistake for a value; an absent key cannot be.
+#: The same shape `RiskSizing` uses for `qty` on a rejection, and for the same reason.
+CANDIDATE_FIELD: Final = "pair"
 
 #: Engine 1 `exchange` (A). The account engine: balances, fee tier, pair rules.
 EXCHANGE_KEY: Final = "exchange"
@@ -227,6 +243,20 @@ REASON_TICK_GRID_TOO_COARSE: Final = "barriers_below_tick_size"
 #: arithmetic it does not belong to.
 REASON_INPUTS_UNAVAILABLE: Final = "scout_inputs_unavailable"
 
+#: The universe was computed and is empty: every pair was excluded, so there is no candidate
+#: this tick. **This is a `PASS`, not a `BLOCK`, and not a failure of any kind.**
+#:
+#: Nothing qualifying is this system's honest default state on a small account — the console
+#: renders it as *"Scanned 412 pairs. 38 entered the tradable universe. None qualified."* —
+#: and recording it as a block would fill `block_records` with a normal Tuesday and corrupt
+#: engine 17 `safety`'s error rate, which counts those rows.
+#:
+#: Like :data:`REASON_INPUTS_UNAVAILABLE` it is **not** in :data:`EXCLUSION_REASONS`: it is a
+#: statement about the tick rather than about a pair. Every pair that produced it is already
+#: counted under its own exclusion code, so counting this one too would double-count the
+#: whole universe.
+REASON_EMPTY_UNIVERSE: Final = "empty_universe"
+
 #: Every reason a *pair* can be excluded, in the order the filter applies them.
 #:
 #: The order is part of the behaviour rather than an implementation detail: a pair is
@@ -250,6 +280,50 @@ EXCLUSION_REASONS: Final[tuple[str, ...]] = (
 # --------------------------------------------------------------------------- #
 # Arithmetic
 # --------------------------------------------------------------------------- #
+
+
+def rank_universe(pairs: Iterable[str]) -> tuple[str, ...]:
+    """The universe in the order the candidate is taken from. **Alphabetical, and that is
+    the whole of it in Phase 3.**
+
+    **RULED by the operator on 2026-09-10, and the reasoning belongs here as much as in
+    spec 44**, because the next agent to read this will be looking for the score:
+
+        A deterministic score over features is meaningless before features exist, and a
+        placeholder score would be a check whose output resembles the claim while the claim
+        is untrue — this phase has produced enough of those. The universe filter is the
+        contribution; ranking one candidate out of a filtered set is a Phase 5 decision made
+        with real features in front of us.
+
+    So this is the **tie-break alone**: pair name, ascending. Not a score that happens to be
+    constant, not a score over spread or volume, not a `TODO` returning zero. Invariant 4
+    describes engine 7's ranking as "a deterministic score over features"; in Phase 3 there
+    are no features, so equal treatment of every pair in the universe is the honest
+    behaviour and alphabetical order is how equal treatment is spelled.
+
+    **This is a recorded absence, not a design.** It is isolated here — one named function,
+    the way :data:`EXCLUSION_REASONS` is a named table — so that Phase 5 fixing it is one
+    edit against a named seam rather than a hunt through the engine. Nobody should read
+    alphabetical ordering as a choice anyone defended.
+
+    `sorted` over the names is deliberately not `sorted(..., key=something)`: a key function
+    is where a score would arrive by accident, and there is nothing here for one to hide in.
+    """
+    return tuple(sorted(pairs))
+
+
+def select_candidate(pairs: Iterable[str]) -> str | None:
+    """The one pair the judgement chain will consider, or `None` when the universe is empty.
+
+    One candidate leaves this engine, never several: the judgement chain considers one, and
+    engines 10 and 11 read a single `state["scout"]["pair"]`.
+
+    `None` is a routine answer rather than a failure — nothing qualifying is this system's
+    honest default state on a small account — and the engine turns it into `PASS`, not
+    `BLOCK`. See the engine's module docstring for why that distinction is load-bearing.
+    """
+    ordered = rank_universe(pairs)
+    return ordered[0] if ordered else None
 
 
 def round_down_to_lot(quantity: Decimal, lot_decimals: int) -> Decimal:
@@ -310,6 +384,21 @@ class ScoutUniverse(BaseModel):
     excluded: Mapping[str, int] = {}
     equity: Money | None = None
 
+    candidate: str | None = None
+    """The one pair the judgement chain will consider, or `None` when nothing qualified.
+
+    Chosen by :func:`select_candidate` over :func:`rank_universe`, which in Phase 3 is
+    alphabetical and nothing else. It is published under :data:`CANDIDATE_FIELD` and is
+    **absent from the payload** rather than null when there is none.
+    """
+
+    reason_code: str | None = None
+    """Why there is no candidate, or `None` when there is one.
+
+    :data:`REASON_EMPTY_UNIVERSE` on an empty universe. That is a `PASS` and not a failure,
+    so this field is not evidence of one.
+    """
+
     @property
     def entered(self) -> int:
         return len(self.pairs)
@@ -324,11 +413,23 @@ class ScoutUniverse(BaseModel):
         return self.scanned == self.entered + sum(self.excluded.values())
 
     def to_state_data(self) -> dict[str, Any]:
-        """The JSON-serialisable form the orchestrator puts in `state["scout"]`."""
-        return {
+        """The JSON-serialisable form the orchestrator puts in `state["scout"]`.
+
+        **`pair` is omitted entirely when there is no candidate**, rather than emitted as
+        `null`. Engines 10 and 11 reach it through a `_require` that treats a published
+        `None` exactly like an absent key — so a null would be handled correctly today, and
+        the omission is about tomorrow: a key called `pair` sitting in the payload of a tick
+        that chose nothing is a key some future consumer reads without the `_require`. The
+        same shape, and the same argument, as `RiskSizing` omitting `qty` on a rejection.
+        """
+        payload: dict[str, Any] = {
             PAIRS_FIELD: list(self.pairs),
             "scanned": self.scanned,
             "entered": self.entered,
             "excluded": dict(self.excluded),
             "equity": None if self.equity is None else format(self.equity, "f"),
+            "reason_code": self.reason_code,
         }
+        if self.candidate is not None:
+            payload[CANDIDATE_FIELD] = self.candidate
+        return payload

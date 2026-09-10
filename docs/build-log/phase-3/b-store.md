@@ -734,3 +734,46 @@ is more useful than "we lack a rate for a pair you disabled anyway".
 false and every fixture quote is the reporting currency — which is the point rather than a
 caveat. The hole is closed before the flag is ever turned on, and the flag was one line away in
 my own test suite.
+
+### A mutation showed three ordering tests proving less than their docstrings claimed
+
+**Agent:** B · **Task:** spec 44 · **Date:** 2026-09-10
+
+**What happened.** The lead asked for the ordering to be mutated: *"a sort that is stable by
+accident rather than alphabetical by construction will pass a single fixture."* I replaced
+`rank_universe`'s `sorted(pairs)` with `tuple(pairs)` — arrival order — expecting the three
+behavioural ordering tests to go red. **All three stayed green.** The only thing that caught
+it was a one-line unit assertion inside a test about something else.
+
+**Why.** The engine builds its scan set as `sorted(set(rules) | set(quotes))` and appends
+survivors in that order, so `rank_universe` is *always* handed an already-ordered sequence. A
+ranking that merely preserved arrival order therefore answers alphabetically anyway. My
+shuffle test rebuilds the published mappings in reverse and rotated order — but the engine
+re-sorts them before ranking, so the shuffle never reaches the function under test.
+
+The two sorts are defence in depth in the engine and I am keeping both; a gate that orders its
+own scan deterministically is right. What was wrong was the **claim**:
+`test_the_candidate_is_stable_under_a_shuffled_input_mapping` said in its docstring that it was
+"the assertion carrying the ordering" and that an accidentally-stable sort "would give the same
+answer on every fixture whose insertion order happens to be alphabetical". The first half was
+false and the second half described precisely the case it could not detect.
+
+**This is the shape I have spent the phase catching in other people's work**, and the lead's
+instruction is the only reason I found it in mine. Reading the test would not have revealed it —
+the docstring is persuasive and the test does something real. Only breaking the code did.
+
+**Fix.** `test_rank_universe_orders_by_name_and_not_by_arrival` calls the function directly
+with reverse-alphabetical input, so arrival order and name order disagree on every element
+rather than on one; it asserts the whole tuple rather than the head, because a ranking that
+returned the right head for the wrong reason would pass the weaker form; and it asserts
+idempotence, because a ranking that reversed on each call would satisfy a single invocation.
+Re-mutated: it now goes red, along with the seam test.
+
+The shuffle test is **kept** — spec 44 asks for it directly and end-to-end insensitivity to
+mapping order is genuinely worth having — with its docstring rewritten to say what it proves
+and, explicitly, what it does not and why. The blind spot is named in `scout/README.md` too,
+because the next person to change the ordering will read that before they read the tests.
+
+**Consequence.** Two of the three claims I have had to withdraw today were about my own tests
+rather than my own code, and both were caught by mutation rather than review. The engine has
+been right every time; the prose about it has not.

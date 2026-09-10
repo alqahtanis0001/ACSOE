@@ -66,7 +66,28 @@ exercises replay. One line and one constant to reverse; full reasoning in the bu
   cross-checked against the real engine 11 over a table straddling `ordermin` by one lot
   increment each way. Four mutations run and each caught by the test written for it.
   **One escalation to the lead — see below.**
-- **Spec 44** — engine 7 `scout`, the candidate and the gate. Not started.
+- **Spec 44** — engine 7 `scout`, the candidate and the gate. `src/acsoe/engines/scout/`,
+  `tests/engines/test_scout.py`. ***Complete, all four gates green 2026-09-10, and
+  `--phase 3` is 9 PASS / 0 FAIL / 0 PENDING.*** 44 tests. One candidate under
+  `state["scout"]["pair"]`, absent and never null when there is none; empty universe is
+  `PASS` and not `BLOCK`; the handoff run as one tick through the real engines 10 and 11.
+  Ordering is alphabetical, isolated as `rank_universe` in `contracts.py`.
+
+#### OPEN QUESTION for the tracker — engine 7 has no ranking score, and that is recorded
+
+**Ruled by the operator on 2026-09-10 and not a defect**, but it belongs in
+`context/progress-tracker.md`, which is the lead's, so it is raised here.
+
+Invariant 4 describes engine 7's ranking as "a deterministic score over features". There
+are no features in Phase 3, so **the ordering is the tie-break alone: pair name,
+ascending**. The operator's reasoning: a placeholder score would be a check whose output
+resembles the claim while the claim is untrue, and ranking one candidate out of a filtered
+set is a Phase 5 decision made with real features in front of us.
+
+**Phase 5 closes it.** It is isolated as one named function, `rank_universe` in
+`scout/contracts.py`, so the fix is one edit against a named seam. `engines/scout/README.md`
+says in as many words that alphabetical ordering is a recorded absence rather than a design,
+so nobody reads it as a choice someone defended.
 
 #### For the lead — the affordability check compares two currencies
 

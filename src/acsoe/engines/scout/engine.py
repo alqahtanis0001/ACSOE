@@ -68,6 +68,7 @@ from acsoe.engines.scout.contracts import (
     REASON_BELOW_COSTMIN,
     REASON_BELOW_ORDERMIN,
     REASON_CRYPTO_QUOTED,
+    REASON_EMPTY_UNIVERSE,
     REASON_INPUTS_UNAVAILABLE,
     REASON_INSUFFICIENT_QUOTE_BALANCE,
     REASON_NO_FX_RATE,
@@ -79,6 +80,7 @@ from acsoe.engines.scout.contracts import (
     PairFacts,
     ScoutUniverse,
     round_down_to_lot,
+    select_candidate,
 )
 
 RISK_FRACTION_KEY = "trading.risk_fraction_per_trade"
@@ -140,13 +142,28 @@ class ScoutEngine(BaseEngine):
             return self._blocked_on_missing_input(str(missing), started)
 
         duration_ms = (time.perf_counter() - started) * 1000.0
-        # An empty universe is not an error and not a block: it is a tick with nothing to
-        # consider, which happens routinely on a small account. Spec 44 owns the candidate
-        # and the gate proper; this is the status that will not have to change under it.
-        status = EngineStatus.OK if universe.pairs else EngineStatus.PASS
+
+        # **An empty universe is `PASS`, and the distinction is the whole reason
+        # `EngineStatus` has both.** `PASS` means "nothing to do this cycle; not an error",
+        # and the orchestrator stops the opportunity chain on it *without* setting
+        # `trading_blocked_by`. Nothing qualifying is this system's honest default state on
+        # a small account; recording it as a block would fill `block_records` with a normal
+        # Tuesday and corrupt engine 17 `safety`'s error rate, which counts those rows.
+        #
+        # `BLOCK` is reserved for the gate failure above — this engine could not reach the
+        # data to compute a universe at all. That is invariant 3 and it is a different fact.
+        if universe.candidate is None:
+            return EngineResult(
+                engine=self.name,
+                status=EngineStatus.PASS,
+                blocks_trading=False,
+                data=universe.to_state_data(),
+                duration_ms=duration_ms,
+            )
+
         return EngineResult(
             engine=self.name,
-            status=status,
+            status=EngineStatus.OK,
             blocks_trading=False,
             data=universe.to_state_data(),
             duration_ms=duration_ms,
@@ -198,11 +215,18 @@ class ScoutEngine(BaseEngine):
             else:
                 excluded[reason] = excluded.get(reason, 0) + 1
 
+        # One candidate leaves this engine, never several: the judgement chain considers
+        # one. In Phase 3 the ordering is alphabetical and nothing else — see
+        # `rank_universe`, where the operator's ruling and its reasoning live.
+        candidate = select_candidate(pairs)
+
         return ScoutUniverse(
             pairs=tuple(pairs),
             scanned=len(scanned),
             excluded=excluded,
             equity=equity,
+            candidate=candidate,
+            reason_code=None if candidate is not None else REASON_EMPTY_UNIVERSE,
         )
 
     def _exclusion(

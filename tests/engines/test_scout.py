@@ -37,10 +37,12 @@ from acsoe.core.contracts import EngineStatus
 from acsoe.engines.exchange.engine import ExchangeEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
 from acsoe.engines.scout.contracts import (
+    CANDIDATE_FIELD,
     EXCLUSION_REASONS,
     REASON_BELOW_COSTMIN,
     REASON_BELOW_ORDERMIN,
     REASON_CRYPTO_QUOTED,
+    REASON_EMPTY_UNIVERSE,
     REASON_INPUTS_UNAVAILABLE,
     REASON_INSUFFICIENT_QUOTE_BALANCE,
     REASON_NO_FX_RATE,
@@ -49,6 +51,8 @@ from acsoe.engines.scout.contracts import (
     REASON_PAIR_RULES_MISSING,
     REASON_QUOTE_NOT_PROVABLY_STABLE,
     REASON_TICK_GRID_TOO_COARSE,
+    rank_universe,
+    select_candidate,
 )
 from acsoe.engines.scout.engine import ScoutEngine
 
@@ -605,30 +609,150 @@ def test_every_published_exclusion_code_is_one_this_module_declares(
 #: too — and the failure mode of this seam is silence, not noise, so the exemption is built
 #: to be impossible to forget rather than to be remembered.
 #:
-#: **Empty, and that is its normal state.** It held `no_fx_rate` for roughly twenty minutes
-#: on 2026-09-10, between the operator's FX ruling and C landing the prose. The expiry test
-#: went red the moment C landed it, which is the mechanism working: the entry was deleted
+#: **Empty is its normal state.** It held `no_fx_rate` for roughly twenty minutes on
+#: 2026-09-10, between the operator's FX ruling and C landing the prose; the expiry test
+#: went red the moment C landed it, which is the mechanism working — the entry was deleted
 #: because a test failed, not because anyone remembered.
+#:
+#: It held `empty_universe` for a few minutes under spec 44 — sent to C the minute the code
+#: existed, ahead of the engine being finished, so it would not be the line holding up
+#: spec 47. C landed the prose before the engine was done, and the expiry test emptied this
+#: again. Twice now the mechanism has closed the gap rather than a person remembering.
 PROSE_PENDING_WITH_C: frozenset[str] = frozenset()
 
 
-def test_every_exclusion_code_is_renderable_by_the_console() -> None:
+def declared_reason_codes() -> dict[str, str]:
+    """Every `REASON_*` string this engine's contract declares, read off the module.
+
+    **Enumerated, never hand-listed**, and deliberately wider than `EXCLUSION_REASONS`: two
+    of the codes this engine emits are statements about the *tick* rather than about a pair
+    — `scout_inputs_unavailable` and `empty_universe` — and are kept out of that tuple on
+    purpose, because counting them in the tally would break
+    `scanned == entered + sum(excluded)`.
+
+    A test that enumerated the tuple alone would therefore miss exactly the two codes an
+    operator meets when something is wrong or when nothing qualified. C's own enumeration
+    walks `vars()` for the same reason, and it was C noticing this that made the point.
+    """
+    import acsoe.engines.scout.contracts as module
+
+    return {
+        name: value
+        for name, value in vars(module).items()
+        if name.startswith("REASON_") and isinstance(value, str)
+    }
+
+
+def test_every_reason_code_this_engine_emits_is_renderable_by_the_console() -> None:
     """The seam nothing else would notice. `console/format.py` maps a stored code to the
     sentence an operator reads, and a code absent from that table renders "No reason was
-    recorded." silently. Enumerated out of `EXCLUSION_REASONS` rather than hand-listed, so
-    a code added later cannot skip this."""
+    recorded." silently, with no error anywhere."""
     from acsoe.console.format import NO_REASON_RECORDED, REASON_PROSE, operator_reason
 
-    missing = [
+    declared = declared_reason_codes()
+    assert set(EXCLUSION_REASONS) < set(declared.values()), (
+        "the exclusion tuple must be a strict subset of the declared codes; the tick-level "
+        "codes are what it is missing, and they are the ones an operator meets on a fault"
+    )
+
+    missing = sorted(
         code
-        for code in EXCLUSION_REASONS
+        for code in declared.values()
         if code not in REASON_PROSE and code not in PROSE_PENDING_WITH_C
-    ]
+    )
     assert missing == [], f"C's REASON_PROSE has no entry for {missing}"
-    for code in EXCLUSION_REASONS:
+    for code in declared.values():
         if code in PROSE_PENDING_WITH_C:
             continue
         assert operator_reason(code) != NO_REASON_RECORDED
+
+
+# --------------------------------------------------------------------------- #
+# The handoff: engines 10 and 11 read the published pair with no translation
+# --------------------------------------------------------------------------- #
+
+
+def test_the_cost_gate_reads_the_published_candidate_with_no_translation(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """Spec 44's handoff check, run as one tick rather than asserted as a string equality.
+
+    `scout` publishes `state["scout"]["pair"]` and engine 10 `cost` reads it through its own
+    `CANDIDATE_PAIR_PATH`. Two constants, two modules, no import between them — contract
+    rule 3 forbids one — so the only thing holding them together is that they name the same
+    key. Comparing the two constants would prove they match *today*; running the two engines
+    on one `state` proves the handoff works, which is the thing that was broken in three
+    places when this phase opened.
+
+    The gate is driven to a real net-edge comparison rather than a missing-input block,
+    because a block would be satisfied by a `cost` that never found the pair at all.
+    """
+    from acsoe.engines.cost.contracts import REASON_INPUTS_UNAVAILABLE as COST_INPUTS
+    from acsoe.engines.cost.engine import CostEngine
+
+    state = build_state(account)
+    scouted = scout.process(account, state)
+    state["scout"] = scouted.data
+
+    candidate = scouted.data[CANDIDATE_FIELD]
+    # Engines 8 and 9 are C's and are Phase 5; they stay mocked, as spec 40 established.
+    state["prediction"] = {"expected_move_pct": "0.03"}
+    state["order_book"] = {"estimated_slippage_pct": "0.0005"}
+
+    priced = CostEngine().process(account, state)
+
+    assert priced.data["reason_code"] != COST_INPUTS, "cost found the candidate"
+    assert priced.data["pair"] == candidate, "the same pair, with nothing in between"
+
+
+def test_the_risk_gate_reads_the_published_candidate_with_no_translation(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """The same handoff for engine 11, which reads the pair through its own `SCOUT_KEY`.
+
+    Both gates are checked because both read it, and because a candidate that reached one
+    and not the other would be the audit's failure recurring at the next seam along.
+    """
+    from acsoe.engines.risk.contracts import REASON_INPUTS_UNAVAILABLE as RISK_INPUTS
+    from acsoe.engines.risk.engine import RiskEngine
+
+    state = build_state(account)
+    scouted = scout.process(account, state)
+    state["scout"] = scouted.data
+
+    sized = RiskEngine().process(account, state)
+
+    assert sized.data["reason_code"] != RISK_INPUTS, "risk found the candidate"
+    assert sized.data["pair"] == scouted.data[CANDIDATE_FIELD]
+
+
+def test_a_tick_with_no_candidate_leaves_the_downstream_gates_nothing_to_read(
+    scout: ScoutEngine, account: Any, kraken: FakeKrakenWithStream
+) -> None:
+    """The other side of the handoff, and the reason `pair` is absent rather than null.
+
+    On a `PASS` tick the orchestrator stops the opportunity chain, so engines 10 and 11
+    never run — but they must fail closed if they ever do, rather than reading a `None` as a
+    pair. Asserted through the real cost gate: it blocks on the missing input rather than
+    pricing something.
+    """
+    from acsoe.engines.cost.contracts import REASON_INPUTS_UNAVAILABLE as COST_INPUTS
+    from acsoe.engines.cost.engine import CostEngine
+
+    kraken.set_balances({"USD": "0"})
+    state = build_state(account)
+    scouted = scout.process(account, state)
+    state["scout"] = scouted.data
+    state["prediction"] = {"expected_move_pct": "0.03"}
+    state["order_book"] = {"estimated_slippage_pct": "0.0005"}
+
+    assert scouted.status is EngineStatus.PASS
+    assert CANDIDATE_FIELD not in state["scout"]
+
+    priced = CostEngine().process(account, state)
+
+    assert priced.blocks_trading is True
+    assert priced.data["reason_code"] == COST_INPUTS
 
 
 def test_no_exemption_outlives_the_prose_it_was_waiting_for() -> None:
@@ -824,6 +948,257 @@ def test_a_non_empty_universe_reports_ok_and_an_empty_one_passes(
     assert empty.status is EngineStatus.PASS
     assert empty.blocks_trading is False
     assert empty.data["pairs"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Spec 44 — one candidate, or none
+# --------------------------------------------------------------------------- #
+
+
+def test_a_populated_universe_publishes_exactly_one_candidate(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """The pass half of the gate. One candidate leaves this engine, never several — the
+    judgement chain considers one, and engines 10 and 11 read a single
+    `state["scout"]["pair"]`."""
+    result = scout.process(account, build_state(account))
+
+    assert result.status is EngineStatus.OK
+    assert result.blocks_trading is False
+    assert result.data[CANDIDATE_FIELD] in result.data["pairs"]
+    assert isinstance(result.data[CANDIDATE_FIELD], str), "one pair, not a list of them"
+    assert result.data["reason_code"] is None
+
+
+def test_an_empty_universe_passes_and_does_not_block(
+    scout: ScoutEngine, account: Any, kraken: FakeKrakenWithStream
+) -> None:
+    """**The middle case, and the assertion that would quietly be wrong forever.**
+
+    `PASS` means "nothing to do this cycle; not an error", and the orchestrator stops the
+    opportunity chain on it *without* setting `trading_blocked_by`. Nothing qualifying is
+    this system's honest default state on a small account — the console renders it as
+    *"Scanned 412 pairs. 38 entered the tradable universe. None qualified."*
+
+    Recording it as a `BLOCK` would fill `block_records` with a normal Tuesday and corrupt
+    engine 17 `safety`'s error rate, which counts those rows. A breaker tripped by ordinary
+    quiet days is a breaker nobody can leave switched on.
+
+    So the status is asserted **and** asserted not to be `BLOCK`: an engine returning
+    `BLOCK` here would satisfy every other test in this file.
+    """
+    kraken.set_balances({"USD": "0"})
+
+    result = scout.process(account, build_state(account))
+
+    assert result.status is EngineStatus.PASS
+    assert result.status is not EngineStatus.BLOCK
+    assert result.blocks_trading is False
+    assert result.data["pairs"] == []
+    assert CANDIDATE_FIELD not in result.data, "absent, never null"
+    assert result.data["reason_code"] == REASON_EMPTY_UNIVERSE
+
+
+def test_a_gate_failure_blocks_and_is_not_the_same_as_nothing_qualifying(
+    scout: ScoutEngine, account: Any, kraken: FakeKrakenWithStream
+) -> None:
+    """The block half, asserted **beside** the pass half because the pair is the point.
+
+    "We could not compute a universe" and "the universe is empty" are different facts and
+    they take different statuses. Invariant 3 makes the first a block; spec 44 makes the
+    second a pass. An engine that collapsed them would look correct from either test alone.
+    """
+    kraken.fail("asset_pairs")
+
+    blocked = scout.process(account, build_state(account))
+
+    assert blocked.status is EngineStatus.BLOCK
+    assert blocked.blocks_trading is True
+    assert blocked.reason
+    assert CANDIDATE_FIELD not in blocked.data, "absent in both cases, never null"
+
+    kraken.clear_failures("asset_pairs")
+    kraken.set_balances({"USD": "0"})
+    empty = scout.process(account, build_state(account))
+
+    assert empty.status is EngineStatus.PASS
+    assert empty.blocks_trading is False
+    assert blocked.status is not empty.status, "the two facts do not share a status"
+
+
+# --------------------------------------------------------------------------- #
+# The ordering: alphabetical, and a recorded absence rather than a design
+# --------------------------------------------------------------------------- #
+
+
+def test_the_candidate_is_the_alphabetically_first_pair_in_the_universe(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """Ruled by the operator on 2026-09-10: there is no score in Phase 3.
+
+    The universe here is BTC/USD, ETH/USD and SOL/USD, so the candidate is BTC/USD. Asserted
+    **by name** rather than as `sorted(pairs)[0]`, which would be the implementation
+    restated — a test that computes the expected answer the same way the engine does cannot
+    disagree with it.
+    """
+    result = scout.process(account, build_state(account))
+
+    assert set(result.data["pairs"]) == set(USD_PAIRS)
+    assert result.data[CANDIDATE_FIELD] == "BTC/USD"
+
+
+def test_the_ordering_does_not_move_when_spreads_or_volumes_change(
+    scout: ScoutEngine, account: Any, kraken: FakeKrakenWithStream
+) -> None:
+    """**A hidden score would show up here as a different answer**, and this is the test
+    carrying the whole ordering in Phase 3.
+
+    A score over spread, volume, volatility or price is exactly what the ruling forbids — it
+    would look like a ranking and be an arbitrary one. So the books are moved underneath the
+    universe: BTC/USD is given a punishing spread and SOL/USD a tight one, which is the
+    ordering any plausible invented score would reverse. The candidate does not move.
+    """
+    before = scout.process(account, build_state(account)).data[CANDIDATE_FIELD]
+
+    # BTC/USD: a spread two hundred times wider than SOL/USD's, and a thinner book.
+    kraken.set_order_book("BTC/USD", bids=[("49000.0", "0.01")], asks=[("51000.0", "0.01")])
+    kraken.set_order_book("SOL/USD", bids=[("150.000", "900.0")], asks=[("150.001", "900.0")])
+    kraken.stream_pairs(ALL_PAIRS, at=account.now - timedelta(seconds=60))
+
+    after = scout.process(account, build_state(account)).data[CANDIDATE_FIELD]
+
+    assert before == "BTC/USD"
+    assert after == before, "the ordering is alphabetical; nothing about the book enters it"
+
+
+def test_the_candidate_is_stable_under_a_shuffled_input_mapping(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """Determinism end to end: the published mappings are rebuilt in reverse, rotated and
+    reverse-sorted, and the candidate does not move.
+
+    Dict ordering is not part of engine 1's or engine 3's contract, which is exactly why an
+    engine must not depend on it. Spec 44 asks for this directly — "shuffle the pair mapping
+    and assert the answer is unchanged".
+
+    **What this test does *not* prove, established by mutation rather than by reading.**
+    Replacing `rank_universe`'s `sorted(pairs)` with `tuple(pairs)` leaves this test green.
+    The engine builds its scan set as `sorted(set(rules) | set(quotes))`, so `rank_universe`
+    is handed an already-ordered sequence and a ranking that merely preserved arrival order
+    would still answer alphabetically. The two sorts are defence in depth in the engine and
+    a blind spot in this test, and the blind spot is worth naming rather than leaving for
+    someone to trip over.
+
+    `test_rank_universe_orders_by_name_and_not_by_arrival` is what actually pins
+    alphabetical-by-construction, and it is the one that caught that mutation.
+    """
+    baseline = scout.process(account, build_state(account)).data[CANDIDATE_FIELD]
+
+    answers = {baseline}
+    for reorder in (
+        lambda items: list(reversed(items)),
+        lambda items: items[1:] + items[:1],
+        lambda items: sorted(items, key=lambda kv: kv[0], reverse=True),
+    ):
+        state = build_state(account)
+        rules = state["exchange"]["pair_rules"]["pairs"]
+        quotes = state["market_sensor"]["quotes"]
+        state["exchange"]["pair_rules"]["pairs"] = dict(reorder(list(rules.items())))
+        state["market_sensor"]["quotes"] = dict(reorder(list(quotes.items())))
+        answers.add(scout.process(account, state).data[CANDIDATE_FIELD])
+
+    assert answers == {"BTC/USD"}, f"the candidate moved with input order: {answers}"
+
+
+def test_the_ordering_is_alphabetical_over_the_whole_universe_not_a_tie_break(
+    scout: ScoutEngine, account: Any, kraken: FakeKrakenWithStream
+) -> None:
+    """The distinction spec 44 draws: alphabetical over the *whole* universe, not a
+    tie-break applied to pairs some score already rated equal.
+
+    Removing the alphabetically first pair must promote the next one by name. A hidden score
+    with alphabetical tie-breaking would pass the fixed-universe test above and fail this,
+    because it would promote whichever pair its score preferred rather than ETH/USD.
+    """
+    kraken.remove_pair("BTC/USD")
+    without_btc = scout.process(account, build_state(account)).data
+
+    assert "BTC/USD" not in without_btc["pairs"]
+    assert without_btc[CANDIDATE_FIELD] == "ETH/USD"
+
+    kraken.remove_pair("ETH/USD")
+    without_eth = scout.process(account, build_state(account)).data
+
+    assert without_eth[CANDIDATE_FIELD] == "SOL/USD"
+
+
+def test_rank_universe_orders_by_name_and_not_by_arrival() -> None:
+    """**The assertion that actually pins alphabetical-by-construction.**
+
+    Found by mutation, and worth the explanation: replacing `sorted(pairs)` with
+    `tuple(pairs)` inside `rank_universe` leaves every *behavioural* ordering test in this
+    file green, because the engine hands it an already-sorted scan set. Only a direct call
+    with deliberately unsorted input can tell "orders by name" from "preserves the order it
+    was given".
+
+    The input is reverse-alphabetical so that arrival order and name order disagree on every
+    element rather than on one, and the assertion is on the whole tuple rather than on the
+    first item — a ranking that returned the right head for the wrong reason would pass the
+    weaker form.
+    """
+    assert rank_universe(["SOL/USD", "ETH/USD", "BTC/USD"]) == (
+        "BTC/USD",
+        "ETH/USD",
+        "SOL/USD",
+    )
+    assert select_candidate(["SOL/USD", "ETH/USD", "BTC/USD"]) == "BTC/USD"
+    assert rank_universe([]) == ()
+    assert select_candidate([]) is None
+
+    # Idempotent: ranking an already-ranked universe changes nothing. A ranking that
+    # reversed on each call would satisfy the assertions above on one invocation.
+    once = rank_universe(["c", "b", "a"])
+    assert rank_universe(once) == once
+
+
+def test_the_ordering_is_one_named_function_and_the_engine_holds_no_score(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """The seam Phase 5 will edit, asserted so it stays a seam.
+
+    Spec 44 requires the ordering isolated in `contracts.py` as one named function — the way
+    `CONDITION_ACTION` is a named table — so that fixing it in Phase 5 is one edit against a
+    named thing rather than a hunt through the engine. This asserts the function exists,
+    that it is what the engine's answer agrees with, and that the engine module itself
+    contains no sorting of its own for a score to hide in.
+    """
+    import ast
+
+    import acsoe.engines.scout.engine as engine_module
+
+    assert rank_universe(["c", "a", "b"]) == ("a", "b", "c")
+    assert select_candidate([]) is None
+    assert select_candidate(["c", "a", "b"]) == "a"
+
+    published = scout.process(account, build_state(account)).data
+    assert published[CANDIDATE_FIELD] == select_candidate(published["pairs"])
+
+    # The engine reaches the candidate **through the seam**, rather than computing an
+    # ordering of its own that happens to agree today. `sorted` and `min` both appear in
+    # this module legitimately — the scan set and the tick-grid barrier comparison — so a
+    # blanket ban on them would be a rule about the wrong thing; what matters is that the
+    # candidate comes from the named function Phase 5 will edit.
+    tree = ast.parse(Path(engine_module.__file__).read_text(encoding="utf-8"))
+    called = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "select_candidate" in called, (
+        "the candidate must come from contracts.select_candidate, so Phase 5 fixing the "
+        "ranking is one edit against a named seam rather than a hunt through the engine"
+    )
+    assert "max" not in called, "a max over a score is what the ruling forbids"
 
 
 def test_no_pair_name_or_exchange_value_is_written_into_the_engine_source() -> None:

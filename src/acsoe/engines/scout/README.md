@@ -128,6 +128,75 @@ is a fault somebody must fix.
 set is an operator saying "none of them are", which is a decision and excludes under the
 ordinary `crypto_quoted` code.
 
+## One candidate, or none
+
+`state["scout"]["pair"]` carries the single pair the judgement chain will consider. Engines
+10 `cost` and 11 `risk` read it directly, and the cross-chain key table in
+`engine-contracts.md` fixes that name — **it may not be renamed.** One candidate leaves this
+engine, never several.
+
+**`pair` is absent from the payload, never null, when there is no candidate.** Engines 10
+and 11 reach it through a `_require` that treats a published `None` exactly like an absent
+key, so a null would be handled correctly today; the omission is about tomorrow, when some
+consumer reads it without that guard. The same shape `RiskSizing` uses for `qty` on a
+rejection.
+
+### PASS, OK and BLOCK are three different answers
+
+| Situation | Status | `pair` | `reason_code` |
+|---|---|---|---|
+| A pair qualified | `OK` | the candidate | none |
+| The universe was computed and is empty | **`PASS`** | absent | `empty_universe` |
+| The universe could not be computed at all | `BLOCK` | absent | `scout_inputs_unavailable` |
+
+**An empty universe is `PASS`, not `BLOCK`, and the distinction is the whole reason
+`EngineStatus` has both.** `PASS` means "nothing to do this cycle; not an error", and the
+orchestrator stops the opportunity chain on it *without* setting `trading_blocked_by`.
+Nothing qualifying is this system's honest default state on a small account — the console
+renders it as *"Scanned 412 pairs. 38 entered the tradable universe. None qualified."*
+
+Recording that as a block would fill `block_records` with a normal Tuesday and corrupt
+engine 17 `safety`'s error rate, which counts those rows. A breaker tripped by ordinary
+quiet days is a breaker nobody can leave switched on.
+
+`BLOCK` is reserved for the gate failure invariant 3 describes: this engine could not reach
+the data to compute a universe at all — no pair rules, no equity snapshot, no quotes for any
+pair.
+
+## The ordering is alphabetical, and that is a recorded absence rather than a design
+
+**RULED by the operator on 2026-09-10.** Invariant 4 describes engine 7's ranking as "a
+deterministic score over features". There are no features in Phase 3, and the operator's
+reasoning is worth quoting rather than summarising:
+
+> A deterministic score over features is meaningless before features exist, and a
+> placeholder score would be a check whose output resembles the claim while the claim is
+> untrue — this phase has produced enough of those. The universe filter is the contribution;
+> ranking one candidate out of a filtered set is a Phase 5 decision made with real features
+> in front of us.
+
+So the ordering is the **tie-break alone**: pair name, ascending, over the *whole* universe
+rather than applied to pairs some score already rated equal. Not a score that happens to be
+constant, not a score over spread or volume, not a `TODO` returning zero.
+
+**Nobody should read this as a choice anyone defended.** Equal treatment of every pair in the
+universe is the honest behaviour when nothing yet distinguishes them, and alphabetical order
+is how equal treatment is spelled. **Phase 5 closes it**, with real features; it is carried
+as an open question in `context/progress/b-store.md` and belongs in the tracker.
+
+It is isolated as **one named function**, `rank_universe` in `contracts.py`, the way
+`EXCLUSION_REASONS` is a named table — so Phase 5 fixing it is one edit against a named seam
+rather than a hunt through the engine.
+
+**One thing to know before trusting the ordering tests**, because it was found by mutation
+rather than by reading: replacing `rank_universe`'s `sorted(pairs)` with `tuple(pairs)`
+leaves every *behavioural* ordering test green. The engine builds its scan set as
+`sorted(...)`, so `rank_universe` is handed an already-ordered sequence and a ranking that
+merely preserved arrival order still answers alphabetically. The two sorts are defence in
+depth in the engine and a blind spot in the behavioural tests.
+`test_rank_universe_orders_by_name_and_not_by_arrival` calls it directly with
+reverse-alphabetical input and is what actually pins alphabetical-by-construction.
+
 ## The sizing arithmetic exists twice, on purpose
 
 Engine 11 `risk` sizes the position; this filter asks whether a position is possible at all.
