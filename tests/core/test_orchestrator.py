@@ -458,3 +458,98 @@ def test_a_store_without_the_interrupted_reader_still_ticks() -> None:
 def test_mode_always_starts_idle() -> None:
     """Never restored from the store: a crashed daemon comes back not trading."""
     assert _orch(Chains()).system["mode"] == "idle"
+
+
+# ------------------------------------------------------- _record_run, against a real store
+
+
+class _RealClients:
+    """`Clients` holding a genuine `StoreClient`, not a double.
+
+    Every other test in this file uses `_Store`, which is shaped like the real client
+    method for method and is the right tool for the properties they assert. This one
+    exists because a double cannot demonstrate the property below: `_record_run` returns
+    early unless the store exposes `start_run`, so for a whole phase the only route into
+    its body was a real client, and `cli/engine.py` was passing three `None`s. Two lines
+    in it duplicated a keyword `_log` already supplies and raised `TypeError` the first
+    time they ran. See `code-standards.md` under Testing.
+    """
+
+    def __init__(self, store: Any) -> None:
+        self._store = store
+
+    @property
+    def kraken(self) -> Any:
+        return object()
+
+    @property
+    def store(self) -> Any:
+        return self._store
+
+    @property
+    def recorder(self) -> Any:
+        return object()
+
+
+def test_a_tick_records_its_run_through_a_real_store_client(tmp_path: Any) -> None:
+    """A tick holding a real `StoreClient` completes and writes its `runs` row.
+
+    The assertion is deliberately on the row rather than on "no exception": a `_log`
+    call that raises would fail this test either way, but a `_record_run` that silently
+    returned early would pass an exception-only assertion while recording nothing, and
+    that is the state the daemon was actually in.
+    """
+    from acsoe.clients.store.client import StoreClient
+
+    store = StoreClient(str(tmp_path / "acsoe.sqlite"))
+    store.migrate()
+    try:
+        orch = Orchestrator(
+            config=_Config(), clock=_Clock(), clients=_RealClients(store), chains=Chains()
+        )
+        orch.tick()
+        orch.tick()
+
+        runs = store.latest_runs(5)
+        assert [r.run_id for r in runs].count(orch.run_id) == 1, (
+            "_record_run must write exactly one runs row for this run_id, and write it "
+            "once across two ticks rather than on every tick"
+        )
+        assert runs[0].mode == "paper"
+
+        # The mode column stays NULL here and that is correct, not a half-delivery.
+        # `_persist_mode` is called from the command reader after a transition has been
+        # applied, and a daemon that starts idle and receives no command has entered no
+        # mode to record. Asserted rather than left implicit, because the null is the
+        # kind of thing a later reader "fixes".
+        assert store.system_mode(orch.run_id).mode is None
+    finally:
+        store.close()
+
+
+def test_the_run_record_failure_branch_logs_instead_of_killing_the_loop(
+    tmp_path: Any,
+) -> None:
+    """The `except` around `start_run` exists so a bookkeeping row can never stop the
+    loop. It contained the same duplicated keyword, so the branch that protects the loop
+    would itself have raised — turning a logged warning into a dead daemon. Driven by a
+    store whose `start_run` raises, which is the only way into it.
+    """
+
+    class _RaisingStore:
+        def start_run(self, *args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("bookkeeping is unavailable")
+
+        def set_system_mode(self, *args: Any, **kwargs: Any) -> bool:
+            return False
+
+    orch = Orchestrator(
+        config=_Config(),
+        clock=_Clock(),
+        clients=_RealClients(_RaisingStore()),
+        chains=Chains(),
+    )
+
+    state = orch.tick()
+
+    assert state is not None

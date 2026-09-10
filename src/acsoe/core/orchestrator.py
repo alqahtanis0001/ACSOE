@@ -287,9 +287,9 @@ class Orchestrator:
             )
         # Broad by intent: a bookkeeping row must never stop the loop. See the docstring.
         except Exception as exc:
-            self._log("run_record_failed", run_id=self._run_id, error=repr(exc))
+            self._log("run_record_failed", error=repr(exc))
             return
-        self._log("run_recorded", run_id=self._run_id, mode=str(self._config.mode))
+        self._log("run_recorded", mode=str(self._config.mode))
 
     def _persist_mode(self, store: Any, stamp: int) -> None:
         """Record the system mode this run is now in, for the console to read.

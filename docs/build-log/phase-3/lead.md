@@ -327,3 +327,54 @@ recorded there that a package where every fail-closed path raises one exception 
 `pytest.raises(ThatType)` alone a weak assertion — A's second finding, which is a special case
 of the same rule and the one most likely to recur, since `clients/kraken/` is built that way on
 purpose.
+
+### `_log` injects `run_id`, and two callers passed it again — unreachable until spec 39 wired a real store
+
+**Agent:** Lead · **Task:** spec 39 fallout, `core/orchestrator.py` · **Date:** 2026-09-10
+
+**What happened.** Landing the operator's `trading.stable_quote_currencies` values, two CLI
+tests went red — `test_engine_starts_against_the_committed_config` and
+`test_engine_ticks_against_an_empty_registry_and_exits_zero` — with a traceback that has
+nothing to do with config:
+
+```
+TypeError: structlog.stdlib.BoundLogger.debug() got multiple values for keyword argument 'run_id'
+  orchestrator.py:292 in _record_run  ->  orchestrator.py:129 in _log
+```
+
+**Why.** `Orchestrator._log` is a helper that binds the run and cycle onto every event:
+`self._logger.debug(event, run_id=self._run_id, cycle_id=self._cycle_id, **fields)`. Two call
+sites inside `_record_run` pass `run_id=self._run_id` a second time through `**fields`, so the
+call has the argument twice and Python refuses it. Lines 290 and 292; the rest of the file's
+twenty-odd `_log` calls are correct, and none passes `cycle_id`.
+
+**Why it has never fired.** `_record_run` returns early at line 280 —
+`run_record_skipped, reason="store exposes no start_run"` — when the store does not expose that
+method, and until this session `cli/engine.py` passed a `Clients()` of three `None`s. So the
+only route to those two lines was a real store client, and nothing had one. **A's spec 39
+wiring is what made the code reachable, and the bug was waiting there for it.** Line 290 is the
+worse of the two: it is inside the `except` handler, so the path that exists to stop a
+bookkeeping failure from killing the loop would itself have raised, turning a logged warning
+into a dead daemon. The `except Exception` above it is annotated "a bookkeeping row must never
+stop the loop", and it did the opposite.
+
+**Not the intermittent fault and not A's.** Deterministic, reproduces every run, and it is in
+`src/acsoe/core/`, which is the lead's file and which no teammate may edit — A would have been
+blocked on it by the escalation rule. Recording that explicitly because a red suite arriving in
+the middle of another agent's task is exactly the situation the recovery notes say to
+disentangle before resuming anyone.
+
+**Fix.** Dropped the redundant `run_id=` from both call sites; `_log` was already supplying it.
+Added a regression test that drives a tick through an orchestrator holding a **real**
+`StoreClient` on a temporary database, so `_record_run` actually executes both its success and
+its failure branch. That is the real defect here — not the duplicated keyword, which is a typo,
+but that a method existed for a phase with no test able to reach it. A typo in an unreachable
+branch is invisible; the same typo under a test is a red line the moment it is written.
+
+**Consequence, and it generalises past this file.** The pattern is the one `code-standards.md`
+gained a rule about an hour ago from A's and B's findings — a double simpler than the real thing
+in the dimension under test. Here the double was `Clients()` of three `None`s, which is simpler
+than a real client in exactly the dimension `_record_run` is about, and it made two lines
+unexecutable rather than merely untested. Worth stating as the sharper form: **a fixture that
+makes a branch unreachable is not weak coverage, it is zero coverage that looks like weak
+coverage.**
