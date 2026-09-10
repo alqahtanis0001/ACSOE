@@ -895,3 +895,22 @@ hole in the network guard and did not find one: real sockets, real httpx, `Netwo
 asserted so a half-guard is distinguishable from a whole one, plus the restore, loopback and
 `socketpair` scoping tests. A green report from someone actively trying to break it is worth
 more than the absence of complaints.
+
+*(Second occurrence, and this one is the case the wider net was built for.)* B landed
+`REASON_EMPTY_UNIVERSE = "empty_universe"` for spec 44 and the enumeration went red again.
+Unlike `no_fx_rate`, this code is **deliberately not in `EXCLUSION_REASONS`** — like
+`scout_inputs_unavailable` it is a statement about the tick rather than about a pair, and
+every pair that produced it is already counted under its own exclusion code, so counting it
+in the tally would double-count the whole universe. **A tuple-based enumeration would not
+have seen it.** Two codes now sit outside that tuple and both need prose; the `vars(module)`
+scan is what finds them.
+
+The prose needed more care than the others because **this one is a `PASS`, not a refusal.**
+B's docstring is emphatic about it: nothing qualifying is this system's honest default state
+on a small account, and recording it as a block would fill `block_records` with a normal
+Tuesday and corrupt engine 17's error rate, which counts those rows. `ui-context.md` says the
+same thing from the other side — a console that looks empty most of the time is telling the
+truth rather than failing. So the sentence is "No pair was tradable on this bar": what the
+system did, past tense, no apology, and nothing suggesting a fault. A sentence borrowed from
+the refusal codes around it would have made the system's normal state read as a problem on
+the screen that is most often on display.

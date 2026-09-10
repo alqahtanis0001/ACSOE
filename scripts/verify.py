@@ -1941,7 +1941,7 @@ async def _probe_websocket(
     try:
         try:
             first = await asyncio.wait_for(outbound.get(), timeout=WS_ACCEPT_TIMEOUT_S)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return WsProbe(False, False, 0.0, "the application never answered the handshake")
         if first.get("type") != "websocket.accept":
             return WsProbe(False, False, 0.0, "handshake answered with " + str(first.get("type")))
@@ -1960,7 +1960,7 @@ async def _probe_websocket(
                 break
             try:
                 message = await asyncio.wait_for(outbound.get(), timeout=remaining)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
             if message.get("type") == "websocket.send":
                 return WsProbe(
@@ -1981,7 +1981,7 @@ async def _probe_websocket(
                 return WsProbe(True, False, budget_s * 1000, "nothing was pushed")
             try:
                 message = await asyncio.wait_for(outbound.get(), timeout=remaining)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return WsProbe(True, False, budget_s * 1000, "nothing was pushed")
             elapsed_ms = (time.monotonic() - started) * 1000
             if message.get("type") == "websocket.send":
@@ -2594,7 +2594,12 @@ _TAGS = re.compile(r"<[^>]+>")
 #: A cell whose text is a figure: digits, with an optional sign, separators, a
 #: percent or a currency letter group. The proper minus sign is U+2212, which is
 #: what `ui-context.md` requires in numeric output.
-_NUMERIC_TEXT = re.compile("^[+−-]?[0-9][0-9\\s.,:]*%?$")
+# RUF001 is correct that the character is ambiguous and would be destructive to obey.
+# U+2212 is the glyph `ui-context.md` rule 6 *requires* in numeric output, and this
+# pattern is what recognises it; replacing it with an ASCII hyphen would make the check
+# accept the exact character it exists to reject. Same shape as the standing example in
+# `code-standards.md`, where `tests/console/test_format.py` binds the same glyph.
+_NUMERIC_TEXT = re.compile("^[+−-]?[0-9][0-9\\s.,:]*%?$")  # noqa: RUF001
 
 
 def check_console_tabular_figures(ctx: VerifyContext) -> Outcome:
@@ -2918,7 +2923,7 @@ class _DoneEngine:
         self.number = number
         self._field = field
 
-    def process(self, context: Any, state: Any) -> Any:
+    def process(self, context: Any, state: Any) -> Any:  # noqa: ARG002 - fixed engine interface
         from acsoe.core.contracts import EngineResult, EngineStatus
 
         return EngineResult(

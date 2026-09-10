@@ -153,6 +153,18 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # An operator who read the same sentence for both would go looking at their
     # balances for a fault that is not there.
     "no_fx_rate": "No exchange rate to value this pair's quote currency",
+    # Spec 44, added 2026-09-10 the same way and with the same caveat — my wording, B
+    # asked to replace it. Caught by the enumeration within a test run of B landing it,
+    # and by the *wider* half of it: like `scout_inputs_unavailable` this is a statement
+    # about the tick rather than about a pair, so B deliberately keeps it out of
+    # `EXCLUSION_REASONS` and a tuple-based test would not have seen it.
+    #
+    # **This is a PASS, not a refusal**, and the sentence has to carry that. Nothing
+    # qualifying is this system's honest default state, and `ui-context.md` is explicit
+    # that a console which looks empty most of the time is telling the truth rather than
+    # failing. So: what the system did, in the past tense, with no apology and no
+    # suggestion that anything is wrong.
+    "empty_universe": "No pair was tradable on this bar",
     "barriers_below_tick_size": "This pair's price steps are too coarse for a stop",
     "meta_label_veto": "The skeptic vetoed this entry",
     "outlier_market_state": "Market state is an outlier",
