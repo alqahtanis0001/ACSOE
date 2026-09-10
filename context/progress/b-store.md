@@ -18,6 +18,11 @@
 
 - **Spec 40** — wire engine 10 `cost` to the real `state["exchange"]`.
   `src/acsoe/engines/cost/{contracts,engine}.py`, `README.md`, `tests/engines/test_cost.py`.
+  ***Complete, all four gates green 2026-09-10.*** Fixtures rewritten, not repointed: every
+  `state["exchange"]` in `test_cost.py` is `ExchangeEngine().process(...).data` verbatim,
+  from A's real engine 1 against C's `FakeKrakenClient`, and a source-reading test refuses
+  any of engine 1's payload keys written as a dict-key literal in that file.
+  `test_cost.py:376` deleted, not edited; reason in the build log.
 - **Spec 41** — wire engine 11 `risk`, give it a price, and **build** the paper-mode balance
   fallback. `src/acsoe/engines/risk/{contracts,engine}.py`, `README.md`,
   `tests/engines/test_risk.py`.

@@ -27,20 +27,28 @@ because a stop must always exit as a taker. Both rates are added once.
 |---|---|---|
 | Candidate pair | `state["scout"]["pair"]` | 7 `scout` (B, Phase 3 proper) |
 | Expected move | `state["prediction"]["expected_move_pct"]` | 8 `prediction` (C) |
-| Maker fee | `state["exchange"]["fees"]["maker_pct"]` | 1 `exchange` (A) |
-| Taker fee | `state["exchange"]["fees"]["taker_pct"]` | 1 `exchange` (A) |
+| Maker fee | `state["exchange"]["fee_tier"]["maker_fee_pct"]` | 1 `exchange` (A) |
+| Taker fee | `state["exchange"]["fee_tier"]["taker_fee_pct"]` | 1 `exchange` (A) |
 | Measured spread | `state["market_sensor"]["quotes"][pair]["spread_pct"]` | 3 `market_sensor` (A) |
 | Estimated slippage | `state["order_book"]["estimated_slippage_pct"]` | 9 `order_book` (C) |
-| Fallbacks that fired | `state["exchange"]["fallbacks_used"]` | 1 `exchange` (A) |
+| Why a call failed, for the block sentence only | `state["exchange"]["failed_fetches"]` | 1 `exchange` (A) |
 
 Configuration: `trading.hurdle_multiple`, and nothing else.
 
-**All five paths are ratified**, in `engine-contracts.md`'s cross-chain key table, as of
-2026-09-09. They were B's proposal when this engine was written, declared as `Final`
-constants under a heading saying so — which is what let the lead re-point the spread from
-`state["exchange"]` to `state["market_sensor"]` as a one-constant edit rather than an
-argument. Engine 1 `exchange` is the *account* engine (balances, fee tier, pair rules);
-engine 3 `market_sensor` is the *market-data* engine, and spread is market data.
+**One path was ratified and three were assumed. Corrected 2026-09-10 by spec 40.** What
+the lead ratified on 2026-09-09 was a set of *positions* in `engine-contracts.md`'s
+cross-chain key table — which engine publishes each value, under which state key. That
+table says the fee tier arrives on `state["exchange"]` from engine 1; it does not fix
+engine 1's field names, and it never did. The field names below `state["exchange"]` were
+B's assumption, written against an engine 1 that did not exist yet, and the Phase 3 audit
+found three of them wrong: `exchange.fees` was really `exchange.fee_tier`, `maker_pct` and
+`taker_pct` were really `maker_fee_pct` and `taker_fee_pct`, and `fallbacks_used` was
+nothing at all. Every one of them blocked every live tick.
+
+The spread path *was* ratified, and it is the one that was right. B proposed it on
+`state["exchange"]` and the lead re-pointed it to `state["market_sensor"]`: engine 1
+`exchange` is the *account* engine (balances, fee tier, pair rules); engine 3
+`market_sensor` is the *market-data* engine, and spread is market data.
 
 **Money crosses `state` as an exact decimal string, never a `Decimal` and never a
 `float`.** `EngineResult.data` refuses a `Decimal` outright — its JSON check allows only
@@ -74,7 +82,41 @@ Blocks when:
 The reason is always operator prose carrying the actual number — "Net edge −0.21% after
 fees" — because `console/format.py`'s `operator_reason` prefers a stored prose reason
 over the generic sentence keyed on the code, and no code-keyed mapping can carry a
-number.
+number. The one exception to "name the input" is the fee tier: when `trade_volume` is
+named in `failed_fetches`, the sentence quotes *that call and its reason* instead of
+`exchange.fee_tier`. The state key is true and useless — it sends the operator to look at
+a `None` — while the call is the thing they can act on.
+
+## The fee tier has no fallback, in any mode
+
+**A confirmed pair with no fee data blocks that pair.** Not in live mode only: in paper
+mode too, and this engine applies no fallback at all.
+
+Invariant 2's paper-mode table used to carry a fee-tier row that named a tier and told the
+system to assume it. **The operator retired that row on 2026-09-10 (spec 37), because it
+was never implementable.** `AssetPairs` carries no fee schedule, so there was no runtime
+source the named tier could have been read from, and the only way to honour the row was to
+write a fee percentage into the code — which `AGENTS.md` forbids in its first paragraph
+and which would have been stale the day it was written. A fee nobody fetched invalidates
+this gate for exactly the reason a spread nobody measured does: both are terms of
+`friction`, and a gate priced on a guess is not a gate.
+
+The consequence is worth stating plainly rather than leaving to be discovered: with an
+empty `.env` the private calls fail, `TradeVolume` returns nothing, and **every pair blocks
+here**. A fresh clone still runs the loop, still records the order book and still builds
+candles — which is what the recording exists for and cannot be recovered later — but it
+takes no paper trades and produces no rejection rows past this gate. That is the honest
+description of an unauthenticated clone, and it beats one that generates a research
+dataset priced on a fee somebody guessed.
+
+So `fallbacks_used` on this engine's payload is **always empty**, and it is kept rather
+than removed because it is a real `rejections` column that engine 19 fills. It records
+fallbacks *this engine applied*. It is **not** a copy of engine 1's `failed_fetches`, and
+the distinction is the whole reason the old dead read was deleted rather than re-pointed:
+a failed fetch is the opposite of a fallback. Nothing was substituted, so nothing was
+traded on, and writing one into that column would misreport exactly the thing invariant 2
+asks to be recorded. **Balance is the only paper-mode fallback left in this system**, and
+it belongs to engine 11 `risk`, not here.
 
 ## Two things worth knowing before you change this
 
