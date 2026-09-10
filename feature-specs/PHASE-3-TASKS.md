@@ -177,6 +177,13 @@ flight, and the way to tell them apart is what *moves* between runs:
   to re-run and confirm green is what keeps destroying the evidence.
 - **A real defect of yours.** Reproduces every time, in isolation, in your own paths.
 
+**A baseline is only meaningful if the tree is quiescent when it is taken.** Any task that
+compares a gate's output before and after a change — spec 47's "Phases 0 to 2 unchanged" is the
+worked example — must capture its before-picture while nobody else is saving, and say in the
+build log when it was taken. With three agents in one working tree, "before" and "after" are not
+separated by your change alone, and a contaminated baseline manufactures a finding that does not
+exist. The tell is the same as above: run it twice and see whether the names move.
+
 ## Two files every session
 
 - `context/progress/<agent>.md` — what you built, what is in progress, what blocked you, open

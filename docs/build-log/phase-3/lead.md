@@ -659,3 +659,49 @@ six findings mean something.
 **A also reported four `pytest.raises` calls it checked and deliberately left**, each with the
 reason. That is the right disposition and worth naming: a sweep that fixes everything it touches
 is indistinguishable from one that fixed things that were fine.
+
+### A baseline cannot be captured while another agent is saving, and spec 47 depends on baselines
+
+**Agent:** Lead · **Task:** spec 47 preparation · **Date:** 2026-09-10
+
+**What happened.** Spec 47 step 3 requires re-running all four phase gates after registering the
+engines and treating *any* change in Phases 0, 1 or 2 as a finding to have in isolation. That
+needs a before-picture, so I captured Phase 0, 1 and 2 baselines before touching `bootstrap.py` —
+the same discipline C used for spec 45, and C's turned out byte-identical, which is what made its
+"unchanged" claim mean anything.
+
+Mine came back with `FAIL toolchain_green` on Phases 0 and 1. Three consecutive runs named three
+**different** sets of tests, all in C's `tests/verify/`:
+
+```
+run 1   FAILED tests/verify/test_phase1_criteria.py::test_the_push_budget_comes_from_config_not_from_a_literal   1 failed, 1285 passed
+run 2   FAILED tests/verify/test_phase3_criteria.py::test_a_breaker_that_never_escalates_on_the_outage_is_a_fail  1 failed, 1287 passed
+run 3   FAILED tests/verify/test_phase1_criteria.py::test_the_pass_message_still_reports_the_measured_time
+        FAILED tests/verify/test_phase1_criteria.py::test_each_command_writes_exactly_one_row                     3 failed, 1285 passed
+```
+
+Asking pytest for the two tests named in runs 1 and 2 returned **"no tests ran"** — they no
+longer exist. C is mid-edit on the Phase 1 timing criterion I assigned it, and
+`test_the_pass_message_still_reports_the_measured_time` is precisely the test my own ruling asked
+for. Moving names, moving totals, all in one agent's paths: the mid-save signature, exactly as the
+triage note in `PHASE-3-TASKS.md` describes it. Nothing is regressed and nothing needs fixing.
+
+**Why it is an entry rather than a shrug.** Had I taken that as the baseline and compared against
+it after registering four engines, the diff would have shown Phase 0 and Phase 1 "changing" from
+FAIL to PASS, and spec 47 says in as many words to treat a Phase 0-to-2 change as a finding. I
+would have gone looking for a registration side-effect that does not exist — or worse, concluded
+that registering the engines *fixed* two phases, which is a claim the evidence would appear to
+support and which is nonsense.
+
+**The general rule, which I have added to the triage section:** a baseline is only meaningful if
+the tree is quiescent when it is taken. With three agents saving into one working tree, "before"
+and "after" are not separated by your change alone. **Capture baselines when the team is idle, and
+say in the entry when they were taken.** For spec 47 specifically this is not a constraint at all,
+because the spec already lands last — the quiescent moment arrives on its own, and I am waiting
+for it rather than working around it.
+
+**A second-order point worth keeping.** The contaminated baseline was *legible* only because the
+failures moved. A single stable FAIL from another agent's half-saved file would have looked
+exactly like a real one. The thing that made this diagnosable was running it three times and
+noticing the names change — which is the same two-run discipline that distinguishes this machine's
+intermittent fault from an ordering dependency, applied to a third cause.
