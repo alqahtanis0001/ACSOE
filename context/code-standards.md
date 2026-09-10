@@ -123,6 +123,11 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   an import fails, and to `pytest.importorskip`, which re-raises an `ImportError` from inside a
   module but **skips** a `ModuleNotFoundError` — so a dependency moving to an extra silently skips
   every test behind it, under a reason string that is no longer true.
+  **The fix is never to delete the fallback — it is to add the assertion that the fallback is
+  unreachable.** One line saying "the real branch is the live one" turns a stale workaround into
+  a tripwire for the day someone breaks what it stood in for; deleting it throws that away. The
+  same applies to `except KeyError: continue` over a config read, which conflates *absent* with
+  *present-and-null* — two different facts that `Config.get` deliberately reports differently.
 - **`pytest.raises(SomeError)` alone is a weak assertion wherever one error type has several
   causes.** Every fail-closed path in `clients/kraken/` raises `KrakenUnavailableError` on
   purpose, so the bare form cannot tell the failure you induced from one that happened first.

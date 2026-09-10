@@ -705,3 +705,64 @@ failures moved. A single stable FAIL from another agent's half-saved file would 
 exactly like a real one. The thing that made this diagnosable was running it three times and
 noticing the names change — which is the same two-run discipline that distinguishes this machine's
 intermittent fault from an ordering dependency, applied to a third cause.
+
+### `seed_thresholds_from_config` could silently reintroduce the defect its own docstring exists to prevent
+
+**Agent:** Lead · **Task:** A's sweep finding 7 · **Date:** 2026-09-10
+
+**What happened.** A reported it and flagged it to me specifically, because it sits under the
+seed that all of Phase 3's `safety` evidence rests on. I reproduced it independently before
+acting:
+
+```
+configured max_errors_in_window : 20
+after the rename                : 10
+```
+
+**Why.** `tests/conftest.py::seed_thresholds_from_config` reads five `safety.*` values with
+
+```python
+try:
+    value = config.get("safety." + name)
+except KeyError:
+    continue
+```
+
+`Config.get`'s own docstring is explicit that it **"raises on a miss, never returns a default,
+and never returns None to mean absent"** — so `None` means present-and-null and the raise means
+absent. Those are two different facts and `except KeyError: continue` collapses them into one
+response. The helper's docstring carefully draws exactly that distinction — present-and-null is
+left to `SeedThresholds` to default, because "the operator has not decided yet" must not become a
+number this file invented — and the code does not implement the distinction it describes.
+
+**Why it matters more than a normal test-helper bug.** The same docstring recounts the defect
+this function was written to prevent: the seed scaled to `seed.py`'s shape default of 10 against
+the operator's 20, and *"a Phase 3 test of engine 17's error-rate input against it found the
+condition untripped and failed pointing at the engine."* Renaming or removing a `safety.*` key
+returns the fixture to precisely that state, silently, and the next symptom is again a Phase 3
+test failing while accusing an engine. A function whose entire purpose is to prevent a silent
+wrong default had a path back to that silent wrong default.
+
+**Fix.** An absent key now raises with the key named and the consequence spelt out, rather than
+being skipped. Present-and-null still defaults, which is the case the docstring is right about.
+The file's `config/default.yaml`-does-not-exist branch above is untouched: a tree with no config
+at all is a legitimate state for several tests, and it is handled before this loop rather than
+inside it.
+
+**A's generalisation, which is the transferable half and is now the fifth rule.** Five of A's
+eight findings are one mechanism: a fallback written when the real thing did not exist yet, still
+armed, with nothing asserting the real branch is live — `try: import real / except: define our
+own`, `getattr(mod, "Name", None)` then skip, and this `except KeyError: continue`. A's fix
+formulation is better than the one I wrote into the standard this morning: **the fix is never to
+delete the fallback — it is to add the assertion that the fallback is unreachable.** One line
+saying "the real branch is the live one" turns a stale workaround into a tripwire for the day
+someone breaks what it stood in for. Deleting it would have been the obvious move and would have
+thrown away the tripwire.
+
+**Scale, for the two I am not fixing.** `engine_context` does `getattr(contracts, "EngineContext",
+None)` then `pytest.skip`, so a rename would skip **44 test functions across 7 files** — every
+engine any of us has written, including `test_scout` — green. A rated `paper_config` lower rather
+than reporting it flat, because a missing config fails loudly elsewhere and the skip would be
+noise beside a real failure rather than silence. Both are C's and reported to C; the rating is the
+part worth keeping, because eight findings all marked "sharp" would tell C nothing about where to
+start.

@@ -806,3 +806,54 @@ branch that fires on a condition that should be impossible. **The fix is never t
 the fallback; it is to add the assertion that the fallback is unreachable.** One line
 saying "the real branch is the live one" converts a silent workaround into a tripwire
 for the day someone breaks the thing it used to stand in for.
+
+### My own mutation harness rewrote a file's line endings, and the guard I put in it half-worked
+
+**Agent:** A · **Task:** branch-coverage pass · **Date:** 2026-09-10
+
+**What happened.** The harness for the refusal-branch sweep applies one mutation,
+runs a test subset, and restores the file. It read the file with `read_bytes()` and
+wrote the mutated version with `write_text(..., encoding="utf-8")`. On the first
+mutation it stopped with:
+
+```
+!! src/acsoe/clients/kraken/contracts.py changed on disk during the run - NOT restoring blindly
+```
+
+The file had not changed on disk. `write_text` opens in **text mode**, so Python
+translated every `\n` to `\r\n` on the way out — 665 of them. The file I compared
+against was byte-for-byte different from the file I had written, for a reason that had
+nothing to do with anyone else editing it.
+
+**Why the guard was there and why it was still not enough.** Three agents share one
+working tree, so a harness that restores a saved copy can clobber another agent's save
+if they wrote during its window. The check exists to refuse that. It fired correctly on
+its own terms — what it saw genuinely did not match what it wrote — and then did the
+one thing that made the situation worse: it exited **without restoring**, leaving
+`contracts.py` carrying a live `pass  # MUTANT` in `_to_money` and a whole-file line
+ending change. `git diff --stat` reported 665 insertions and 665 deletions on a file I
+had never intended to edit.
+
+**Fix.** `write_bytes` throughout, so nothing is translated and the comparison is
+exact. And the restore is unconditional: the original bytes go back first, and the
+"changed underneath me" case becomes a warning after the file is safe rather than a
+reason to leave it broken. A safety check that can leave the tree in a worse state than
+no check is not a safety check.
+
+Restored with `git checkout` — the file was clean in HEAD and I had made no edit to it
+this session, so nothing was lost. Verified afterwards: no `MUTANT` anywhere in `src/`,
+0 CRLF and 665 LF in the file, and 100 tests green across `tests/clients/kraken` and
+`tests/engines/test_exchange.py`.
+
+**Worth recording rather than quietly repairing**, for two reasons. A tool written to
+find defects introduced one, in the package whose whole job is talking to the exchange
+— and it did it by touching a file that was not even a candidate for the sweep. And the
+line-ending translation is invisible in every diff view that normalises whitespace: had
+the tests passed, the mutation would have been reverted and the CRLF conversion would
+have stayed, showing up later as an unexplained 665-line diff on a file nobody edited.
+`.gitattributes` was already the subject of an earlier escalation for adjacent reasons.
+
+**The general point.** `Path.write_text` is not the text-mode-free counterpart of
+`read_bytes`, and pairing them is the mistake. Read bytes, write bytes; if you are
+round-tripping a file you did not author, never let the platform reformat it in
+between.

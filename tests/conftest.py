@@ -214,10 +214,29 @@ def seed_thresholds_from_config() -> Any:
     }
     supplied: dict[str, Any] = {}
     for name, cast in fields.items():
+        dotted = "safety." + name
         try:
-            value = config.get("safety." + name)
-        except KeyError:
-            continue
+            value = config.get(dotted)
+        except KeyError as absent:
+            # ABSENT is not the same fact as PRESENT-AND-NULL, and this function used to
+            # answer both with `continue`. `Config.get` raises on a miss and returns None
+            # for a null - its docstring says so in as many words - so the information to
+            # tell them apart was always here and was being discarded.
+            #
+            # Skipping an absent key silently returns the seed to `seed.py`'s shape
+            # defaults, which is the exact defect this function exists to prevent and
+            # which the docstring above recounts: the seed scaled to 10 against the
+            # operator's 20, and a Phase 3 test of engine 17's error-rate input failed
+            # pointing at the engine. A renamed or removed key must not be able to do
+            # that again quietly.
+            raise KeyError(
+                f"{dotted} is not in config/default.yaml. The seed scales its fixtures "
+                "to the operator's configured limits, and a key it cannot find would "
+                "silently return it to seed.py's own shape constants - which are "
+                "documented as fixture shapes, not recommended values. If the key was "
+                "renamed, rename it here too; if it was removed, decide deliberately "
+                "what the seed should overshoot instead. Do not let this default."
+            ) from absent
         if value is not None:
             supplied[name] = cast(str(value)) if cast is Decimal else cast(value)
     return seed.SeedThresholds(**supplied)
