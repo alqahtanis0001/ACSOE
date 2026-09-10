@@ -180,3 +180,55 @@ silence a failing test.
 
 **Consequence.** Spec 37's step 4 and its appendix both still say "operator-chosen". Per rule
 6 I have not edited them; this entry is the correction, and step 4 is the wrong half.
+
+### Confirmed A's `RateLimiter` loop-binding flag before spec 39 spent time on it
+
+**Agent:** Lead · **Task:** spec 39 support, and spec 47's acceptance · **Date:** 2026-09-10
+
+**What happened.** A flagged, from reading the code rather than from a failure, that
+`RateLimiter` constructs an `asyncio.Lock` in `__init__` while `platform/aio.py`'s
+`run_blocking` calls `asyncio.run` once per call — so a limiter held across ticks may bind to
+the first event loop and raise on the second. A proposed to confirm it empirically under spec
+39. I reproduced it immediately instead, because the answer changes how spec 39 is built and
+because it lands on spec 47's acceptance, which is mine: *"a daemon tick completes on an empty
+database and on the seeded one"*.
+
+**It is real, and A's reasoning about the trigger was right in the part that matters.**
+On this machine's Python 3.13.5, one `asyncio.Lock` across two separate `asyncio.run` calls:
+
+```
+uncontended run 1: ok
+uncontended run 2: ok
+contended run 1: ok
+contended run 2 RAISED: RuntimeError - <asyncio.locks.Lock object at 0x... [locked]>
+                        is bound to a different event loop
+```
+
+**Why contention is the whole story.** `Lock.acquire()` on the uncontended path sets
+`_locked` and returns without ever calling `_get_loop()`, so an uncontended lock survives any
+number of loops. The contended path calls `self._get_loop().create_future()`, and `_get_loop()`
+binds `self._loop` on first use and raises against any later loop. Engine 1 gathers three
+fetches concurrently, which is what makes it contended — so the binding happens on tick 1 and
+tick 2 raises. A single-tick test can never see it and a concurrency-free one never will
+either. That asymmetry is the non-obvious half and is the reason this is written down.
+
+**Two things the reproduction added to A's read.** The lock is left `[locked]` in the raised
+state, because the failure lands partway through `acquire()` — so it is not merely "tick 2
+raises", the limiter is wedged, and any caller that catches the `RuntimeError` and retries gets
+a lock that never opens. And the reason nothing has caught it is structural rather than lucky:
+`cli/engine.py` passes three `None`s, so no real client has ever run two ticks against a shared
+limiter, and the existing limiter tests inject their own sleep inside one loop.
+
+**Fix.** Not mine — `clients/kraken/limiter.py` and `platform/aio.py` are A's, and A has the
+reproduction and is writing its own entry. Recorded here because the confirmation is the lead's
+and because spec 47 would otherwise have discovered it as a mystery on registration day. The
+constraint A must not lose under the fix, which A named first: the limiter is deliberately
+shared between the REST and WebSocket clients because one account has one rate budget, so a
+per-loop lock must not become a per-loop *budget*.
+
+**Consequence for the phase, and it is a point in the specs' favour.** Spec 39's acceptance
+says "daemon completes **two** ticks with real clients". Written as one tick it would have
+passed and shipped a daemon that dies on its second minute. The clause was not written with
+this defect in mind — it was about the subscription set changing between ticks — which is the
+argument for acceptance criteria that exercise a mechanism twice rather than once, whatever
+the stated reason.
