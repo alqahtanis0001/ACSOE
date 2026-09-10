@@ -914,3 +914,135 @@ truth rather than failing. So the sentence is "No pair was tradable on this bar"
 system did, past tense, no apology, and nothing suggesting a fault. A sentence borrowed from
 the refusal codes around it would have made the system's normal state read as a problem on
 the screen that is most often on display.
+
+### The intermittent fault was mine: `sweep_stale_workspaces` deletes other runs' live databases
+
+**Agent:** C · **Task:** the lead's root-cause finding · **Date:** 2026-09-10
+
+**What happened.** B hypothesised and the lead reproduced on the first attempt: create one
+workspace with a seeded database, close the connection, call `sweep_stale_workspaces` — and
+it deletes that workspace *and two others that were live at that moment*.
+
+```
+seeded, db exists: True
+sweep removed: 3 dir(s)
+db still exists: False | workspace still exists: False
+sqlite3.OperationalError: unable to open database file
+```
+
+**Why, and the docstring is the defect rather than a description of it.** It says:
+
+> Best effort throughout: a directory another verify run is using right now simply will not
+> delete, and that is fine - it is swept by whichever run goes last.
+
+That is a POSIX assumption stated as a fact about Windows, and it is wrong twice over. An
+*open* file cannot be unlinked on Windows — but **a SQLite database between connections is
+not open**, and every criterion here seeds, closes, and reopens, so it is unlocked for that
+entire window. And `ignore_errors=True` means the call does not stop at what it cannot
+remove: it deletes everything it can and skips the rest, so **partial deletion is guaranteed
+rather than possible**.
+
+That is why there were two signatures and one bug. Directory gone before the next connection
+opens → `unable to open database file`. Directory survives with the database deleted inside
+it → `sqlite3.connect` helpfully **creates a fresh empty one** and the next statement says
+`no such table: equity_snapshots`. The criterion that "seeded a database and then found it
+empty" was not confused; its database had been deleted between the write and the read.
+
+The concurrency required is our normal working state. `tests/verify/test_runner.py` calls
+`main()` nine times, so one ordinary `pytest tests/` sweeps the shared temp directory nine
+times, and three agents each running the full suite is three of those at once.
+
+**I wrote that docstring, and it is the sentence that stopped anyone looking.** Worse, there
+*is* a recursion guard immediately above it for the nested `toolchain_green` subprocess — so
+a related concurrency case was genuinely considered, which made the unconsidered one look
+handled. A comment asserting a property nobody checked is the same shape as the fallbacks A
+found this morning, one door along: the assertion was in prose instead of in code, so nothing
+could notice it going false. It was never true.
+
+**Fix.** Next entry.
+
+### Correction: three entries above attribute to a native fault what was my own sweeper
+
+**Agent:** C · **Task:** the same · **Date:** 2026-09-10
+
+Per rule 6, correcting with a new entry rather than editing the old ones.
+
+Three entries above blame this machine's intermittent native fault, and at least the first is
+certainly wrong: **the zero-byte `phase0.txt`** that opened this session's work. I recorded
+that as "exit 139, the bash rendering of the 0xC0000005 access violation this machine is
+known for", and used it to justify the streaming-output fix. The streaming fix stands on its
+own merits — a run that dies mid-way should leave the verdicts it reached — but the reason it
+died was almost certainly a concurrent sweep pulling the seeded database out from under
+`seed_fixtures_present`, not the hardware.
+
+The other two are the websocket test and `test_persisted_mode_is_pending_when_core_never_calls_the_writer`.
+The lead has since made a standing rule that a failure is attributed to the sweeper **only if
+it carries a database error**, and B pushed for it specifically to stop a newly-named
+mechanism absorbing everything the way the native fault did. By that rule the Phase 2 one is
+the sweeper — B captured `OperationalError: unable to open database file` on a sibling of it —
+and the websocket one is **not**, because it is a wall-clock assertion and no amount of
+deleted temp directories makes a measured duration wrong. That one still has no mechanism.
+The native fault is also still real: a full run today died with `Windows fatal exception:
+access violation`. Three mechanisms, not one.
+
+**What is worth keeping from this, and it is uncomfortable.** `PHASE-3-TASKS.md` has told
+every agent for two phases that on a FAIL you re-run the named test in isolation and, if it
+passes, write it up as the intermittent fault. That advice *works* — the test does pass in
+isolation, because in isolation nothing else is sweeping. **So the mitigation confirmed the
+wrong diagnosis every single time it was applied**, and it did so with the authority of the
+phase rules behind it. Four spurious FAILs while Phase 2 closed, one of them landing on the
+test asserting no credential was committed. A real, deterministic, fixable defect sat behind
+a folk explanation load-bearing enough to be written into the process.
+
+I did not merely inherit that explanation, I extended it: I wrote a fresh entry this morning
+attributing a zero-byte file to the hardware, having reached for the rule rather than the
+evidence. The rule told me what the answer was before I had looked, and the check it
+prescribed could not distinguish the two causes. A diagnostic procedure that cannot fail is
+the same defect as a test that cannot fail, and this project has spent a whole phase on the
+second while running on the first.
+
+*(Fix, completing the entry two above.)* `sweep_stale_workspaces` now removes only
+directories whose **newest mtime anywhere inside them** predates this process's start by more
+than a minute. Four changes, and the middle two are the ones I would have missed:
+
+**The cutoff is this process's start time, not a fixed age.** `PROCESS_STARTED_AT` is captured
+at import. A run that has not finished has, by definition, written to its workspace since this
+process started — so its directory cannot be older than this process and cannot be selected.
+The ordering is the entire argument, which is why no lock file or inter-process protocol is
+needed. "Anything older than an hour" would have been a guess about how long a run takes.
+
+**The newest mtime *inside*, not the directory's own.** A directory's mtime changes when an
+entry is added or removed from it, not when a file inside it is written — so a long-running
+run's workspace carries the mtime of the moment it was created. Reading only that would have
+left the bug exactly where it was for any run outlasting the margin, and `toolchain_green`
+alone takes ninety seconds. `test_a_workspace_being_written_to_now_survives_even_if_it_was_created_long_ago`
+is that case, and it fails against the naive version.
+
+**A minute of margin, and the direction it errs in is the whole justification.** Filesystem
+and system clocks do not agree to better than a second or two on Windows and are coarser on
+FAT-derived filesystems. The two errors are not symmetric: keeping a leftover one run too long
+costs some disk; deleting a live database costs a wrong verdict on a gate that decides whether
+real money trades. The asymmetry picks the number.
+
+**The suppression moved inside the loop.** `contextlib.suppress(OSError)` wrapped the whole
+`for`, so a single entry that would not stat aborted the sweep and every workspace after it
+alphabetically was kept forever — the 450MB-per-run leak this function exists to prevent,
+reintroduced by its own error handling. Found by writing the unreadable-entry test, not by
+reading the code. It has its own test now.
+
+`ignore_errors=True` is kept and now means what the old docstring wrongly claimed: everything
+reaching `rmtree` has already been established as nobody's, so a failure to remove one is a
+genuine best-effort miss and the next run gets it. What it is no longer doing is deciding
+*whether* a directory is safe to delete by trying and seeing what happens. **The false
+docstring is gone**, replaced by the reasoning above — it was the sentence that stopped anyone
+looking, and leaving it while fixing the code would have left the more durable half of the
+defect in place.
+
+**Ten tests in `tests/verify/test_workspace_sweep.py`, where there were none — which is the
+other half of why this survived two phases.** Both directions are asserted, because each alone
+is satisfiable by a broken sweeper: "delete everything" passes the stale-leftover test and
+"delete nothing" passes the live-workspace test, so
+`test_the_live_one_survives_while_the_stale_one_beside_it_goes` runs both in one sweep.
+Mutated as the lead asked: removing the mtime guard turns **four** of the ten red, including
+the headline one. Every test runs against a fabricated temp root — a regression test for this
+bug that swept the real temp directory would be the bug, committed by its own test.

@@ -1708,23 +1708,82 @@ def remove_workspace(tmp: Path) -> bool:
     return False
 
 
-def sweep_stale_workspaces(*, report: bool = True) -> tuple[int, int]:
-    """Remove `acsoe-verify-*` leftovers from earlier runs. Returns (removed, bytes).
+#: When this process began, as a POSIX timestamp. A workspace created before this
+#: instant cannot belong to this run; one created after it may belong to anybody.
+#: Captured at import so it is fixed for the life of the process, and captured
+#: *before* the first sweep so a workspace this run is about to mint cannot predate it.
+PROCESS_STARTED_AT = time.time()
 
-    This process is the only one that knows those directories are safe to delete,
-    and a run that finds fifty of its own leftovers should not leave them there.
-    Best effort throughout: a directory another verify run is using right now simply
-    will not delete, and that is fine - it is swept by whichever run goes last.
+#: A minute of slack on either side of that instant. Temp-directory mtimes come from
+#: the filesystem's clock and `time.time()` from the system's, and on Windows they are
+#: not guaranteed to agree to better than a couple of seconds; FAT-derived filesystems
+#: are coarser still. The cost of being too generous is a leftover directory surviving
+#: one extra run. The cost of being too tight is deleting a live database, which is the
+#: bug this whole mechanism just caused. The asymmetry decides the number.
+SWEEP_SAFETY_MARGIN_S = 60.0
+
+
+def sweep_stale_workspaces(*, report: bool = True) -> tuple[int, int]:
+    """Remove `acsoe-verify-*` leftovers **from runs that finished before this one
+    started**. Returns (removed, bytes).
+
+    ## What this used to say, and why it was the defect
+
+    > Best effort throughout: a directory another verify run is using right now simply
+    > will not delete, and that is fine - it is swept by whichever run goes last.
+
+    That is a POSIX assumption written as a fact about Windows, and it was wrong in
+    both directions at once. Windows does refuse to unlink an *open* file - but **a
+    SQLite database between connections is not open**, and every criterion here seeds,
+    closes and reopens, so it is unlocked for that whole window. And `ignore_errors=True`
+    does not stop at what it cannot remove: it deletes everything it can and skips the
+    rest, so partial deletion was *guaranteed* rather than possible.
+
+    Hence two signatures and one bug. Directory gone before the next connection opens
+    gives `unable to open database file`. Directory surviving with its database deleted
+    gives a **fresh empty database** from `sqlite3.connect` and then
+    `no such table: equity_snapshots`. Both were misread for two phases as this
+    machine's intermittent native fault, because the standing mitigation - re-run the
+    named test in isolation - passes every time: in isolation nothing else is sweeping.
+
+    The concurrency needed is this project's normal state. `tests/verify/test_runner.py`
+    calls `main()` nine times, so one `pytest tests/` sweeps nine times, and three
+    agents each running the suite is three of those at once.
+
+    ## What it does now
+
+    Only directories whose mtime predates :data:`PROCESS_STARTED_AT` by more than
+    :data:`SWEEP_SAFETY_MARGIN_S` are removed. A run that has not finished has, by
+    definition, written to its workspace since this process started - so its directory
+    cannot be older than this process, and cannot be selected. No lock file, no
+    inter-process protocol: the ordering is the whole argument.
+
+    `ignore_errors=True` is kept, and now means what the old docstring wrongly claimed.
+    Everything reaching `rmtree` has already been established as nobody's, so a failure
+    to remove one is a genuine best-effort miss - a virus scanner holding a handle, say -
+    and the next run gets it. What it is no longer doing is deciding *whether* a
+    directory is safe to delete by trying and seeing what happens.
 
     Deliberately scoped to the exact prefix this script mints. It never touches
     `pytest-of-*`, which belongs to pytest, or anything else in the temp directory.
     """
     root = Path(tempfile.gettempdir())
+    cutoff = PROCESS_STARTED_AT - SWEEP_SAFETY_MARGIN_S
     removed = 0
     freed = 0
-    with contextlib.suppress(OSError):
-        for entry in sorted(root.glob(WORKSPACE_PREFIX + "*")):
+    try:
+        entries = sorted(root.glob(WORKSPACE_PREFIX + "*"))
+    except OSError:
+        return 0, 0
+    for entry in entries:
+        # Per entry, not around the loop. An entry that will not stat used to abort the
+        # whole sweep, so one unreadable leftover silently stopped every workspace after
+        # it alphabetically from being cleaned up - the leak this function exists to
+        # prevent, reintroduced by its own error handling.
+        with contextlib.suppress(OSError):
             if not entry.is_dir():
+                continue
+            if not _predates_this_run(entry, cutoff):
                 continue
             size = directory_bytes(entry)
             shutil.rmtree(entry, ignore_errors=True)
@@ -1737,6 +1796,29 @@ def sweep_stale_workspaces(*, report: bool = True) -> tuple[int, int]:
             file=sys.stderr,
         )
     return removed, freed
+
+
+def _predates_this_run(entry: Path, cutoff: float) -> bool:
+    """Whether `entry` was last written to before this process could have touched it.
+
+    The **newest** mtime anywhere inside it, not the directory's own. A directory's
+    mtime changes when an entry is added or removed from it and not when a file inside
+    is written, so a workspace whose database is being written to right now can carry a
+    directory mtime from the moment it was created. Reading only that would have left
+    the bug exactly where it was for any run longer than the margin.
+
+    Unreadable means not ours: an entry that cannot be stat'ed is one we know nothing
+    about, and the safe answer to "may I delete this" is no.
+    """
+    newest = 0.0
+    try:
+        newest = entry.stat().st_mtime
+        for child in entry.rglob("*"):
+            with contextlib.suppress(OSError):
+                newest = max(newest, child.stat().st_mtime)
+    except OSError:
+        return False
+    return newest < cutoff
 
 
 def seeded_console_db(directory: Path) -> tuple[Path | None, Outcome | None]:
