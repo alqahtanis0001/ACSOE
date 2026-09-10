@@ -95,6 +95,23 @@ kraken:                          # Client tuning. Requested by A, spec 25.
   rest_timeout_s: 10             # HTTP timeout. An order of magnitude above a healthy round
                                  # trip, short enough that a hung socket cannot outlive the
                                  # one-minute loop tick.
+  cache_ttl_s:                   # Operator-chosen 2026-09-10. How long a fetched snapshot may
+                                 # price a decision before it must be fetched again. OUR OWN
+                                 # re-fetch interval, not a claim about anything Kraken
+                                 # publishes or permits.
+                                 #
+                                 # Invariant 2: a cache stale beyond its TTL COUNTS AS A FAILED
+                                 # FETCH. It is not returned, and in live mode the trade blocks.
+                                 # Separate from the last-known-good retention in
+                                 # `clients/kraken/`, which keeps the same values FOREVER, past
+                                 # any TTL, and may be read only by invariant 14's emergency
+                                 # liquidation. Two mechanisms, two readers; do not merge them.
+                                 #
+                                 # Two keys and not one, because the two values change on
+                                 # different timescales.
+    asset_pairs: 300             # Pair rules change when Kraken lists or delists something.
+    trade_volume: 60             # The fee tier can move on a single trade, and it prices the
+                                 # cost gate, so it is re-read on the timescale of the loop.
 
 data_guard:                      # Engine 4, the first real gate. Requested by A, spec 29.
   max_data_age_s: 120            # Operator-chosen 2026-09-09. The staleness threshold: market
