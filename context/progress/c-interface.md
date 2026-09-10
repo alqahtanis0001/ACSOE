@@ -33,10 +33,57 @@ Never edit the tracker directly.
   the verdicts it reached on disk rather than an empty file; and the Phase 3 safety criteria
   seed through config-derived `SeedThresholds` rather than `seed.py`'s module defaults.
 
-  Spec 46 is claimed but not started; it waits on B declaring engine 7's reason codes in
-  `scout/contracts.py`. B has been asked to message the strings; the test will **enumerate**
-  them out of B's module rather than hand-list them, so what it needs is the module, not the
-  strings retyped.
+- **Phase 3. Claimed: spec 46. Finished.** Started once B landed `scout/contracts.py`.
+  Seven codes added to `REASON_PROSE`, all with the producing agent's wording verbatim:
+  engine 7's six new per-exclusion codes, `scout_inputs_unavailable`, and
+  `safety_inputs_unavailable` on B's explicit yes. `below_ordermin`, `below_costmin` and
+  `insufficient_quote_balance` needed nothing — `scout` reuses engine 11's codes deliberately
+  rather than minting parallel ones. **All 19 codes across engines 7, 10, 11 and 17 are now
+  mapped, none of them unmapped**, and no prose string carries a digit.
+
+  `tests/console/test_reason_prose.py` enumerates out of the producing module, and it walks
+  `vars(module)` for `REASON_*` rather than the `EXCLUSION_REASONS` tuple. The difference is
+  load-bearing: B deliberately keeps `scout_inputs_unavailable` out of that tuple because it
+  is a fact about the tick rather than about a pair and would break
+  `scanned == entered + sum(tally)` — so a test enumerating only the tuple would have left
+  exactly that code unmapped, and it is the one an operator meets when something is broken.
+
+  **The enumeration was broken before being trusted**, per the rule the lead added to
+  `code-standards.md`: against a fabricated module, and then by deleting the real
+  `barriers_below_tick_size` line from `format.py` and confirming two tests went red. The
+  second is the one that matters — the first would still pass against a hand-written list.
+
+  **Spec 46 step 5, reported not fixed:** the console's empty state does **not** read engine
+  7's tally. `ConsoleReader.feed_summary` hardcodes "Pairs scanned" and "Entered the tradable
+  universe" as `count=None, detail=_NOT_RECORDED`. The gap is structural rather than a
+  missed wire — the console is a separate process reading SQLite and never sees `state`, so
+  the tally needs engine 19 `memory` (Phase 4) to persist it. Its docstring also misnames the
+  universe filter as engine 4 / Phase 2; it is engine 7 / Phase 3, and that comment is mine
+  from Phase 1. Both left alone per the spec's scope limits and written up in the build log.
+
+- **Phase 3. Lead-assigned: `console_websocket_pushes_on_change`. Finished.** A **Phase 1
+  criterion changed from Phase 3**, on the lead's explicit ruling after I escalated rather
+  than touching it inside spec 45. `budget_ms = poll_ms * 2` was doing three jobs with one
+  number; it is now three mechanisms. Safety net: twenty poll intervals, still from config,
+  carrying no promptness claim. Assertion: the socket stays silent through a two-interval
+  quiet window in which nothing changed and the client sent nothing, then pushes when the
+  watermark moves. Evidence: the measured time stays in the PASS message.
+
+  **Strictly stronger than what it replaced.** Mutated both ways: `if False:` (never pushes)
+  FAILs as before, and `if True:` (pushes every poll regardless) now FAILs too — which the
+  old form could not catch, because "a push arrived within the budget" is true of a console
+  that pushes constantly. Phases 0 and 2 are byte-identical to their baselines; phase 1
+  differs on that one line only.
+
+- **Phase 3. Taken from A's harness sweep: three cannot-fail findings, all in my files.
+  Finished.** `fake_kraken.py`'s error-type test could not tell the real classes from its own
+  fallbacks — fixed with an identity assertion, fallback kept because fabricated trees still
+  reach it. `migrated_store` returned `None` for both "not written" and "written and will not
+  import" — fixed by narrowing the `except`, after **two wrong attempts** that tried to make
+  the consumer stricter and turned eighteen then five green tests red. And
+  `pytest.importorskip` would have skipped ~370 tests with a false reason if a dependency ever
+  moved to an extra — replaced with `require_module`, plus a `pytest_sessionstart` check so
+  the fault is one loud abort rather than hundreds of quiet skips. All written up.
 
 ### Open questions and handoffs
 
@@ -61,6 +108,24 @@ Never edit the tracker directly.
   of its own code and is accurate. Asked B whether to map it and proposed "The safety breaker
   could not read its inputs"; not adding it until B answers, because those three entries are
   deliberately the producer's wording rather than mine.
+
+- **Queued, not started: consolidating the stream doubles in `tests/harness/`.** B counted
+  three separate fakes for engine 3's stream — A's `FakeStream` in `test_market_sensor.py`
+  and two of B's — and my Phase 3 criteria work around the same gap a fourth way, building
+  quotes through `QuoteView` directly because `FakeKrakenClient` answers no `recent_trades`.
+  Four workarounds for one missing capability. B has sketched a `FakeKrakenWithStream` that
+  derives quotes from the committed `order_book.json` through the fake's own `order_book`
+  call rather than inventing prices, which is the right design and which I intend to take
+  close to verbatim. `tests/harness/` is mine so the call is mine. **B has been told to keep
+  its local doubles until I land it and not to refactor onto it speculatively.**
+
+- **Unexplained, two data points, not attributed.** Two criterion tests have each failed once
+  in a full-suite run and passed in isolation and across their own directory:
+  `test_a_socket_that_accepts_and_never_pushes_is_a_failure` (Phase 1, mine, touched today)
+  and `test_persisted_mode_is_pending_when_core_never_calls_the_writer` (Phase 2, mine,
+  **untouched**). Both drive an ASGI console through `asyncio.run` in-process. The second one
+  is why I stopped attributing this to the websocket change. Not root-caused; recorded rather
+  than guessed at. Re-run in isolation before believing either.
 
 - **Not a question, but worth the lead knowing.** `is_gate_matches_registry` is Phase 0's and
   gains four gates at spec 47. Nothing I registered pins a gate count, so spec 47 does not

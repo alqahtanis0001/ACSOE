@@ -224,14 +224,40 @@ def test_a_socket_that_accepts_and_never_pushes_is_a_failure(
     assert "nothing was pushed" in outcome.message
 
 
-def test_the_push_budget_comes_from_config_not_from_a_literal(
+def test_a_console_that_pushes_on_a_timer_rather_than_on_change_is_a_failure(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """The failure the old form of this criterion could not see.
+
+    Until 2026-09-10 the criterion moved the watermark and waited for any push, so a
+    console pushing unconditionally satisfied it — "a push arrived within the budget"
+    is true of a console that pushes constantly, and that console is wrong: the
+    operator gets a screen that refreshes forever and never tells them anything
+    changed. The criterion now watches a quiet window first, and a push there is a
+    failure rather than an early success.
+
+    `if current != seen:` becomes `if True:`, which is exactly a poll loop that has
+    stopped comparing.
+    """
+    fabricate_console(
+        tree_with_harness,
+        app_module=variant_app("if current != seen:", "if True:"),
+    )
+    outcome = run(verify_module, "console_websocket_pushes_on_change", tree_with_harness)
+    assert outcome.result is verify_module.Result.FAIL
+    assert "pushing on a timer" in outcome.message
+
+
+def test_both_windows_come_from_config_not_from_a_literal(
     verify_module: ModuleType, console_tree: Path
 ) -> None:
     """`ui-context.md` makes the poll interval configuration.
 
     A criterion carrying its own copy of 500 would stop testing the console the
-    moment the operator retuned the file, so the budget is asserted to move with
-    `config/default.yaml` rather than to be a constant.
+    moment the operator retuned the file, so the windows are asserted to move with
+    `config/default.yaml` rather than to be constants. The quiet window is the one
+    that appears in the PASS message, because it is the one carrying an assertion —
+    the timeout is a safety net and deliberately does not read like a claim.
     """
     config = console_tree / "config" / "default.yaml"
     text = config.read_text(encoding="utf-8")
@@ -241,7 +267,23 @@ def test_the_push_budget_comes_from_config_not_from_a_literal(
     )
     outcome = run(verify_module, "console_websocket_pushes_on_change", console_tree)
     assert outcome.result is verify_module.Result.PASS
-    assert "500ms budget" in outcome.message
+    assert "silent through 500ms" in outcome.message
+
+
+def test_the_pass_message_still_reports_the_measured_time(
+    verify_module: ModuleType, console_tree: Path
+) -> None:
+    """The evidence half, kept deliberately when the assertion half was loosened.
+
+    The timeout is now twenty poll intervals and asserts nothing about promptness, so
+    without the measured figure in the message a console that had become slow could
+    degrade all the way to the safety net without anyone seeing it. The number in the
+    message is what keeps a promptness regression visible without making it a
+    spurious FAIL on a loaded machine.
+    """
+    outcome = run(verify_module, "console_websocket_pushes_on_change", console_tree)
+    assert outcome.result is verify_module.Result.PASS
+    assert "ms after the watermark moved" in outcome.message
 
 
 # --------------------------------------------------------------------------- #

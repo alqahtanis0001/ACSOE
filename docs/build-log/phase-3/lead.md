@@ -766,3 +766,72 @@ than reporting it flat, because a missing config fails loudly elsewhere and the 
 noise beside a real failure rather than silence. Both are C's and reported to C; the rating is the
 part worth keeping, because eight findings all marked "sharp" would tell C nothing about where to
 start.
+
+### The intermittent fault is not a native memory fault — verify.py deletes other runs' databases
+
+**Agent:** Lead · **Task:** confirming B's hypothesis · **Date:** 2026-09-10
+
+**What happened.** B captured the traceback I asked the team for and offered a mechanism as a
+candidate, explicitly unproven, having failed to make it fire on demand. I reproduced it on the
+first attempt. **B is right, and the consequence is larger than the bug.**
+
+**The mechanism.** `scripts/verify.py::sweep_stale_workspaces` globs every `acsoe-verify-*`
+directory in the system temp directory and `shutil.rmtree`s it. Its docstring says:
+
+> Best effort throughout: a directory another verify run is using right now simply will not
+> delete, and that is fine — it is swept by whichever run goes last.
+
+**That is a POSIX assumption and it is false on Windows**, in both directions at once. Windows
+refuses to unlink a file that is currently *open* — but a SQLite database between connections is
+not open, and a criterion that seeds a database, closes it, and reopens it to read is unlocked for
+that entire window. And `ignore_errors=True` means the call does not stop when it hits something
+it cannot remove: it deletes everything it can and silently skips the rest, so "will not delete"
+is not merely wrong, it is guaranteed **partial** deletion.
+
+**The reproduction, first attempt, no concurrency needed to demonstrate it:**
+
+```
+seeded, db exists: True
+sweep removed: 3 dir(s)
+db still exists: False | workspace still exists: False
+sqlite3.OperationalError: unable to open database file
+```
+
+Note `removed: 3`. Those were not my leftovers — a single sweep took three live workspaces
+belonging to whatever else was running at that moment.
+
+**It accounts for both signatures the team has been reporting, and they are the same bug at
+different moments.** If the workspace directory is gone when the next connection opens, SQLite
+reports `unable to open database file` — B saw that twice, C saw it too. If the directory
+survives but the file inside it was removed, `sqlite3.connect` **creates a fresh empty database**
+and the next statement reports `no such table: equity_snapshots` — which is the traceback B
+captured. A criterion that seeded a database and then found it empty was not confused; its
+database really had been deleted, by a sibling process, between the write and the read.
+
+**What this costs, and it is the part that matters.** For two phases this project has attributed
+these to "this machine's intermittent native fault" and has written that into
+`PHASE-3-TASKS.md` as standing advice: run the named test in isolation, and if it passes, say so
+in the build log. That advice **worked** — the test does pass in isolation, because in isolation
+nothing else is sweeping. So the mitigation confirmed the wrong diagnosis every time it was
+applied. Four spurious FAILs in twenty runs while Phase 2 closed, one of them landing on the test
+asserting no credential was committed; my own spurious FAIL earlier today; C's zero-byte report
+file; B's four. **A real, deterministic, fixable defect has been sitting behind a folk
+explanation, and the folk explanation was load-bearing enough to be written into the phase rules.**
+
+`tests/verify/test_runner.py` calls `main()` nine times, so an ordinary `pytest tests/` sweeps the
+shared temp directory nine times per run. Three agents each running the full suite is exactly the
+concurrency required.
+
+**Fix.** Not mine to write — `scripts/verify.py` is C's and C is editing it as I write this. Sent
+to C with the reproduction. The shape I have asked for is to sweep only what this process could
+possibly own: leftovers older than this process's own start time, which is the standard way to
+garbage-collect a shared temp directory and needs no lock. Deleting *nothing* would also be
+correct and is the safer half if C would rather do that first.
+
+**What B did right, and it is the reason this was caught.** B captured the traceback before
+re-running, which is the discipline nobody had managed for two phases and which I had put in the
+task list only hours earlier. Then B offered the mechanism **as a candidate**, said plainly that
+two direct provocations came back green, and refused to present it as more than plausible. An
+honest half-answer that turns out to be right is worth more than the four confident wrong ones
+that preceded it, and if B had rounded it up to a claim I would have had to discount it the same
+way I discounted the native-fault story.

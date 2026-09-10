@@ -559,3 +559,339 @@ the empty state; report a mismatch, do not fix it inside this spec". I am report
 and to the lead rather than reaching for it, because the honest version of that fix is the
 same change that wires the tally up, and it wants to be one task in Phase 4 rather than a
 stale comment corrected now and a rewrite later.
+
+### A spec 45 test asserted a fact about the calendar rather than a property of the criterion
+
+**Agent:** C · **Task:** spec 45, follow-up during spec 46 · **Date:** 2026-09-10
+
+**What happened.** B landed `tests/engines/test_scout.py` for spec 43, and
+`test_both_tests_passes_against_the_real_tree_for_the_three_built_gates` went red:
+
+```
+assert <Result.PASS: 'PASS'> is <Result.PENDING: 'PENDING'>
+  Outcome(PASS, 'every Phase 3 gate has a test asserting it blocks and one asserting
+  it passes (block/pass per engine: cost 10/3, risk 17/4, safety 6/4, scout 2/1)')
+```
+
+The criterion did exactly the right thing — engine 7's tests arrived carrying both
+directions, so it came off PENDING and passed, with no change to `verify.py`. My test was
+what broke.
+
+**Why.** It asserted `assert_pending(...)` and `"test_scout.py" in outcome.message`, because
+when I wrote it that was the state of the tree. That is a fact about what had been built by
+lunchtime, not a property of the criterion, and it had a guaranteed expiry date — the whole
+point of registering the criterion was that somebody would land that file. It is the same
+defect as a fixture pinned to a literal threshold, which this phase has already produced
+twice: correct on the day it is written, wrong the moment the thing it describes moves, and
+red for a reason that has nothing to do with a defect.
+
+**Fix.** Rewritten as `test_both_tests_never_fails_against_the_real_tree`, which asserts the
+durable property instead: against the real repository the criterion must **never FAIL**, and
+if it is PENDING the message must name a `tests/engines/test_*.py` path so the operator is
+not left guessing what the gate waits for. A FAIL there would mean a gate has a test file
+carrying only one direction, which is a real defect in somebody's tests; that is the thing
+worth asserting and it holds whatever B has landed so far.
+
+**Worth carrying.** The PENDING half of every two-sided proof is vulnerable to this in a way
+the PASS and FAIL halves are not, because PENDING is by definition the state a subject is
+*passing through*. The other six PENDING tests in that file are safe because they build their
+own tree with the subject deliberately absent — `unbuilt_tree` and friends — rather than
+relying on the real repository still lacking it. This was the one that asserted PENDING
+against `repo_root`, and it is the one that expired.
+
+### `universe_varies_with_balance` was under-supplying `state`, and the first missing input hid the rest
+
+**Agent:** C · **Task:** spec 45, follow-up when engine 7 landed · **Date:** 2026-09-10
+
+**What happened.** B landed `engines/scout/`, the criterion came off PENDING and started
+judging for real, and it reported
+
+```
+FAIL universe_varies_with_balance  engine 7 published no 'pairs' at the $10.00 balance;
+                                   the universe is what every later gate iterates over
+```
+
+which is a true sentence and an unhelpful one. Driving B's engine directly:
+
+```
+status: BLOCK  reason: Scout could not read the pairs it needs: missing market_sensor is absent
+data: {"reason_code": "scout_inputs_unavailable"}
+```
+
+The engine was right. My criterion built a `state` carrying only `state["exchange"]`, and
+engine 7 reads the live book per pair as well — it needs a bid and an ask to value a
+position, the same way engines 10 and 11 do. It also reaches the store for an equity
+snapshot. I had supplied none of that, so the gate fail-closed exactly as invariant 3 says
+it should, and my criterion accused it of publishing no universe.
+
+**Why it matters beyond the missing key.** Two things, and the second is the one worth
+keeping.
+
+The first is that this is the wrong verdict, not merely a wrong message. An engine that
+cannot reach its inputs is unfinished wiring or an under-supplied caller; it is not a filter
+that ignores the balance, which is what `universe_varies_with_balance` exists to catch. I had
+already built the guard for this on `cost` and `risk` — both report **PENDING naming their
+spec** when they answer `*_inputs_unavailable` against a real payload — and wrote a decision
+entry about why. `scout` did not get the guard because `scout` did not exist when I wrote it,
+so the one criterion registered furthest ahead of its subject was the one missing the
+protection that being ahead of your subject requires.
+
+The second is A's finding, relayed by the lead the same day, arriving from a different
+direction: **a fail-closed path with several possible causes tells you only that one of them
+fired.** A's `test_a_private_call_without_credentials_blocks_rather_than_defaulting` built a
+client missing two things, the first raised before the check the test was named for, and both
+raise the same type — green for a phase, asserting nothing. Here the same shape appears in a
+criterion rather than a test: `scout` raises `MissingInputError` for an absent
+`market_sensor`, an absent `exchange`, an unreachable store, a missing equity snapshot, a
+null config key and a currency mismatch, and every one of them renders as the single code
+`scout_inputs_unavailable`. Fixing only the market-sensor half would have moved the failure
+to the next missing input and told me nothing I had not already guessed.
+
+**Fix.** Two changes, and the second is the general one:
+
+1. The criterion now supplies the full opportunity-chain `state` engine 7 actually reads —
+   engine 1's real payload, plus quotes built through engine 3's real `QuoteView` for every
+   pair engine 1 publishes — and hands it a real `StoreClient` over the config-scaled seed so
+   the equity snapshot is there.
+2. It reports **PENDING naming spec 43** when engine 7 answers `REASON_INPUTS_UNAVAILABLE`,
+   **quoting the engine's own sentence verbatim**. That sentence is what distinguishes
+   "missing market_sensor" from "no equity_snapshots row yet", and without it the PENDING
+   would be the same undiagnosable category the code itself is. Same shape as `cost` and
+   `risk`, and the reason it is worth the line is precisely that one code covers six causes.
+
+**Consequence, and it generalises past this criterion.** When a gate has one fail-closed code
+for many causes, a caller that reports only the code has thrown away the diagnosis. Every
+PENDING and FAIL message in this section now carries the producing engine's own reason string
+rather than restating the category — which is also the argument for never piping this gate's
+output through `tail`, made concrete.
+
+### Changing a Phase 1 criterion from Phase 3: the websocket budget was measuring the machine
+
+**Agent:** C · **Task:** lead's ruling, following the entry above · **Date:** 2026-09-10
+
+**Crossing a phase boundary, so the justification first.** `console_websocket_pushes_on_change`
+is a Phase 1 criterion and this is a Phase 3 change to it, made on the lead's explicit
+ruling after I escalated rather than touched it inside spec 45. The escalation was the right
+call and the fix is not the one I would have made unprompted: I had proposed counting polls
+instead of milliseconds, and the lead's answer is better — **separate the three jobs that
+were being done by one number.**
+
+**What was wrong.** `budget_ms = poll_ms * 2` was simultaneously the safety net stopping a
+broken console hanging the gate, and the assertion that the push was prompt. The second is
+load-sensitive: it is a factor of two of headroom, measured on a machine also running the
+rest of the suite. It went red once during a full run and passed three times in isolation
+(1.65s, 2.19s, 8.07s for the same eight parametrised cases, which is a fivefold spread on an
+idle machine). Spec 45 added 45 tests, nineteen copying a tree, and made the suite more
+I/O-bound; the sensitivity pre-existed and I made it likelier to fire.
+
+**And the promptness assertion was never the interesting property.** A console that polls on
+an interval is at most one interval late by construction, so the tight bound was standing in
+for "the poll loop is actually running" — which can be demonstrated from a generous bound,
+and now is.
+
+**Fix — three jobs, three mechanisms.**
+
+- **Safety net:** twenty poll intervals, still from config. Its only job is that a dead
+  poller fails in finite time. It carries no promptness claim, and the FAIL message says so
+  in as many words: "a dead poller rather than a slow one".
+- **Assertion:** behavioural. The socket stays silent through a **quiet window** of two poll
+  intervals in which nothing changed and the client sent nothing, and *then* pushes once the
+  watermark moves. That pair is what `ui-context.md` actually specifies.
+- **Evidence:** the measured elapsed time stays in the PASS message — "silent through 1000ms
+  with nothing changed, then pushed 508ms after the watermark moved". A promptness regression
+  stays visible in gate output without being a spurious FAIL.
+
+**The quiet window's load behaviour is the opposite of the old budget's, and that is the
+point.** Waiting longer only makes it stricter. A loaded machine cannot turn it into a false
+accusation; the worst it can do is fail to notice a console that pushes on a timer, which is
+a missed detection rather than a wrong verdict. The fabricated console in `tests/verify/`
+catches that case deterministically on an idle machine.
+
+**Mutated both ways, per the ruling.** `if current != seen:` to `if False:` — nothing is ever
+pushed, FAIL, which the old form also caught. And `if current != seen:` to `if True:` —
+pushes on every poll regardless, **which the old form could not catch**: "a push arrived
+within the budget" is true of a console that pushes constantly, and that console is wrong in
+a way the operator would feel, as a screen that refreshes forever and never means anything.
+That second mutation is why this change is strictly stronger than what it replaced rather
+than a loosening.
+
+**Consequence.** A wall-clock number in an assertion is worth asking two questions of: what
+property is it standing in for, and does a slower machine make it *stricter* or *wronger*?
+The old budget answered "the poll loop runs" and "wronger". Both halves were fixable and
+neither needed the number widened.
+
+*(Follow-up to the entry above, recorded because the standing instruction is to say so
+rather than smooth it over.)* On the first combined run after the change,
+`test_a_socket_that_accepts_and_never_pushes_is_a_failure` failed once across
+`tests/verify/ tests/console/ tests/harness/` — 1 failed, 514 passed. It has not reproduced
+since: the same test passes in isolation (11.59s, which is the expected quiet window plus
+the full safety net), the same combined selection passed on the next run at 515 passed, and
+`test_phase1_criteria.py` has since run three times at 41 passed. I did not capture the
+assertion message before it stopped happening, which was a mistake — the failing verdict
+would have said whether it went PENDING on a handshake that never answered, or FAIL for a
+different reason, and those want different responses.
+
+Two candidates and I am not able to choose between them on one observation: this machine's
+known intermittent fault, or a handshake exceeding `WS_ACCEPT_TIMEOUT_S` under contention.
+What I can say is that this test is now the longest in the suite at ~11s, because it is the
+one where the console is *designed* never to push and therefore pays the whole safety net —
+and a longer test is a wider window for a transient to land in. That cost is bounded to one
+test and is the deliberate price of a generous timeout, so I have not touched the number.
+If it recurs, the message is the thing to capture.
+
+### The spec 46 enumeration earned itself inside a day
+
+**Agent:** C · **Task:** spec 46, follow-up · **Date:** 2026-09-10
+
+**What happened.** Six consecutive runs of `tests/verify/ tests/harness/ tests/console/`
+came back `2 failed, 519 passed` — deterministic, not the load flake I was chasing:
+
+```
+AssertionError: engine 7 declares exclusion reason(s) with no operator prose:
+['no_fx_rate']. Each renders as 'No reason was recorded.' on the console, silently.
+```
+
+B had added `REASON_NO_FX_RATE = "no_fx_rate"` to `scout/contracts.py` on an operator
+ruling made the same day, and the enumeration went red within minutes of it landing.
+
+**Why it is worth an entry.** This is the seam working, and it is the case the spec argued
+about in the abstract: *"a hand-written list drifts the first time B adds a code, and it
+drifts silently, which is the failure mode this seam is known for."* B added a code, in good
+faith, for a good reason, and told nobody — because there was nothing to tell; the code is
+correct and its docstring is thorough. A hand-listed test would have stayed green and the
+console would have rendered "No reason was recorded." for a real exclusion, with no error
+anywhere. The gap between the code landing and the test going red was one test run.
+
+It also lands on the right side of a distinction I had not thought about when writing it:
+`no_fx_rate` **is** in `EXCLUSION_REASONS`, so even the narrower tuple-based enumeration
+would have caught this one. The `vars(module)` scan earns its keep on the codes B keeps *out*
+of the tuple, of which `scout_inputs_unavailable` is the only one so far.
+
+**Fix, and the part of it I am least comfortable with.** I added the prose immediately rather
+than waiting for B, because the alternative was leaving the tree red for everyone over a
+one-line mapping. **The wording is mine, not the producer's**, which breaks the arrangement
+every other entry follows — B has been asked to replace it if it is wrong. The sentence is
+"No exchange rate to value this pair's quote currency", and it is deliberately not a variant
+of `no_quote_balance` beside it: that one is "you hold none of it", a fact about the account,
+while this one is "we cannot tell what it is worth", a fact about a mechanism nobody has
+built. An operator handed the same sentence for both would go looking at their balances for a
+fault that is not there.
+
+**And a new invariant, which that pair is what suggested it.** `test_no_two_codes_share_a_sentence`
+asserts no two codes render identically. The lead's spec 43 ruling is the specific case —
+`crypto_quoted` and `quote_not_provably_stable` exist separately so a universe that shrank by
+policy is distinguishable from one that shrank for want of a config key — but the property is
+general, and two codes sharing a sentence is exactly how such a ruling gets undone in the view
+layer, where nothing else is looking. There were no duplicates when I added it; the point is
+that there cannot silently become one.
+
+*(Follow-up, and it changes the reading of the two entries above.)* A second test showed the
+same behaviour: `test_persisted_mode_is_pending_when_core_never_calls_the_writer` failed once
+in a full-suite run, then passed twice in isolation and again across its whole directory
+(248 passed). **That is a Phase 2 criterion test I have not touched**, driving a fabricated
+console the same way the websocket one does.
+
+Two different tests, in two different phases' criteria, one of them nothing to do with my
+change, showing the same shape: green in isolation, green in their own directory,
+occasionally red in a full run. That points away from the websocket quiet window as the
+cause and towards something environmental about running ~1300 tests on this machine — which
+is the same suspicion the intermittent native fault already carries. It does not exonerate
+the old two-interval budget, which was separately and provably load-sensitive; it does mean I
+should stop attributing every full-run flake to that change.
+
+What the criteria have in common is that both drive an ASGI console through
+`asyncio.run` in-process, with wall-clock waits, inside a suite that spawns hundreds of
+event loops. I have not root-caused it and I am not going to guess further on three
+observations. Recorded so the next person sees two data points rather than one, and so that
+"C changed the websocket criterion and now things are flaky" is not the story that gets told.
+
+### A's three cannot-fail findings in the shared harness, and one fix that was wrong twice
+
+**Agent:** C · **Task:** A's sweep, files are C's · **Date:** 2026-09-10
+
+A swept `tests/conftest.py` and `tests/harness/` for tests that cannot fail and found three,
+all mine. A's framing is the right one and worth keeping: **each is a fallback that fires
+silently when an import fails**, each was correct when written because the thing it fell back
+from did not exist yet, and none has an assertion that the *real* branch is the live one — so
+none notices when its own reason for existing has expired. The failure mode is not a red
+test; it is a green suite that has quietly stopped testing.
+
+**1. The fake Kraken client's error types.** `fake_kraken.py` imports `KrakenError` and its
+two subclasses from `acsoe.clients.kraken` and defines its own on `ImportError`. The test
+whose entire purpose is proving the fake raises *the real client's* type imports `KrakenError`
+**from the harness** — so against the fallback both sides move together and it passes while
+asserting nothing. A demonstrated it by blocking `acsoe.clients.kraken` at the import system:
+the test still passes, against classes that are not the real error type.
+
+Fixed with an identity check —
+`test_the_harness_is_using_the_real_error_types_not_its_own_fallbacks` asserts all three
+`is` the real ones. **The fallback stays**, because it is still reachable: `tests/verify/`
+drives criteria against fabricated trees carrying `tests/` and no `src/`, and the harness
+imports there with no real client to find. What was missing was anything noticing which
+branch is live. The older test now carries a line saying it depends on the new one and is not
+a tautology, because it reads like one.
+
+**2. `migrated_store` returning `None`, and I got the fix wrong twice before getting it
+right.** This is the part worth recording.
+
+`migrated_store` caught `ModuleNotFoundError` and returned `None`, which `build_verify_doubles`
+hands to `scripts/verify.py` — so a criterion could tick an orchestrator against a client
+bundle with no store and still report PASS. A's comparison is exact: it is the shape that
+made `Orchestrator._record_run` unexecutable for a whole phase.
+
+**First attempt: require a store in `_harness_doubles`.** Eighteen tests went from green to
+PENDING. Several criteria are *supposed* to run on trees with no store —
+`data_guard_blocks_bad_data` judges an engine that never touches one, against a fabricated
+tree with no `src/` at all. I had turned "this criterion cannot check everything" into "this
+criterion refuses to check anything", which is the same defect pointed the other way.
+
+**Second attempt: make it opt-in, `require_store=True`, on the two criteria that reach the
+store.** Five tests still failed, for the same reason one level down: those two criteria are
+*also* designed to run against fabricated trees, and a fabricated tree legitimately has no
+store.
+
+**What was actually wrong** was none of that. It is the same defect as finding 3, in a
+different file: `except ModuleNotFoundError` catches the module's own absence *and* a missing
+dependency raised from inside it. "Not written yet" and "written and will not import" are
+different facts with different right answers, and the handler could not tell them apart. The
+fix is four lines in `migrated_store` — narrow the `except` to a `ModuleNotFoundError` naming
+the store client itself, re-raise anything else. Absent still returns `None`; broken now
+raises. No criterion changed, no test moved.
+
+**The lesson is about where I reached first.** Twice I went for the consumer — make the
+criterion demand more — when the defect was in the producer's inability to distinguish two
+cases. Both attempts made the gate *stricter* and both were wrong, and "stricter" is a
+seductive direction when the finding is "this could pass when it should not". The question
+that would have got me there first is the one A's finding already contained: *what are the two
+situations this handler is conflating, and does the caller have any way to tell them apart?*
+
+**3. `pytest.importorskip` and 370 tests.** A found that an `ImportError` from inside a module
+is re-raised by pytest 9.1.1 — so a genuinely broken module fails loudly, which A expected to
+be wrong about and was glad to be. But a **`ModuleNotFoundError`** from inside is skipped, and
+that is what an absent dependency produces. About 370 test functions, a third of the suite,
+reach a fixture guarded that way. All of them would vanish, the run would report green, and
+the skip reason would read "the store client does not exist yet" — false, and pointing the
+reader away from the cause.
+
+Fixed with `require_module` in `tests/conftest.py`, which skips only when the named module
+*itself* is what is missing and re-raises otherwise — the same discrimination
+`scripts/verify.py`'s `try_import` has drawn since Phase 0. The tests should not be looser
+than the gate that judges them. All five `importorskip` calls now use it, and
+`pytest_sessionstart` aborts the run once, up front, if one of those modules is on disk and
+unimportable — because the same fault otherwise surfaces as several hundred separate fixture
+errors, which is loud but unreadable and blames the fixture rather than the thing that broke.
+
+`tests/harness/test_require_module.py` proves the discrimination both ways against a real
+temporary package whose import genuinely fails, including the negative half —
+`pytest.importorskip` **is** shown swallowing the same module, so if pytest ever changes
+behaviour the replacement stops being justified from a red test rather than from somebody's
+memory. It also covers the prefix case (`acsoe.a.b.c` when the package is missing raises with
+`name` set to the *package*), which a naive `exc.name == name` check gets wrong and which
+would have turned every genuinely-unwritten module into a hard error — breaking the whole
+working method of registering criteria ahead of their subjects.
+
+**What A found that was not a finding, and is worth recording as such.** A went looking for a
+hole in the network guard and did not find one: real sockets, real httpx, `NetworkAccessError.layer`
+asserted so a half-guard is distinguishable from a whole one, plus the restore, loopback and
+`socketpair` scoping tests. A green report from someone actively trying to break it is worth
+more than the absence of complaints.

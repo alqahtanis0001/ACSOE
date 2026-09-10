@@ -857,3 +857,54 @@ have stayed, showing up later as an unexplained 665-line diff on a file nobody e
 `read_bytes`, and pairing them is the mistake. Read bytes, write bytes; if you are
 round-tripping a file you did not author, never let the platform reformat it in
 between.
+
+### Six more untested refusal branches in the Kraken client, found by the tell
+
+**Agent:** A · **Task:** branch-coverage pass · **Date:** 2026-09-10
+
+**What happened.** The lead turned the `parse_envelope` finding into a greppable rule:
+find every function in `clients/` and `platform/` with more than one refusal branch
+raising the same exception type, and check that each branch has a test reaching *it*
+rather than a neighbour. An AST scan found **18 such functions, 55 refusal branches**.
+Disabling each branch on its own and running the tests killed 32 and left 23.
+
+**Two of the 23 were false survivors and that matters for how this is reported.** The
+first pass ran a narrow test subset per package. Re-running the survivors against a
+wide set — `tests/{clients,engines,cli,platform,verify,core}` — killed
+`_levels:325` and `map_order_book:347`, which are reached through the order-book
+tests rather than through anything in the file they live in. **A mutation that
+survives a subset has not survived; it has only not been asked.** Worth stating,
+because reporting 23 would have been wrong by two and the two are indistinguishable
+from the rest without the second pass.
+
+**Six genuine survivors in `rest.py`**, all raising `KrakenUnavailableError`, all at
+the boundary where the system finds out what the exchange said:
+
+- `_decimal:241` — the value arrived as a **float**. This is the guard that stops a
+  fee or a price that has already lost precision from entering the system at all, and
+  `code-standards.md` opens its money section with exactly that rule. `json.loads`
+  produces a float for any unquoted JSON number, so this is not a hypothetical shape —
+  it is what an unquoted `0.0026` in a Kraken response becomes. Untested.
+- `_decimal:247` — the value is not a decimal number at all. Untested, and invisible
+  through `map_asset_pairs`, which catches the failure per pair and drops that pair, so
+  removing the raise produces the same observable outcome by a different route.
+- `map_asset_pairs:260` — the result was not a mapping of pairs.
+- `map_asset_pairs:284` — **no pair in the response carried a complete rule set.**
+  Without it an empty `PairRulesSnapshot` is returned as a success, and an empty pair
+  map propagates as an empty subscription scope and an empty tradable universe — a
+  system that has quietly stopped trading and reports nothing wrong.
+- `_levels:329` — a level that is not a `[price, volume]` pair.
+- `parse_envelope:212` — `error` is present but is **not a list**, e.g.
+  `{"error": "boom"}`. The one remaining untested branch of the four in the function
+  whose branch 2 started all of this.
+
+**Why they cluster here rather than being scattered.** Every one is a guard against a
+*shape* the exchange should never send, and the fixtures are all well-formed by
+construction, because they were written to exercise the mapping rather than to attack
+it. `AGENTS.md` says any remembered Kraken shape is stale, which is the argument for
+these guards existing; nothing was arguing for testing them. The same reasoning that
+makes the guards right makes them easy to leave unexercised.
+
+**Fix.** A test per branch, each asserting the message so it cannot drift onto a
+neighbour — the same rule that found the first one. Then each mutated again to confirm
+it is killed.

@@ -80,6 +80,7 @@ __all__ = [
     "REASON_INPUTS_UNAVAILABLE",
     "REASON_INSUFFICIENT_QUOTE_BALANCE",
     "REASON_MAX_CONCURRENT_POSITIONS",
+    "REASON_NO_FX_RATE",
     "SCOUT_KEY",
     "RiskInputs",
     "RiskSizing",
@@ -159,6 +160,20 @@ REASON_BELOW_COSTMIN: Final = "below_costmin"
 REASON_INSUFFICIENT_QUOTE_BALANCE: Final = "insufficient_quote_balance"
 REASON_MAX_CONCURRENT_POSITIONS: Final = "max_concurrent_positions"
 
+#: Affordability cannot be computed: the notional is in `trading.base_reporting_currency`
+#: and the balance is in the pair's quote currency, and **nothing in this system publishes
+#: an exchange rate between them.**
+#:
+#: **Ruled by the operator on 2026-09-10.** This engine has carried the comparison since
+#: spec 35 and no test ever reached it, because no fixture had a pair whose quote is not the
+#: reporting currency that got this far. It surfaced while engine 7 `scout` was being
+#: written — the third caller of the same arithmetic — rather than by anything failing.
+#:
+#: Refusing claims nothing about the world, which is what separates it from inventing a rate
+#: or assuming parity. Shared with engine 7, which excludes such a pair from the universe
+#: under the same code and for the same reason.
+REASON_NO_FX_RATE: Final = "no_fx_rate"
+
 #: Fail-closed. Not in C's table yet; flagged. The reason written alongside it is always
 #: prose, and `operator_reason` prefers prose over the mapping, so it renders correctly
 #: meanwhile.
@@ -198,6 +213,7 @@ class RiskInputs(BaseModel):
 
     pair: str
     quote_currency: str
+    reporting_currency: str
     ask: Money
     bid: Money
     ordermin: Money

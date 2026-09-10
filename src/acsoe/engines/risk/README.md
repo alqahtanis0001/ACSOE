@@ -96,11 +96,19 @@ In order, because the order is part of the behaviour:
    never allocate cash the account does not hold in that pair's quote currency. Rejected
    rather than capped to fit: a position quietly resized is no longer the position the
    sizing rule chose, which is the same objection as rounding up to a minimum.
-3. **Quantity below `ordermin`** — `below_ordermin`. Rejected, never rounded up.
-4. **Position value below `costmin`** — `costmin` is tested on the rounded quantity's real
+3. **The quote currency is not the reporting currency** — `no_fx_rate`. Affordability
+   cannot be *computed*: the notional is in `trading.base_reporting_currency` and the
+   balance is in the pair's quote currency, and nothing publishes a rate between them.
+   **Ruled by the operator on 2026-09-10**, after it surfaced while engine 7 `scout` was
+   being written. This engine has carried the comparison since spec 35 and no test ever
+   reached it, because no fixture had such a pair with a balance in its quote currency.
+   Refusing claims nothing about the world; inventing a rate or assuming parity would.
+   Engine 7 excludes such a pair from the universe under the same code.
+4. **Quantity below `ordermin`** — `below_ordermin`. Rejected, never rounded up.
+5. **Position value below `costmin`** — `costmin` is tested on the rounded quantity's real
    value **at the bid**, not on the notional the sizing asked for, because rounding down
    can drop the value below the minimum even when the request cleared it.
-5. Any input absent, null or unparseable — `risk_inputs_unavailable`. A published `null`
+6. Any input absent, null or unparseable — `risk_inputs_unavailable`. A published `null`
    `ordermin` means the `AssetPairs` fetch failed, and invariant 2 gives pair rules no
    fallback at all; it must never be readable as zero, which would make every position
    trivially large enough.
@@ -181,6 +189,16 @@ defect arriving through a rounding mode rather than an explicit bump. And roundi
 the check would let a quantity that passed `ordermin` be rounded below it and placed
 anyway. The number compared against the minimum has to be the number that would actually
 be sent.
+
+**The sizing arithmetic exists twice, and one test holds it together.** Engine 7 `scout`
+asks whether a position is possible *at all* — the tradable universe — using this same
+`target_notional / ask`, round down, value at the bid. Contract rule 3 forbids one engine
+importing another, so the arithmetic is written twice on purpose, and two copies only stay
+honest while something compares them. **`test_the_sizing_agrees_with_engine_eleven` in
+`tests/engines/test_scout.py`** runs this engine over the same published state as `scout`
+and requires `scout` to include a pair if and only if this engine approves it, over a table
+straddling `ordermin` by one lot increment in each direction. If you change the sizing here,
+that is the test that should stop you. `engines/scout/README.md` names it too.
 
 **Nothing here is remembered.** `AGENTS.md` says any remembered order minimum is stale.
 There is no constant, no config key and no cache for `ordermin`, `costmin`, tick size or

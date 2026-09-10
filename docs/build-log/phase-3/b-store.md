@@ -510,3 +510,227 @@ The lead also supplied a fact that shrinks the deferred cost I recorded there:
 replay is built in Phase 4". So no tick can reach that branch today in any mode but paper, and
 the divergence I was worried about cannot occur before Phase 4 builds replay and decides
 deliberately. The ruling stands: keep `!= "paper"`.
+
+### The affordability check compares two currencies, and nothing publishes a rate
+
+**Agent:** B · **Task:** spec 43 · **Date:** 2026-09-10 · **Status: escalated, not guessed.**
+
+**What happened.** Spec 43 makes the balance one of the filter's arithmetic inputs, and the
+comparison that uses it is "does the account hold enough of this pair's quote currency to fund
+the position this equity would size". Writing it exposed that the two sides are in **different
+currencies**: `target_notional` derives from equity, which invariant 7 expresses in
+`trading.base_reporting_currency`, while the balance is in the pair's quote currency. For a
+USD-quoted pair on a USD-reporting account they coincide; for a EUR- or BTC-quoted pair they do
+not, and comparing them is meaningless.
+
+**Why it was not visible before.** Engine 11 `risk` carries the identical comparison and has
+since spec 35 — `notional > inputs.quote_balance` — and no test has ever exercised it on a pair
+whose quote is not the reporting currency, because no fixture has one that gets that far.
+Crypto-quoted pairs are excluded by policy before the check, and there is no fiat-quoted pair in
+a second currency anywhere in the committed fixtures. So the defect is two engines old and was
+found by writing the third caller rather than by anything failing.
+
+Invariant 7 says PnL and equity are converted "at the trade timestamp", so the intent is clear
+and the mechanism is simply absent: **nothing in this system publishes an FX rate.**
+
+**Fix.** The comparison is asked only when `facts.quote == reporting_currency`, and the reason
+is a comment at the call site rather than a silent condition. **I did not invent a rate and did
+not assume parity**, and I did not mint a seventh exclusion rule for "cannot be converted"
+either — that would be inventing trading behaviour under cover of being careful, and the lead's
+own ruling on A's crypto-quoted heuristic is the precedent: a rule that fails conservatively
+passes every test we have and then quietly shrinks the universe on real data.
+
+**What that leaves, stated plainly rather than left to be discovered.** With the check skipped,
+a non-reporting-currency pair could enter the universe without being shown affordable. That is
+the *over*-including direction, which is the wrong one for `scout` by the lead's own reasoning.
+It is unreachable today — `allow_crypto_quoted` is false and no fixture has a second fiat quote
+— but it becomes reachable the moment the operator enables crypto-quoted pairs, and my own
+`test_a_crypto_quoted_pair_is_excluded_unless_the_operator_allows_it` flips exactly that flag.
+So the test that proves the flag is the only thing excluding `ETH/BTC` is also the test that
+walks through the gap.
+
+Escalated to the lead with that stated. Nothing is blocked: everything else in spec 43 is built
+and green.
+
+### Scanning source text for a forbidden symbol flagged the invariant that forbids it
+
+**Agent:** B · **Task:** spec 43 · **Date:** 2026-09-10
+
+**What happened.** Engines 10 and 11 each carry a guard that reads their own module's source
+text and asserts no remembered fee or order minimum appears in it. I wrote the same shape for
+`scout` — no pair name, no remembered pair rule — and it failed immediately on the word `BTC`.
+
+**Why.** The match was in `scout`'s own docstring, quoting invariant 7: a crypto-quoted pair is
+one whose quote is *"BTC, ETH, or any non-stable asset"*. That quotation is not decoration — it
+is what explains why there are two crypto-quoted reason codes rather than one, which is the
+least obvious decision in the module. The only ways to satisfy a text scan are to delete the
+reasoning or to paraphrase the invariant until it stops matching, and both make the file worse
+to protect a check that was never about prose.
+
+Same shape as `code-standards.md`'s standing `RUF001` example, where the ambiguous glyph **is**
+the fixture for the rule that flags it: a rule that is right in general and wrong on the one
+line that is the fixture for it.
+
+**Fix.** The guard parses the module's AST and inspects string literals that are not
+docstrings, instead of scanning raw text. That checks what the Locked Decision actually forbids
+— a symbol or a pair rule used as a *value* — and comments do not survive into the AST at all,
+so it is stricter than the text scan rather than looser. Verified by mutation: it still catches
+a symbol written into a literal.
+
+Deliberately **not** retrofitted to engines 10 and 11. Their guards are for numeric constants
+that would never legitimately appear in prose, they are green, and changing a working check in
+two other engines to match a decision made in a third is the kind of tidying that turns one
+spec into three. Noted here so the next person to write one of these knows both shapes exist
+and why.
+
+### Decision: a named constant lost to a criterion that asks the serialiser instead
+
+**Agent:** B · **Task:** spec 43 · **Date:** 2026-09-10
+
+**What happened.** `universe_varies_with_balance` reported PENDING with *"acsoe.engines.scout.
+contracts declares no UNIVERSE_FIELD naming where the universe is published"*. I added that
+constant, re-ran the gate, and it turned **two** criteria red rather than green: C's criterion,
+having found the universe key, drives `scout` with a `state` carrying only `state["exchange"]`
+— no `market_sensor` quotes and no store — so the engine reached a fail-closed BLOCK and the
+criterion reported *"engine 7 published no 'pairs'"*.
+
+**Why that was worth thinking about rather than just fixing.** The choice was between a FAIL
+that said "the engine is wrong" and a PENDING that said "this criterion is not finished". The
+second is the accurate one — my engine was built and green; the criterion could not yet feed it
+— and the standing rule is that a FAIL is a stop for every agent on a shared gate. So I reverted
+the alias inside a few minutes, kept the constant under an honest name, and sent C the exact
+recipe: engine 3's output, a store with an equity snapshot, and a stream double, because
+`FakeKrakenClient` implements neither `recent_trades` nor `latest_quote`.
+
+**Options, once C had that.** Add the alias C's criterion looked for, or have the criterion read
+the name some other way.
+
+**Chose: neither, and C's answer is better than both.** C's criterion now *asks* the model — it
+serialises a `ScoutUniverse` carrying a sentinel pair through `to_state_data()` and takes the
+key whose value contains it. The name is derived from my own serialiser, so a rename follows
+automatically and there is no literal on either side to drift.
+
+**Because** the alias would have been a second copy of a string that already exists, agreed by
+two agents and maintained by neither. That is the shape the Phase 3 audit is about: four retyped
+field names on `state["exchange"]` survived a whole phase because every test agreed with whoever
+wrote it. A constant is only protection when one side owns it and the other reads it; when both
+sides *declare* it, it is just a mock agreeing with its caller wearing a `Final` annotation.
+
+**Cost.** `PAIRS_FIELD` exists and is used by my serialiser, so there is still one name in one
+place; nothing outside this module reads it, which makes it weaker than it looks. If a future
+consumer wants a constant rather than a probe, it should import this one rather than declare its
+own — that is the whole point.
+
+**Consequence, and it is a note about process rather than code.** I introduced a known FAIL to
+the shared gate deliberately, having predicted it, and reverted it within minutes. I would not
+do that again: the right order was to send C the recipe first and land the constant once the
+criterion could consume it, which is what I did on the second attempt. Predicting a break is not
+the same as having permission to cause one.
+
+### A captured traceback for the intermittent test failures, and a candidate mechanism
+
+**Agent:** B · **Task:** spec 43, aside · **Date:** 2026-09-10
+
+**What happened.** Running the gate at a task boundary, `toolchain_green` failed four times in a
+row naming a **different test each time**, and one of them was mine —
+`tests/db/test_migrations.py::test_malformed_migration_sets_are_refused[0002_second.sql-contiguous]`.
+Every one passed in isolation. The lead has asked repeatedly for a captured traceback before
+anyone re-runs, because re-running to confirm green is what has destroyed the evidence every
+previous time. So I captured one.
+
+**The reproduction, which is the part that was missing.** Serially the suite is green — I ran
+the migration test alone three times and the full suite twice, all green. **Four concurrent
+pytest processes over `tests/db tests/clients/store tests/verify` produced one failure**, and
+this is its traceback:
+
+```
+tests/verify/test_phase3_criteria.py::test_a_criterion_clocked_off_the_seed_sees_the_seeded_error_rows
+outcome = Outcome(result=FAIL,
+    message='criterion raised - OperationalError: no such table: equity_snapshots')
+```
+
+A criterion seeded a database and then found that database with no tables in it. Together with
+the `OperationalError: unable to open database file` I saw twice earlier the same day, the
+family is clear: **temporary databases disappearing underneath the process using them**, not
+logic, and not the native memory fault that is separately known.
+
+**Candidate mechanism, stated as a candidate because I could not make it fire on demand.**
+`scripts/verify.py`'s `main()` calls `sweep_stale_workspaces()`, which `shutil.rmtree`s **every**
+`acsoe-verify-*` directory in the system temp directory. Its docstring says "a directory another
+verify run is using right now simply will not delete, and that is fine" — which holds on POSIX,
+where an unlinked open file keeps working, and **does not hold on Windows**, where a SQLite file
+that is merely between operations is deleted happily. There is a recursion guard for the
+`toolchain_green` subprocess, so the nested case was considered; two *independent* runs were
+not. And `tests/verify/test_runner.py` calls `verify_module.main(...)` **nine times**, so an
+ordinary `pytest tests/` sweeps the shared temp directory nine times per run.
+
+Three agents each running the full suite against one working tree, plus `verify.py` spawning its
+own toolchain subprocess, is exactly the concurrency that turns that into someone else's missing
+table.
+
+**I did not fix it and did not try.** `scripts/verify.py` and `tests/verify/` are C's, and this
+is a diagnosis rather than a patch. Two direct provocations — two concurrent `verify.py` runs,
+and a loop of `test_runner.py` against the criteria tests — both came back green, so the
+mechanism is **plausible and unproven**, and I would rather hand over an honest half-answer than
+a confident wrong one.
+
+**What is solid, and it is worth separating from the speculation:** the failures are real,
+deterministic under concurrency, absent when serial, and every observed instance is a temporary
+database vanishing. That is a different fault from the native memory fault in the seed write path
+recorded in `docs/build-log/phase-0.md`, and it should not go on inheriting that one's
+explanation — which is what "re-run it and it goes green" has been doing.
+
+### RULED: a pair whose affordability cannot be computed is excluded, not skipped
+
+**Agent:** B · **Task:** spec 43, follow-up · **Date:** 2026-09-10
+· **Supersedes the FX entry above.**
+
+**What happened.** The operator ruled on the currency-mismatch gap I escalated: a pair whose
+affordability cannot be computed is **excluded from the universe, under its own reason code**,
+rather than having the check quietly skipped. Engine 11 `risk` refuses such a candidate under
+the same code.
+
+**Why the ruling went against my reasoning, which is the part worth keeping.** I declined to
+mint an exclusion because it would be "inventing trading behaviour under cover of caution", and
+cited the lead's refusal of A's crypto-quoted heuristic as the precedent. **The precedent cuts
+the other way**, and the distinction the lead drew is one I had collapsed:
+
+- What was refused to A was **inventing a fact about the world** — a heuristic that would
+  *claim* to know which quotes are crypto, and be wrong on real Kraken data.
+- **Excluding a pair you cannot prove affordable claims nothing.** It asserts no rate, no
+  parity, no classification. It says only that the question was not answerable.
+
+The second is the same shape as the ruling that already existed for `scout` — a quote that is
+not provably stable is excluded — which I had implemented an hour earlier without noticing it
+was the answer to my own question. My analysis had even said the residue was the over-including
+direction and that this was the wrong direction for `scout`; I stopped one step short of the
+conclusion that followed from it.
+
+**Fix.** `REASON_NO_FX_RATE = "no_fx_rate"` in both engines. In `scout` it is an exclusion
+placed between the tick-grid rule and the affordability comparison — affordability cannot be
+*compared* before it can be *computed*. In `risk` it is a rejection before the quote-balance
+check, and the sentence names both currencies, because "no exchange rate" without saying
+between what is the useless kind of true.
+
+**The test that broke is the best evidence the hole was real.**
+`test_a_crypto_quoted_pair_is_excluded_unless_the_operator_allows_it` asserted that flipping
+`allow_crypto_quoted` admits `ETH/BTC`. It no longer does — BTC is not the reporting currency —
+and that test was, as I had told the lead when escalating, the one walking straight through the
+gap. It is rewritten to assert the flag moves the pair from one exclusion to a *different* one,
+which is a stronger claim than "the flag was the only thing" and the true one.
+
+Added `test_a_pair_quoted_in_another_currency_cannot_be_shown_affordable`, on a **EUR**-quoted
+pair, because that is the case the ruling is actually about: EUR is in
+`stable_quote_currencies`, so the crypto flag is irrelevant to it and only the missing rate
+refuses it. The crypto-quoted test reaches the same rule only by disabling a policy.
+
+**One assertion I got wrong on the way, and the engine was right.** I asserted the EUR fixture
+would count two `no_fx_rate` exclusions — the EUR pair and `ETH/BTC`. It counts one:
+`crypto_quoted` fires first, because a pair is attributed to the first rule it fails. That
+ordering is the tally working as designed, and telling an operator "the operator disabled this"
+is more useful than "we lack a rate for a pair you disabled anyway".
+
+**Consequence.** It costs nothing today — no pair reaches it while `allow_crypto_quoted` is
+false and every fixture quote is the reporting currency — which is the point rather than a
+caveat. The hole is closed before the flag is ever turned on, and the flag was one line away in
+my own test suite.

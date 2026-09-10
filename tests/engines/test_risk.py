@@ -24,7 +24,7 @@ so one test moves it in the fixture and another reads the engine's own source.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -45,6 +45,7 @@ from acsoe.engines.risk.contracts import (
     REASON_INPUTS_UNAVAILABLE,
     REASON_INSUFFICIENT_QUOTE_BALANCE,
     REASON_MAX_CONCURRENT_POSITIONS,
+    REASON_NO_FX_RATE,
     round_down_to_lot,
 )
 from acsoe.engines.risk.engine import RiskEngine
@@ -574,6 +575,61 @@ def test_the_balance_is_read_per_quote_currency(
     assert result.data["reason_code"] == REASON_INPUTS_UNAVAILABLE
     assert "EUR" in (result.reason or "")
     assert FALLBACK_BALANCE_FROM_PAPER not in (result.reason or "")
+
+
+def test_a_pair_quoted_in_another_currency_is_refused_for_want_of_a_rate(
+    risk: RiskEngine, sized_context: Any, kraken: FakeKrakenWithStream
+) -> None:
+    """**Ruled by the operator on 2026-09-10**, and this engine has carried the defect since
+    spec 35.
+
+    `target_notional` derives from equity, which invariant 7 expresses in
+    `trading.base_reporting_currency`; the balance it is compared against is in the pair's
+    quote currency. Comparing them needs an FX rate and nothing publishes one, though
+    invariant 7 says one is converted "at the trade timestamp".
+
+    No test ever reached it, because no fixture had a pair whose quote is not the reporting
+    currency *and* a balance in it — the balance check refused those first, for a different
+    reason. It surfaced while engine 7 `scout` was being written, as the third caller of the
+    same arithmetic, rather than by anything failing.
+
+    The account holds EUR here, so the pair clears every earlier rule and this is the only
+    thing refusing it. Refusing claims nothing about the world; inventing a rate or assuming
+    parity would.
+    """
+    eur_pair = "SOL/EUR"
+    kraken.set_pair_rule(
+        eur_pair,
+        base="SOL",
+        quote="EUR",
+        ordermin="0.05",
+        costmin="5.00",
+        tick_size="0.001",
+        lot_decimals=8,
+        pair_decimals=3,
+    )
+    kraken.set_order_book(eur_pair, bids=[(DEFAULT_BID, "500")], asks=[(DEFAULT_ASK, "500")])
+    kraken.set_balances({"USD": "5000.00", "EUR": "5000.00"})
+    kraken.stream_pairs([PAIR, eur_pair], at=sized_context.now - timedelta(seconds=60))
+
+    result = risk.process(sized_context, build_state(sized_context, pair=eur_pair))
+
+    assert result.blocks_trading is True
+    assert result.data["reason_code"] == REASON_NO_FX_RATE
+    assert "qty" not in result.data, "nothing is sized against a balance it cannot compare"
+    assert "EUR" in (result.reason or "")
+    assert "USD" in (result.reason or ""), "the sentence names both currencies"
+
+
+def test_a_reporting_currency_pair_is_unaffected_by_the_rate_rule(
+    risk: RiskEngine, sized_context: Any
+) -> None:
+    """The other half, so the refusal above is proved to be about the currency mismatch and
+    not about having quietly stopped approving anything."""
+    result = risk.process(sized_context, build_state(sized_context))
+
+    assert result.data["approved"] is True
+    assert result.data["reason_code"] is None
 
 
 def test_the_portfolio_cap_is_counted_from_the_store_not_from_state(

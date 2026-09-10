@@ -92,6 +92,7 @@ from acsoe.engines.risk.contracts import (
     REASON_INPUTS_UNAVAILABLE,
     REASON_INSUFFICIENT_QUOTE_BALANCE,
     REASON_MAX_CONCURRENT_POSITIONS,
+    REASON_NO_FX_RATE,
     SCOUT_KEY,
     RiskInputs,
     RiskSizing,
@@ -99,6 +100,7 @@ from acsoe.engines.risk.contracts import (
 )
 
 RISK_FRACTION_KEY = "trading.risk_fraction_per_trade"
+REPORTING_CURRENCY_KEY = "trading.base_reporting_currency"
 MAX_CONCURRENT_KEY = "trading.max_concurrent_positions"
 STOP_PCT_KEY = "barriers.stop_pct"
 
@@ -186,6 +188,30 @@ class RiskEngine(BaseEngine):
         # yes or no, and a position quietly resized to fit is no longer the position the
         # sizing rule chose, which is the same objection as rounding up to a minimum.
         #
+        # **Affordability cannot be computed across currencies, so the candidate is
+        # refused.** `target_notional` derives from equity, which invariant 7 expresses in
+        # `trading.base_reporting_currency`; the balance is in the pair's quote currency.
+        # Comparing them needs an FX rate and nothing in this system publishes one, though
+        # invariant 7 says one is converted "at the trade timestamp".
+        #
+        # Ruled by the operator on 2026-09-10. This engine has carried the comparison since
+        # spec 35 and no test ever reached it: no fixture has a pair whose quote is not the
+        # reporting currency that gets this far. It surfaced while engine 7 was being
+        # written — the third caller of the same arithmetic — rather than by anything
+        # failing. Engine 7 excludes such a pair from the universe under the same code.
+        if inputs.quote_currency != inputs.reporting_currency:
+            return self._reject(
+                inputs,
+                REASON_NO_FX_RATE,
+                (
+                    f"Position is priced in {inputs.reporting_currency} and the balance is "
+                    f"in {inputs.quote_currency}, and there is no exchange rate to convert "
+                    "between them"
+                ),
+                fallbacks,
+                started,
+            )
+
         # Tested on the notional the sizing *asked* for, before rounding. Rounding down at
         # the ask can only reduce the cash committed, so checking the larger figure is the
         # conservative direction.
@@ -299,7 +325,7 @@ class RiskEngine(BaseEngine):
         if snapshot is None:
             raise MissingInputError("no equity_snapshots row yet; cannot size against equity")
         currency = str(snapshot.currency)
-        reporting = str(context.config.get("trading.base_reporting_currency"))
+        reporting = str(context.config.get(REPORTING_CURRENCY_KEY))
         if currency != reporting:
             raise MissingInputError(
                 f"latest equity snapshot is in {currency}, not the reporting currency {reporting}"
@@ -340,6 +366,7 @@ class RiskEngine(BaseEngine):
         raw: dict[str, Any] = {
             "pair": pair,
             "quote_currency": quote,
+            "reporting_currency": str(context.config.get(REPORTING_CURRENCY_KEY)),
             "ask": _require(book, QUOTE_ASK_FIELD, f"{quotes_where}.{pair}"),
             "bid": _require(book, QUOTE_BID_FIELD, f"{quotes_where}.{pair}"),
             "ordermin": _require(facts, PAIR_ORDERMIN_FIELD, where),

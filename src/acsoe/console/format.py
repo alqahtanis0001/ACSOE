@@ -99,12 +99,61 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # cannot drift.
     "cost_inputs_unavailable": "The cost gate could not price this candidate",
     "risk_inputs_unavailable": "The risk gate could not size this candidate",
+    # Engine 17 `safety` and engine 7 `scout`, completing the set. Added 2026-09-10 on
+    # B's explicit yes; wording proposed by me and confirmed by B, which is the same
+    # direction the two lines above travelled.
+    #
+    # `safety`'s own contracts note that `operator_reason` prefers the row's own prose
+    # and that engine 17 always writes a sentence, so this entry is never reached today.
+    # That is a property of what engine 17 writes *now*, not a guarantee, and the
+    # fallback exists precisely for the row that does not carry a sentence. A code
+    # absent from this table renders "No reason was recorded." with no error anywhere,
+    # which is the failure this seam exists to prevent.
+    "safety_inputs_unavailable": "The safety breaker could not read its inputs",
+    "scout_inputs_unavailable": "The scout could not read the pairs it needs",
     "spread_wider_than_move": "The spread is wider than the expected move",
     "below_ordermin": "Position would be below the pair's minimum order size",
     "below_costmin": "Position value would be below the pair's minimum order value",
     "insufficient_quote_balance": "Not enough quote currency held to open this position",
     "max_concurrent_positions": "Already holding the maximum number of positions",
     "outside_universe": "Pair is outside the tradable universe at this balance",
+    # Engine 7 `scout`, spec 46. The six per-exclusion codes, requested by B on
+    # 2026-09-10 with B's own wording, kept verbatim so the producer and the consumer
+    # cannot drift — the same arrangement as engines 4, 10 and 11. `below_ordermin`,
+    # `below_costmin` and `insufficient_quote_balance` are above and are engine 11's:
+    # `scout` reuses them deliberately rather than minting parallel codes, because it is
+    # the same arithmetic and should read the same on screen.
+    #
+    # Not one of these carries a number, a threshold or a cause. The engines write prose
+    # carrying the actual figure and `operator_reason` prefers it; a sentence invented
+    # in the view layer is a sentence nothing verifies.
+    "pair_rules_missing": "The exchange did not report rules for this pair",
+    "no_live_quote": "No live price for this pair",
+    "crypto_quoted": "This pair is priced in a volatile asset",
+    # Deliberately not folded into `crypto_quoted`, on the lead's spec 43 ruling. When
+    # `trading.stable_quote_currencies` is absent, `scout` cannot *show* a quote to be
+    # stable and excludes it — but a universe that shrank by policy and one that shrank
+    # because nobody supplied a config key look identical from the outside, and only the
+    # second is a fault somebody must fix. So this sentence points at the configuration
+    # rather than at the market, which is the entire reason the code exists separately.
+    "quote_not_provably_stable": (
+        "The stable currencies are not configured, so this pair's quote cannot be trusted"
+    ),
+    "no_quote_balance": "The account holds none of this pair's quote currency",
+    # Added 2026-09-10 when the enumeration test went red on B landing the code — which
+    # is the seam working rather than a surprise. **My wording, not B's**, because the
+    # alternative was leaving the suite red while I waited; B has been asked to replace
+    # it if it is wrong, and every other entry from engines 4, 7, 10, 11 and 17 is the
+    # producer's own.
+    #
+    # Deliberately not a variant of `no_quote_balance` above. That one is "you hold
+    # none of it", a fact about the account; this one is "we cannot tell what it is
+    # worth", a fact about a mechanism nobody has built — nothing in this system
+    # publishes a rate between the reporting currency and an arbitrary quote currency.
+    # An operator who read the same sentence for both would go looking at their
+    # balances for a fault that is not there.
+    "no_fx_rate": "No exchange rate to value this pair's quote currency",
+    "barriers_below_tick_size": "This pair's price steps are too coarse for a stop",
     "meta_label_veto": "The skeptic vetoed this entry",
     "outlier_market_state": "Market state is an outlier",
     "dissimilarity_index": "Conditions are unlike anything in training",

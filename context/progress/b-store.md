@@ -55,7 +55,37 @@ exercises replay. One line and one constant to reverse; full reasoning in the bu
   the real `Orchestrator` over engines 1, 2, 3, 4, 17 against a real `StoreClient` on an
   empty database and on the seed.
 
-Specs 43 and 44 (`scout`) are the lead's second wave and are not claimed here yet.
+### Phase 3 wave 2 — claimed 2026-09-10
+
+- **Spec 43** — engine 7 `scout`, the tradable universe. `src/acsoe/engines/scout/`
+  (`engine.py`, `contracts.py`, `README.md`), `tests/engines/test_scout.py`.
+  ***Complete, all four gates green 2026-09-10, and `--phase 3` is 9 PASS / 0 FAIL /
+  0 PENDING.*** 24 tests. Nine exclusion codes, each rule proved to be the *only* thing
+  excluding its pair; the tick-grid rule made to fire and its boundary pinned as strict;
+  counts asserted to add up including on a tick where four rules fire at once; the sizing
+  cross-checked against the real engine 11 over a table straddling `ordermin` by one lot
+  increment each way. Four mutations run and each caught by the test written for it.
+  **One escalation to the lead — see below.**
+- **Spec 44** — engine 7 `scout`, the candidate and the gate. Not started.
+
+#### For the lead — the affordability check compares two currencies
+
+`target_notional` derives from equity, which invariant 7 expresses in
+`trading.base_reporting_currency`; the balance it is compared against is in the pair's
+**quote** currency. Comparing them needs an FX rate and nothing in this system publishes
+one, though invariant 7 says one is converted "at the trade timestamp".
+
+**Engine 11 has carried the identical comparison since spec 35** and no test has ever
+reached it on a pair whose quote is not the reporting currency, because no fixture has one
+that gets that far. Found by writing the third caller, not by anything failing.
+
+I ask the comparison only when the currencies match, with the reason at the call site. I
+did **not** invent a rate, assume parity, or mint a "cannot be converted" exclusion — the
+last would be inventing trading behaviour under cover of caution, and the ruling on A's
+crypto-quoted heuristic is the precedent. The residue: a non-reporting-currency pair can
+enter the universe without being shown affordable, which is the *over*-including direction
+and the wrong one for `scout`. Unreachable today, reachable the moment
+`allow_crypto_quoted` is enabled — and my own crypto-quoted test flips exactly that flag.
 
 ## CLOSED — engine 17's `CONDITION_ACTION`, ruled 2026-09-10
 

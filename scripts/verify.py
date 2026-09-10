@@ -492,7 +492,15 @@ ORCHESTRATOR_CONTRACT = (
 
 
 def _harness_doubles() -> tuple[Any, Outcome | None]:
-    """The fakes the test harness already defines, reused so there is one set."""
+    """The fakes the test harness already defines, reused so there is one set.
+
+    The store may legitimately be `None` here: several criteria are *supposed* to run
+    on trees that have no store at all - `data_guard_blocks_bad_data` judges an engine
+    that never touches one, against a fabricated tree carrying `tests/` and no `src/`.
+    The guard against a *broken* store is in `migrated_store` itself, where the
+    difference between "not written" and "written and will not import" can actually be
+    told apart. See its docstring.
+    """
     module, problem = try_import("tests.harness.doubles")
     if module is None:
         return None, problem
@@ -1884,16 +1892,25 @@ def asgi_request(app: Any, method: str, path: str) -> AsgiResponse:
 
 @dataclass(frozen=True)
 class WsProbe:
-    """What a WebSocket probe saw. `accepted` False means there is no endpoint."""
+    """What a WebSocket probe saw. `accepted` False means there is no endpoint.
+
+    `pushed_unprompted` is the observation that makes `pushed` mean anything. A
+    console that pushes on a timer regardless of the data satisfies "a push arrived"
+    and is wrong - the operator would get a screen that refreshes constantly and
+    tells them nothing about whether anything changed. So the probe watches a quiet
+    window *before* touching the database, and a push there is a failure rather than
+    an early success.
+    """
 
     accepted: bool
     pushed: bool
     elapsed_ms: float
     detail: str
+    pushed_unprompted: bool = False
 
 
 async def _probe_websocket(
-    app: Any, path: str, *, on_open: Callable[[], None], budget_s: float
+    app: Any, path: str, *, on_open: Callable[[], None], quiet_s: float, budget_s: float
 ) -> WsProbe:
     inbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     outbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -1929,16 +1946,43 @@ async def _probe_websocket(
         if first.get("type") != "websocket.accept":
             return WsProbe(False, False, 0.0, "handshake answered with " + str(first.get("type")))
 
+        # The quiet window: connected, nothing sent by this client, nothing changed
+        # in the database. A polling console must poll through this and say nothing.
+        # Waiting *longer* here only makes the check stricter, so a loaded machine
+        # cannot turn this into a spurious failure - it can only fail to notice a
+        # console that pushes on a timer, which is a missed detection rather than a
+        # false accusation, and the fabricated console in `tests/verify/` catches
+        # that case deterministically on an idle machine.
+        quiet_started = time.monotonic()
+        while True:
+            remaining = quiet_s - (time.monotonic() - quiet_started)
+            if remaining <= 0:
+                break
+            try:
+                message = await asyncio.wait_for(outbound.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                break
+            if message.get("type") == "websocket.send":
+                return WsProbe(
+                    True,
+                    False,
+                    (time.monotonic() - quiet_started) * 1000,
+                    "pushed before anything changed",
+                    pushed_unprompted=True,
+                )
+            if message.get("type") == "websocket.close":
+                return WsProbe(True, False, 0.0, "the endpoint closed the socket")
+
         on_open()
         started = time.monotonic()
         while True:
             remaining = budget_s - (time.monotonic() - started)
             if remaining <= 0:
-                return WsProbe(True, False, budget_s * 1000, "no push inside the budget")
+                return WsProbe(True, False, budget_s * 1000, "nothing was pushed")
             try:
                 message = await asyncio.wait_for(outbound.get(), timeout=remaining)
             except asyncio.TimeoutError:
-                return WsProbe(True, False, budget_s * 1000, "no push inside the budget")
+                return WsProbe(True, False, budget_s * 1000, "nothing was pushed")
             elapsed_ms = (time.monotonic() - started) * 1000
             if message.get("type") == "websocket.send":
                 return WsProbe(True, True, elapsed_ms, "pushed")
@@ -1955,8 +1999,12 @@ async def _probe_websocket(
             await task
 
 
-def probe_websocket(app: Any, path: str, *, on_open: Callable[[], None], budget_s: float) -> WsProbe:
-    return asyncio.run(_probe_websocket(app, path, on_open=on_open, budget_s=budget_s))
+def probe_websocket(
+    app: Any, path: str, *, on_open: Callable[[], None], quiet_s: float, budget_s: float
+) -> WsProbe:
+    return asyncio.run(
+        _probe_websocket(app, path, on_open=on_open, quiet_s=quiet_s, budget_s=budget_s)
+    )
 
 
 # --- reading the stylesheet without a browser ------------------------------ #
@@ -2090,11 +2138,45 @@ def check_console_renders_seeded_screens(ctx: VerifyContext) -> Outcome:
 
 
 def check_console_websocket_pushes_on_change(ctx: VerifyContext) -> Outcome:
-    """A push arrives within twice `console.poll_interval_ms` of a database change.
+    """A push arrives **because** the database changed, and not otherwise.
 
-    The budget is read from config, never hardcoded: `ui-context.md` makes the
-    poll interval configuration and a criterion carrying its own copy of 500 would
-    stop testing the console the moment the operator retuned it.
+    Three jobs, three mechanisms, and separating them is the point - they used to be
+    one number doing all three badly.
+
+    **The assertion is behavioural.** The socket stays quiet through a window in
+    which nothing changed, and then pushes once something does. The client sends
+    nothing at any point, so every push is unprompted. That pair is the property
+    `ui-context.md` actually specifies: the console pushes *when the watermark
+    moves*. A console that pushes on a timer regardless satisfies "a push arrived"
+    and is wrong in a way an operator would feel - a screen that refreshes forever
+    and never means anything.
+
+    **The timeout is a safety net and nothing more.** Twenty poll intervals, so a
+    broken console fails in finite time rather than hanging the gate. It is not a
+    promptness assertion and must not read like one: it used to be *two* intervals,
+    which is a factor of two of headroom measured on a machine also running the rest
+    of the suite, and it went red once under a full run while passing three times in
+    isolation. That budget was measuring the machine, not the console. The
+    interesting property was never "within 1000ms" anyway - a console that polls on
+    an interval is at most one interval late by construction, so the tight bound was
+    standing in for "the poll loop is running", which the quiet window now
+    demonstrates directly.
+
+    **The evidence is the measured time in the message.** A promptness regression
+    stays visible in gate output - "pushed 508ms after the watermark moved" - without
+    being a spurious FAIL on a loaded machine.
+
+    Both windows are read from config. `ui-context.md` makes the poll interval
+    configuration, and a criterion carrying its own copy of 500 would stop testing
+    the console the moment the operator retuned it.
+
+    Changed 2026-09-10 on the lead's ruling. **This is a Phase 1 criterion and this
+    is a Phase 3 change to it**, which is worth justifying rather than slipping in:
+    the old form was a wall-clock assertion that had begun failing intermittently,
+    and loosening its number inside an unrelated spec is how such an assertion ends
+    up asserting nothing. Replacing it with the property it was standing in for is
+    the alternative, and it is strictly stronger - the old form could not tell a
+    console that pushes on change from one that pushes constantly.
     """
     config_data, problem = load_config(ctx.root)
     if config_data is None:
@@ -2104,7 +2186,12 @@ def check_console_websocket_pushes_on_change(ctx: VerifyContext) -> Outcome:
         return pending("config key `" + KEY_POLL_INTERVAL + "` is not defined yet")
     if poll_ms is None:
         return pending("the operator has not set `" + KEY_POLL_INTERVAL + "`")
-    budget_ms = int(poll_ms) * 2
+    #: Two poll intervals of silence, so a polling console has certainly polled at
+    #: least once and chosen not to push. This is the assertion's half.
+    quiet_ms = int(poll_ms) * 2
+    #: Twenty, so a dead poller fails in finite time. This is the safety net's half
+    #: and carries no claim about promptness.
+    timeout_ms = int(poll_ms) * 20
 
     with root_import_path(ctx.root), console_workspace() as tmp:
         db_path, early = seeded_console_db(tmp)
@@ -2132,7 +2219,11 @@ def check_console_websocket_pushes_on_change(ctx: VerifyContext) -> Outcome:
 
         try:
             probe = probe_websocket(
-                app, "/ws", on_open=move_the_watermark, budget_s=budget_ms / 1000
+                app,
+                "/ws",
+                on_open=move_the_watermark,
+                quiet_s=quiet_ms / 1000,
+                budget_s=timeout_ms / 1000,
             )
         finally:
             close_console(app)
@@ -2141,23 +2232,33 @@ def check_console_websocket_pushes_on_change(ctx: VerifyContext) -> Outcome:
         return pending(
             "no WebSocket endpoint at /ws yet - " + probe.detail + " (" + CONSOLE_CONTRACT + ")"
         )
+    if probe.pushed_unprompted:
+        return failed(
+            "the console pushed "
+            + format(probe.elapsed_ms, ".0f")
+            + "ms after connecting, with nothing changed in the database and nothing "
+            "sent by the client. It is pushing on a timer rather than on the watermark, "
+            "which satisfies `a push arrived` and still leaves the operator watching a "
+            "screen that refreshes forever and means nothing."
+        )
     if not probe.pushed:
         return failed(
-            "the watermark moved and nothing was pushed within "
-            + str(budget_ms)
-            + "ms (2 x "
+            "the watermark moved and nothing was pushed. The socket was open, the "
+            "client sent nothing to provoke it, and it stayed silent for "
+            + str(timeout_ms)
+            + "ms - twenty times `"
             + KEY_POLL_INTERVAL
-            + "="
+            + "`="
             + str(poll_ms)
-            + "): "
+            + ", which is a dead poller rather than a slow one: "
             + probe.detail
         )
     return passed(
-        "pushed "
+        "silent through "
+        + str(quiet_ms)
+        + "ms with nothing changed, then pushed "
         + format(probe.elapsed_ms, ".0f")
-        + "ms after the watermark moved, inside the "
-        + str(budget_ms)
-        + "ms budget"
+        + "ms after the watermark moved"
     )
 
 
@@ -4707,6 +4808,104 @@ def check_risk_rejects_sub_ordermin(ctx: VerifyContext) -> Outcome:
 # --- universe_varies_with_balance ------------------------------------------ #
 
 
+#: A pair name no fixture carries, used to find which key `ScoutUniverse` publishes the
+#: universe under. Shaped like a pair so a model that validates the field still accepts it.
+UNIVERSE_PROBE_PAIR = "PROBE/USD"
+
+
+def _published_pairs(
+    exchange: Mapping[str, Any], contracts_mod: ModuleType
+) -> Mapping[str, Any]:
+    """The per-pair rules engine 1 published, addressed through the reader's own keys."""
+    rules_key = getattr(contracts_mod, "EXCHANGE_PAIR_RULES_KEY", "pair_rules")
+    pairs_key = getattr(contracts_mod, "PAIR_RULES_PAIRS_KEY", "pairs")
+    rules = exchange.get(rules_key)
+    if not isinstance(rules, Mapping):
+        return {}
+    pairs = rules.get(pairs_key)
+    return pairs if isinstance(pairs, Mapping) else {}
+
+
+def _scout_state(
+    exchange: Mapping[str, Any], contracts_mod: ModuleType
+) -> tuple[dict[str, Any] | None, Outcome | None]:
+    """`state` as the opportunity chain has it when engine 7 runs.
+
+    Engine 7 values a candidate position at the book, so it needs a bid and an ask for
+    every pair as well as engine 1's account payload - the criterion originally supplied
+    only the latter and the gate fail-closed on the missing quotes, correctly, which the
+    criterion then misread as a filter that publishes no universe.
+
+    The quotes are built through engine 3's real `QuoteView`, one per pair engine 1
+    published, and every key comes from engine 7's own `contracts.py`. One price for all
+    of them is deliberate: this criterion varies the *balance* and must hold everything
+    else still, or a difference in pair counts could be a difference in prices.
+    """
+    quotes: dict[str, Any] = {}
+    for pair in sorted(_published_pairs(exchange, contracts_mod)):
+        quote, problem = _quote_payload(
+            pair, bid="99.95", ask="100.05", spread_pct=CANDIDATE_SPREAD_PCT
+        )
+        if quote is None:
+            return None, problem
+        quotes[pair] = quote
+    return {
+        getattr(contracts_mod, "EXCHANGE_KEY", "exchange"): dict(exchange),
+        getattr(contracts_mod, "MARKET_SENSOR_KEY", "market_sensor"): {
+            getattr(contracts_mod, "MARKET_SENSOR_QUOTES_KEY", "quotes"): quotes
+        },
+    }, None
+
+
+def _scout_universe_field(contracts_mod: ModuleType) -> tuple[str | None, Outcome | None]:
+    """Which key under `state["scout"]` holds the universe, read from B's own contract.
+
+    Two ways, and neither of them retypes the name.
+
+    `UNIVERSE_FIELD` first, because that is what this criterion's PENDING line proposed
+    when it was registered ahead of engine 7. **B built something different and better**:
+    a `ScoutUniverse` pydantic model with a `to_state_data()` serialiser, which is the
+    same shape engines 10 and 11 use and neither of those declares a field-name constant
+    either. The contract in a PENDING message is a proposal to the owning agent, not a
+    decree, so the criterion follows the engine rather than the other way round.
+
+    So, failing the constant, the model is *asked*: a `ScoutUniverse` carrying one
+    sentinel pair is serialised, and the key whose value contains that sentinel is the
+    one. That derives the name from B's own serialiser, so a rename follows
+    automatically and there is no literal here to drift - which is the same discipline
+    the rest of this section applies to `state["exchange"]`, where four retyped field
+    names survived a whole phase because every test agreed with whoever wrote it.
+    """
+    declared = getattr(contracts_mod, "UNIVERSE_FIELD", None)
+    if isinstance(declared, str):
+        return declared, None
+
+    model = getattr(contracts_mod, "ScoutUniverse", None)
+    if model is None:
+        return None, None
+    try:
+        payload = model(pairs=(UNIVERSE_PROBE_PAIR,)).to_state_data()
+    except (TypeError, ValueError, AttributeError) as exc:
+        return None, pending(
+            "acsoe.engines.scout.contracts.ScoutUniverse could not be asked which key "
+            f"carries the universe ({type(exc).__name__}: {exc}) - " + SCOUT_CONTRACT
+        )
+    if not isinstance(payload, Mapping):
+        return None, failed(
+            "ScoutUniverse.to_state_data() returned "
+            + type(payload).__name__
+            + " rather than a mapping; `state['scout']` is what every later gate reads"
+        )
+    for key, value in payload.items():
+        if isinstance(value, (list, tuple)) and UNIVERSE_PROBE_PAIR in value:
+            return str(key), None
+    return None, failed(
+        "ScoutUniverse published a universe of one pair and no key in its payload "
+        f"carries it: {sorted(payload)}. The universe is what every later gate iterates "
+        "over, and nothing downstream can find it either."
+    )
+
+
 def check_universe_varies_with_balance(ctx: VerifyContext) -> Outcome:
     """The tradable universe is smaller at $10 than at $5,000, over one fixture set.
 
@@ -4726,11 +4925,11 @@ def check_universe_varies_with_balance(ctx: VerifyContext) -> Outcome:
         # universe is published - guessing a key under another engine's payload is the
         # audit's own defect - so an agreed `contracts.py` is the precondition for
         # anything else here, engine included.
-        universe_key = getattr(contracts_mod, "UNIVERSE_FIELD", None)
+        universe_key, problem = _scout_universe_field(contracts_mod)
         if universe_key is None:
-            return pending(
-                "acsoe.engines.scout.contracts declares no UNIVERSE_FIELD naming where the "
-                "universe is published - " + SCOUT_CONTRACT
+            return problem or pending(
+                "acsoe.engines.scout.contracts does not say where the universe is "
+                "published - " + SCOUT_CONTRACT
             )
         engine_cls, problem = _engine_class("acsoe.engines.scout.engine", "scout")
         if engine_cls is None:
@@ -4738,34 +4937,78 @@ def check_universe_varies_with_balance(ctx: VerifyContext) -> Outcome:
         config, problem = _phase3_config()
         if config is None:
             return problem or pending("the committed config could not be loaded")
+        store_cls, problem = _store_class()
+        if store_cls is None:
+            return problem or pending("acsoe.clients.store.client does not exist yet")
+        unavailable = getattr(contracts_mod, "REASON_INPUTS_UNAVAILABLE", None)
 
         counts: dict[str, int] = {}
-        for label, balance in (("small", "10.00"), ("large", "5000.00")):
-            fake, problem = _fake_kraken()
-            if fake is None:
-                return problem or pending("the fake Kraken client is unavailable")
-            exchange, context, problem = _exchange_payload(config, fake)
-            if exchange is None:
-                return problem or pending("engine 1 `exchange` could not be driven")
-            quote_currencies = {
-                str(rule.get("quote"))
-                for rule in (exchange.get("pair_rules") or {}).get("pairs", {}).values()
-                if isinstance(rule, Mapping)
-            }
-            fake.set_balances(dict.fromkeys(sorted(quote_currencies), balance))
-            exchange, context, problem = _exchange_payload(config, fake)
-            if exchange is None:
-                return problem or pending("engine 1 `exchange` could not be driven")
+        with console_workspace() as tmp:
+            db_path, early = _phase3_seeded_db(ctx, tmp)
+            if db_path is None:
+                return early or pending("the Phase 0 seed is not available")
 
-            state: dict[str, Any] = {getattr(contracts_mod, "EXCHANGE_KEY", "exchange"): exchange}
-            result = engine_cls().process(context, state)
-            published = (result.data or {}).get(universe_key)
-            if published is None:
-                return failed(
-                    f"engine 7 published no {universe_key!r} at the ${balance} balance; "
-                    "the universe is what every later gate iterates over"
+            for label, balance in (("small", "10.00"), ("large", "5000.00")):
+                fake, problem = _fake_kraken()
+                if fake is None:
+                    return problem or pending("the fake Kraken client is unavailable")
+                # Engine 1 is run once to learn which quote currencies exist, the
+                # balances are set on the *client*, and it is run again. The balance is
+                # never written into the payload: invariant 2 makes it a runtime fetch,
+                # and a criterion injecting one would be exercising a path no live tick
+                # takes.
+                probe, _context, problem = _exchange_payload(config, fake)
+                if probe is None:
+                    return problem or pending("engine 1 `exchange` could not be driven")
+                pairs = _published_pairs(probe, contracts_mod)
+                quote_field = getattr(contracts_mod, "PAIR_QUOTE_FIELD", "quote")
+                fake.set_balances(
+                    dict.fromkeys(
+                        sorted(
+                            str(rule.get(quote_field))
+                            for rule in pairs.values()
+                            if isinstance(rule, Mapping)
+                        ),
+                        balance,
+                    )
                 )
-            counts[label] = len(published)
+
+                with store_cls(db_path) as store:
+                    clients, problem = _fake_clients(kraken=fake, store=store)
+                    if clients is None:
+                        return problem or pending("test doubles unavailable")
+                    context, problem = _engine_context(config, clients, now=_seed_now(db_path))
+                    if context is None:
+                        return problem or pending("acsoe.core.contracts does not exist yet")
+                    exchange, _ctx, problem = _exchange_payload(config, fake)
+                    if exchange is None:
+                        return problem or pending("engine 1 `exchange` could not be driven")
+                    state, problem = _scout_state(exchange, contracts_mod)
+                    if state is None:
+                        return problem or pending("engine 3's quote contract is unavailable")
+                    result = engine_cls().process(context, state)
+
+                data = result.data or {}
+                if unavailable is not None and data.get("reason_code") == unavailable:
+                    number, spec = PHASE3_ENGINES["scout"]
+                    # The engine's own sentence, verbatim. `scout_inputs_unavailable`
+                    # covers six different missing inputs - an absent `market_sensor`,
+                    # an absent `exchange`, an unreachable store, no equity snapshot, a
+                    # null config key, a currency mismatch - and reporting only the code
+                    # would throw away the one thing that says which.
+                    return pending(
+                        f"engine {number} `scout` could not be driven yet ({spec}): "
+                        + repr(getattr(result, "reason", None))
+                    )
+                published = data.get(universe_key)
+                if published is None:
+                    return failed(
+                        f"engine 7 published no {universe_key!r} at the ${balance} balance, "
+                        "and did not report its inputs unavailable either. The universe is "
+                        "what every later gate iterates over. It said: "
+                        + repr(getattr(result, "reason", None))
+                    )
+                counts[label] = len(published)
 
         if counts["small"] == counts["large"]:
             return failed(

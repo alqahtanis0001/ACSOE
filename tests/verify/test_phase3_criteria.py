@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -528,7 +528,7 @@ def test_universe_is_pending_when_scout_declares_no_universe_field(
     )
     outcome = run(verify_module, "universe_varies_with_balance", phase3_tree)
     assert_pending(outcome, verify_module)
-    assert "UNIVERSE_FIELD" in outcome.message
+    assert "does not say where the universe is published" in outcome.message
 
 
 def test_universe_passes_against_a_filter_that_reads_the_balance(
@@ -538,6 +538,72 @@ def test_universe_passes_against_a_filter_that_reads_the_balance(
     outcome = run(verify_module, "universe_varies_with_balance", phase3_tree)
     assert_pass(outcome, verify_module)
     assert "at a $10 balance" in outcome.message
+
+
+def test_the_universe_key_is_read_from_scouts_own_model(verify_module: ModuleType) -> None:
+    """The criterion follows the engine's contract rather than the other way round.
+
+    Its PENDING line proposed a `UNIVERSE_FIELD` constant while engine 7 was unwritten.
+    B built a `ScoutUniverse` model with a `to_state_data()` serialiser instead — the
+    same shape engines 10 and 11 use, neither of which declares a field-name constant
+    either — so the proposal was the worse of the two designs and the criterion adapts.
+    A PENDING message is a proposal to the owning agent, not a decree.
+
+    It adapts by *asking the model*, not by retyping `"pairs"`. That is the same
+    discipline this section applies to `state["exchange"]`, where four retyped field
+    names survived a whole phase because every test agreed with whoever wrote it.
+    """
+    from acsoe.engines.scout import contracts as scout_contracts
+
+    key, problem = verify_module._scout_universe_field(scout_contracts)
+    assert problem is None, problem
+    assert key in scout_contracts.ScoutUniverse(pairs=("A/B",)).to_state_data()
+
+
+def test_renaming_the_universe_field_moves_the_criterion_with_it(
+    verify_module: ModuleType,
+) -> None:
+    """The property that makes the probe worth having rather than a literal.
+
+    If B renames the field, the criterion follows on its own. A hardcoded `"pairs"`
+    would keep looking for a key nobody publishes and would report a FAIL against a
+    perfectly good engine — the drift this whole phase exists to stop, pointed the other
+    way.
+    """
+
+    class RenamedUniverse:
+        def __init__(self, pairs: tuple[str, ...] = ()) -> None:
+            self._pairs = pairs
+
+        def to_state_data(self) -> dict[str, object]:
+            return {"tradable": list(self._pairs), "scanned": 0}
+
+    key, problem = verify_module._scout_universe_field(
+        SimpleNamespace(ScoutUniverse=RenamedUniverse)
+    )
+    assert problem is None, problem
+    assert key == "tradable"
+
+
+def test_a_model_that_publishes_no_universe_at_all_is_a_fail(
+    verify_module: ModuleType,
+) -> None:
+    """Not PENDING. A `ScoutUniverse` that exists and drops the universe on the floor is
+    a broken contract, not unfinished work, and nothing downstream could iterate it."""
+
+    class UniverselessUniverse:
+        def __init__(self, pairs: tuple[str, ...] = ()) -> None:
+            self._pairs = pairs
+
+        def to_state_data(self) -> dict[str, object]:
+            return {"scanned": len(self._pairs)}
+
+    key, problem = verify_module._scout_universe_field(
+        SimpleNamespace(ScoutUniverse=UniverselessUniverse)
+    )
+    assert key is None
+    assert problem is not None
+    assert problem.result is verify_module.Result.FAIL
 
 
 def test_a_universe_that_ignores_the_balance_is_a_fail(
@@ -914,14 +980,32 @@ def test_both_tests_reads_the_boolean_assertion_style_too(
     assert_pass(outcome, verify_module)
 
 
-def test_both_tests_passes_against_the_real_tree_for_the_three_built_gates(
+def test_both_tests_never_fails_against_the_real_tree(
     verify_module: ModuleType, repo_root: Path
 ) -> None:
-    """PENDING today because engine 7 has no test file, and the message must say which
-    engine and which spec rather than "something is missing"."""
+    """Against the real repository: PASS once every gate has a test file, PENDING while
+    one is still missing, and **never FAIL**.
+
+    This test used to assert PENDING outright, because engine 7 had no test file when
+    the criterion was registered. B landed `tests/engines/test_scout.py` a few hours
+    later and the criterion went green on its own — correctly — and took this test red
+    with it. It was asserting a fact about the calendar rather than a property of the
+    criterion, which is the same defect as a fixture pinned to a literal: right on the
+    day it is written and wrong the moment the thing it describes moves.
+
+    The durable property is the one the criterion exists for. A FAIL means a gate has a
+    test file carrying only one direction, and that is a real defect in somebody's
+    tests; a PENDING means a file is not there yet and must name which, so the operator
+    is not left to guess what the gate is waiting for.
+    """
     outcome = run(verify_module, BOTH_TESTS_CRITERION, repo_root)
-    assert_pending(outcome, verify_module)
-    assert "test_scout.py" in outcome.message
+    assert outcome.result is not verify_module.Result.FAIL, outcome
+    if outcome.result is verify_module.Result.PENDING:
+        assert "tests/engines/test_" in outcome.message, outcome
+    else:
+        assert_pass(outcome, verify_module)
+        for engine in ("scout", "cost", "risk", "safety"):
+            assert engine in outcome.message, outcome
 
 
 @pytest.mark.parametrize("engine", ["scout", "cost", "risk", "safety"])
