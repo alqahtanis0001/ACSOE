@@ -356,18 +356,50 @@ def test_an_empty_registry_produces_a_valid_tick(startable_config: Path) -> None
     assert "trading_blocked_by" not in state
 
 
-def test_the_registered_guard_chain_is_the_four_phase_2_engines(
+def test_the_guard_chain_ingests_before_it_judges_and_judges_before_it_breaks(
     startable_config: Path,
 ) -> None:
-    """What `bootstrap` actually holds, asserted where it can be read as that claim."""
+    """The guard chain's *order*, which is a property; not its membership, which is a date.
+
+    **Rewritten for spec 47, and the reason is worth more than the fix.** This asserted a
+    literal list of the four Phase 2 engines under a docstring saying "what `bootstrap`
+    actually holds". That is a fact about what had been registered on the afternoon it was
+    written, and registering engine 17 `safety` turned it red for no defect — the third
+    expiring test this phase, after A's tripwire that pinned a value the test itself
+    supplied and C's criterion test asserting PENDING because `test_scout.py` did not exist
+    yet.
+
+    What the chain's order actually guarantees, and what a later registration must not
+    break:
+
+    - **`exchange` first.** It publishes the account picture the rest of the chain reads.
+    - **`market_sensor` after `market_data_recorder`.** Candles and quotes are built from
+      frames that have been recorded, not the other way round.
+    - **`data_guard` after both publishers.** It judges what 1 and 3 produced, so it cannot
+      precede either.
+    - **`safety` last.** It reads the current tick's `state["trading_blocked_by"]`, which
+      `data_guard` sets, so it cannot precede the engine whose verdict it counts.
+
+    Asserted as relative positions rather than as a list, so registering engines 5, 6, 12
+    or 13 later changes nothing here — and reordering any of these four still fails.
+    """
     from acsoe import bootstrap
 
-    assert [engine.name for engine in bootstrap.build_chains().guard] == [
-        "exchange",
-        "market_data_recorder",
-        "market_sensor",
-        "data_guard",
-    ]
+    order = [engine.name for engine in bootstrap.build_chains().guard]
+
+    for name in ("exchange", "market_data_recorder", "market_sensor", "data_guard", "safety"):
+        assert name in order, f"{name} is not registered in the guard chain"
+
+    assert order.index("exchange") < order.index("market_sensor")
+    assert order.index("market_data_recorder") < order.index("market_sensor")
+    assert order.index("market_sensor") < order.index("data_guard")
+    assert order.index("exchange") < order.index("data_guard")
+    assert order.index("data_guard") < order.index("safety"), (
+        "safety reads state['trading_blocked_by'], which data_guard sets on the same tick"
+    )
+    assert order.index("safety") == len(order) - 1, (
+        "safety is the account-level breaker and runs after every ingestion engine"
+    )
 
 
 def test_a_tick_with_no_clients_at_all_records_errors_rather_than_raising(

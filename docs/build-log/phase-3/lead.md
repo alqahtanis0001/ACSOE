@@ -877,3 +877,50 @@ is a count of polls, not a duration. **Those are two defects and they must stay 
 sweeper only if it carries a database error. Anything else is unexplained until it is explained,
 and "unexplained" is an acceptable thing to write in this log — C wrote it, which is why the
 timing bug was still visible as its own problem when B went looking.
+
+### Spec 47's "Phases 0 to 2 unchanged" clause found the one thing it was written to find
+
+**Agent:** Lead · **Task:** spec 47 · **Date:** 2026-09-10
+
+**What happened.** Registered engines 7, 10, 11 and 17, then re-ran all four gates against
+baselines taken minutes earlier on a genuinely quiet tree — the first clean baseline of the
+session, and it was only obtainable because C's sweeper fix had landed. The diff is short, and
+sorting it is the whole value of the clause.
+
+**One real finding.** `tests/cli/test_entrypoints.py::test_the_registered_guard_chain_is_the_four_phase_2_engines`
+asserts the guard chain is exactly the four Phase 2 engines. Registering `SafetyEngine` turns it
+red, correctly. **It is a decayed assertion of the exact kind this phase has been cataloguing**:
+its docstring says *"what `bootstrap` actually holds, asserted where it can be read as that
+claim"*, which is a fact about what had been built on the afternoon it was written, not a
+property that survives the next registration. It is the third expiring test found this phase —
+after A's tripwire that pinned a value the test itself supplied, and C's criterion test asserting
+PENDING because `test_scout.py` did not exist yet — and all three were written by careful agents
+for good reasons.
+
+**Two changes that are the criteria working, not findings.** `orchestrator_empty_registry` moved
+from *"acsoe.bootstrap holds 4 registered engines"* to *"holds 8"*, and `is_gate_matches_registry`
+from *"4 engines registered; 0 mismatches (1 gates)"* to *"8 engines registered; 0 mismatches (5
+gates)"*. The second **is spec 47's acceptance clause** — four new gates matched against the Gate
+column of the registry table, zero mismatches. The first is C's deliberate design: the criterion
+reports the registry count while explicitly not ticking over it, so a registration is visible in
+its message without changing its verdict. Both are the kind of "change" the clause is meant to
+show you and then let you pass.
+
+**One measurement, not a change.** `console_websocket_pushes_on_change` moved from 5ms to 18ms.
+That is C's new form working as designed — the measured time is *evidence in the message* rather
+than the assertion, precisely so that variation like this is visible without being a verdict.
+Under the old form both numbers would have been compared against a 1000ms budget that was mostly
+measuring connection setup.
+
+**And the native fault is still here, which settles a question B and C both raised.** The Phase 1
+baseline run carries `RETRIED AFTER CRASH: pytest CRASHED ... 0xC0000005 ACCESS_VIOLATION ... the
+retry was clean`, and the Phase 2 post-registration run crashed once with `0xC0000409
+STACK_BUFFER_OVERRUN` before its retry. **Neither is the sweeper**: no database error, and the
+sweeper is fixed. So the phase closes with three distinct mechanisms rather than one — the
+sweeper, now fixed; C's wall-clock timing assertion, now fixed; and a genuine native fault that
+remains, is now *only* charged with the crashes it actually causes, and no longer has the other
+two hiding behind it. B's warning that a newly named mechanism absorbs every flake was worth
+making, and this run is the evidence it was not needed in the other direction either.
+
+**Fix.** The decayed test is rewritten below rather than deleted: what it genuinely pins is worth
+keeping.
