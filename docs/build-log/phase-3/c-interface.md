@@ -1046,3 +1046,36 @@ is satisfiable by a broken sweeper: "delete everything" passes the stale-leftove
 Mutated as the lead asked: removing the mtime guard turns **four** of the ten red, including
 the headline one. Every test runs against a fabricated temp root — a regression test for this
 bug that swept the real temp directory would be the bug, committed by its own test.
+
+### The strongest instance yet of a test that cannot fail, and it is B's
+
+**Agent:** C · **Task:** recorded at the lead's request · **Date:** 2026-09-10
+
+Not my work, and it belongs here because it is the same argument as this file's
+induced-failure entry approached from the other side, and it is a better example than any
+of mine.
+
+B mutated `rank_universe`'s `sorted(pairs)` to arrival order, expecting three ordering tests
+to go red. **All three stayed green.** The engine sorts its scan set *before* ranking, so a
+ranking that merely preserved arrival order still answered alphabetically — the shuffled
+input never reached the function under test.
+
+The part that makes it the best example is the docstring. That test **claimed to be "the
+assertion carrying the ordering"** and described an accidentally-stable sort as precisely the
+thing it would catch. It was the one case it could not detect. And no amount of *reading*
+would have revealed that, because the docstring is persuasive and the test does something
+real — it drives the engine, it asserts an order, the order is right.
+
+My own entry above says the induced failures found two criteria that "looked right, passed
+against the real engines, and were checking less than they claimed", and I wrote there that
+neither would have been found by adding PASS cases. B's is stronger: **it would not have been
+found by review either.** A test can be well-written, well-named, well-documented and still be
+untestable prose. The only thing that distinguishes it from a real test is breaking the
+subject and watching, which is why `code-standards.md` now requires it rather than commending
+it.
+
+Worth pairing with the correction two entries up, because they are the same failure at
+different scales: a diagnostic procedure that cannot fail told four agents for two phases
+that a deterministic bug was a hardware fault, and a test that cannot fail told B its ordering
+was pinned. In both cases the check ran, produced an answer, and the answer was
+unfalsifiable — and in both cases the prose around it was what made it convincing.

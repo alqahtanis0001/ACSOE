@@ -85,6 +85,30 @@ Never edit the tracker directly.
   moved to an extra — replaced with `require_module`, plus a `pytest_sessionstart` check so
   the fault is one loud abort rather than hundreds of quiet skips. All written up.
 
+- **Phase 3. The sweeper. Finished, and it was the "intermittent fault".**
+  `sweep_stale_workspaces` in `scripts/verify.py` was deleting other runs' live databases.
+  B hypothesised it, the lead reproduced it first try, and the file and the false docstring
+  are both mine. It now removes only directories whose **newest mtime anywhere inside them**
+  predates this process's start by more than a minute — the ordering is the whole argument, so
+  no lock file is needed. Four parts, and the two I would have missed are (a) the newest mtime
+  *inside* rather than the directory's own, because a directory's mtime does not change when a
+  file in it is written, and (b) the `contextlib.suppress(OSError)` that wrapped the loop
+  rather than the body, so one unreadable entry silently stopped every workspace after it
+  being swept — the leak this function exists to prevent, reintroduced by its own error
+  handling. Found by writing the test, not by reading the code.
+
+  **Ten tests in `tests/verify/test_workspace_sweep.py`, where there were none** — which is
+  the other half of why it survived two phases. Both directions in one sweep, because "delete
+  everything" and "delete nothing" each satisfy one half alone. Removing the mtime guard turns
+  four of the ten red; setting the margin to zero turns two red. Every test runs against a
+  fabricated temp root: a regression test for this bug that swept the real temp directory
+  would *be* the bug.
+
+  Two of my own tests were wrong first and are worth remembering: both anchored to
+  `time.time()` where the cutoff is anchored to process start, so they passed alone and failed
+  in a full run, and one of them passed for a reason that had nothing to do with the margin it
+  was named after.
+
 ### Open questions and handoffs
 
 - ~~**For the lead — `tests/conftest.py`'s shared `seed_fixtures` fixture is wrong and it is

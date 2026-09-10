@@ -1766,6 +1766,25 @@ def sweep_stale_workspaces(*, report: bool = True) -> tuple[int, int]:
 
     Deliberately scoped to the exact prefix this script mints. It never touches
     `pytest-of-*`, which belongs to pytest, or anything else in the temp directory.
+
+    ## What this guarantees, and what it does not
+
+    **Guaranteed:** a workspace belonging to a run that started before this call and has
+    not yet finished is never removed, whether or not any file in it is open. That is
+    the property the old code got wrong, and it holds on Windows and POSIX alike because
+    it rests on timestamps rather than on file locking.
+
+    **Not guaranteed, deliberately:** that every stale leftover goes. A directory whose
+    mtime cannot be read is kept; one another process holds open is kept; one written to
+    within :data:`SWEEP_SAFETY_MARGIN_S` of this process's start is kept. Each is
+    collected by a later run. The two errors are not symmetric and the function is tuned
+    for the one that matters: keeping a leftover one run too long costs disk, deleting a
+    live database costs a wrong verdict on a gate that decides whether real money trades.
+
+    **Never relied upon:** that an open file cannot be deleted. It is true of an open
+    file on Windows and it is not true of a *SQLite database between connections*, which
+    is the state every criterion here spends most of its time in. Nothing in this
+    function's correctness depends on the filesystem refusing anything.
     """
     root = Path(tempfile.gettempdir())
     cutoff = PROCESS_STARTED_AT - SWEEP_SAFETY_MARGIN_S
