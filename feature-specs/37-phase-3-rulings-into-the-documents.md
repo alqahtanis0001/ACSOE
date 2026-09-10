@@ -50,13 +50,26 @@ with every contradicting sentence elsewhere corrected in the same change.
    running `python scripts/verify.py --phase 3` against a temporary reinstatement of the old
    wording before committing the new one — a retired-term row nobody has seen fail is a
    comment.
-4. **Two cache TTL keys, not one.** Add to `config/default.yaml` under `kraken:`:
-   `cache_ttl_s.asset_pairs: 300` and `cache_ttl_s.trade_volume: 60`, both marked
-   operator-chosen 2026-09-10, with the comment saying what they are and what they are not:
-   they are **our own** re-fetch interval, not a claim about anything Kraken publishes, and
-   the values differ because pair rules change on the timescale of a listing while a fee
-   tier changes on the timescale of a trade. `Config.get` descends through mapping values,
-   so `kraken.cache_ttl_s.asset_pairs` resolves without a new section model.
+4. **Two cache TTL keys, not one — and they land paired with spec 38.** Add to
+   `config/default.yaml` under `kraken:`: `cache_ttl_s.asset_pairs: 300` and
+   `cache_ttl_s.trade_volume: 60`, both marked operator-chosen 2026-09-10, with a comment
+   saying what they are and what they are not — **our own** re-fetch interval, not a claim
+   about anything Kraken publishes — and why there are two: pair rules change on the
+   timescale of a listing, a fee tier on the timescale of a trade.
+
+   **This was attempted and reverted on 2026-09-10, and the reason is a real ownership
+   constraint rather than an accident.** `KrakenSection` in `src/acsoe/platform/config.py`
+   sets `extra="forbid"`, so a key in the YAML with no field on the model makes
+   `load_config()` raise and **every test in the tree fails until the field exists**. That
+   file is A's. The lead authors `config/default.yaml`; A owns the loader. So:
+
+   - **A adds the `cache_ttl_s` field to `KrakenSection` first**, as step 2 of spec 38,
+     and messages the lead.
+   - **The lead adds the YAML block in the same change.** Nothing is committed in between.
+
+   `Config.get` descends through mapping values, so `kraken.cache_ttl_s.asset_pairs`
+   resolves once the field exists. The block is written out verbatim at the bottom of this
+   spec so it is one paste and cannot drift from what A validates against.
 5. **Do the propagation by hand, per `ai-workflow-rules.md`'s "What this check does not
    catch".** Grep `AGENTS.md`, `README.md` and every `context/*.md` for the claims these
    rulings contradict — "assume tier 1", "the worst tier", "drawdown and loss-streak limits
@@ -91,3 +104,28 @@ with every contradicting sentence elsewhere corrected in the same change.
   wording, and PASSes against the new one.
 - `python -c "from acsoe.platform.config import load_config; c=load_config(); print(c.get('kraken.cache_ttl_s.asset_pairs'), c.get('kraken.cache_ttl_s.trade_volume'))"` prints `300 60`.
 - `pytest tests/ -q` · `mypy --strict src/` · `ruff check src/` · `python scripts/verify.py --phase 3`
+
+## The `config/default.yaml` block, verbatim
+
+Insert under `kraken:`, after `rest_timeout_s`. Do not commit it before A's `KrakenSection`
+field exists — see Implementation step 4.
+
+```yaml
+  cache_ttl_s:                   # Operator-chosen 2026-09-10. How long a fetched snapshot may
+                                 # price a decision before it must be fetched again. OUR OWN
+                                 # re-fetch interval, not a claim about anything Kraken
+                                 # publishes or permits.
+                                 #
+                                 # Invariant 2: a cache stale beyond its TTL COUNTS AS A FAILED
+                                 # FETCH. It is not returned, and in live mode the trade blocks.
+                                 # Separate from the last-known-good retention in
+                                 # `clients/kraken/`, which keeps the same values FOREVER, past
+                                 # any TTL, and may be read only by invariant 14's emergency
+                                 # liquidation. Two mechanisms, two readers; do not merge them.
+                                 #
+                                 # Two keys and not one, because the two values change on
+                                 # different timescales.
+    asset_pairs: 300             # Pair rules change when Kraken lists or delists something.
+    trade_volume: 60             # The fee tier can move on a single trade, and it prices the
+                                 # cost gate, so it is re-read on the timescale of the loop.
+```

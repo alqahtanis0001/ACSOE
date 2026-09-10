@@ -16,17 +16,25 @@ considers, or stops the chain when nothing qualifies — and publishes
    arithmetic over `ordermin`, `costmin`, tick size, live spread and balance, and its
    candidate ranking is a deterministic score over features. It contains no model, so
    nothing may override it."* Same inputs, same tick, same answer, always.
-2. **THE SCORE IS AN OPERATOR RULING AND IS NOT YET MADE.** No context file specifies it,
-   and `AGENTS.md` forbids inventing trading behaviour. This spec does **not** authorise
-   choosing one. Until the operator fixes it, implement the ranking as a named function with
-   the ordering the operator supplies, isolated in one place in `contracts.py` the way
-   `CONDITION_ACTION` is, so the ruling is one edit. **If work reaches this step before the
-   ruling arrives, stop and record it as an open question — do not pick a plausible score.**
-   That is how a placeholder becomes a decision nobody took, which is exactly what happened
-   to `CONDITION_ACTION`.
-3. **The tie-break is fixed here regardless**, because it is determinism rather than
-   strategy: equal scores break on pair name, ascending, so the candidate does not depend on
-   the iteration order of a dictionary. State it in the `README.md`.
+2. **RULED 2026-09-10: there is no score in Phase 3, and none is to be invented.** The
+   operator's ruling, and its reasoning, which belongs in the code as much as in this file:
+
+   > A deterministic score over features is meaningless before features exist, and a
+   > placeholder score would be a check whose output resembles the claim while the claim is
+   > untrue — this phase has produced enough of those. The universe filter is the
+   > contribution; ranking one candidate out of a filtered set is a Phase 5 decision made
+   > with real features in front of us.
+
+   So the ordering in Phase 3 is **the tie-break alone**: pair name, ascending. Not a score
+   that happens to be constant, not a score over spread or volume, not a `TODO` returning
+   zero. Implement it as one named function, isolated in `contracts.py` the way
+   `CONDITION_ACTION` is, so that Phase 5 fixing the score is one edit against a named
+   seam rather than a hunt through the engine.
+3. **Say in the `README.md` that the ordering is alphabetical and that this is a recorded
+   absence, not a design.** Name the phase that closes it. An agent arriving in Phase 5 must
+   not read alphabetical ordering as a choice anyone defended; the tracker carries it as an
+   open question and the README points there. Equal treatment of every pair in the universe
+   is the honest behaviour when nothing yet distinguishes them.
 4. **One candidate leaves this engine.** `state["scout"]["pair"]` carries it, and the
    cross-chain key table in `engine-contracts.md` fixes that name — engines 10 and 11 read
    it and it may not be renamed.
@@ -49,7 +57,9 @@ considers, or stops the chain when nothing qualifies — and publishes
 
 ## Scope Limits
 
-- Do **not** choose the ranking score. It is the operator's, and step 2 is a stop.
+- Do **not** choose, approximate, or stand in for the ranking score. Ruled 2026-09-10.
+  A score over spread, volume, volatility or price is exactly what this forbids — it would
+  look like a ranking and be an arbitrary one.
 - Do **not** emit more than one candidate. The judgement chain considers one.
 - Do **not** return `BLOCK` when the universe is merely empty.
 - Do **not** let any model output, confidence, or router decision reach this engine.
@@ -69,8 +79,12 @@ considers, or stops the chain when nothing qualifies — and publishes
   `blocks_trading=False`, and no `pair` key. Assert the status is `PASS` and not `BLOCK` —
   this is the assertion that would quietly be wrong forever.
 - Determinism: the same inputs produce the same candidate across repeated runs and across a
-  shuffled input ordering. Shuffle the pair mapping and assert the answer is unchanged.
-- The tie-break fires: two pairs with an identical score resolve to the alphabetically first.
+  shuffled input ordering. Shuffle the pair mapping and assert the answer is unchanged. This
+  is the assertion carrying the whole ordering in Phase 3, so it is not a formality.
+- The ordering is alphabetical over the *whole* universe, not merely a tie-break applied to
+  equal scores: assert the candidate from a three-pair universe by name, and assert it does
+  not change when the pairs are reordered or when their spreads and volumes are altered.
+  A hidden score would show up here as a different answer.
 - Engines 10 and 11 read the published pair without a translation step — one test runs
   scout, then the cost gate, on the same `state`.
 - Every `reason_code` this engine emits is present in `console/format.py`'s `REASON_PROSE`,

@@ -40,14 +40,33 @@ Discarding on failure would make rule 14 unimplementable at exactly the moment i
 
 **In live mode, a failed fetch always blocks.** Blocking is the correct response to not knowing a cost. The single exception is an emergency liquidation under rule 14, which must be able to complete during the outage that triggered it. Nothing else below applies to live mode.
 
-**In paper mode**, so that a fresh clone with an empty `.env` can still run the pipeline and generate research data:
+**In paper mode**, so that a fresh clone with an empty `.env` can still start, run its loop, record market data and build candles:
 
 | Failed fetch | Paper-mode fallback |
 |---|---|
-| Fee tier | Assume **tier 1**, the worst tier |
+| Fee tier | Block that pair. No fallback — see below |
 | Balance | Use `paper.starting_balances`, a **currency to amount map** in config, adjusted by simulated fills |
 | Pair rules | Block that pair. No fallback — a wrong `ordermin` produces invalid orders |
 | Spread | Block that pair. No fallback — an assumed spread invalidates the cost gate |
+
+**Balance is the only paper-mode fallback in this system.** Three of the four rows block, and that is the table working rather than an oversight: a fallback is only legitimate where the value it stands in for cannot change the answer to *"can this trade pay for itself"*, and the balance is the only one of the four that qualifies.
+
+**The fee-tier row named a tier and told the system to ~~assume~~ it. That is retired, 2026-09-10.**
+It was never implementable.
+`AssetPairs` carries no fee schedule, so there was no runtime source the named tier could be read from,
+and the only way to honour the row was to write a fee percentage into the code — which is the hardcoded
+fee `AGENTS.md` forbids in its first paragraph, and which would be stale the day it was written.
+A fee nobody fetched invalidates the cost gate for exactly the reason a spread nobody measured does:
+both are terms of `friction`, and a gate priced on a guess is not a gate.
+**A confirmed pair with no fee data blocks that pair.**
+
+*The retired wording is deliberately not quoted here.* `scripts/verify.py`'s `docs_vocabulary`
+criterion carries a row for it, qualified so it only fires on a line that also tells the system to
+assume one — and a quotation of a defect is the one thing that will always look exactly like the
+defect. `context/ai-workflow-rules.md`'s own retired-vocabulary section is the one place licensed to
+name it, because cataloguing superseded things is that section's whole job.
+
+The consequence, stated plainly rather than left to be discovered: with an empty `.env` the private calls fail, `TradeVolume` returns nothing, and **every pair blocks at the cost gate**. A fresh clone still runs the loop, still records the order book, and still builds candles — which is what the recording exists for and cannot be recovered later — but it takes no paper trades and produces no rejection rows past the cost gate. That is the honest description of an unauthenticated clone, and it is preferable to one that generates a research dataset priced on a fee somebody guessed.
 
 Every decision affected by a fallback records which fallback fired. A fallback is never optimistic: it may only make the system less willing to trade.
 
@@ -146,12 +165,21 @@ Everything else in this document makes the system less willing to act. This rule
 
 ### When it fires
 
-`close_intent` is set in exactly two ways: an operator presses Close all, or engine 17 `safety` escalates. `safety` escalates on either of two account-level conditions:
+`close_intent` is set in exactly two ways: an operator presses Close all, or engine 17 `safety` escalates. **`safety` escalates on exactly one condition:**
 
-- **Its configured drawdown and loss-streak limits** are breached.
 - **A sustained data outage.** Once `data_guard` has blocked more than `safety.max_consecutive_data_blocks` consecutive ticks — default **15** — `safety` writes `close_all`. The manage chain holds exits while the guard is rejecting data, and a hold that never ends is a position carried indefinitely on data nobody trusts. Fifteen one-minute ticks is one full decision bar: long enough that a websocket reconnect never liquidates the account, short enough that nothing is carried through a second bar.
 
-`safety` escalates when there are **open positions or resting entry orders**. A resting post-only buy is exposure that has not happened yet; left on the book through a blackout it can open a position into a market the system has already declared untrustworthy.
+`safety` escalates only when there are **open positions or resting entry orders**. A resting post-only buy is exposure that has not happened yet; left on the book through a blackout it can open a position into a market the system has already declared untrustworthy.
+
+### The drawdown and loss-streak limits freeze. They do not liquidate
+
+Ruled by the operator, 2026-09-10. Breaching `safety.max_drawdown_pct` or `safety.max_consecutive_losses` makes `safety` write a **`freeze`** row, not a `close_all`. So does the error-rate limit. `close_all` is reserved for the data-outage escalation above and for the operator's own Close all button.
+
+Freeze stops new positions while the manage chain keeps watching the open ones, and the operator decides whether to liquidate.
+
+**The distinction is what the condition is a statement about.** A drawdown or a losing streak is a statement about *past* trades: the data is trustworthy, the positions are being managed correctly, and the strategy is losing. Liquidating on that turns an unrealised loss into a realised one on the system's own authority, at whatever price the book happens to hold, and it does so at the moment the system has the least evidence it is reading the market correctly. A sustained data outage is a statement about *present* knowledge — the system no longer knows what it holds or what it is worth — and that is the case this rule was written for. Unknown exposure is worse than a bad fill; a known bad position is not.
+
+An earlier version of this section listed the drawdown and loss-streak limits alongside the outage as escalation conditions. Engine 17 could not be built against it: the Phase 0 seed carries a breached drawdown, a breached streak, an open position and a resting order all at once, so under that reading the seeded drawdown liquidated the account while the Phase 3 exit criterion required it to freeze, and no fixture could satisfy both. The contradiction is what surfaced the decision.
 
 ### What it overrides
 

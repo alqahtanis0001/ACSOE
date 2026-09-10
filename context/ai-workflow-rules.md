@@ -65,6 +65,7 @@ The second is the `## Decision history` section of `context/progress-tracker.md`
 | `paper.starting_balance` (singular) | — | `paper.starting_balances`, a per-currency map |
 | `24 bars` | — | 48 bars |
 | `eight` | `machine learning`, `non-ML`, or `engines` | nine — `scout` is deterministic |
+| `tier 1` | `assume` | a pair with no fee data blocks; there is no fee fallback |
 
 The middle column exists because some retired terms are ordinary English words. `eight` is only
 wrong when it counts engines; it is perfectly good in any other sentence, and a bare-token match

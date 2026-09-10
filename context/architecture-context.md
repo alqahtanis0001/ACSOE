@@ -154,7 +154,7 @@ Because the guard chain records every blocker, the outage count is **the number 
 
 `trades`, `positions`, `orders`, `equity_snapshots`, `block_records` and `rejections` are all written by engine 19 `memory`, from `state`, in the manage chain. No other engine writes a relational row. Engine 22 `exit` closes a position on the exchange; `memory` records that it happened. Keeping one writer is what makes the manage chain's "always runs" guarantee sufficient for invariant 12, and it is why `memory` is the dependency under `safety`'s entire input surface.
 
-Money columns are stored as **exact decimal strings in TEXT**, never `REAL`. `Decimal` in, `Decimal` out. A float equity series drifts, and a drifting equity series moves a drawdown threshold that liquidates the account.
+Money columns are stored as **exact decimal strings in TEXT**, never `REAL`. `Decimal` in, `Decimal` out. A float equity series drifts, and a drifting equity series moves the drawdown threshold that freezes the account — see invariant 14 for why that limit freezes rather than liquidates.
 
 ### What engine 17 `safety` reads
 

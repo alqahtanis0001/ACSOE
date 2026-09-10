@@ -13,29 +13,38 @@ so the rule has nothing to be true of.
 
 ## Implementation
 
-1. In `src/acsoe/clients/kraken/rest.py`, cache the parsed `PairRulesSnapshot` and
+1. **Before anything else in this spec, add the `cache_ttl_s` field to
+   `KrakenSection` in `src/acsoe/platform/config.py`, then tell the lead.** That model sets
+   `extra="forbid"`, so the YAML key and the model field must land in one change — the lead
+   tried the YAML alone on 2026-09-10 and `load_config()` raised, failing every test in the
+   tree until it was reverted. The lead authors `config/default.yaml` and pastes the block
+   from spec 37's appendix the moment your field exists; you own the loader. Neither half is
+   committed without the other.
+2. In `src/acsoe/clients/kraken/rest.py`, cache the parsed `PairRulesSnapshot` and
    `FeeTierSnapshot` from a successful call, each with the `fetched_at` it already carries.
    A call inside its TTL returns the cached snapshot without touching the network.
-2. TTLs come from config: `kraken.cache_ttl_s.asset_pairs` and
-   `kraken.cache_ttl_s.trade_volume`, added by spec 37. **Never a literal**, and the two are
-   read separately — a single shared TTL is the shape this spec exists to prevent.
-3. **A cache past its TTL is a failed fetch, not a stale value.** When the TTL has expired
+3. TTLs come from config: `kraken.cache_ttl_s.asset_pairs` and
+   `kraken.cache_ttl_s.trade_volume`. **Never a literal**, and the two are read separately —
+   a single shared TTL is the shape this spec exists to prevent. Validate them as you
+   validate every other threshold: a null is OPERATOR REQUIRED and the process refuses to
+   start.
+4. **A cache past its TTL is a failed fetch, not a stale value.** When the TTL has expired
    the client re-fetches; if that re-fetch fails, the call **raises** exactly as it does
    today. It does not return the expired entry. This is the half of invariant 2 that
    protects the kill switch, and the wording that makes it easy to get wrong is in the
    invariant itself: *for trading*, a stale value does not exist.
-4. **Retention is untouched and is a separate mechanism.** `last_known_good_asset_pairs` and
+5. **Retention is untouched and is a separate mechanism.** `last_known_good_asset_pairs` and
    `last_known_good_balances` keep the last successful value forever, past any TTL, for rule
    14 only. The cache answers *"may I use this now"*; retention answers *"what is the last
    thing we knew"*. Do not merge them into one field, and do not let the TTL expiry discard
    the retained value.
-5. **`TradeVolume` is not retained and must not become retained.** Invariant 2 is explicit:
+6. **`TradeVolume` is not retained and must not become retained.** Invariant 2 is explicit:
    its only reader is the cost gate, and an assumed fee invalidates that gate. A TTL cache
    for it is legitimate; a last-known-good for it is not.
-6. Age is computed against the **injected clock**, never `time.time()`. The client already
+7. Age is computed against the **injected clock**, never `time.time()`. The client already
    takes a `Clock`; use it. `context.now` is not reachable from here, and a direct clock read
    inside the client would make a replay unfaithful in exactly the layer replay depends on.
-7. Update `src/acsoe/clients/kraken/README.md`: what is cached, for how long, what expiry
+8. Update `src/acsoe/clients/kraken/README.md`: what is cached, for how long, what expiry
    does, and the one-line statement that cache and retention are different mechanisms with
    different readers.
 
