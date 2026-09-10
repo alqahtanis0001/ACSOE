@@ -46,6 +46,19 @@
 > - **Mutation survivors not yet re-checked**: `clients/kraken/contracts.py`, `limiter.py`,
 >   `engines/market_data_recorder/contracts.py`, `platform/config.py`, and three in
 >   `clients/store/migrations.py`.
+> - **An unexplained CRLF conversion, and it is the kind that hides.** A mutation-harness script
+>   writing with `write_bytes` nevertheless returned `platform/config.py` with 733 CRLF line
+>   endings. The file was restored and verified byte-for-byte, but **the cause was never found** and
+>   was deliberately not guessed at. It matters because a whole-file line-ending change is invisible
+>   in most diff views and would resurface later as an unexplained several-hundred-line diff on a
+>   file nobody edited. `.gitattributes` has already been raised once for adjacent reasons.
+> - **Branch-coverage backlog**, from the tell that found six untested refusal branches at the
+>   exchange boundary: `clients/kraken/contracts.py::_to_money` (4), `limiter.py::acquire` (the
+>   `cost <= 0` guard), `engines/market_data_recorder/contracts.py::validate_line` (1),
+>   `platform/config.py` (5 across `_to_decimal`, `_require_currency_map`,
+>   `_tick_divides_the_bar`, `get`, `load_yaml_mapping`), and `clients/store/migrations.py::discover_migrations`
+>   (3). **These counts come from a narrow subset and have not been re-checked wide** — by the rule
+>   below, expect some to die on contact.
 > - **The harness stream doubles are not consolidated.** Three separate fakes exist for engine 3's
 >   stream plus a fourth workaround in the criteria. A design is sketched; `tests/harness/` owns it.
 >

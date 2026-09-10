@@ -97,6 +97,11 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   code, in the commit that cited the rule. Reverse the condition, delete the guard, return the
   wrong field; confirm the test fails; put it back. It takes a minute and it is the only step
   that cannot be talked past. A test you have never seen fail is a claim, not a check.
+  **And a mutation that survives a *subset* has not survived — it has not been asked.** Re-run
+  survivors against the whole suite before believing them: two of eight survivors in one sweep died
+  on contact with tests in another file. A false survivor is worse than a missed one, because it
+  sends someone to write a test for a case already covered and makes the real survivors look less
+  urgent. Without this caveat the practice produces confident noise.
 - **Coverage counts executions; a mutation asks whether anything would object.** They are not
   two measures of the same thing, and where they disagree the mutation is right. Spec 39's
   twelve mutations killed eleven; the survivor was a branch with *excellent* line coverage —
