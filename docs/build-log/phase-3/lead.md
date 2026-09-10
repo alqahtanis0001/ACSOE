@@ -466,3 +466,46 @@ re-run and confirm green is the instinct that keeps destroying the evidence.
 than smoothed over, and the reason is cumulative: any one of these is noise, and the count is
 not. Recording it costs a paragraph; not recording it means the next person to see it starts
 from zero, and it has now cost this project time in Phase 2 and again here.
+
+### The `close_all` fall-through landed inside the spec 42 commit, and that commit's message does not say so
+
+**Agent:** Lead · **Task:** spec 42 follow-up · **Date:** 2026-09-10
+
+**What happened.** B reported spec 42 with the suppressed-`close_all` question still open and
+the fix unapplied, and its idle summary said the same. Both were stale. B had in fact applied
+the operator's ruling before I committed, so the fall-through is in `5510243` — a commit whose
+message describes spec 42 and does not mention it. Anyone later asking "when did the fall-through
+land" will not find it by reading commit messages.
+
+**Why the confusion, and it is worth naming rather than shrugging at.** Three exchanges crossed
+in flight: the operator ruled, I wrote it into invariant 14 and messaged B, B applied it while
+composing a report written against the pre-ruling position, and I then committed the tree and
+asked B to do the thing it had already done. **Nobody was wrong at the moment they wrote — every
+message was accurate when composed and stale when read.** That is the cost of parallel agents
+with asynchronous messages, and it is the same failure the progress files keep having: a claim
+and the code drifting apart, here by minutes rather than by sessions. Per rule 6 I have not
+rewritten the commit; this entry is the correction and is where the fall-through's provenance
+now lives.
+
+**I verified it rather than trusting either account, by mutation.** Replacing the fall-through
+call with `return None, suppressed_because` — the pre-ruling behaviour exactly — turns six tests
+red, including both of the two that matter:
+
+```
+FAILED test_a_suppressed_close_all_falls_through_to_the_freeze_that_was_due
+FAILED test_the_fall_through_does_not_fire_when_the_outage_is_the_only_condition
+```
+
+Restored, 48 passed. So the ruling is pinned in **both** directions: the first test says the
+fall-through happens, the second says it does not over-fire when the outage is the only
+condition tripped. B built the second one without being asked for it by name, and it is the one
+that stops "emit the strongest unsuppressed action" quietly becoming "always emit something".
+
+**The general point, which is the reason this is an entry and not a note.** I asked B to mutate
+this and then verified it myself instead of asking whether it had. Three of the five cannot-fail
+tests this phase were found by the person who wrote them, and two were found by someone else —
+so the check is worth doing at the boundary regardless of who claims to have done it, and it
+costs a minute. That is not distrust of B, whose mutation discipline is the best on the team and
+is why the practice is now in `code-standards.md`. It is that "did you check?" and "I checked"
+are two more claims that can drift from the code, and the mutation is the only one of the three
+that cannot.
