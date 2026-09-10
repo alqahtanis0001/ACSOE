@@ -151,7 +151,19 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
         "console_shows_live_rows",
         "console_reads_persisted_mode",
     }
-    for phase in range(3, verify_module.MAX_PHASE + 1):
+    # Spec 45, registered before three of the four engines they judge. Until they
+    # existed `--phase 3` carried `every_phase` alone and printed "Phase 3 is green"
+    # over a phase whose engines were unbuilt.
+    assert {c.name for c in verify_module._REGISTRY[3]} == every_phase | {
+        "cost_gate_uses_live_fee_tier",
+        "risk_rejects_sub_ordermin",
+        "universe_varies_with_balance",
+        "safety_freezes_on_drawdown_without_opportunity_chain",
+        "safety_escalates_on_sustained_outage",
+        "safety_inputs_all_from_the_seed",
+        "phase_3_gates_have_both_tests",
+    }
+    for phase in range(4, verify_module.MAX_PHASE + 1):
         assert {c.name for c in verify_module._REGISTRY[phase]} == every_phase
 
 

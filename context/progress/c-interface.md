@@ -10,8 +10,62 @@ Never edit the tracker directly.
   `verify.py --phase 3` reported `2 criteria: 2 PASS, 0 FAIL, 0 PENDING` and printed
   *"Phase 3 is green: every criterion PASS, zero PENDING"* over a phase where engines 7, 10, 11
   and 17 are unbuilt or unwired. `docs_vocabulary` and `toolchain_green` alone were claiming a
-  finished phase. Seven criteria, each PENDING until its subject lands. **In progress.**
-  Spec 46 is claimed but not started; it waits on B declaring engine 7's reason codes.
+  finished phase. Seven criteria, each PENDING until its subject lands. **Finished.**
+
+  `--phase 3` now reports **9 criteria: 7 PASS, 0 FAIL, 2 PENDING** and prints *"Phase 3 is not
+  green: 2 PENDING"*. The two PENDING are `universe_varies_with_balance` and
+  `phase_3_gates_have_both_tests`, both waiting on engine 7 `scout` and both naming specs 43
+  and 44 in their message. That is the mid-phase bar — no FAIL — and the false green is gone.
+
+  All twenty-one observations are in `tests/verify/test_phase3_criteria.py`: each criterion
+  PENDING against a tree without its subject, PASS against the subject, and FAIL against a
+  deliberately broken one. Every induced failure is written up in
+  `docs/build-log/phase-3/c-interface.md`. Two of them found real defects in criteria that
+  were already green — a reason-code assertion that renamed the constant it was checking
+  against, so expectation and answer moved together; and an error-count comparison that was
+  zero on both sides. Neither would have been found by adding PASS cases.
+
+  Three side items landed in `scripts/verify.py` while I was in there, all recorded in the
+  build log: the toolchain subprocess decode is now explicit (`encoding="utf-8",
+  errors="replace"`) after a `UnicodeDecodeError` on a cp1252 em-dash threw away every line
+  of a FAIL's explanation; the report is now **streamed and flushed per criterion** instead of
+  printed once at the end, so a run killed by this machine's intermittent native fault leaves
+  the verdicts it reached on disk rather than an empty file; and the Phase 3 safety criteria
+  seed through config-derived `SeedThresholds` rather than `seed.py`'s module defaults.
+
+  Spec 46 is claimed but not started; it waits on B declaring engine 7's reason codes in
+  `scout/contracts.py`. B has been asked to message the strings; the test will **enumerate**
+  them out of B's module rather than hand-list them, so what it needs is the module, not the
+  strings retyped.
+
+### Open questions and handoffs
+
+- **For the lead — `tests/conftest.py`'s shared `seed_fixtures` fixture is wrong and it is
+  mine.** It calls `seed_database` with no `thresholds`, so the seed scales to `seed.py`'s
+  module defaults, which are documented as "fixture-shape constants, not recommended values"
+  and have diverged: the default `max_errors_in_window` is 10 against the committed config's
+  20, so the shared fixture yields 13 ERROR rows — overshooting 10, sitting under 20, and
+  therefore unable to trip the configured error-rate condition at all. B found this
+  independently and shadowed it locally in `tests/engines/test_safety.py`; I hit the same
+  thing through `seeded_console_db` in `verify.py` and fixed it there with
+  `_phase3_seeded_db`. That is two places from two directions, which says the convenience
+  helper is the wrong default rather than that either caller was careless. **Spec 45's scope
+  limits keep me out of `tests/conftest.py`, so I have not touched it.** It wants its own
+  small task; any test that seeds and then asserts against a config threshold is currently
+  asserting against a fixture pinned to a different number.
+
+- **For B — `safety_inputs_unavailable` is not in `REASON_PROSE`.** `cost_inputs_unavailable`
+  and `risk_inputs_unavailable` both are, added 2026-09-09 from B's wording; B's
+  `cost/contracts.py` docstring saying otherwise is stale. `safety/contracts.py` says the same
+  of its own code and is accurate. Asked B whether to map it and proposed "The safety breaker
+  could not read its inputs"; not adding it until B answers, because those three entries are
+  deliberately the producer's wording rather than mine.
+
+- **Not a question, but worth the lead knowing.** `is_gate_matches_registry` is Phase 0's and
+  gains four gates at spec 47. Nothing I registered pins a gate count, so spec 47 does not
+  have to edit anything of mine. `tests/verify/test_runner.py` does pin the phase 3
+  *criterion set*, which is deliberate — adding a criterion to the wrong phase is otherwise
+  silent — and spec 47 adds no criteria, so it does not touch that either.
 
 - **Phase 2. Claimed: specs 33 then 32.** Claimed 2026-09-09, before any code was written, in the
   order `PHASE-2-TASKS.md` sets: 33 concurrently with A from the first commit, so the criteria

@@ -22,6 +22,7 @@ Owner: C - Interface and models. Specs 00, 01, 02.
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import contextlib
 import copy
@@ -45,7 +46,7 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Final
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1251,7 +1252,12 @@ def _interpreter_with_toolchain(root: Path) -> tuple[str | None, list[str]]:
     for candidate in candidates:
         try:
             done = subprocess.run(  # fixed argv, never a shell
-                [candidate, "-c", probe], capture_output=True, text=True, timeout=120
+                [candidate, "-c", probe],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
             )
         except (OSError, subprocess.SubprocessError):
             continue
@@ -1267,13 +1273,30 @@ def _interpreter_with_toolchain(root: Path) -> tuple[str | None, list[str]]:
 def _run_tool(
     interpreter: str, args: list[str], root: Path, env: dict[str, str]
 ) -> tuple[int | None, str]:
-    """One toolchain command. `None` as the returncode means it timed out."""
+    """One toolchain command. `None` as the returncode means it timed out.
+
+    The encoding is named rather than inherited, and `errors="replace"` is not
+    decoration. `text=True` alone decodes the child's bytes with whatever
+    `locale.getencoding()` returns for *this* process, which makes the gate's output
+    depend on the operator's console codepage: under the default Windows locale a
+    UTF-8 byte from a tool mojibakes silently, and under `PYTHONUTF8=1` or `-X utf8`
+    a cp1252 byte raises `UnicodeDecodeError` **on the reader thread**, where
+    `subprocess.run` cannot propagate it - so it returns empty stdout *and* empty
+    stderr and the criterion reports a FAIL with `(no output)` where the list of
+    failing tests should be. That was observed on 2026-09-10: pytest emitted an
+    em-dash as byte 0x97 and every line of the diagnosis was lost. A gate that
+    reports a verdict it cannot explain is the thing "never pipe this through
+    `tail`" exists to prevent, so the decode is now deterministic and lossy in the
+    one direction that keeps the text readable.
+    """
     try:
         done = subprocess.run(  # fixed argv, never a shell
             [interpreter, *args],
             cwd=root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=SUBPROCESS_TIMEOUT_S,
             env=env,
         )
@@ -4057,6 +4080,1524 @@ def check_console_reads_persisted_mode(ctx: VerifyContext) -> Outcome:
 
 
 # --------------------------------------------------------------------------- #
+# Phase 3 - the economics gates. Spec 45.
+# --------------------------------------------------------------------------- #
+#
+# Seven criteria for engines 7 `scout`, 10 `cost`, 11 `risk` and 17 `safety`.
+# Registered first in the phase, before three of the four subjects are wired, for
+# the reason spec 00 came first in Phase 0 and spec 16 first in Phase 1: until they
+# exist, `--phase 3` registers `docs_vocabulary` and `toolchain_green` alone and
+# prints "Phase 3 is green: every criterion PASS, zero PENDING" over a phase whose
+# engines are unbuilt. It printed exactly that on 2026-09-10. PENDING is what stops
+# an empty phase looking finished, and a criterion has to exist to report it.
+#
+# Three rules shape all seven, and the first is the one this phase exists to enforce.
+#
+# **Fabricate the subject a criterion judges. Never fabricate a contract it is held
+# to.** The Phase 3 audit found engines 10 and 11 reading a `state["exchange"]` that
+# engine 1 does not publish - `exchange.fees.maker_pct` against engine 1's
+# `exchange.fee_tier.maker_fee_pct`, and three more - which survived a whole phase
+# because every test built that payload by hand and therefore agreed with its caller.
+# A criterion built the same way repeats that defect one level up, where it would be
+# harder to see and would be believed. So: `state["exchange"]` here is always the
+# real `ExchangeEngine`'s own output over the fake Kraken client, never a literal;
+# every state key and field name is imported from the engine's real `contracts.py`
+# rather than retyped; and where a subject genuinely does not exist yet - engines 8
+# and 9 are Phase 5, engine 7 is unwritten - the *payload* is fabricated while the
+# *key it lands under* still comes from the real contract.
+#
+# **No criterion may read `data/`, `logs/` or `models/`, need the network, or need a
+# key.** All three directories are gitignored, so a criterion depending on one cannot
+# pass on a fresh clone. Exchange values come from the fake client over the committed
+# `tests/fixtures/kraken/` envelopes; store values come from the Phase 0 seed written
+# into a temporary directory.
+#
+# **Nothing here may depend on a live engine 19 `memory`.** Every one of `safety`'s
+# six inputs is written by engine 19, which is Phase 4. The Phase 0 seed exists to
+# resolve that forward dependency and criteria 4, 5 and 6 read it.
+
+#: The four engines this phase is about, with the spec that lands each one. Used in
+#: PENDING messages so a waiting criterion names who is building its subject.
+PHASE3_ENGINES: Final[Mapping[str, tuple[int, str]]] = {
+    "scout": (7, "spec 43 and 44"),
+    "cost": (10, "spec 40"),
+    "risk": (11, "spec 41"),
+    "safety": (17, "spec 42"),
+}
+
+#: `state["exchange"]` is only ever engine 1's own output. Named so the PENDING line
+#: says which engine a criterion is waiting on rather than "a module is missing".
+EXCHANGE_ENGINE_CONTRACT = (
+    "expected: acsoe.engines.exchange.engine.ExchangeEngine, whose EngineResult.data "
+    "is `state['exchange']`. No criterion here hand-builds that payload - the Phase 3 "
+    "audit found three field names assumed wrong under it, and every test that could "
+    "have caught it had built the payload itself"
+)
+
+SCOUT_CONTRACT = (
+    "expected: acsoe.engines.scout.engine exposing the BaseEngine subclass with "
+    "name == 'scout', publishing a per-tick universe into state['scout'] whose size "
+    "responds to the quote-currency balance engine 1 reports, and "
+    "acsoe.engines.scout.contracts declaring the universe key and the exclusion "
+    "reason codes. The universe is read from the published payload, never counted by "
+    "this criterion, because a count this criterion computes is a count engine 7 is "
+    "not held to"
+)
+
+
+def _phase3_config() -> tuple[Any, Outcome | None]:
+    """The committed config, through the shared test double.
+
+    The same loader `console_config` uses, called directly rather than through it
+    because nothing here is about the console and a reader should not have to check
+    whether `console_config()` does something console-shaped on the way.
+    """
+    module, problem = try_import("tests.harness.doubles")
+    if module is None:
+        return None, problem
+    loader, missing = module_attr(module, "load_default_config")
+    if loader is None:
+        return None, pending("test doubles unavailable: " + missing)
+    return loader(), None
+
+
+def _fake_kraken() -> tuple[Any, Outcome | None]:
+    """C's fake Kraken client over the committed envelopes. Never the network."""
+    module, problem = try_import("tests.harness.fake_kraken")
+    if module is None:
+        return None, problem
+    cls, missing = module_attr(module, "FakeKrakenClient")
+    if cls is None:
+        return None, pending("test harness unavailable: " + missing)
+    return cls(), None
+
+
+def _fake_clients(kraken: Any = None, store: Any = None) -> tuple[Any, Outcome | None]:
+    module, problem = try_import("tests.harness.doubles")
+    if module is None:
+        return None, problem
+    cls, missing = module_attr(module, "FakeClients")
+    if cls is None:
+        return None, pending("test doubles unavailable: " + missing)
+    clients = cls()
+    if kraken is not None:
+        clients.kraken = kraken
+    if store is not None:
+        clients.store = store
+    return clients, None
+
+
+#: A fixed instant. Every criterion here injects its clock; none reads the wall clock,
+#: so two runs a week apart produce the same verdict.
+PHASE3_NOW = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+
+
+def _engine_context(
+    config: Any, clients: Any, *, run_id: str = "verify-phase-3", now: datetime | None = None
+) -> tuple[Any, Outcome | None]:
+    """The real `EngineContext`, or `None` if `core/` is not there yet.
+
+    Deliberately the real one. `check_data_guard_blocks_bad_data` once fabricated an
+    `EngineContext` with a `cycle_id` field that does not exist and no `mode`, its
+    body never executed, and both halves of its two-sided proof passed anyway
+    because the fabricated contract agreed with the mistake.
+    """
+    core_mod, problem = try_import("acsoe.core.contracts")
+    if core_mod is None:
+        return None, problem or pending("acsoe.core.contracts does not exist yet")
+    cls, missing = module_attr(core_mod, "EngineContext")
+    if cls is None:
+        return None, pending(missing)
+    return cls(
+        mode="paper",
+        run_id=run_id,
+        now=PHASE3_NOW if now is None else now,
+        config=config,
+        clients=clients,
+    ), None
+
+
+def _engine_absent(problem: Outcome | None, engine: str) -> Outcome:
+    """The PENDING an absent Phase 3 engine reports, naming the spec that lands it.
+
+    `problem or pending(...)` is the wrong shape here and it cost two tests: `try_import`
+    already returns a PENDING reading "acsoe.engines.safety.contracts does not exist
+    yet", which is truthy, so it won and the spec number never reached the operator. A
+    FAIL still wins, because a broken environment is a broken environment and whose spec
+    it is beside the point.
+    """
+    if problem is not None and problem.result is Result.FAIL:
+        return problem
+    number, spec = PHASE3_ENGINES[engine]
+    return pending(f"engine {number} `{engine}` does not exist yet ({spec})")
+
+
+def _engine_class(module_name: str, engine: str) -> tuple[Any, Outcome | None]:
+    """The `BaseEngine` subclass named `engine`, or the PENDING that says who owns it."""
+    number, spec = PHASE3_ENGINES[engine]
+    module, problem = try_import(module_name)
+    if module is None:
+        if problem is not None and problem.result is Result.FAIL:
+            return None, problem
+        return None, pending(f"engine {number} `{engine}` does not exist yet ({spec})")
+    cls = _engine_named(module, engine)
+    if cls is None:
+        return None, pending(f"{module_name} exposes no class with name == {engine!r}")
+    return cls, None
+
+
+def _exchange_payload(
+    config: Any, fake: Any
+) -> tuple[Mapping[str, Any] | None, Any, Outcome | None]:
+    """Run the real engine 1 over `fake` and return what it publishes.
+
+    Returns (payload, context, early outcome). The context is returned with it
+    because the gates under test are handed the same one - a criterion that built a
+    second context could hand the gate a different clock or a different config from
+    the one that produced the payload it is judging.
+    """
+    clients, problem = _fake_clients(kraken=fake)
+    if clients is None:
+        return None, None, problem
+    context, problem = _engine_context(config, clients)
+    if context is None:
+        return None, None, problem
+    module, problem = try_import("acsoe.engines.exchange.engine")
+    if module is None:
+        return None, None, _with_contract(
+            problem, "engine 1 `exchange` does not exist yet", EXCHANGE_ENGINE_CONTRACT
+        )
+    engine_cls = _engine_named(module, "exchange")
+    if engine_cls is None:
+        return None, None, pending(
+            "acsoe.engines.exchange.engine exposes no class with name == 'exchange' - "
+            + EXCHANGE_ENGINE_CONTRACT
+        )
+    result = engine_cls().process(context, {})
+    payload = result.data
+    if not isinstance(payload, Mapping):
+        return None, None, failed(
+            "engine 1 published " + type(payload).__name__ + " rather than a mapping; "
+            "`state['exchange']` is what every gate in this phase reads"
+        )
+    return payload, context, None
+
+
+def _tradable_pair(
+    exchange: Mapping[str, Any], contracts_mod: ModuleType
+) -> tuple[str | None, Mapping[str, Any] | None, str]:
+    """A pair engine 1 published, whose quote currency the account actually holds.
+
+    Chosen from engine 1's output rather than written down here. A criterion naming
+    `BTC/USD` would keep passing after that pair left the fixtures and would be
+    testing the fixture rather than the gate; and `risk` needs a pair whose quote
+    currency has a balance, which is a fact about the payload, not about the symbol.
+    """
+    rules_key = getattr(contracts_mod, "EXCHANGE_PAIR_RULES_KEY", "pair_rules")
+    pairs_field = getattr(contracts_mod, "PAIR_RULES_PAIRS_FIELD", "pairs")
+    quote_field = getattr(contracts_mod, "PAIR_QUOTE_FIELD", "quote")
+    balances_key = getattr(contracts_mod, "EXCHANGE_BALANCES_KEY", "balances")
+
+    rules = exchange.get(rules_key)
+    if not isinstance(rules, Mapping):
+        return None, None, f"engine 1 published no {rules_key!r}"
+    pairs = rules.get(pairs_field)
+    if not isinstance(pairs, Mapping) or not pairs:
+        return None, None, f"engine 1 published no {rules_key}.{pairs_field}"
+    balances = exchange.get(balances_key)
+    held = set(balances) if isinstance(balances, Mapping) else set()
+
+    for name in sorted(pairs):
+        rule = pairs[name]
+        if isinstance(rule, Mapping) and str(rule.get(quote_field, "")) in held:
+            return str(name), rule, ""
+    return None, None, (
+        "engine 1 published no pair whose quote currency appears in "
+        f"{balances_key}; `risk` cannot size a pair the account cannot pay for"
+    )
+
+
+def _quote_payload(pair: str, *, bid: str, ask: str, spread_pct: str) -> tuple[Any, Outcome | None]:
+    """One top-of-book quote, built through engine 3's **real** `QuoteView`.
+
+    Engine 3 exists, but its quotes come from a WebSocket stream the fake client
+    deliberately does not have - `_quotes` returns `{}` for any client with no
+    `recent_trades`, so there is no way to drive a real spread out of it offline.
+    The subject is therefore fabricated and the contract is not: the model, its field
+    names and its serialisation are engine 3's own, so a criterion cannot invent a
+    quote shape engine 3 would never publish.
+    """
+    module, problem = try_import("acsoe.engines.market_sensor.contracts")
+    if module is None:
+        return None, problem or pending("acsoe.engines.market_sensor.contracts does not exist yet")
+    cls, missing = module_attr(module, "QuoteView")
+    if cls is None:
+        return None, pending(missing)
+    view = cls(
+        pair=pair,
+        ts=PHASE3_NOW.isoformat().replace("+00:00", "Z"),
+        bid=Decimal(bid),
+        ask=Decimal(ask),
+        spread=Decimal(ask) - Decimal(bid),
+        spread_pct=Decimal(spread_pct),
+        age_s=1.0,
+    )
+    return view.state_dict(), None
+
+
+# --- cost_gate_uses_live_fee_tier ------------------------------------------ #
+
+#: Two fee tiers far enough apart that the same candidate clears the hurdle under one
+#: and is refused under the other. Both are invented test data for a fake exchange and
+#: neither is a claim about Kraken's schedule - `AGENTS.md` rule 1: any remembered fee
+#: percentage is stale and must never be written into code. Nothing outside this
+#: criterion reads them, and the *engine* still gets its rates from the client.
+CHEAP_TIER = ("0.0005", "0.0010")
+EXPENSIVE_TIER = ("0.0025", "0.0045")
+
+#: The three numbers the cost gate needs that no Phase 3 engine publishes. Engine 8
+#: `prediction` and engine 9 `order_book` are Phase 5 and are C's own; the spread is
+#: engine 3's, which cannot be driven offline. Chosen so the *cheap* tier clears and
+#: the *expensive* tier does not: with `trading.hurdle_multiple` at 1.5 a candidate
+#: clears when `move > 2.5 x friction`, which 0.0100 does against the cheap tier's
+#: 0.0025 friction and does not against the expensive tier's 0.0080.
+CANDIDATE_MOVE_PCT = "0.0100"
+CANDIDATE_SLIPPAGE_PCT = "0.0005"
+CANDIDATE_SPREAD_PCT = "0.0005"
+
+
+def _cost_state(
+    exchange: Mapping[str, Any], contracts_mod: ModuleType, pair: str, quote: Any
+) -> dict[str, Any]:
+    """`state` as the opportunity chain would have it when engine 10 runs.
+
+    Every key comes from `cost/contracts.py`. That is the whole point: the audit's
+    four defects were all a *name* under `state["exchange"]`, and a criterion that
+    retyped those names would agree with whichever version of the engine it was
+    written against instead of catching the next disagreement.
+    """
+    scout_key, pair_field = contracts_mod.CANDIDATE_PAIR_PATH
+    return {
+        contracts_mod.EXCHANGE_KEY: dict(exchange),
+        scout_key: {pair_field: pair},
+        contracts_mod.MARKET_SENSOR_KEY: {
+            contracts_mod.MARKET_SENSOR_QUOTES_KEY: {pair: quote}
+        },
+        contracts_mod.PREDICTION_KEY: {"expected_move_pct": CANDIDATE_MOVE_PCT},
+        contracts_mod.ORDER_BOOK_KEY: {"estimated_slippage_pct": CANDIDATE_SLIPPAGE_PCT},
+    }
+
+
+def _cost_tick(
+    config: Any, contracts_mod: ModuleType, engine_cls: Any, maker: str, taker: str
+) -> tuple[Any, str, Outcome | None]:
+    """One `cost` tick against a fee tier the fake client reports. Returns (result, pair)."""
+    fake, problem = _fake_kraken()
+    if fake is None:
+        return None, "", problem
+    fake.set_fee_tier(tier=2, maker_fee_pct=maker, taker_fee_pct=taker)
+
+    exchange, context, problem = _exchange_payload(config, fake)
+    if exchange is None:
+        return None, "", problem
+    pair, _rule, why = _tradable_pair(exchange, contracts_mod)
+    if pair is None:
+        return None, "", failed(why)
+    quote, problem = _quote_payload(
+        pair, bid="99.95", ask="100.05", spread_pct=CANDIDATE_SPREAD_PCT
+    )
+    if quote is None:
+        return None, "", problem
+    state = _cost_state(exchange, contracts_mod, pair, quote)
+    return engine_cls().process(context, state), pair, None
+
+
+def check_cost_gate_uses_live_fee_tier(ctx: VerifyContext) -> Outcome:
+    """Net edge moves with the fee tier the client reports, and the gate blocks below
+    the hurdle.
+
+    **The comparison is the criterion.** A single tick would be satisfied by an engine
+    with the fee rate compiled into it, which is precisely what invariant 2 forbids and
+    what `AGENTS.md` opens by warning about. So the same candidate is run twice, and
+    the two net edges must differ by *exactly* the difference between the two tiers -
+    not merely differ, which a gate could achieve by reading anything at all that
+    happened to change.
+    """
+    with root_import_path(ctx.root):
+        contracts_mod, problem = try_import("acsoe.engines.cost.contracts")
+        if contracts_mod is None:
+            number, spec = PHASE3_ENGINES["cost"]
+            return _with_contract(
+                problem,
+                f"engine {number} `cost` does not exist yet ({spec})",
+                EXCHANGE_ENGINE_CONTRACT,
+            )
+        engine_cls, problem = _engine_class("acsoe.engines.cost.engine", "cost")
+        if engine_cls is None:
+            return problem or pending("engine 10 `cost` does not exist yet")
+
+        config, problem = _phase3_config()
+        if config is None:
+            return problem or pending("the committed config could not be loaded")
+
+        cheap, pair, problem = _cost_tick(config, contracts_mod, engine_cls, *CHEAP_TIER)
+        if cheap is None:
+            return problem or pending("engine 10 `cost` could not be driven")
+        expensive, _pair, problem = _cost_tick(
+            config, contracts_mod, engine_cls, *EXPENSIVE_TIER
+        )
+        if expensive is None:
+            return problem or pending("engine 10 `cost` could not be driven")
+
+        unavailable = getattr(contracts_mod, "REASON_INPUTS_UNAVAILABLE", None)
+        for result in (cheap, expensive):
+            data = result.data or {}
+            if unavailable is not None and data.get("reason_code") == unavailable:
+                number, spec = PHASE3_ENGINES["cost"]
+                return pending(
+                    f"engine {number} `cost` is not wired to engine 1 yet ({spec}): it "
+                    "answered " + repr(unavailable) + " against engine 1's own published "
+                    "payload rather than reaching a net-edge comparison. Its reason: "
+                    + repr(getattr(result, "reason", None))
+                )
+
+        try:
+            cheap_edge = as_decimal(cheap.data["net_edge_pct"], "cost.net_edge_pct")
+            dear_edge = as_decimal(expensive.data["net_edge_pct"], "cost.net_edge_pct")
+        except (KeyError, TypeError) as exc:
+            return failed(f"engine 10 published no usable net_edge_pct: {exc}")
+
+        expected_gap = (
+            Decimal(EXPENSIVE_TIER[0])
+            + Decimal(EXPENSIVE_TIER[1])
+            - Decimal(CHEAP_TIER[0])
+            - Decimal(CHEAP_TIER[1])
+        )
+        if cheap_edge == dear_edge:
+            return failed(
+                "the net edge did not move when the fee tier did: both tiers produced "
+                f"{cheap_edge}. The gate is not reading the fee tier the client "
+                "reported, and invariant 2 says a fee is never a constant."
+            )
+        if cheap_edge - dear_edge != expected_gap:
+            return failed(
+                "the net edge moved by "
+                + str(cheap_edge - dear_edge)
+                + " when the fee tier moved by "
+                + str(expected_gap)
+                + ". Something other than the reported fee is feeding the arithmetic."
+            )
+        if not bool(cheap.data.get("clears_hurdle")):
+            return failed(
+                "the candidate did not clear the hurdle on the cheap tier "
+                f"(net edge {cheap_edge}, hurdle {cheap.data.get('hurdle_pct')}). A gate "
+                "that refuses everything proves nothing about the fee tier."
+            )
+        if bool(expensive.data.get("clears_hurdle")):
+            return failed(
+                "the candidate still cleared the hurdle on the expensive tier "
+                f"(net edge {dear_edge}, hurdle {expensive.data.get('hurdle_pct')}); the "
+                "gate does not block below the hurdle."
+            )
+        if not getattr(expensive, "blocks_trading", False):
+            return failed(
+                "engine 10 reported the hurdle uncleared and still did not block the "
+                "tick. Invariant 5: a candidate that does not clear the hurdle is refused."
+            )
+
+    return passed(
+        f"{pair}: net edge {cheap_edge} at maker/taker {CHEAP_TIER[0]}/{CHEAP_TIER[1]} and "
+        f"{dear_edge} at {EXPENSIVE_TIER[0]}/{EXPENSIVE_TIER[1]}, moving by exactly the "
+        f"{expected_gap} fee difference; the cheap tier clears the hurdle and the "
+        "expensive tier is blocked"
+    )
+
+
+# --- risk_rejects_sub_ordermin --------------------------------------------- #
+
+
+def _risk_tick(
+    config: Any,
+    risk_contracts: ModuleType,
+    cost_contracts: ModuleType,
+    engine_cls: Any,
+    store_cls: Any,
+    db_path: Path,
+    *,
+    ordermin: str | None,
+) -> tuple[Any, str, Mapping[str, Any], Outcome | None]:
+    """One `risk` tick, optionally with the pair's `ordermin` overridden on the client.
+
+    The override goes on the **fake exchange**, not into `state`. `ordermin` is an
+    `AssetPairs` value and invariant 2 makes it a runtime fetch rather than a constant,
+    so a criterion that injected it into the payload would be exercising a path no live
+    tick takes - and would keep passing if `risk` stopped reading the pair rules at all.
+    """
+    fake, problem = _fake_kraken()
+    if fake is None:
+        return None, "", {}, problem
+    if ordermin is not None:
+        # Which pair gets chosen depends only on engine 1's fixtures and the balances,
+        # and the override touches neither, so it is the same pair as the first tick.
+        # It is still re-read below rather than assumed.
+        probe, _context, problem = _exchange_payload(config, fake)
+        if probe is None:
+            return None, "", {}, problem
+        probe_pair, _rule, why = _tradable_pair(probe, risk_contracts)
+        if probe_pair is None:
+            return None, "", {}, failed(why)
+        ordermin_field = getattr(risk_contracts, "PAIR_ORDERMIN_FIELD", "ordermin")
+        fake.set_pair_rule(probe_pair, **{ordermin_field: ordermin})
+
+    with store_cls(db_path) as store:
+        clients, problem = _fake_clients(kraken=fake, store=store)
+        if clients is None:
+            return None, "", {}, problem
+        context, problem = _engine_context(config, clients)
+        if context is None:
+            return None, "", {}, problem
+        module, problem = try_import("acsoe.engines.exchange.engine")
+        if module is None:
+            return None, "", {}, _with_contract(
+                problem, "engine 1 `exchange` does not exist yet", EXCHANGE_ENGINE_CONTRACT
+            )
+        exchange_cls = _engine_named(module, "exchange")
+        if exchange_cls is None:
+            return None, "", {}, pending(
+                "engine 1 `exchange` exposes no engine class - " + EXCHANGE_ENGINE_CONTRACT
+            )
+        exchange = exchange_cls().process(context, {}).data
+        if not isinstance(exchange, Mapping):
+            return None, "", {}, failed("engine 1 published no mapping into `state['exchange']`")
+        pair, rule, why = _tradable_pair(exchange, risk_contracts)
+        if pair is None:
+            return None, "", {}, failed(why)
+        quote, problem = _quote_payload(
+            pair, bid="99.95", ask="100.05", spread_pct=CANDIDATE_SPREAD_PCT
+        )
+        if quote is None:
+            return None, "", {}, problem
+        state = _cost_state(exchange, cost_contracts, pair, quote)
+        return engine_cls().process(context, state), pair, rule, None
+
+
+def check_risk_rejects_sub_ordermin(ctx: VerifyContext) -> Outcome:
+    """A size one increment below `ordermin` is refused, and no quantity comes back.
+
+    **The second half is the half that matters.** A criterion asserting only "no order
+    was placed" passes against an implementation that quietly rounds the size *up* to
+    `ordermin` and places it - which is a different trade from the one that was
+    assessed, at a size nothing sized. So this asserts the returned quantity is absent,
+    not merely that approval was withheld. It asserts the reason code too: this gate
+    blocks for five different reasons, and "it refused" does not say the minimum
+    refused it.
+
+    `ordermin` is never written down here. The engine is asked to size the candidate
+    once, and the pair's `ordermin` is then set one lot increment *above* whatever it
+    sized - so the refused quantity is exactly one increment below the minimum whatever
+    the sizing rules are, and the criterion cannot drift when those rules change.
+    """
+    with root_import_path(ctx.root):
+        risk_contracts, problem = try_import("acsoe.engines.risk.contracts")
+        if risk_contracts is None:
+            number, spec = PHASE3_ENGINES["risk"]
+            return _with_contract(
+                problem,
+                f"engine {number} `risk` does not exist yet ({spec})",
+                EXCHANGE_ENGINE_CONTRACT,
+            )
+        engine_cls, problem = _engine_class("acsoe.engines.risk.engine", "risk")
+        if engine_cls is None:
+            return problem or pending("engine 11 `risk` does not exist yet")
+        cost_contracts, problem = try_import("acsoe.engines.cost.contracts")
+        if cost_contracts is None:
+            return problem or pending("acsoe.engines.cost.contracts does not exist yet")
+        store_cls, problem = _store_class()
+        if store_cls is None:
+            return problem or pending("acsoe.clients.store.client does not exist yet")
+        config, problem = _phase3_config()
+        if config is None:
+            return problem or pending("the committed config could not be loaded")
+
+        unavailable = getattr(risk_contracts, "REASON_INPUTS_UNAVAILABLE", None)
+        lot_field = getattr(risk_contracts, "PAIR_LOT_DECIMALS_FIELD", "lot_decimals")
+        below_ordermin = getattr(risk_contracts, "REASON_BELOW_ORDERMIN", "below_ordermin")
+
+        with console_workspace() as tmp:
+            db_path, early = _phase3_seeded_db(ctx, tmp)
+            if db_path is None:
+                return early or pending("the Phase 0 seed is not available")
+
+            sized, pair, rule, problem = _risk_tick(
+                config,
+                risk_contracts,
+                cost_contracts,
+                engine_cls,
+                store_cls,
+                db_path,
+                ordermin=None,
+            )
+            if sized is None:
+                return problem or pending("engine 11 `risk` could not be driven")
+            data = dict(sized.data or {})
+            if unavailable is not None and data.get("reason_code") == unavailable:
+                number, spec = PHASE3_ENGINES["risk"]
+                return pending(
+                    f"engine {number} `risk` is not wired to engine 1 yet ({spec}): against "
+                    "engine 1's own published payload it answered "
+                    + repr(unavailable)
+                    + " rather than sizing. Its reason: "
+                    + repr(getattr(sized, "reason", None))
+                )
+            raw_qty = data.get("qty")
+            if raw_qty is None:
+                return failed(
+                    "engine 11 refused the candidate before `ordermin` had been tightened "
+                    "at all, so there is nothing to push one increment below it. Reason: "
+                    + repr(getattr(sized, "reason", None))
+                )
+            qty = as_decimal(raw_qty, "risk.qty")
+            increment = Decimal(1).scaleb(-int(rule.get(lot_field, 8)))
+            just_above = qty + increment
+
+            refused, pair, rule, problem = _risk_tick(
+                config,
+                risk_contracts,
+                cost_contracts,
+                engine_cls,
+                store_cls,
+                db_path,
+                ordermin=format(just_above, "f"),
+            )
+            if refused is None:
+                return problem or pending("engine 11 `risk` could not be driven")
+            rdata = dict(refused.data or {})
+
+        if bool(rdata.get("approved")):
+            return failed(
+                f"engine 11 approved {rdata.get('qty')} against an `ordermin` of "
+                f"{just_above}, one lot increment above it. Invariant 7: a size below the "
+                "exchange minimum is not tradable."
+            )
+        if rdata.get("qty") is not None:
+            return failed(
+                "engine 11 refused the candidate and still returned a quantity of "
+                + repr(rdata.get("qty"))
+                + ". A rejected candidate has no size. A quantity that survives a "
+                "rejection is one an executor can place, and a size rounded up to the "
+                "minimum is a different trade from the one that was assessed."
+            )
+        if rdata.get("reason_code") != below_ordermin:
+            return failed(
+                "engine 11 refused for "
+                + repr(rdata.get("reason_code"))
+                + " rather than "
+                + repr(below_ordermin)
+                + ". This gate blocks for five different reasons and the criterion cannot "
+                "tell it was the minimum that refused it."
+            )
+
+    return passed(
+        f"{pair}: sized {qty}, then refused at an `ordermin` of {just_above} - one lot "
+        f"increment ({increment}) above it - with reason {below_ordermin!r} and no "
+        "quantity returned"
+    )
+
+
+# --- universe_varies_with_balance ------------------------------------------ #
+
+
+def check_universe_varies_with_balance(ctx: VerifyContext) -> Outcome:
+    """The tradable universe is smaller at $10 than at $5,000, over one fixture set.
+
+    Both counts are asserted **and** asserted to differ. A criterion checking only
+    that the filter runs would pass against a filter that ignores the balance
+    entirely, and invariant 7's whole claim is that what the account can afford is
+    part of what is tradable.
+    """
+    with root_import_path(ctx.root):
+        contracts_mod, problem = try_import("acsoe.engines.scout.contracts")
+        if contracts_mod is None:
+            number, spec = PHASE3_ENGINES["scout"]
+            return _with_contract(
+                problem, f"engine {number} `scout` does not exist yet ({spec})", SCOUT_CONTRACT
+            )
+        # Read before the engine is imported. The criterion may not guess where the
+        # universe is published - guessing a key under another engine's payload is the
+        # audit's own defect - so an agreed `contracts.py` is the precondition for
+        # anything else here, engine included.
+        universe_key = getattr(contracts_mod, "UNIVERSE_FIELD", None)
+        if universe_key is None:
+            return pending(
+                "acsoe.engines.scout.contracts declares no UNIVERSE_FIELD naming where the "
+                "universe is published - " + SCOUT_CONTRACT
+            )
+        engine_cls, problem = _engine_class("acsoe.engines.scout.engine", "scout")
+        if engine_cls is None:
+            return problem or pending("engine 7 `scout` does not exist yet - " + SCOUT_CONTRACT)
+        config, problem = _phase3_config()
+        if config is None:
+            return problem or pending("the committed config could not be loaded")
+
+        counts: dict[str, int] = {}
+        for label, balance in (("small", "10.00"), ("large", "5000.00")):
+            fake, problem = _fake_kraken()
+            if fake is None:
+                return problem or pending("the fake Kraken client is unavailable")
+            exchange, context, problem = _exchange_payload(config, fake)
+            if exchange is None:
+                return problem or pending("engine 1 `exchange` could not be driven")
+            quote_currencies = {
+                str(rule.get("quote"))
+                for rule in (exchange.get("pair_rules") or {}).get("pairs", {}).values()
+                if isinstance(rule, Mapping)
+            }
+            fake.set_balances(dict.fromkeys(sorted(quote_currencies), balance))
+            exchange, context, problem = _exchange_payload(config, fake)
+            if exchange is None:
+                return problem or pending("engine 1 `exchange` could not be driven")
+
+            state: dict[str, Any] = {getattr(contracts_mod, "EXCHANGE_KEY", "exchange"): exchange}
+            result = engine_cls().process(context, state)
+            published = (result.data or {}).get(universe_key)
+            if published is None:
+                return failed(
+                    f"engine 7 published no {universe_key!r} at the ${balance} balance; "
+                    "the universe is what every later gate iterates over"
+                )
+            counts[label] = len(published)
+
+        if counts["small"] == counts["large"]:
+            return failed(
+                f"the universe held {counts['small']} pair(s) at $10 and the same "
+                f"{counts['large']} at $5,000. Invariant 7 makes affordability part of "
+                "tradability, so a filter that ignores the balance is not filtering on it."
+            )
+        if counts["small"] > counts["large"]:
+            return failed(
+                f"the universe was larger at $10 ({counts['small']}) than at $5,000 "
+                f"({counts['large']}). More money cannot make fewer pairs tradable."
+            )
+
+    return passed(
+        f"{counts['small']} pair(s) tradable at a $10 balance and {counts['large']} at "
+        "$5,000, over the same fixture set"
+    )
+
+
+# --- the three `safety` criteria ------------------------------------------- #
+#
+# All three drive B's real `SafetyEngine` over the Phase 0 seed through B's real
+# `StoreClient`. None of them touches a live engine 19 `memory`, which is Phase 4 and
+# writes every one of `safety`'s six inputs - the seed exists to resolve exactly that
+# forward dependency.
+#
+# The tick is anchored at `(run_id, cycle_id)` deliberately in each case, because that
+# anchor is what the outage walk means by "consecutive through T-1". Anchoring at a
+# `cycle_id` above 1 under a `run_id` the seed does not carry says "the previous tick
+# was clean and wrote no block record", which ends the seeded outage; anchoring at
+# cycle 1 says "this is the first tick of a new process", which the walk is required
+# to treat as continuing an outage across a restart. Criterion 4 needs the first and
+# criterion 5 needs the second, and they are not interchangeable.
+
+
+def _phase3_seeded_db(ctx: VerifyContext, tmp: Path) -> tuple[Path | None, Outcome | None]:
+    """The Phase 0 seed, scaled against **the committed config's** thresholds.
+
+    Not `seeded_console_db`, which passes no `thresholds` and therefore gets `seed.py`'s
+    module defaults - documented as "fixture-shape constants, not recommended values",
+    and already diverged: the default `max_errors_in_window` is 10 where the config says
+    20, so the default-scaled seed carries 13 ERROR rows, overshooting 10 and sitting
+    under 20. The console criteria do not care what the thresholds are; these three care
+    a great deal, and seeding to a constant while asserting against the config is the
+    defect spec 13 names - a fixture pinned to a literal stops overshooting the moment
+    the operator raises a limit, and the criterion then accuses the seed of a bug the
+    criterion caused. `check_seed_fixtures_present` takes this same path.
+    """
+    config, problem = load_config(ctx.root)
+    if config is None:
+        return None, problem or pending("config/default.yaml does not exist yet")
+    thresholds, early = required_thresholds(
+        config,
+        [KEY_MAX_DATA_BLOCKS, KEY_MAX_DRAWDOWN, KEY_MAX_LOSSES, KEY_MAX_ERRORS, KEY_ERROR_WINDOW],
+    )
+    if early is not None:
+        return None, early
+
+    seed_mod, problem = try_import("acsoe.clients.store.seed")
+    if seed_mod is None:
+        return None, problem or pending("acsoe.clients.store.seed does not exist yet")
+    seed_fn, missing = module_attr(seed_mod, "seed_database")
+    if seed_fn is None:
+        return None, pending(missing)
+    seed_kwargs, mismatch = _seed_threshold_kwargs(
+        seed_mod,
+        seed_fn,
+        {
+            "max_consecutive_data_blocks": int(thresholds[KEY_MAX_DATA_BLOCKS]),
+            "max_drawdown_pct": as_decimal(thresholds[KEY_MAX_DRAWDOWN], KEY_MAX_DRAWDOWN),
+            "max_consecutive_losses": int(thresholds[KEY_MAX_LOSSES]),
+            "max_errors_in_window": int(thresholds[KEY_MAX_ERRORS]),
+            "error_rate_window_s": int(thresholds[KEY_ERROR_WINDOW]),
+        },
+    )
+    if mismatch is not None:
+        return None, mismatch
+
+    db_path = tmp / "acsoe.sqlite"
+    seed_fn(db_path, **seed_kwargs)
+    if not db_path.is_file():
+        return None, failed("seed_database created no database file")
+    return db_path, None
+
+
+def _seed_workspace(ctx: VerifyContext, tmp: Path) -> tuple[Path | None, Any, Outcome | None]:
+    """The config-scaled Phase 0 seed, plus the `Config` the engines are handed."""
+    config, problem = _phase3_config()
+    if config is None:
+        return None, None, problem or pending("the committed config could not be loaded")
+    db_path, early = _phase3_seeded_db(ctx, tmp)
+    if db_path is None:
+        return None, None, early or pending("the Phase 0 seed is not available")
+    return db_path, config, None
+
+
+def _store_class() -> tuple[Any, Outcome | None]:
+    module, problem = try_import("acsoe.clients.store.client")
+    if module is None:
+        return None, problem or pending("acsoe.clients.store.client does not exist yet")
+    cls, missing = module_attr(module, "StoreClient")
+    if cls is None:
+        return None, pending(missing)
+    return cls, None
+
+
+def _safety_state(
+    *, cycle_id: int, blocked_by: str | None = None, close_intent: bool = False
+) -> dict[str, Any]:
+    """`state` as the guard chain has it when engine 17 runs.
+
+    `position_manager` and `exit` are never set, and their absence is the point: the
+    manage chain runs *after* the guard chain, so a fixture that supplied them would
+    be handing the engine a state the orchestrator cannot produce - and would let an
+    engine that read them pass a criterion asserting it does not.
+    """
+    state: dict[str, Any] = {
+        "system": {"mode": "running", "close_intent": close_intent},
+        "cycle_id": cycle_id,
+        "guard_blockers": [],
+    }
+    if blocked_by is not None:
+        state["trading_blocked_by"] = blocked_by
+        state["block_reason"] = "seeded outage"
+    return state
+
+
+def _safety_command_rows(db_path: Path, contracts_mod: ModuleType) -> list[str]:
+    """Every command `safety` has ever written, oldest first, claimed or not.
+
+    Read from the table rather than through `store.pending_commands()`, which returns
+    the *queue*. The orchestrator's command reader claims and consumes at the top of
+    every tick, so a criterion that ticks a daemon and then asks the queue what was
+    written sees an empty list the moment the daemon obeys - "every row was consumed"
+    and "no row was written" are the same answer there, and they are opposite verdicts.
+    `check_commands_round_trip` reads the table directly for the same reason.
+
+    The console's rows are a different source and are excluded, using B's enum value
+    rather than the literal `'safety'`.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT command FROM commands WHERE source = ? ORDER BY id",
+            (str(contracts_mod.CommandSource.SAFETY),),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [str(row[0]) for row in rows]
+
+
+def _drawdown_action_is_freeze(safety_contracts: ModuleType) -> bool:
+    """Whether spec 37's ruling has reached `CONDITION_ACTION` yet."""
+    table = getattr(safety_contracts, "CONDITION_ACTION", None)
+    condition = getattr(safety_contracts, "SafetyCondition", None)
+    action = getattr(safety_contracts, "SafetyAction", None)
+    if table is None or condition is None or action is None:
+        return False
+    return table.get(condition.DRAWDOWN) is action.FREEZE
+
+
+SPEC_42_PENDING = (
+    "engine 17 `safety` has not been ratified against the spec 37 ruling yet (spec 42): "
+    "CONDITION_ACTION still maps DRAWDOWN to an escalation. Invariant 14 as rewritten "
+    "escalates on one condition only, a sustained data outage; drawdown, loss streak and "
+    "error rate all write `freeze`. This criterion starts judging behaviour the moment "
+    "that table says FREEZE, and will fail a `close_all` emitted on the seeded drawdown"
+)
+
+
+def check_safety_freezes_on_drawdown_without_opportunity_chain(ctx: VerifyContext) -> Outcome:
+    """The breaker freezes on the seeded drawdown on a tick the opportunity chain never
+    reached, and writes nothing on the ticks after it.
+
+    **It runs in a real orchestrator with an empty opportunity chain**, rather than by
+    calling `process` directly. "Not gated behind the other gates" is a claim about
+    placement, and placement is the orchestrator's, so a criterion that called the
+    engine itself would be asserting the thing it wanted to prove.
+
+    The absence of the `close_all` is asserted as well as the presence of the `freeze`,
+    and it is not vacuous: the seed carries open positions and resting entry orders, so
+    invariant 14's escalation precondition is satisfied and an engine that still read
+    drawdown as an escalation would emit one here.
+    """
+    with root_import_path(ctx.root):
+        safety_contracts, problem = try_import("acsoe.engines.safety.contracts")
+        if safety_contracts is None:
+            return _engine_absent(problem, "safety")
+        engine_cls, problem = _engine_class("acsoe.engines.safety.engine", "safety")
+        if engine_cls is None:
+            return problem or pending("engine 17 `safety` does not exist yet")
+        store_contracts, problem = try_import("acsoe.clients.store.contracts")
+        if store_contracts is None:
+            return problem or pending("acsoe.clients.store.contracts does not exist yet")
+        if not _drawdown_action_is_freeze(safety_contracts):
+            return pending(SPEC_42_PENDING)
+
+        store_cls, problem = _store_class()
+        if store_cls is None:
+            return problem or pending("acsoe.clients.store.client does not exist yet")
+        orch_mod, problem = try_import("acsoe.core.orchestrator")
+        if orch_mod is None:
+            return problem or pending("acsoe.core.orchestrator does not exist yet")
+        core_mod, problem = try_import("acsoe.core.contracts")
+        if core_mod is None:
+            return problem or pending("acsoe.core.contracts does not exist yet")
+        orch_cls, missing = module_attr(orch_mod, "Orchestrator")
+        if orch_cls is None:
+            return pending(missing)
+        chains_cls, missing = module_attr(core_mod, "Chains")
+        if chains_cls is None:
+            return pending(missing)
+
+        with console_workspace() as tmp:
+            db_path, config, early = _seed_workspace(ctx, tmp)
+            if db_path is None:
+                return early or pending("the Phase 0 seed is not available")
+
+            # The seed's `data_guard` run is the newest thing in `block_records` and is
+            # three ticks past the outage limit, so on any tick it also trips the
+            # outage - which *is* an escalation, correctly, and would emit the very
+            # `close_all` this criterion asserts the absence of. Deleting that run from
+            # this copy of the seed is what isolates the drawdown, and it is the only
+            # way to ask the question at all: with two escalating conditions live, an
+            # engine that had never been corrected would be indistinguishable from one
+            # that had. Everything the criterion actually reads - the drawdown series,
+            # the losing streak, the open positions, the resting orders - is untouched,
+            # and the outage is criterion 5's subject, tested there against the seed's
+            # own rows.
+            # Read before the deletion: `_seed_now` takes the newest `block_records`
+            # timestamp, and the rows about to go are the newest ones.
+            seed_now = _seed_now(db_path)
+            outage = _seeded_outage_ticks(db_path)
+            _truncate_outage_to(db_path, outage, 0)
+
+            with store_cls(db_path) as store:
+                exposure = _seed_exposure(db_path, store_contracts)
+                if exposure == (0, 0):
+                    return failed(
+                        "the Phase 0 seed carries neither an open position nor a resting "
+                        "entry order, so the absence of a `close_all` here would prove "
+                        "nothing: invariant 14 gates escalation on exposure"
+                    )
+                # A list, sliced by length below, never a set difference: the seed
+                # may already carry a `safety` row, and a set difference would report
+                # a second identical command as nothing having happened.
+                before = _safety_command_rows(db_path, store_contracts)
+                clients, problem = _fake_clients(store=store)
+                if clients is None:
+                    return problem or pending("test doubles unavailable")
+                # The operator presses Activate first, through the real `commands`
+                # table. A daemon starts `idle` and never restores its mode, and
+                # freezing a system that is not running is correctly a no-op - so
+                # without this the criterion would be asking whether the breaker stops
+                # a system that was already stopped, which nothing can answer. The row
+                # is written the way the console writes it and applied by the real
+                # command reader at the top of the first tick.
+                _append_command(
+                    store, store_contracts, "activate", int(seed_now.timestamp() * 1_000_000)
+                )
+                orchestrator = orch_cls(
+                    config=config,
+                    clock=_RoundTripClock(seed_now),
+                    clients=clients,
+                    chains=chains_cls(guard=(engine_cls(),)),
+                )
+                # Three ticks, all with an empty opportunity chain. The first must
+                # emit; the rest must not, or a sustained drawdown appends a row every
+                # sixty seconds forever.
+                first = orchestrator.tick()
+                orchestrator.tick()
+                orchestrator.tick()
+                mode = orchestrator.system.get("mode")
+                emitted = _safety_command_rows(db_path, store_contracts)[len(before) :]
+                published = first.get("safety") or {}
+
+        tripped = list(published.get("tripped") or [])
+        drawdown = str(safety_contracts.SafetyCondition.DRAWDOWN)
+        freeze = str(store_contracts.CommandName.FREEZE)
+        close_all = str(store_contracts.CommandName.CLOSE_ALL)
+
+        if drawdown not in tripped:
+            return failed(
+                "the seeded drawdown did not trip the breaker on a tick where the "
+                f"opportunity chain never ran; it reported {tripped}"
+            )
+        if close_all in emitted:
+            return failed(
+                "the seeded drawdown emitted `close_all`. Spec 37's ruling makes the "
+                "sustained data outage the only escalation; drawdown writes `freeze`. "
+                f"Commands written: {emitted}"
+            )
+        if freeze not in emitted:
+            return failed(
+                "the breaker tripped on the seeded drawdown and wrote no `freeze` row. "
+                "Its BLOCK stops one tick; the row is what makes the decision persist "
+                f"across the restart. Commands written: {emitted}"
+            )
+        if len(emitted) != 1:
+            return failed(
+                f"three ticks with the condition unchanged wrote {len(emitted)} rows "
+                f"({emitted}). A breaker that re-emits while the condition persists "
+                "appends a row every tick forever."
+            )
+
+        if mode != "frozen":
+            return failed(
+                "three ticks after the breaker wrote its `freeze` the daemon still reads "
+                f"mode={mode!r}. The row is only a record until the command reader "
+                "applies it; a breaker whose decision never reaches `state['system']` "
+                "has not stopped anything."
+            )
+
+    return passed(
+        "the seeded drawdown froze the system on a tick with an empty opportunity chain "
+        f"(tripped: {', '.join(tripped)}); one `freeze` row over three ticks, no "
+        f"`close_all`, and the daemon reached `{mode}` - against a seed carrying "
+        f"{exposure[0]} open position(s) and {exposure[1]} resting entry order(s)"
+    )
+
+
+def _seed_exposure(db_path: Path, store_contracts: ModuleType) -> tuple[int, int]:
+    """(open positions, resting entry orders) in the seed - invariant 14's precondition.
+
+    The three status values are taken from B's real enums rather than written into the
+    SQL. They are lowercase in the schema and the first draft of this helper spelled
+    them `'OPEN'` and `'RESTING'`, which matched nothing and reported an unexposed seed
+    - and an unexposed seed is a state both `safety` criteria are written to refuse, so
+    the mistake surfaced as two confident FAILs accusing the seed. A criterion that
+    retypes a contract can be wrong about it in exactly the way this phase exists to
+    correct.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        positions = _count(
+            conn,
+            "SELECT COUNT(*) FROM positions WHERE status = ?",
+            (str(store_contracts.PositionStatus.OPEN),),
+        )
+        orders = _count(
+            conn,
+            "SELECT COUNT(*) FROM orders WHERE status = ? AND intent = ?",
+            (
+                str(store_contracts.OrderStatus.RESTING),
+                str(store_contracts.OrderIntent.ENTRY),
+            ),
+        )
+    finally:
+        conn.close()
+    return positions, orders
+
+
+def _seed_now(db_path: Path) -> datetime:
+    """The seed's own most recent instant, as the clock a criterion should run at.
+
+    `safety`'s error-rate input is "ERROR rows inside the configured window counted
+    back from `context.now`", so a criterion that picks its own instant and then
+    compares against the seed counts zero rows on both sides and calls that agreement.
+    The seed is generated from a fixed seed value, so this is as deterministic as a
+    literal - it is simply the fixture's instant rather than one chosen beside it.
+
+    Falls back to :data:`PHASE3_NOW` on an empty table: a criterion whose subject has
+    no rows has other problems, and they are its own to report.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute("SELECT MAX(ts) FROM block_records").fetchone()
+    finally:
+        conn.close()
+    if row is None or row[0] is None:
+        return PHASE3_NOW
+    return datetime.fromtimestamp(int(row[0]) / 1_000_000, tz=UTC)
+
+
+def _seeded_outage_ticks(db_path: Path) -> list[tuple[str, int]]:
+    """The seed's longest run of consecutive `data_guard` ticks, oldest first.
+
+    Ordered by `ts` and grouped by `(run_id, cycle_id)`, for the reasons
+    `_seeded_block_run` spells out: `cycle_id` restarts at 1 with each process and the
+    seed reuses values across two runs on purpose, and a tick two guards blocked
+    contributes one.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT run_id,
+                   cycle_id,
+                   MIN(ts) AS ts,
+                   MAX(CASE WHEN blocked_by = 'data_guard' THEN 1 ELSE 0 END) AS has_guard
+            FROM block_records
+            GROUP BY run_id, cycle_id
+            ORDER BY ts, run_id, cycle_id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    best: list[tuple[str, int]] = []
+    current: list[tuple[str, int]] = []
+    for row in rows:
+        if int(row["has_guard"]):
+            current.append((str(row["run_id"]), int(row["cycle_id"])))
+            if len(current) > len(best):
+                best = list(current)
+        else:
+            current = []
+    return best
+
+
+def _truncate_outage_to(db_path: Path, ticks: Sequence[tuple[str, int]], keep: int) -> None:
+    """Delete the seeded outage's trailing ticks so the run is exactly `keep` long.
+
+    The rows that remain are the seed's own rows - this shortens the fixture, it does
+    not write a new one. The seed overshoots every threshold by three deliberately, so
+    that a fixture pinned to a literal cannot stop overshooting when the operator
+    raises a limit; that is right for proving the breaker fires and it makes the seed
+    incapable of ever sitting **at** the boundary, which is exactly what "and not one
+    tick before" has to test.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executemany(
+            "DELETE FROM block_records WHERE run_id = ? AND cycle_id = ?",
+            [(run_id, cycle_id) for run_id, cycle_id in ticks[keep:]],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def check_safety_escalates_on_sustained_outage(ctx: VerifyContext) -> Outcome:
+    """`close_all` on the tick after the limit, and nothing on the tick at it.
+
+    Both halves, because a criterion asserting only the escalation passes against an
+    implementation that fires a tick early - and firing early liquidates an account
+    over an outage that has not reached the threshold the operator chose.
+
+    Counted from the seeded `block_records` and from nothing else. Engine 19 `memory`
+    writes those rows in Phase 4 and Phase 3 may not depend on it. The seed's outage
+    run is longer than the limit by design, so it cannot sit at the boundary; the
+    fixture is shortened to `limit - 1` and then to `limit` trailing ticks, using the
+    seed's own rows, and the boundary is read off the engine.
+    """
+    with root_import_path(ctx.root):
+        safety_contracts, problem = try_import("acsoe.engines.safety.contracts")
+        if safety_contracts is None:
+            return _engine_absent(problem, "safety")
+        engine_cls, problem = _engine_class("acsoe.engines.safety.engine", "safety")
+        if engine_cls is None:
+            return problem or pending("engine 17 `safety` does not exist yet")
+        store_contracts, problem = try_import("acsoe.clients.store.contracts")
+        if store_contracts is None:
+            return problem or pending("acsoe.clients.store.contracts does not exist yet")
+        store_cls, problem = _store_class()
+        if store_cls is None:
+            return problem or pending("acsoe.clients.store.client does not exist yet")
+
+        config, problem = _phase3_config()
+        if config is None:
+            return problem or pending("the committed config could not be loaded")
+        limit = config.get(KEY_MAX_DATA_BLOCKS)
+        if limit is None:
+            return pending(_unset_key_message(KEY_MAX_DATA_BLOCKS))
+        limit = int(limit)
+
+        outage = str(safety_contracts.SafetyCondition.DATA_OUTAGE)
+        close_all = str(store_contracts.CommandName.CLOSE_ALL)
+        readings: dict[str, Any] = {}
+
+        for label, keep in (("at the limit", limit - 1), ("past the limit", limit)):
+            with console_workspace() as tmp:
+                db_path, _config, early = _seed_workspace(ctx, tmp)
+                if db_path is None:
+                    return early or pending("the Phase 0 seed is not available")
+                ticks = _seeded_outage_ticks(db_path)
+                if len(ticks) < limit:
+                    return failed(
+                        f"the Phase 0 seed's longest `data_guard` run is {len(ticks)} tick(s) "
+                        f"and `safety.max_consecutive_data_blocks` is {limit}. The seed is "
+                        "supposed to overshoot every threshold; this criterion cannot reach "
+                        "the boundary from it."
+                    )
+                seed_now = _seed_now(db_path)
+                exposure = _seed_exposure(db_path, store_contracts)
+                if exposure == (0, 0):
+                    return failed(
+                        "the Phase 0 seed carries no open position and no resting entry "
+                        "order, so invariant 14's escalation precondition is absent and no "
+                        "`close_all` could be emitted whatever the outage did"
+                    )
+                _truncate_outage_to(db_path, ticks, keep)
+                anchor_run, anchor_cycle = ticks[keep - 1]
+
+                with store_cls(db_path) as store:
+                    before = _safety_command_rows(db_path, store_contracts)
+                    clients, problem = _fake_clients(store=store)
+                    if clients is None:
+                        return problem or pending("test doubles unavailable")
+                    context, problem = _engine_context(
+                        config, clients, run_id=anchor_run, now=seed_now
+                    )
+                    if context is None:
+                        return problem or pending("acsoe.core.contracts does not exist yet")
+                    result = engine_cls().process(
+                        context,
+                        _safety_state(cycle_id=anchor_cycle + 1, blocked_by="data_guard"),
+                    )
+                    emitted = _safety_command_rows(db_path, store_contracts)[len(before) :]
+                    data = result.data or {}
+                    readings[label] = {
+                        "tripped": list(data.get("tripped") or []),
+                        "effective": data.get("consecutive_data_blocks"),
+                        "emitted": emitted,
+                    }
+
+        at_limit = readings["at the limit"]
+        past_limit = readings["past the limit"]
+
+        if at_limit["effective"] != limit:
+            return failed(
+                f"the tick at the limit counted {at_limit['effective']} consecutive blocked "
+                f"tick(s), not {limit}. The count is `stored through T-1` plus this tick, "
+                "and the criterion cannot judge the boundary if it is not standing on it."
+            )
+        if outage in at_limit["tripped"]:
+            return failed(
+                f"the outage tripped at exactly {limit} consecutive blocked ticks. "
+                "Invariant 14 says 'more than', so the limit itself must not fire - firing "
+                "a tick early liquidates an account over an outage that has not reached "
+                "the operator's threshold."
+            )
+        if close_all in at_limit["emitted"]:
+            return failed(
+                "a `close_all` was written on the tick at the limit: "
+                f"{at_limit['emitted']}"
+            )
+        if past_limit["effective"] != limit + 1:
+            return failed(
+                f"the tick past the limit counted {past_limit['effective']}, not {limit + 1}"
+            )
+        if outage not in past_limit["tripped"]:
+            return failed(
+                f"{limit + 1} consecutive blocked ticks did not trip the outage; it "
+                f"reported {past_limit['tripped']}. The breaker never fires."
+            )
+        if close_all not in past_limit["emitted"]:
+            return failed(
+                "the outage tripped past the limit and no `close_all` was written. Per "
+                "the spec 37 ruling the sustained outage is the one condition that "
+                f"escalates. Commands written: {past_limit['emitted']}"
+            )
+
+    return passed(
+        f"counted from the seeded block_records: {limit} consecutive blocked tick(s) "
+        f"does not trip the outage and writes no `close_all`; {limit + 1} trips it and "
+        f"writes one, against a seed carrying {exposure[0]} open position(s) and "
+        f"{exposure[1]} resting entry order(s)"
+    )
+
+
+#: What `safety` must read from the store, and the seeded value each one has to match.
+#: The criterion computes every right-hand side straight from the seeded tables by SQL,
+#: so a reading that agrees is a reading that came from those rows.
+SAFETY_INPUT_FIELDS: Final[tuple[str, ...]] = (
+    "drawdown_pct",
+    "consecutive_losses",
+    "errors_in_window",
+    "stored_data_blocks",
+    "open_positions",
+    "resting_entry_orders",
+)
+
+#: Values a `state` payload would carry if `safety` read one. Deliberately plausible
+#: and deliberately wrong: an engine reading engine 19 out of `state` would report
+#: these instead of the seed's, and every one of them is far enough from the seeded
+#: value that agreement cannot be a coincidence.
+POISONED_STATE: Final[Mapping[str, Any]] = {
+    "position_manager": {
+        "open_positions": 99,
+        "positions": [],
+        "resting_entry_orders": 99,
+        "hold_reason": None,
+    },
+    "exit": {"positions_closed": True},
+    "memory": {
+        "drawdown_pct": "0.99",
+        "consecutive_losses": 99,
+        "errors_in_window": 99,
+        "stored_data_blocks": 99,
+    },
+}
+
+
+def check_safety_inputs_all_from_the_seed(ctx: VerifyContext) -> Outcome:
+    """Every one of `safety`'s six inputs comes from the store, and none from `state`.
+
+    Two independent proofs, because either alone is satisfiable by the wrong engine.
+
+    **The readings match the seeded tables.** Each of the six is recomputed here
+    straight from the seeded SQL and compared with what the engine reported. A reading
+    that agrees with a number this criterion derived from the rows is a reading that
+    came from those rows.
+
+    **The readings do not move when `state` is poisoned.** The same tick is run again
+    with `state["position_manager"]`, `state["exit"]` and `state["memory"]` carrying
+    plausible, wrong values of the same six quantities. An engine reading any of them
+    from `state` reports a different number the second time. This is the half that
+    catches a *live engine 19* being read: engine 19 is Phase 4 and the seed exists to
+    resolve that forward dependency, so a Phase 3 gate that reached for it would still
+    pass every test written against a database.
+    """
+    with root_import_path(ctx.root):
+        engine_cls, problem = _engine_class("acsoe.engines.safety.engine", "safety")
+        if engine_cls is None:
+            return problem or pending("engine 17 `safety` does not exist yet")
+        store_contracts, problem = try_import("acsoe.clients.store.contracts")
+        if store_contracts is None:
+            return problem or pending("acsoe.clients.store.contracts does not exist yet")
+        store_cls, problem = _store_class()
+        if store_cls is None:
+            return problem or pending("acsoe.clients.store.client does not exist yet")
+        config, problem = _phase3_config()
+        if config is None:
+            return problem or pending("the committed config could not be loaded")
+        window_s = config.get(KEY_ERROR_WINDOW)
+        if window_s is None:
+            return pending(_unset_key_message(KEY_ERROR_WINDOW))
+
+        with console_workspace() as tmp:
+            db_path, _config, early = _seed_workspace(ctx, tmp)
+            if db_path is None:
+                return early or pending("the Phase 0 seed is not available")
+
+            seed_now = _seed_now(db_path)
+            seed_now_us = int(seed_now.timestamp() * 1_000_000)
+            conn = sqlite3.connect(db_path)
+            try:
+                seeded = {
+                    "drawdown_pct": _seeded_max_drawdown(conn),
+                    "consecutive_losses": _seeded_losing_streak(conn),
+                    "errors_in_window": _seeded_error_blocks(
+                        conn, seed_now_us - int(window_s) * MICROSECONDS
+                    ),
+                }
+            finally:
+                conn.close()
+            positions, orders = _seed_exposure(db_path, store_contracts)
+            seeded["open_positions"] = positions
+            seeded["resting_entry_orders"] = orders
+            seeded["stored_data_blocks"] = len(_seeded_outage_ticks(db_path))
+
+            readings: dict[str, dict[str, Any]] = {}
+            for label, extra in (("clean", {}), ("poisoned", POISONED_STATE)):
+                with store_cls(db_path) as store:
+                    clients, problem = _fake_clients(store=store)
+                    if clients is None:
+                        return problem or pending("test doubles unavailable")
+                    # Cycle 1 under a `run_id` the seed does not carry: the first tick
+                    # of a new process, which the outage walk is required to treat as
+                    # continuing an outage across a restart rather than resetting it.
+                    # That is what makes the whole seeded run visible to the reading
+                    # this criterion checks. Anchoring under one of the seed's own
+                    # `run_id`s instead makes the walk refuse to cross into itself and
+                    # reports zero, which is correct behaviour and the wrong question.
+                    context, problem = _engine_context(config, clients, now=seed_now)
+                    if context is None:
+                        return problem or pending("acsoe.core.contracts does not exist yet")
+                    state = _safety_state(cycle_id=1)
+                    state.update(copy.deepcopy(dict(extra)))
+                    result = engine_cls().process(context, state)
+                    readings[label] = dict(result.data or {})
+
+        missing = [f for f in SAFETY_INPUT_FIELDS if f not in readings["clean"]]
+        if missing:
+            return failed(
+                "engine 17 published no reading for " + ", ".join(missing) + ". Every one "
+                "of the six is a `commands`-table decision's evidence and the console "
+                "renders them; a breaker that does not report what it read cannot be audited."
+            )
+
+        for field in SAFETY_INPUT_FIELDS:
+            reported = readings["clean"][field]
+            expected = seeded[field]
+            same = (
+                as_decimal(reported, f"safety.{field}") == expected
+                if isinstance(expected, Decimal)
+                else int(reported) == int(expected)
+            )
+            if not same:
+                return failed(
+                    f"engine 17 reported {field} = {reported!r}; the seeded tables say "
+                    f"{expected!r}. That reading did not come from the Phase 0 seed."
+                )
+
+        moved = [
+            field
+            for field in SAFETY_INPUT_FIELDS
+            if readings["poisoned"].get(field) != readings["clean"].get(field)
+        ]
+        if moved:
+            return failed(
+                "poisoning `state` with a plausible engine 19 payload changed "
+                + ", ".join(moved)
+                + ". Every one of `safety`'s six inputs is a store read: engine 19 is "
+                "Phase 4, it runs in the manage chain *after* the guard chain even once "
+                "it exists, and `state` cannot carry those values when engine 17 runs."
+            )
+
+    return passed(
+        "all six inputs match the seeded tables (drawdown "
+        + str(seeded["drawdown_pct"])
+        + f", {seeded['consecutive_losses']} losing trade(s), "
+        + f"{seeded['errors_in_window']} error block(s), {seeded['stored_data_blocks']} "
+        + f"outage tick(s), {seeded['open_positions']} position(s), "
+        + f"{seeded['resting_entry_orders']} resting order(s)) and none of them moved "
+        "when state was poisoned with an engine 19 payload"
+    )
+
+
+# --- phase_3_gates_have_both_tests ----------------------------------------- #
+
+#: Where each Phase 3 gate's tests live. Each agent owns `tests/` mirroring the source
+#: it owns, so these are B's files; this criterion reads them and never writes one.
+PHASE3_TEST_FILES: Final[Mapping[str, str]] = {
+    "scout": "tests/engines/test_scout.py",
+    "cost": "tests/engines/test_cost.py",
+    "risk": "tests/engines/test_risk.py",
+    "safety": "tests/engines/test_safety.py",
+}
+
+#: Read as "this test asserts the gate refused" and "this test asserts it allowed".
+#: Matched against the parsed syntax tree rather than the test's name: a name is a
+#: label the author chose and `test_it_blocks_on_a_wide_spread` can assert nothing at
+#: all, whereas an `EngineStatus.BLOCK` in a comparison is the assertion itself.
+BLOCK_MARKERS: Final[tuple[str, ...]] = ("BLOCK",)
+PASS_MARKERS: Final[tuple[str, ...]] = ("OK",)
+
+
+def _test_directions(path: Path) -> tuple[int, int, str]:
+    """How many tests in `path` assert a block, and how many assert a pass.
+
+    Counted from the AST. Every `EngineStatus.<NAME>` attribute access inside a
+    `def test_*` body is collected, along with `blocks_trading` compared against a
+    boolean, and a test is counted in a direction when it carries a marker for it. A
+    test carrying both - a parametrised one covering the gate in both directions -
+    counts for both, which is correct: the criterion asks whether the behaviour is
+    exercised, not how many functions it took.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError) as exc:
+        return 0, 0, f"{path.name} could not be parsed: {exc}"
+
+    blocking = 0
+    passing = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not node.name.startswith("test_"):
+            continue
+        statuses = {
+            child.attr
+            for child in ast.walk(node)
+            if isinstance(child, ast.Attribute)
+            and isinstance(child.value, ast.Name)
+            and child.value.id == "EngineStatus"
+        }
+        blocks_flags = {
+            bool(sibling.value)
+            for child in ast.walk(node)
+            if isinstance(child, ast.Compare)
+            for operand in [child.left, *child.comparators]
+            for sibling in ast.walk(child)
+            if isinstance(sibling, ast.Constant)
+            and isinstance(sibling.value, bool)
+            and isinstance(operand, ast.Attribute)
+            and operand.attr == "blocks_trading"
+        }
+        if statuses & set(BLOCK_MARKERS) or True in blocks_flags:
+            blocking += 1
+        if statuses & set(PASS_MARKERS) or False in blocks_flags:
+            passing += 1
+    return blocking, passing, ""
+
+
+def check_phase_3_gates_have_both_tests(ctx: VerifyContext) -> Outcome:
+    """Each of engines 7, 10, 11 and 17 has a test proving it blocks and one proving it
+    passes.
+
+    A gate with only a happy path is incomplete and a gate with only block cases is a
+    gate that refuses everything and proves nothing. `code-standards.md` requires both
+    halves of every gate; this is the criterion that notices when one is missing, and
+    it is a completeness check rather than a correctness one - whether those tests
+    *pass* is `toolchain_green`'s question and it runs in every phase.
+
+    It reads the assertions, not the test names.
+    """
+    findings: list[str] = []
+    absent: list[str] = []
+    for engine in sorted(PHASE3_TEST_FILES):
+        number, spec = PHASE3_ENGINES[engine]
+        path = ctx.root / Path(PHASE3_TEST_FILES[engine])
+        if not path.is_file():
+            absent.append(f"engine {number} `{engine}` ({PHASE3_TEST_FILES[engine]}, {spec})")
+            continue
+        blocking, passing, problem = _test_directions(path)
+        if problem:
+            return failed(problem)
+        if not blocking or not passing:
+            missing = "no test asserting it blocks" if not blocking else "no test asserting it passes"
+            return failed(
+                f"engine {number} `{engine}` has {missing} in "
+                f"{PHASE3_TEST_FILES[engine]} ({blocking} block, {passing} pass). "
+                "code-standards.md: every gate needs at least one test proving it blocks "
+                "and one proving it passes."
+            )
+        findings.append(f"{engine} {blocking}/{passing}")
+
+    if absent:
+        return pending(
+            "no test file yet for " + "; ".join(absent) + ". Each agent owns the tests "
+            "mirroring its own source, so this criterion reads them and never writes one."
+        )
+    return passed(
+        "every Phase 3 gate has a test asserting it blocks and one asserting it passes "
+        "(block/pass per engine: " + ", ".join(findings) + ")"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Registration
 # --------------------------------------------------------------------------- #
 
@@ -4114,35 +5655,65 @@ register(1, Criterion("console_tabular_figures", check_console_tabular_figures))
 register(1, Criterion("console_focus_and_reduced_motion", check_console_focus_and_reduced_motion))
 register(1, Criterion("console_restart_banner", check_console_restart_banner))
 
+# Phase 3 - the economics gates. Spec 45, registered first in the phase and ahead of
+# three of the four engines it judges, for the reason spec 00 was first in Phase 0 and
+# spec 16 first in Phase 1. Until these existed `--phase 3` registered `docs_vocabulary`
+# and `toolchain_green` alone and printed "Phase 3 is green: every criterion PASS, zero
+# PENDING" over a phase in which engines 7, 10, 11 and 17 were unbuilt or unwired. A
+# phase with nothing in it must not be able to report as finished, and PENDING is how it
+# says so.
+register(3, Criterion("cost_gate_uses_live_fee_tier", check_cost_gate_uses_live_fee_tier))
+register(3, Criterion("risk_rejects_sub_ordermin", check_risk_rejects_sub_ordermin))
+register(3, Criterion("universe_varies_with_balance", check_universe_varies_with_balance))
+register(
+    3,
+    Criterion(
+        "safety_freezes_on_drawdown_without_opportunity_chain",
+        check_safety_freezes_on_drawdown_without_opportunity_chain,
+    ),
+)
+register(
+    3, Criterion("safety_escalates_on_sustained_outage", check_safety_escalates_on_sustained_outage)
+)
+register(3, Criterion("safety_inputs_all_from_the_seed", check_safety_inputs_all_from_the_seed))
+register(3, Criterion("phase_3_gates_have_both_tests", check_phase_3_gates_have_both_tests))
+
 
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 
 
-def format_report(
+def name_column_width(criteria: Sequence[Criterion]) -> int:
+    """The width the criterion-name column is padded to.
+
+    Taken from the criterion *names* rather than from finished results, because
+    `main` prints each line as its criterion returns and the column has to be
+    settled before the first one runs. The names are known from the registry, so
+    this is the same number `format_report` used to compute at the end.
+    """
+    return max((len(c.name) for c in criteria), default=0)
+
+
+def report_header(phase: int, root: Path) -> list[str]:
+    return ["ACSOE verify - phase " + str(phase), "repo: " + str(root), ""]
+
+
+def criterion_line(criterion: Criterion, outcome: Outcome, width: int) -> str:
+    return (
+        outcome.result.value.ljust(8) + criterion.name.ljust(width) + "  " + outcome.message
+    )
+
+
+def report_summary(
     phase: int,
-    root: Path,
     results: Sequence[tuple[Criterion, Outcome]],
     skipped: Sequence[Criterion],
-) -> str:
-    lines = ["ACSOE verify - phase " + str(phase), "repo: " + str(root), ""]
-    if results:
-        width = max(len(c.name) for c, _ in results)
-        for criterion, outcome in results:
-            lines.append(
-                outcome.result.value.ljust(8)
-                + criterion.name.ljust(width)
-                + "  "
-                + outcome.message
-            )
-    else:
-        lines.append("(no criteria registered for this phase)")
-
+) -> list[str]:
     counts = dict.fromkeys(Result, 0)
     for _, outcome in results:
         counts[outcome.result] += 1
-    lines.append("")
+    lines = [""]
     lines.append(
         str(len(results))
         + " criteria: "
@@ -4171,6 +5742,31 @@ def format_report(
         )
     else:
         lines.append("Phase " + str(phase) + " is green: every criterion PASS, zero PENDING.")
+    return lines
+
+
+def format_report(
+    phase: int,
+    root: Path,
+    results: Sequence[tuple[Criterion, Outcome]],
+    skipped: Sequence[Criterion],
+) -> str:
+    """The whole report as one string.
+
+    `main` no longer builds the report this way - it streams the same pieces as each
+    criterion returns, so a run killed mid-flight still leaves the verdicts it had
+    reached on disk. This composes those pieces in the same order and produces the
+    identical text, and it is what the unit tests hold the format to.
+    """
+    lines = report_header(phase, root)
+    if results:
+        width = name_column_width([criterion for criterion, _ in results])
+        lines.extend(
+            criterion_line(criterion, outcome, width) for criterion, outcome in results
+        )
+    else:
+        lines.append("(no criteria registered for this phase)")
+    lines.extend(report_summary(phase, results, skipped))
     return "\n".join(lines)
 
 
@@ -4205,12 +5801,27 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     context = VerifyContext(root=REPO_ROOT, live=bool(args.live))
     to_run, skipped = criteria_for(args.phase, context.live)
-    results = [(criterion, run_criterion(criterion, context)) for criterion in to_run]
+
+    # Streamed, not batched, and flushed line by line. A criterion that has reached a
+    # verdict has reached it, and this machine's known intermittent native fault kills
+    # the process often enough that "the run that crashed" must not also be "the run
+    # that printed nothing". The text is byte-identical to the batched report.
+    for line in report_header(args.phase, context.root):
+        print(line, flush=True)
+    width = name_column_width(to_run)
+    results: list[tuple[Criterion, Outcome]] = []
+    for criterion in to_run:
+        outcome = run_criterion(criterion, context)
+        results.append((criterion, outcome))
+        print(criterion_line(criterion, outcome, width), flush=True)
+    if not results:
+        print("(no criteria registered for this phase)", flush=True)
 
     if sweeping:
         sweep_stale_workspaces(report=False)
 
-    print(format_report(args.phase, context.root, results, skipped))
+    for line in report_summary(args.phase, results, skipped):
+        print(line, flush=True)
     return 1 if any(o.result is Result.FAIL for _, o in results) else 0
 
 

@@ -433,3 +433,36 @@ evidence that imagining it is not reliable — including for someone who has jus
 instruction down. Breaking the code and watching the test go red takes a minute and is not
 imaginable-away. B did exactly that on spec 41 unprompted, with three mutations reverted, and
 that is now the standard rather than the exception.
+
+### One spurious FAIL, recorded rather than smoothed over
+
+**Agent:** Lead · **Task:** verifying specs 42 and 45 · **Date:** 2026-09-10
+
+**What happened.** Running the full suite to verify B's spec 42 and C's spec 45:
+
+```
+FAILED tests/engines/test_safety.py::test_no_second_close_all_while_the_outage_persists
+1 failed, 1197 passed in 90.98s
+```
+
+The gate run immediately afterwards reported `PASS toolchain_green`, which is the
+contradiction that made it worth chasing rather than shrugging at.
+
+**What I did, in the order the phase rules set.** Ran the named test in isolation: passed.
+Ran its whole file: 48 passed. Re-ran the full suite in the same order: **1198 passed**, the
+same total, no failure. So it is non-deterministic and it is this machine's known intermittent
+fault rather than a defect in B's engine or an ordering dependency between tests — an ordering
+dependency would have reproduced on the second full run, which is the check that distinguishes
+the two and the reason to do it before writing this entry.
+
+**What I did not capture, and it is a real gap.** I have the summary line and not the
+traceback: the first run's detail is gone. That is the fourth or fifth time this fault has
+appeared in this project and there is still no captured traceback for any of them, which is
+why it remains "the intermittent fault" rather than a diagnosed bug. **Next occurrence: run
+the suite with the failure detail preserved before re-running anything.** The instinct to
+re-run and confirm green is the instinct that keeps destroying the evidence.
+
+**Why this is in the log at all.** The phase rules say a spurious FAIL is written down rather
+than smoothed over, and the reason is cumulative: any one of these is noise, and the count is
+not. Recording it costs a paragraph; not recording it means the next person to see it starts
+from zero, and it has now cost this project time in Phase 2 and again here.
