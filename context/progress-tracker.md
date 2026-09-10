@@ -81,18 +81,51 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 
 | Agent | Specs | State |
 |---|---|---|
-| Lead | 37, 47 | 37 done. 47 lands last, after 40–44 are green |
-| A — Platform | 38, 39 | Not started |
-| B — Store and trading | 40, 41, 42, 43, 44 | Not started |
-| C — Interface and models | 45, 46 | Not started. 45 lands early, with 37 |
+| Lead | 37, 47 | 37 **done**. 47 is the last spec in the phase and waits on 44 |
+| A — Platform | 38, 39 | **Both done.** Then a commissioned audit — see below |
+| B — Store and trading | 40, 41, 42, 43, 44 | 40, 41, 42, 43 **done**. 44 in progress |
+| C — Interface and models | 45, 46 | **Both done.** Then the Phase 1 timing criterion and the harness findings |
 
-**One paired landing.** `kraken.cache_ttl_s` needs A's `KrakenSection` field and the lead's YAML in
-one change: `extra="forbid"` means the YAML alone makes `load_config()` raise and fails every test
-in the tree. The lead tried it and reverted it on 2026-09-10; the block is written out verbatim in
-spec 37's appendix so it is one paste when A signals.
+**Ten of eleven specs are done.** `verify.py --phase 3` went from *"2 criteria: 2 PASS — Phase 3 is
+green"* over four unbuilt or unwired engines, to **9 criteria driving four real engines**. That
+false green was the reason spec 45 was ordered first, and it is gone.
+
+**Two paired landings, both done, and the rule they produced.** `kraken.cache_ttl_s` landed first,
+then `trading.stable_quote_currencies` — a key the operator had to supply because invariant 7
+defines a crypto-quoted pair against a set of stable assets that existed nowhere in the repository
+and is not derivable from Kraken's data. `extra="forbid"` means either half alone breaks every test
+that reads the committed config, so the field lands with the YAML in one commit.
+
+A's generalisation, now in `code-standards.md`: **the landing order is universal; the resting state
+is not.** `cache_ttl_s` was tightened to required because every reader raises on absence, so startup
+is the same refusal delivered earlier. `stable_quote_currencies` stays optional because its readers
+were *ruled to disagree* — engine 7 fails closed and excludes, engine 2 fails open and publishes the
+fact — and a required field overrules both by stopping the process, which would mean the recorder
+never runs. A's second half: **a half-landed key is not uniformly safe just because the reader
+raises.** `Config.get` raises, the orchestrator turns a raised engine into `ERROR`, `ERROR` blocks —
+so a missing key briefly made engine 2 the tick's *primary blocker* and displaced `data_guard`,
+which would have written a wrong `block_records.is_primary` for every tick in that window. A
+corrupted audit row is worse than a stopped daemon, because it looks like data.
 
 
-- **Nothing.** Phase 2 closed green on 2026-09-10. Phase 3 has not been planned, specced or assigned, and no agent is running.
+- **Spec 47 waits on spec 44**, which is B's and in progress. That ordering is deliberate: a
+  half-wired gate in the live chain turns every other criterion's failure into a puzzle.
+- **`scripts/verify.py::sweep_stale_workspaces` is a live defect and C is fixing it.** It deletes
+  every `acsoe-verify-*` directory in the shared temp directory, including ones other processes are
+  using. Its docstring claims a directory in use "simply will not delete" — a POSIX assumption that
+  is false on Windows, and `ignore_errors=True` guarantees *partial* deletion rather than none.
+  Reproduced by the lead first try: one sweep took a live seeded database plus two other running
+  workspaces. **This is what has been reported as "the intermittent fault" for two phases.** The
+  standing advice — re-run the named test in isolation, and if it passes record it as the fault —
+  worked, because in isolation nothing else is sweeping, so the mitigation confirmed the wrong
+  diagnosis every time it was applied.
+- **Three flake mechanisms are now distinguished and must stay distinguished.** The sweeper, which
+  always presents as a *database* error; a load-sensitive wall-clock assertion in a Phase 1
+  criterion, which C diagnosed independently and has fixed; and the genuine native
+  `access violation`, which C saw again today. B's warning, taken as a standing rule: **a newly
+  named mechanism will absorb every flake in the tree the way the native memory fault did for two
+  phases** — so a failure is attributed to the sweeper only if it carries a database error, and
+  *unexplained* stays an acceptable thing to write in the log.
 
 ## Phase 2 — how it closed
 
@@ -129,9 +162,44 @@ A's generalisation remains the useful form: **an assertion is decayed if it woul
 
 **None of the eight was caught by running the suite.** They were caught by an agent reading source before building against it, by making a green test go red on purpose, and by dry-running an artefact before depositing it. Those appear to be the only three techniques that work on this class of defect, and all three are cheap.
 
+**Phase 3 produced far more than eight, and separated them into shapes.** Three distinct tells,
+each needing a different question, all now rules in `code-standards.md`:
+
+1. **A double too simple to exhibit the property under test** — a fake transport that counted
+   nothing; a client built without a TTL, so the TTL check raised before the credential check the
+   test existed to exercise; a `FakeTime.sleep` with no `await`, so the lock was never contended;
+   the lead's own orchestrator built with no logger, so `_log` returned before the line under test.
+2. **A claim and its evidence moving together** — B's fixtures agreeing with their caller; C's
+   reason-code assertion importing the constant it checked against; B reading `pending_commands()`
+   after the orchestrator had emptied it; C comparing zero error rows against zero.
+3. **A double standing where the subject should be** — A's Phase 2 tripwire, which passes the "can
+   it fail?" question and simply is not connected to what it claims to watch.
+
+A fourth was found by A's commissioned sweep and is the decayed assertion from the opposite
+direction: **a fallback for a thing that does not exist yet has an expiry date and nothing records
+it.** `try: import real / except: define our own`, `getattr(mod, "Name", None)` then skip,
+`except KeyError: continue`. Each was correct when written; each was a silent branch firing on a
+condition that should be impossible. A's fix formulation is the one that matters: **never delete
+the fallback — add the assertion that it is unreachable**, which turns a stale workaround into a
+tripwire for the day someone breaks what it stood in for.
+
+**Two techniques were added to the three above, and both earned their place by catching the
+lead.** *Break the code and watch the test go red* became a standard after the lead wrote the rule
+about doubles and then committed a regression test that passed against unfixed code, in the commit
+citing that rule by name. And A's caveat, which makes mutation usable rather than noisy: **a
+mutation that survives a subset has not survived — it has not been asked.** Two of A's 23 survivors
+died when re-run against the wider suite. A false survivor is worse than a missed one: it sends
+someone to write a test for a covered case and makes the real survivors look less urgent.
+
+**The sharpest single result was A's**, and it inverts an assumption worth naming: **coverage counts
+executions, a mutation asks whether anything would object.** A's surviving mutant sat on a branch
+with *excellent* line coverage — every test in `test_market_data_recorder.py` runs engine 2 without
+engine 1, so that path executed constantly and nothing asserted what it reported. A line everybody
+runs is the line nobody thinks to assert on.
+
 ### Known gap, recorded not hidden
 
-`cli/engine.py` still passes `Clients()` with three `None`s, so with the engines registered **`acsoe engine` blocks every tick** — engine 1 raises, the orchestrator converts it to `ERROR`, `data_guard` follows with its own missing-key error, and the tick completes recording both. That is contract rule 7 working, and a daemon doing nothing useful. A has pinned the current behaviour in a test so wiring the real clients turns it red and forces a deliberate rewrite. Blocked on `market_data.pairs` and `market_data.book_depth`; no Phase 2 criterion depended on it, because every Phase 2 criterion runs the orchestrator against the fake client rather than through the CLI. **This is carried into Phase 3 rather than closed.**
+`cli/engine.py` still passes `Clients()` with three `None`s, so with the engines registered **`acsoe engine` blocks every tick** — engine 1 raises, the orchestrator converts it to `ERROR`, `data_guard` follows with its own missing-key error, and the tick completes recording both. That is contract rule 7 working, and a daemon doing nothing useful. A has pinned the current behaviour in a test so wiring the real clients turns it red and forces a deliberate rewrite. Blocked on `market_data.pairs` and `market_data.book_depth`; no Phase 2 criterion depended on it, because every Phase 2 criterion runs the orchestrator against the fake client rather than through the CLI. **Carried into Phase 3 and CLOSED there by spec 39.** `acsoe engine` now builds real clients and the subscription set is derived per tick from the pairs whose quote currency the account actually holds. Neither `market_data.pairs` nor `book_depth` was ever added: the operator's ruling retired both, and the universe is engine 7's per-tick computation. A's tripwire for this — written in Phase 2 precisely so that wiring real clients would turn it red — **did not fire**, because it built the empty `Clients()` itself instead of going through `cli/engine.py`, so it pinned a fact the test supplied rather than one about the daemon. That produced a standing rule: *a test whose purpose is "this goes red when X changes" must reach X through the code path X lives on.*
 
 ## Next Up
 
