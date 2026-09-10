@@ -9,7 +9,7 @@ stop, so:
 ```
 risk_amount = equity x trading.risk_fraction_per_trade
 notional    = risk_amount / barriers.stop_pct
-qty         = round_down(notional / price, lot_decimals)
+qty         = round_down(notional / ask, lot_decimals)
 ```
 
 Reading `risk_fraction_per_trade` as a fraction of *notional* rather than of money at
@@ -33,11 +33,35 @@ order matters. Rounding after the check would let a quantity that passed `orderm
 rounded below it and placed anyway; rounding before means the number compared against the
 minimum is the number that would actually be sent.
 
+## Which side of the book, and why it is two sides
+
+**The quantity is sized from the ask; `costmin` is tested against the bid.** A lead
+ruling of 2026-09-10, made under spec 41 because nothing published a price at all and one
+had to be chosen. The entry is a buy, so the ask is the worst price it could pay, and a
+higher assumed price yields *fewer* units for the same money — the position is never
+larger than the sizing chose. The bid is the lowest the resulting position could be
+valued at, so testing the minimum order value there refuses a marginal position rather
+than admitting one. Rounding down and then valuing at the lower side is fail-closed on
+both edges.
+
+It does not double-count the spread against engine 10. That gate charges the spread as
+*friction on a round trip*; this one uses the book to answer *how many units the money
+buys*. Two different questions asked of the same data.
+
+## Invariant 2's one surviving paper-mode fallback
+
+Spec 37 retired the fee-tier row, so **balance is the only paper-mode fallback left in
+this system**, and :meth:`RiskEngine._balances` is its only implementation. In `paper`
+mode a failed `Balance` fetch sizes against `paper.starting_balances` and records
+`balance_from_paper_starting_balances` on the decision; in every other mode it blocks.
+The fallback is never optimistic and never silent — invariant 2 requires both.
+
 ## What is fetched, never remembered
 
-`ordermin`, `costmin`, `lot_decimals` and the price come from `AssetPairs` and the live
-book through engine 1. `AGENTS.md`: any remembered order minimum is stale. Nothing in
-this module or its contracts contains one, and a test reads the source to prove it.
+`ordermin`, `costmin` and `lot_decimals` come from `AssetPairs` through engine 1, and the
+two prices from the live book through engine 3. `AGENTS.md`: any remembered order minimum
+is stale. Nothing in this module or its contracts contains one, and a test reads the
+source to prove it.
 """
 
 from __future__ import annotations
@@ -51,14 +75,18 @@ from pydantic import ValidationError
 from acsoe.core.contracts import BaseEngine, EngineContext, EngineResult, EngineStatus, State
 from acsoe.engines.risk.contracts import (
     EXCHANGE_BALANCES_KEY,
-    EXCHANGE_FALLBACKS_KEY,
     EXCHANGE_KEY,
-    EXCHANGE_PAIRS_KEY,
+    EXCHANGE_PAIR_RULES_KEY,
+    FALLBACK_BALANCE_FROM_PAPER,
+    MARKET_SENSOR_KEY,
+    MARKET_SENSOR_QUOTES_KEY,
     PAIR_COSTMIN_FIELD,
     PAIR_LOT_DECIMALS_FIELD,
     PAIR_ORDERMIN_FIELD,
-    PAIR_PRICE_FIELD,
     PAIR_QUOTE_FIELD,
+    PAIR_RULES_PAIRS_KEY,
+    QUOTE_ASK_FIELD,
+    QUOTE_BID_FIELD,
     REASON_BELOW_COSTMIN,
     REASON_BELOW_ORDERMIN,
     REASON_INPUTS_UNAVAILABLE,
@@ -73,6 +101,15 @@ from acsoe.engines.risk.contracts import (
 RISK_FRACTION_KEY = "trading.risk_fraction_per_trade"
 MAX_CONCURRENT_KEY = "trading.max_concurrent_positions"
 STOP_PCT_KEY = "barriers.stop_pct"
+
+#: The currency-to-amount map invariant 2 names as the balance fallback. Read only in
+#: paper mode, only when engine 1 published no balances at all, and never otherwise.
+PAPER_STARTING_BALANCES_KEY = "paper.starting_balances"
+
+#: The one mode the balance fallback applies in. `live` blocks because invariant 2 says a
+#: failed fetch always blocks in live mode; `replay` blocks because it is not `paper` and
+#: because blocking is the direction a gate defaults in. See the README.
+PAPER_MODE = "paper"
 
 
 class MissingInputError(Exception):
@@ -125,11 +162,9 @@ class RiskEngine(BaseEngine):
         try:
             open_positions = self._count_open_positions(context)
             max_concurrent = int(_config_decimal(context, MAX_CONCURRENT_KEY))
-            inputs = self._read_inputs(context, state)
+            inputs, fallbacks = self._read_inputs(context, state)
         except MissingInputError as missing:
             return self._blocked_on_missing_input(str(missing), started)
-
-        fallbacks = self._fallbacks(state)
 
         # Checked before sizing: the portfolio is already full, so what this candidate
         # would have been sized to is not a question worth answering, and answering it
@@ -144,27 +179,34 @@ class RiskEngine(BaseEngine):
             )
 
         risk_amount = inputs.equity * inputs.risk_fraction
-        notional = risk_amount / inputs.stop_pct
+        target_notional = risk_amount / inputs.stop_pct
 
         # Invariant 6: never allocate cash the account does not hold in that pair's quote
         # currency. Rejected rather than silently capped to the balance — a gate answers
         # yes or no, and a position quietly resized to fit is no longer the position the
         # sizing rule chose, which is the same objection as rounding up to a minimum.
-        if notional > inputs.quote_balance:
+        #
+        # Tested on the notional the sizing *asked* for, before rounding. Rounding down at
+        # the ask can only reduce the cash committed, so checking the larger figure is the
+        # conservative direction.
+        if target_notional > inputs.quote_balance:
             return self._reject(
                 inputs,
                 REASON_INSUFFICIENT_QUOTE_BALANCE,
                 (
-                    f"Position needs {notional:f} {inputs.quote_currency} and the account "
-                    f"holds {inputs.quote_balance:f}"
+                    f"Position needs {target_notional:f} {inputs.quote_currency} and the "
+                    f"account holds {inputs.quote_balance:f}"
                 ),
                 fallbacks,
                 started,
             )
 
-        # Rounded down to the exchange's precision *before* the minimum is tested, so the
-        # number compared against `ordermin` is the number that would actually be sent.
-        qty = round_down_to_lot(notional / inputs.last_price, inputs.lot_decimals)
+        # Sized at the **ask**: the entry is a buy, the ask is the worst price it could
+        # pay, and a higher assumed price yields fewer units for the same money — so the
+        # position is never larger than the sizing chose. Rounded down to the exchange's
+        # precision *before* the minimum is tested, so the number compared against
+        # `ordermin` is the number that would actually be sent.
+        qty = round_down_to_lot(target_notional / inputs.ask, inputs.lot_decimals)
 
         if qty < inputs.ordermin:
             return self._reject(
@@ -178,17 +220,19 @@ class RiskEngine(BaseEngine):
                 started,
             )
 
-        # `costmin` is tested on the rounded quantity's real value, not on the notional
-        # the sizing asked for. Rounding down can drop the value below the minimum even
-        # when the requested notional cleared it.
-        value = qty * inputs.last_price
-        if value < inputs.costmin:
+        # `costmin` is tested on the rounded quantity's real value **at the bid**, not on
+        # the notional the sizing asked for. Two things are going on and both matter:
+        # rounding down can drop the value below the minimum even when the requested
+        # notional cleared it, and the bid is the lowest the position could be valued at,
+        # so a marginal position is refused rather than admitted.
+        value_at_bid = qty * inputs.bid
+        if value_at_bid < inputs.costmin:
             return self._reject(
                 inputs,
                 REASON_BELOW_COSTMIN,
                 (
-                    f"Position value of {value:f} {inputs.quote_currency} is below the "
-                    f"pair's minimum order value of {inputs.costmin:f}"
+                    f"Position value of {value_at_bid:f} {inputs.quote_currency} at the "
+                    f"bid is below the pair's minimum order value of {inputs.costmin:f}"
                 ),
                 fallbacks,
                 started,
@@ -198,7 +242,8 @@ class RiskEngine(BaseEngine):
             pair=inputs.pair,
             approved=True,
             qty=qty,
-            notional=value,
+            notional=qty * inputs.ask,
+            value_at_bid=value_at_bid,
             risk_amount=risk_amount,
             ordermin=inputs.ordermin,
             costmin=inputs.costmin,
@@ -262,20 +307,41 @@ class RiskEngine(BaseEngine):
         equity: Decimal = snapshot.equity
         return equity
 
-    def _read_inputs(self, context: EngineContext, state: State) -> RiskInputs:
+    def _read_inputs(
+        self, context: EngineContext, state: State
+    ) -> tuple[RiskInputs, tuple[str, ...]]:
+        """The sizing inputs, and any fallback that had to fire to assemble them.
+
+        The fallbacks travel with the inputs rather than being recomputed later, because
+        invariant 2 requires the *decision* to record which fallback fired and there is
+        exactly one place that knows: the point where the substitution happened.
+        """
         pair = _require(state.get(SCOUT_KEY), "pair", SCOUT_KEY)
 
+        # Two levels, both through `_require`. Engine 1 publishes the whole `AssetPairs`
+        # snapshot, so a null `pair_rules` — the failed-fetch case — has to report as the
+        # missing snapshot it is rather than as an unknown pair. Invariant 2 gives pair
+        # rules no fallback in any mode: a wrong `ordermin` produces invalid orders.
         exchange = state.get(EXCHANGE_KEY)
-        pairs = _require(exchange, EXCHANGE_PAIRS_KEY, EXCHANGE_KEY)
-        balances = _require(exchange, EXCHANGE_BALANCES_KEY, EXCHANGE_KEY)
-        facts = _require(pairs, str(pair), f"{EXCHANGE_KEY}.{EXCHANGE_PAIRS_KEY}")
-        where = f"{EXCHANGE_KEY}.{EXCHANGE_PAIRS_KEY}.{pair}"
+        pair_rules = _require(exchange, EXCHANGE_PAIR_RULES_KEY, EXCHANGE_KEY)
+        rules_where = f"{EXCHANGE_KEY}.{EXCHANGE_PAIR_RULES_KEY}"
+        pairs = _require(pair_rules, PAIR_RULES_PAIRS_KEY, rules_where)
+        facts = _require(pairs, str(pair), f"{rules_where}.{PAIR_RULES_PAIRS_KEY}")
+        where = f"{rules_where}.{PAIR_RULES_PAIRS_KEY}.{pair}"
         quote = str(_require(facts, PAIR_QUOTE_FIELD, where))
+
+        balances, fallbacks = self._balances(context, exchange, quote)
+        quotes = _require(
+            state.get(MARKET_SENSOR_KEY), MARKET_SENSOR_QUOTES_KEY, MARKET_SENSOR_KEY
+        )
+        quotes_where = f"{MARKET_SENSOR_KEY}.{MARKET_SENSOR_QUOTES_KEY}"
+        book = _require(quotes, str(pair), quotes_where)
 
         raw: dict[str, Any] = {
             "pair": pair,
             "quote_currency": quote,
-            "last_price": _require(facts, PAIR_PRICE_FIELD, where),
+            "ask": _require(book, QUOTE_ASK_FIELD, f"{quotes_where}.{pair}"),
+            "bid": _require(book, QUOTE_BID_FIELD, f"{quotes_where}.{pair}"),
             "ordermin": _require(facts, PAIR_ORDERMIN_FIELD, where),
             "costmin": _require(facts, PAIR_COSTMIN_FIELD, where),
             "lot_decimals": _require(facts, PAIR_LOT_DECIMALS_FIELD, where),
@@ -290,20 +356,72 @@ class RiskEngine(BaseEngine):
             inputs = RiskInputs.model_validate(raw)
         except ValidationError as exc:
             raise MissingInputError(f"unusable risk input: {exc}") from exc
-        if inputs.last_price <= 0:
-            raise MissingInputError(f"{where}.{PAIR_PRICE_FIELD} is not positive")
+        # A non-positive price is not a cheap entry, it is an unusable quote. Checked on
+        # both sides: a zero ask divides, and a zero bid would value every position at
+        # nothing and refuse it for the wrong reason.
+        if inputs.ask <= 0 or inputs.bid <= 0:
+            raise MissingInputError(f"{quotes_where}.{pair} has a non-positive price")
         if inputs.stop_pct <= 0:
             raise MissingInputError(f"config {STOP_PCT_KEY} must be positive")
-        return inputs
+        return inputs, fallbacks
 
-    def _fallbacks(self, state: State) -> tuple[str, ...]:
-        exchange = state.get(EXCHANGE_KEY)
-        if not isinstance(exchange, dict):
-            return ()
-        used = exchange.get(EXCHANGE_FALLBACKS_KEY)
-        if not isinstance(used, (list, tuple)):
-            return ()
-        return tuple(str(item) for item in used)
+    def _balances(
+        self, context: EngineContext, exchange: Any, quote: str
+    ) -> tuple[Any, tuple[str, ...]]:
+        """The account's balances — or invariant 2's one surviving paper-mode fallback.
+
+        **This is the only fallback left in the system.** Spec 37 retired "assume tier 1"
+        on 2026-09-10, and pair rules and the spread block in every mode, so the balance
+        row is the last one in invariant 2's paper-mode table that still substitutes a
+        value instead of refusing. Engine 1 deliberately applies no fallback of its own —
+        it reports the failed call and leaves the decision to the consumer that has to
+        record which one fired — so this method is where the row is implemented.
+
+        Three cases, and only the second is a fallback:
+
+        - `balances` present: use it. A currency *missing from* a published map is not a
+          failed fetch — it is an account that holds nothing in that currency, and it is
+          refused by the caller's `_require` rather than substituted here.
+        - `balances` absent, mode is `paper`: `paper.starting_balances`, recorded.
+        - `balances` absent, any other mode: block. Invariant 2 is explicit that in live
+          mode a failed fetch always blocks, and the one exception in that document is
+          rule 14's liquidation, which is not this. `replay` is not `paper` either, and a
+          gate defaults towards refusing.
+
+        The map is used exactly as configured. "Adjusted by simulated fills" is the fill
+        simulator's contribution and that is Phase 6; the `README.md` names the phase so
+        the gap is recorded rather than discovered.
+        """
+        published = exchange.get(EXCHANGE_BALANCES_KEY) if isinstance(exchange, dict) else None
+        if published is not None:
+            return published, ()
+
+        if context.mode != PAPER_MODE:
+            raise MissingInputError(
+                f"{EXCHANGE_KEY}.{EXCHANGE_BALANCES_KEY} in {context.mode} mode, where a "
+                "failed fetch blocks (invariant 2); the balance fallback is paper-mode only"
+            )
+        try:
+            starting = context.config.get(PAPER_STARTING_BALANCES_KEY)
+        except Exception as exc:
+            # An absent key raises by contract. That is a gate that cannot reach its
+            # configuration, which blocks — it is never a reason to invent a balance.
+            raise MissingInputError(
+                f"config {PAPER_STARTING_BALANCES_KEY} is unreadable: {exc}"
+            ) from exc
+        if not isinstance(starting, dict) or not starting:
+            raise MissingInputError(
+                f"config {PAPER_STARTING_BALANCES_KEY} is not a currency-to-amount map"
+            )
+        if quote not in starting:
+            # Falling back to a map that does not name this pair's quote currency would
+            # be substituting nothing for something. Refused, and named, so the operator
+            # can see which currency the paper account was never given.
+            raise MissingInputError(
+                f"config {PAPER_STARTING_BALANCES_KEY} names no {quote} balance to fall "
+                "back to"
+            )
+        return dict(starting), (FALLBACK_BALANCE_FROM_PAPER,)
 
     # ------------------------------------------------------------------ outcomes
 

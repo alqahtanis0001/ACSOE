@@ -25,7 +25,26 @@
   `test_cost.py:376` deleted, not edited; reason in the build log.
 - **Spec 41** — wire engine 11 `risk`, give it a price, and **build** the paper-mode balance
   fallback. `src/acsoe/engines/risk/{contracts,engine}.py`, `README.md`,
-  `tests/engines/test_risk.py`.
+  `tests/engines/test_risk.py`. ***Complete, all four gates green 2026-09-10.*** Pair rules
+  re-pointed to `exchange.pair_rules.pairs`; the price now comes from
+  `market_sensor.quotes[pair]` — **ask** sizes the quantity, **bid** values it for `costmin`,
+  per the lead's ruling. The balance fallback is built as new behaviour: paper falls back and
+  records `balance_from_paper_starting_balances`, live and replay block. Every `state` in
+  `test_risk.py` is engines 1 and 3's real output against C's fake client. **One open item for
+  the lead — see below.**
+
+#### For the lead — `replay` mode's balance fallback is my reading, not a ruling
+
+Spec 41 names paper (fall back) and live (block). `EngineContext.mode` has a third value,
+`replay`, and the spec does not mention it. I implemented `if context.mode != "paper"` —
+so replay blocks — because invariant 2's table is headed *paper mode*, invariant 3 says a
+gate that is unsure refuses, and "not paper" cannot silently extend the fallback to a mode
+added later the way "is live" would.
+
+**The cost is real and deferred, not absent.** If replay is later meant to reproduce paper
+faithfully, a replayed tick will block where the paper run fell back, and the two diverge
+exactly where invariant 10's faithful-replay property should hold. Nothing in Phase 3
+exercises replay. One line and one constant to reverse; full reasoning in the build log.
 - **Spec 42** — apply the ratified `CONDITION_ACTION` and prove `safety` in a real guard
   chain. `src/acsoe/engines/safety/{contracts,engine}.py`, `README.md`,
   `tests/engines/test_safety.py`, `tests/engines/test_safety_guard_chain.py`.
