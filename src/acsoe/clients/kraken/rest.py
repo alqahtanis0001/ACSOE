@@ -19,11 +19,29 @@ stale, so the mapping is written against the committed fixtures in
 ``--live``, which is opt-in. It is deliberately isolated into named functions so
 that confirming it is a small, obvious edit rather than an archaeology exercise.
 
-**Retention.** ``asset_pairs`` and ``balance`` retain their last successful value
-with the time it was fetched and never discard it on a failure, because rule 14's
+**Caching, and retention, which are two different mechanisms.** They share a word
+and collapsing them breaks the kill switch, so the client keeps them in two
+separate places on purpose.
+
+*The cache answers "may I use this now."* ``asset_pairs`` and ``trade_volume`` keep
+their parsed snapshot for ``kraken.cache_ttl_s.asset_pairs`` and
+``kraken.cache_ttl_s.trade_volume`` seconds respectively, so a one-minute loop tick
+does not re-fetch pair rules that change on the timescale of a listing. Age is
+measured against the **injected clock**. Past its TTL the entry is dropped and the
+call re-fetches; **if that re-fetch fails the call raises and the expired entry is
+never returned**, because invariant 2 says a cache stale beyond its TTL counts as a
+failed fetch — for trading, a stale value does not exist.
+
+*Retention answers "what is the last thing we knew."* ``asset_pairs`` and
+``balance`` retain their last successful value with the time it was fetched and
+**never discard it**, not on a failure and not on a TTL expiry, because rule 14's
 emergency liquidation has to complete during the outage that triggered it.
 ``trade_volume`` and ``order_book`` retain nothing: their only reader is the cost
-gate, and invariant 2 says an assumed spread or fee invalidates that gate.
+gate, and invariant 2 says an assumed spread or fee invalidates that gate. A TTL
+cache for ``trade_volume`` is legitimate; a last-known-good for it is not.
+
+``balance`` and ``order_book`` are not cached at all. Balances change on every fill
+and a stale spread is the loaded gun invariant 2 names.
 
 **No value in this module is a number.** No fee, no minimum, no tick size, no
 precision — not as a constant, not as a fallback, not in a comment.
@@ -82,6 +100,14 @@ BALANCE_PATH = "/0/private/Balance"
 
 #: Calls whose last successful value is kept for rule 14 and nothing else.
 RETAINED_CALLS = frozenset({"asset_pairs", "balance"})
+
+#: Calls that may be served from a TTL-bounded cache. Deliberately not the same set
+#: as :data:`RETAINED_CALLS`: ``balance`` is retained but never cached, and
+#: ``trade_volume`` is cached but never retained. Written out so the difference is
+#: visible rather than inferred from two scattered ``if`` statements.
+CACHED_CALLS = frozenset({"asset_pairs", "trade_volume"})
+
+_MICROSECONDS_PER_SECOND = 1_000_000
 
 
 # --------------------------------------------------------------------------- #
@@ -383,6 +409,12 @@ class KrakenRestClient:
         without the network and without relaxing the test guard.
     :param credentials: the key pair, or None. Absent credentials make the two
         private calls raise rather than silently return something.
+    :param asset_pairs_ttl_s: ``kraken.cache_ttl_s.asset_pairs``, in seconds, or
+        None when the operator has not supplied it. None makes ``asset_pairs()``
+        raise rather than caching for an interval nobody chose.
+    :param trade_volume_ttl_s: ``kraken.cache_ttl_s.trade_volume``, likewise. Read
+        from its own key and kept in its own field: the two TTLs are independent
+        and a single shared one is the shape spec 38 exists to prevent.
     """
 
     def __init__(
@@ -395,6 +427,8 @@ class KrakenRestClient:
         base_url: str = KRAKEN_REST_URL,
         timeout_s: float = 20.0,
         book_depth: int = 10,
+        asset_pairs_ttl_s: int | None = None,
+        trade_volume_ttl_s: int | None = None,
     ) -> None:
         self._clock = clock
         self._limiter = limiter
@@ -405,6 +439,44 @@ class KrakenRestClient:
         self._book_depth = book_depth
         self._retained: dict[str, RetainedValue] = {}
         self._nonce = 0
+        # Two TTLs, two fields, two caches. Nothing here is shared between the two
+        # calls, so no future edit can accidentally make one TTL govern both.
+        self._asset_pairs_ttl_s = asset_pairs_ttl_s
+        self._trade_volume_ttl_s = trade_volume_ttl_s
+        self._cached_asset_pairs: PairRulesSnapshot | None = None
+        self._cached_trade_volume: FeeTierSnapshot | None = None
+
+    # -- the cache: "may I use this now" ---------------------------------- #
+
+    def _require_ttl(self, ttl_s: int | None, key: str) -> int:
+        """The configured TTL, or a failure naming the key that is missing.
+
+        A missing TTL is not "cache forever" and is not "never cache". It is an
+        unanswerable question about whether a value is still good, and invariant 3
+        says the absence of a "no" is never a "yes" — so the call fails the way a
+        failed fetch fails, which is what every gate downstream already handles.
+        """
+        if ttl_s is None:
+            raise KrakenUnavailableError(
+                f"{key} is not configured, so there is no interval after which a cached "
+                "snapshot stops being usable. Invariant 2 makes a stale value a failed "
+                "fetch, and a TTL nobody chose cannot decide when that happens. Supply "
+                f"{key} in config/default.yaml."
+            )
+        return ttl_s
+
+    def _cache_hit(self, cached: PairRulesSnapshot | FeeTierSnapshot | None, ttl_s: int) -> bool:
+        """True when ``cached`` is still inside its TTL, by the injected clock.
+
+        A negative age — the clock stood still or moved back — counts as expired.
+        Fail-closed on a boundary is a re-fetch, never a reuse, and the same reason
+        makes the comparison ``>=``: at exactly its TTL an entry has reached the end
+        of the interval it was permitted, so it is fetched again.
+        """
+        if cached is None:
+            return False
+        age = self._now_micros() - cached.fetched_at
+        return 0 <= age < ttl_s * _MICROSECONDS_PER_SECOND
 
     # -- retention, read only by rule 14 ---------------------------------- #
 
@@ -495,14 +567,47 @@ class KrakenRestClient:
     # -- the Protocol ----------------------------------------------------- #
 
     async def asset_pairs(self) -> PairRulesSnapshot:
+        """Pair rules, from the cache while it is inside ``cache_ttl_s.asset_pairs``.
+
+        Past the TTL this re-fetches, and a re-fetch that fails **raises**. The
+        expired entry is dropped before the network is touched, so there is no code
+        path on which it can be returned — invariant 2's "a cache stale beyond its
+        TTL counts as a failed fetch", made unreachable rather than merely unwritten.
+
+        The retained last-known-good is untouched by any of that. It survives this
+        expiry and this failure, because rule 14 needs it during exactly this outage.
+        """
+        ttl_s = self._require_ttl(self._asset_pairs_ttl_s, "kraken.cache_ttl_s.asset_pairs")
+        cached = self._cached_asset_pairs
+        if self._cache_hit(cached, ttl_s):
+            assert cached is not None  # noqa: S101 - narrowing only; _cache_hit is the check
+            return cached
+        self._cached_asset_pairs = None
         result = await self._public("asset_pairs", ASSET_PAIRS_PATH, {})
         snapshot = map_asset_pairs(result, fetched_at=self._now_micros())
         self._retain("asset_pairs", snapshot)
+        self._cached_asset_pairs = snapshot
         return snapshot
 
     async def trade_volume(self) -> FeeTierSnapshot:
+        """The fee tier, from the cache while it is inside ``cache_ttl_s.trade_volume``.
+
+        Cached, and deliberately **never retained**. Invariant 2: its only reader is
+        the cost gate, and a fee nobody fetched invalidates that gate exactly as a
+        spread nobody measured does. A TTL cache says "this is still good"; a
+        last-known-good would say "use it anyway", which is the thing that must not
+        exist for this value.
+        """
+        ttl_s = self._require_ttl(self._trade_volume_ttl_s, "kraken.cache_ttl_s.trade_volume")
+        cached = self._cached_trade_volume
+        if self._cache_hit(cached, ttl_s):
+            assert cached is not None  # noqa: S101 - narrowing only; _cache_hit is the check
+            return cached
+        self._cached_trade_volume = None
         result = await self._private("trade_volume", TRADE_VOLUME_PATH, {})
-        return map_trade_volume(result, fetched_at=self._now_micros())
+        snapshot = map_trade_volume(result, fetched_at=self._now_micros())
+        self._cached_trade_volume = snapshot
+        return snapshot
 
     async def balance(self) -> BalancesSnapshot:
         result = await self._private("balance", BALANCE_PATH, {})

@@ -9,42 +9,78 @@
   `clients/store/{client,contracts}.py`, `tests/db/`, `tests/clients/store/`. *Complete,
   green on all three phase gates.*
 
-- **Spec 34** — engine 10 `cost`. *Complete, committed at `3581e87`.*
-- **Spec 35** — engine 11 `risk`. *Complete, committed at `5b0dd2b`.*
-- **Spec 36** — engine 17 `safety`. *Complete and green, committed at `5b0dd2b`. **One
-  policy table in it is an open question, not a decision** — see below.*
+- **Spec 34** — engine 10 `cost`. *Complete, committed at `3581e87`. Superseded by spec 40.*
+- **Spec 35** — engine 11 `risk`. *Complete, committed at `5b0dd2b`. Superseded by spec 41.*
+- **Spec 36** — engine 17 `safety`. *Complete and green, committed at `5b0dd2b`. Its one
+  open question is closed by spec 42 — see below.*
 
-Nothing is in progress. Holding, per the lead, until the operator rules on
-`CONDITION_ACTION`.
+### Phase 3 — claimed 2026-09-10
 
-## OPEN QUESTION — engine 17's `CONDITION_ACTION` is NOT ratified
+- **Spec 40** — wire engine 10 `cost` to the real `state["exchange"]`.
+  `src/acsoe/engines/cost/{contracts,engine}.py`, `README.md`, `tests/engines/test_cost.py`.
+- **Spec 41** — wire engine 11 `risk`, give it a price, and **build** the paper-mode balance
+  fallback. `src/acsoe/engines/risk/{contracts,engine}.py`, `README.md`,
+  `tests/engines/test_risk.py`.
+- **Spec 42** — apply the ratified `CONDITION_ACTION` and prove `safety` in a real guard
+  chain. `src/acsoe/engines/safety/{contracts,engine}.py`, `README.md`,
+  `tests/engines/test_safety.py`, `tests/engines/test_safety_guard_chain.py`.
 
-**Read this before treating `engines/safety/contracts.py`'s mapping as settled.** It is my
-implemented reading of a contradiction, not a decision anyone has approved.
+Specs 43 and 44 (`scout`) are the lead's second wave and are not claimed here yet.
 
-`trading-invariants.md` §14 and `feature-specs/36` cannot both be satisfied by the Phase 0
-seed. §14 says `safety` escalates — writes `close_all` — on "its configured drawdown and
-loss-streak limits are breached" or "a sustained data outage", when there are open positions
-or resting entry orders. Spec 36's Check When Done says "it **freezes** on the seeded
-drawdown". The seed carries drawdown 0.2000 against a 0.10 limit, a streak of 8 against 5,
-**and** 2 open positions and 2 resting entry orders — every precondition §14 names, because
-I built it that way in Phase 0 *to* satisfy §14. So under §14 the seeded drawdown emits
-`close_all`; under spec 36 it emits `freeze`. There is no fixture on which both are true.
+## CLOSED — engine 17's `CONDITION_ACTION`, ruled 2026-09-10
 
-Escalated 2026-09-09 with three candidate readings and two further gaps: which command the
-error rate emits, and whether an escalating condition emits `freeze` first. **With the
-operator.**
+**The operator ruled on 2026-09-10 and spec 37 wrote it into invariant 14.** The table is
+now a decision, not my reading of a contradiction:
 
-What is implemented meanwhile, isolated in one dictionary so the ruling is one edit:
-drawdown, loss streak and outage map to `close_all`; the error rate maps to `freeze`,
-because §14 does not list it among the escalation conditions at all — it is an
-engine-health problem rather than account exposure, and liquidating because the system is
-throwing exceptions would be the breaker causing the loss it exists to prevent.
+| Condition | Action |
+|---|---|
+| `DRAWDOWN` | `freeze` |
+| `LOSS_STREAK` | `freeze` |
+| `ERROR_RATE` | `freeze` |
+| `DATA_OUTAGE` | `close_all` |
 
-**Ratified by the lead, and separate from the above:** the `BOUNDARY_SOURCE` table beside
-it, fixing whether each threshold trips *at* its limit or *above* it, each with the sentence
-in the documents that fixes it. Drawdown, loss streak and error rate trip at the limit; the
-outage is the only strictly-greater one.
+`close_all` is reserved for the invariant 14 data-outage escalation and for the operator's
+own Close all button. The reasoning, which is invariant 14's and is not restated in the
+code: a drawdown or a losing streak is a statement about *past* trades — the data is
+trustworthy and the positions are being managed — so liquidating on it realises a paper
+loss on the system's own authority at the moment it has least evidence it is reading the
+market correctly. A sustained outage is a statement about *present* knowledge, and unknown
+exposure is worse than a bad fill.
+
+Two of the four rows changed. `ERROR_RATE` and `DATA_OUTAGE` were already as ruled.
+Applied in spec 42 on 2026-09-10.
+
+**Ratified earlier and unchanged:** the `BOUNDARY_SOURCE` table beside it, fixing whether
+each threshold trips *at* its limit or *above* it, each with the sentence in the documents
+that fixes it. Drawdown, loss streak and error rate trip at the limit; the outage is the
+only strictly-greater one.
+
+## OPEN QUESTION — a suppressed `close_all` swallows a co-occurring `freeze`
+
+**Raised 2026-09-10 while implementing spec 42. Not invented behaviour: the literal spec
+is implemented and this is the case it does not cover.**
+
+`_emit` takes the strongest action among the tripped conditions and emits at most one row —
+spec 42 step 6, "the more severe action wins and the two are not both emitted". Correct on
+its face. But the `close_all` branch has two suppressions of its own (no exposure, and
+`close_intent` already set), and when the strongest action is suppressed **nothing is
+emitted at all**, including the `freeze` that a co-occurring drawdown, loss streak or error
+rate would have emitted on its own.
+
+Concretely: drawdown breached, account has no open position and no resting entry order,
+and a data outage is also running. Drawdown alone emits `freeze`. Drawdown *plus* the
+outage emits nothing, because `close_all` wins and is then suppressed for want of anything
+to close. More bad conditions produce less action, which is the wrong direction.
+
+The practical impact is bounded and worth stating so the ruling is not read as more urgent
+than it is: `safety` returns `BLOCK` on every tick where any condition is tripped, so the
+opportunity chain is stopped regardless. What is lost is the *persistence* — the mode never
+goes `frozen`, so the console shows a running system and the block is re-derived every tick
+rather than recorded once.
+
+**I have not fixed it.** The obvious fix is "emit the strongest action that is not
+suppressed", which would be one line, and it is a change to what the breaker does — so it
+is the operator's, not mine. Recommending that reading.
 
 ## `core/`'s two writes — landed, primitives only
 

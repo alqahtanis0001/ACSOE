@@ -243,6 +243,32 @@ class PaperConfig(_Section):
         return self
 
 
+class CacheTtlConfig(_Section):
+    """How long a fetched snapshot may price a decision before it is fetched again.
+
+    **Not a claim about anything Kraken publishes or permits.** It is *our own*
+    re-fetch interval, chosen by the operator, and it holds no exchange-supplied
+    value: no fee, no minimum, no tick size, no precision.
+
+    **Two keys and not one.** Pair rules change when Kraken lists or delists
+    something; a fee tier can move on a single trade and it prices the cost gate.
+    They are read separately by ``clients/kraken/rest.py`` and a single shared TTL
+    is the shape spec 38 exists to prevent.
+
+    Invariant 2: a cache stale beyond its TTL **counts as a failed fetch**. It is not
+    returned and the call raises. That is a different mechanism from the
+    last-known-good retention in ``clients/kraken/``, which keeps the same values
+    forever, past any TTL, and may be read only by invariant 14's emergency
+    liquidation. Two mechanisms, two readers; do not merge them.
+    """
+
+    asset_pairs: int = Field(gt=0)
+    """Seconds a ``PairRulesSnapshot`` may be reused for."""
+
+    trade_volume: int = Field(gt=0)
+    """Seconds a ``FeeTierSnapshot`` may be reused for."""
+
+
 class KrakenConfig(_Section):
     """Exchange-client tuning.
 
@@ -264,6 +290,24 @@ class KrakenConfig(_Section):
 
     rest_timeout_s: int = Field(gt=0)
     """HTTP timeout for one REST call."""
+
+    cache_ttl_s: CacheTtlConfig | None = None
+    """How long ``AssetPairs`` and ``TradeVolume`` may be reused. Spec 38 step 1.
+
+    **Optional here, and refused at the point of use.** Every other threshold in this
+    file is required, and this one will be too once the lead pastes the block from
+    spec 37's appendix — but the two halves land in one change and this half lands
+    first. A required field would make ``load_config()`` raise on the committed
+    ``config/default.yaml`` until the YAML catches up, which is precisely the failure
+    that reverted the lead's attempt on 2026-09-10, mirrored.
+
+    ``None`` is not a value and nothing is defaulted from it. ``Config.get`` raises
+    :class:`ConfigKeyError` when asked to descend through it, and
+    ``clients/kraken/rest.py`` raises rather than caching for a guessed interval, so
+    an absent TTL fails closed exactly as an absent ``data_guard.max_data_age_s``
+    did. A ``null`` in the YAML is refused by :func:`_refuse_nulls` before pydantic
+    ever sees it, which is what spec 38 step 3 asks for.
+    """
 
 
 class MarketSensorConfig(_Section):

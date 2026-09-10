@@ -5,6 +5,44 @@ Never edit the tracker directly.
 
 ## Current Task
 
+**Phase 3. Claimed: specs 38 and 39**, in that order, per
+`feature-specs/PHASE-3-TASKS.md` and ownership rule 5. Claimed 2026-09-10, before
+any code was written.
+
+### HANDOFF TO THE LEAD — spec 38 step 1, done, the YAML is now safe to paste
+
+**`kraken.cache_ttl_s` exists on the config model.** `CacheTtlConfig` is declared in
+`src/acsoe/platform/config.py` and `KrakenConfig.cache_ttl_s` points at it, so the
+`extra="forbid"` refusal that reverted the lead's 2026-09-10 attempt is gone. The
+block in `feature-specs/37-phase-3-rulings-into-the-documents.md`'s appendix —
+`cache_ttl_s.asset_pairs: 300`, `cache_ttl_s.trade_volume: 60` — can be pasted
+under `kraken:` and will parse.
+
+**One deliberate difference from the obvious reading, and the lead should know it
+before pasting.** The field is declared `CacheTtlConfig | None = None`, not
+required. It had to be: the committed `config/default.yaml` does not carry the key
+yet, and a required field would have made `load_config()` raise on the shipped
+file — the same failure the lead hit, mirrored, taking `paper_config`,
+`scripts/verify.py` and every test that reads the committed config with it. Spec 38
+step 1 says in as many words *"you can test with a fabricated config until the YAML
+lands"*, which is only possible if the shipped file still loads.
+
+Nothing is defaulted. `None` is not a value: `Config.get("kraken.cache_ttl_s.…")`
+raises `ConfigKeyError` on it, and `KrakenRestClient` raises
+`KrakenUnavailableError` naming the missing key rather than caching for a guessed
+interval. Absence fails closed at the point of use, exactly as
+`data_guard.max_data_age_s` did before the operator supplied it.
+
+**Recommended follow-up, one line, the lead's call:** once the YAML is in, change
+`cache_ttl_s: CacheTtlConfig | None = None` to `cache_ttl_s: CacheTtlConfig` so a
+later removal refuses at startup instead of blocking at read.
+`test_the_committed_config_and_the_cache_ttl_handoff` in
+`tests/platform/test_config.py` asserts both worlds and stays green across the
+paste — it asserts the raising behaviour while the key is absent and asserts
+`300`/`60` as positive ints the moment it is present.
+
+### Phase 2 (closed, kept for the record)
+
 **Phase 2. Claimed: specs 25, 26, 27, 28, 29, 30**, in that order, per
 `feature-specs/PHASE-2-TASKS.md` and ownership rule 5.
 

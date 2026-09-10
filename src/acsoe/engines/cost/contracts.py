@@ -14,22 +14,58 @@ refused at this boundary rather than discovered three decimals into a hurdle com
 one money rule in this project and it should have one definition; a second copy here
 would be a second place for it to drift.
 
-## The state paths below are ratified
+## What was ratified, and what was assumed — corrected 2026-09-10, spec 40
 
-They were B's proposal when this engine was written, declared as `Final` constants under
-a heading saying so, precisely so that a ruling could be applied without hunting inlined
-key names through the engine. The lead ratified all four on 2026-09-09 and they are now
-in the cross-chain key table in `engine-contracts.md`.
+An earlier version of this docstring said all four state paths were ratified. Two of them
+were not, and the distinction matters enough to write down rather than quietly fix.
 
-**The spread was re-pointed, and the reason is worth keeping.** It is not
-`state["exchange"]["pairs"][pair]["spread_pct"]`, which is where B first proposed it, but
-`state["market_sensor"]["quotes"][pair]["spread_pct"]`. Engine 1 `exchange` is the
-*account* engine — balances, fee tier, pair rules — and engine 3 `market_sensor` is the
-*market-data* engine. Spread is market data. The deciding argument is engine 4
-`data_guard`, which blocks on stale data, a negative spread and a missing candle: all
-three are market-data faults and should arrive from one publisher rather than two.
+**What the lead ratified on 2026-09-09 was a set of *positions* in the cross-chain key
+table in `engine-contracts.md`** — which engine publishes each value and under which state
+key. That table says the fee tier arrives on `state["exchange"]`, published by engine 1;
+it does not fix engine 1's *field names*, and it never did.
 
-The whole re-point was one constant.
+**The field names below `state["exchange"]` were B's assumption**, written against a
+contract that did not yet exist, and the Phase 3 audit found three of them wrong:
+
+| Assumed | What engine 1 publishes |
+|---|---|
+| `exchange.fees` | `exchange.fee_tier` |
+| `exchange.fees.maker_pct` / `taker_pct` | `exchange.fee_tier.maker_fee_pct` / `taker_fee_pct` |
+| `exchange.fallbacks_used` | `exchange.failed_fetches` — a different thing, see below |
+
+Every one of them was a `BLOCK` on a live tick, and the gate was fail-closed in the least
+useful possible way: refusing everything, for the wrong reason, in prose naming a key
+nothing writes. It stayed invisible for a whole phase because every test built
+`state["exchange"]` by hand in the shape this engine expected. The fixtures are now built
+from engine 1's own output; a mock that agrees with its caller is not a test of the seam.
+
+**The spread path was ratified and is correct.** It is
+`state["market_sensor"]["quotes"][pair]["spread_pct"]`, not
+`state["exchange"]["pairs"][pair]["spread_pct"]` where B first proposed it. Engine 1
+`exchange` is the *account* engine — balances, fee tier, pair rules — and engine 3
+`market_sensor` is the *market-data* engine. Spread is market data. The deciding argument
+is engine 4 `data_guard`, which blocks on stale data, a negative spread and a missing
+candle: all three are market-data faults and should arrive from one publisher rather than
+two. The one path that went through ratification is the one path that was right.
+
+## `failed_fetches` is not `fallbacks_used`
+
+Engine 1 deliberately applies no paper-mode fallback of its own — it reports which calls
+failed and leaves the fallback decision to the consumer that has to record it. So there
+is no `fallbacks_used` on `state["exchange"]` and there never was; this engine's read of
+one returned an empty tuple on every tick, silently.
+
+After spec 37 retired the fee-tier row of invariant 2's paper-mode table, **there is no
+fee-tier fallback in any mode**: a confirmed pair with no fee data blocks. So this engine
+applies no fallback at all, and :attr:`CostAssessment.fallbacks_used` — a real `rejections`
+column — is correspondingly empty. It is kept, and it is sourced from fallbacks *this
+engine applied*, not from engine 1's failed fetches. Copying a failed fetch into that
+column would misreport the record invariant 2 asks for: a failure to fetch is not a
+fallback, it is the opposite of one.
+
+`failed_fetches` is still read, for one purpose only: when the fee tier is missing and the
+`trade_volume` call is named there, the operator sentence quotes *that call's* reason.
+"missing exchange.fee_tier" is true and sends the operator to the wrong place.
 """
 
 from __future__ import annotations
@@ -43,9 +79,12 @@ from acsoe.clients.store.contracts import Money
 
 __all__ = [
     "CANDIDATE_PAIR_PATH",
-    "EXCHANGE_FALLBACKS_KEY",
-    "EXCHANGE_FEES_KEY",
+    "EXCHANGE_FAILED_FETCHES_KEY",
+    "EXCHANGE_FEE_TIER_KEY",
     "EXCHANGE_KEY",
+    "FEE_MAKER_FIELD",
+    "FEE_TAKER_FIELD",
+    "FEE_TIER_CALL",
     "MARKET_SENSOR_KEY",
     "MARKET_SENSOR_QUOTES_KEY",
     "MINUS_SIGN",
@@ -62,20 +101,33 @@ __all__ = [
 ]
 
 # --------------------------------------------------------------------------- #
-# State paths — ratified 2026-09-09, see the module docstring
+# State paths — see the module docstring for what was ratified and what was assumed
 # --------------------------------------------------------------------------- #
 
-#: Engine 1 `exchange` (A). Spec 34 fixes this one: the fee tier arrives here.
+#: Engine 1 `exchange` (A). The account engine: balances, fee tier, pair rules.
 EXCHANGE_KEY: Final = "exchange"
 
 #: Account-level fee tier, under :data:`EXCHANGE_KEY`. One tier per account, so it is
-#: not keyed by pair.
-EXCHANGE_FEES_KEY: Final = "fees"
+#: not keyed by pair. Corrected from `"fees"` on 2026-09-10: engine 1 publishes
+#: `fee_tier`, and the assumed name blocked every live tick.
+EXCHANGE_FEE_TIER_KEY: Final = "fee_tier"
 
-#: Which paper-mode fallbacks fired on this tick, under :data:`EXCHANGE_KEY`. Invariant 2
-#: requires every decision affected by a fallback to record which one, and a gate outcome
-#: is such a decision, so it is carried through into this engine's `data` verbatim.
-EXCHANGE_FALLBACKS_KEY: Final = "fallbacks_used"
+#: The two rate fields under :data:`EXCHANGE_FEE_TIER_KEY`, as
+#: `FeeTierSnapshot.state_dict()` writes them. Lifted out of `_read_inputs` so the next
+#: mismatch is one edit and is greppable — the previous pair were string literals buried
+#: in a call and nothing pointed at them.
+FEE_MAKER_FIELD: Final = "maker_fee_pct"
+FEE_TAKER_FIELD: Final = "taker_fee_pct"
+
+#: Calls engine 1 reports as failed, under :data:`EXCHANGE_KEY`: a list of
+#: `{call, kind, reason}`. **Not a fallback record** — see the module docstring. Read for
+#: exactly one purpose: naming the call that failed in the operator sentence.
+EXCHANGE_FAILED_FETCHES_KEY: Final = "failed_fetches"
+
+#: The name engine 1 gives the fee-tier call in :data:`EXCHANGE_FAILED_FETCHES_KEY`.
+#: Declared here rather than imported from `engines/exchange/`: engine contract rule 3,
+#: an engine never imports another engine.
+FEE_TIER_CALL: Final = "trade_volume"
 
 #: Engine 3 `market_sensor` (A). The market-data engine, and therefore the publisher of
 #: the measured spread — not engine 1, which is the account engine.
@@ -194,6 +246,13 @@ class CostAssessment(BaseModel):
     this payload. Naming them anything else here would put a translation step between
     the engine that computes a number and the table that stores it, which is a place for
     them to stop meaning the same thing.
+
+    `fallbacks_used` is one of those columns and is kept for that reason. It holds the
+    fallbacks **this engine applied**, and after spec 37 retired the fee-tier row of
+    invariant 2's paper-mode table there are none, in any mode — so it is empty and this
+    engine has nothing to put in it. It is not a copy of engine 1's `failed_fetches`: a
+    failed fetch is the opposite of a fallback, and recording one there would misreport
+    exactly the thing invariant 2 wants recorded.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

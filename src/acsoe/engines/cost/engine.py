@@ -42,9 +42,12 @@ from pydantic import ValidationError
 from acsoe.core.contracts import BaseEngine, EngineContext, EngineResult, EngineStatus, State
 from acsoe.engines.cost.contracts import (
     CANDIDATE_PAIR_PATH,
-    EXCHANGE_FALLBACKS_KEY,
-    EXCHANGE_FEES_KEY,
+    EXCHANGE_FAILED_FETCHES_KEY,
+    EXCHANGE_FEE_TIER_KEY,
     EXCHANGE_KEY,
+    FEE_MAKER_FIELD,
+    FEE_TAKER_FIELD,
+    FEE_TIER_CALL,
     MARKET_SENSOR_KEY,
     MARKET_SENSOR_QUOTES_KEY,
     ORDER_BOOK_KEY,
@@ -98,7 +101,7 @@ class CostEngine(BaseEngine):
             inputs = self._read_inputs(state)
             hurdle_multiple = self._read_hurdle_multiple(context)
         except MissingInputError as missing:
-            return self._blocked_on_missing_input(str(missing), started)
+            return self._blocked_on_missing_input(str(missing), state, started)
 
         friction = (
             inputs.maker_fee_pct + inputs.taker_fee_pct + inputs.spread_pct + inputs.slippage_pct
