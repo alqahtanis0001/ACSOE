@@ -103,6 +103,11 @@ async def test_no_secret_reaches_an_exception_message_or_a_log_line(log_file: Pa
         transport=transport,
         credentials=Credentials(key=PLANTED_KEY, secret=PLANTED_SECRET),
         base_url="https://example.invalid",
+        # Both TTLs supplied, so the call reaches the signing path this test is
+        # scanning. Omitting them raises about the missing TTL before a header is
+        # ever built, and a scan of output the key never entered proves nothing.
+        asset_pairs_ttl_s=300,
+        trade_volume_ttl_s=60,
     )
 
     with pytest.raises(KrakenAPIError) as caught:

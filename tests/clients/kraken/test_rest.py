@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -83,14 +83,41 @@ class FakeTransport:
         raise AssertionError(f"no fake response registered for {url}")
 
 
-def build_client(transport: FakeTransport, *, credentials: Credentials | None = None) -> Any:
+#: The two TTLs this file builds clients with, and they are **deliberately
+#: unequal**. A helper that handed both calls the same number would let a
+#: single-shared-TTL implementation — the shape spec 38 exists to prevent — pass
+#: every test in this file without anyone noticing. `test_cache.py` proves the
+#: independence directly; this is the same guard applied to the tests that are
+#: about something else and merely have to live with the cache.
+ASSET_PAIRS_TTL_S = 300
+TRADE_VOLUME_TTL_S = 60
+
+
+def build_client(
+    transport: FakeTransport,
+    *,
+    credentials: Credentials | None = None,
+    clock: FixedClock | None = None,
+    asset_pairs_ttl_s: int | None = ASSET_PAIRS_TTL_S,
+    trade_volume_ttl_s: int | None = TRADE_VOLUME_TTL_S,
+) -> Any:
+    """A client with both TTLs supplied and a clock the caller may keep and move.
+
+    Both TTLs are supplied by default because omitting them is not "no caching" —
+    it is `KrakenUnavailableError` naming the missing key, raised before the call
+    does anything else. A test about the envelope or the signature that omitted
+    them would fail on the TTL and prove nothing about its own subject, which is
+    what happened to seven tests in this package when the cache landed.
+    """
     return KrakenRestClient(
-        clock=FixedClock(AT),
+        clock=clock or FixedClock(AT),
         limiter=RateLimiter(capacity=20, refill_per_second=20),
         transport=transport,
         credentials=credentials
         or Credentials(key=PLANTED_KEY, secret=PLANTED_SECRET),
         base_url="https://example.invalid",
+        asset_pairs_ttl_s=asset_pairs_ttl_s,
+        trade_volume_ttl_s=trade_volume_ttl_s,
     )
 
 
@@ -155,17 +182,29 @@ def test_an_envelope_with_neither_an_error_nor_a_result_is_refused() -> None:
 
 @pytest.mark.asyncio
 async def test_pair_rules_come_from_the_payload_and_change_when_it_changes() -> None:
+    """The rule is fetched, never a constant — and the clock has to move for it.
+
+    The TTL expiry is not incidental scaffolding here. Without it the second call
+    is served from the cache and this test compares a snapshot with itself, which
+    passes both value assertions and proves nothing at all about the payload. The
+    request count is asserted for the same reason: it is what fails if the expiry
+    ever stops working, and a value comparison is not.
+    """
     transport = FakeTransport()
     transport.serve("AssetPairs", fixture("asset_pairs"))
-    client = build_client(transport)
+    clock = FixedClock(AT)
+    client = build_client(transport, clock=clock)
     first = (await client.asset_pairs()).pairs["BTC/USD"]
+    assert len(transport.seen) == 1
 
     altered = fixture("asset_pairs")
     altered["result"]["BTC/USD"]["ordermin"] = "0.5"
     altered["result"]["BTC/USD"]["tick_size"] = "0.7"
     transport.serve("AssetPairs", altered)
+    clock.advance(timedelta(seconds=ASSET_PAIRS_TTL_S + 1))
     second = (await client.asset_pairs()).pairs["BTC/USD"]
 
+    assert len(transport.seen) == 2
     assert second.ordermin == Decimal("0.5")
     assert second.tick_size == Decimal("0.7")
     assert second.ordermin != first.ordermin
@@ -173,18 +212,23 @@ async def test_pair_rules_come_from_the_payload_and_change_when_it_changes() -> 
 
 @pytest.mark.asyncio
 async def test_the_fee_tier_comes_from_the_payload_and_changes_when_it_changes() -> None:
+    """Same property for the fee, past its **own** TTL, which is the shorter one."""
     transport = FakeTransport()
     transport.serve("TradeVolume", fixture("trade_volume"))
-    client = build_client(transport)
+    clock = FixedClock(AT)
+    client = build_client(transport, clock=clock)
     first = await client.trade_volume()
+    assert len(transport.seen) == 1
 
     altered = fixture("trade_volume")
     altered["result"]["tier"] = 3
     altered["result"]["maker_fee_pct"] = "0.0011"
     altered["result"]["taker_fee_pct"] = "0.0019"
     transport.serve("TradeVolume", altered)
+    clock.advance(timedelta(seconds=TRADE_VOLUME_TTL_S + 1))
     second = await client.trade_volume()
 
+    assert len(transport.seen) == 2
     assert (second.tier, second.maker_fee_pct) == (3, Decimal("0.0011"))
     assert second.maker_fee_pct != first.maker_fee_pct
 
@@ -248,19 +292,42 @@ def test_a_crossed_book_is_reported_rather_than_clamped() -> None:
 
 @pytest.mark.asyncio
 async def test_pair_rules_and_balances_are_retained_across_a_later_failure() -> None:
+    """Retention survives the **TTL expiry** that blocked trading — one test, both facts.
+
+    Spec 38 asks for exactly this pairing, and the pairing is the point. The clock
+    is advanced past `cache_ttl_s.asset_pairs`, so the second `AssetPairs` call is
+    a genuine re-fetch rather than a cache hit; the re-fetch fails; the call raises
+    and does **not** hand back the expired snapshot. And after all of that the
+    last-known-good still holds the pre-expiry value, because the cache and the
+    retention are two mechanisms with two readers — the cache answers "may I use
+    this now", which is now no, and the retention answers "what is the last thing
+    we knew", which is unchanged. Rule 14's liquidation needs the second during
+    precisely the outage that makes the first say no.
+
+    `Balance` is not cached at all, so the clock does not affect it; it is here
+    because retention has to hold for both retained calls, not only the cached one.
+    """
     transport = FakeTransport()
     transport.serve("AssetPairs", fixture("asset_pairs"))
     transport.serve("Balance", fixture("balance"))
-    client = build_client(transport)
+    clock = FixedClock(AT)
+    client = build_client(transport, clock=clock)
     await client.asset_pairs()
     await client.balance()
+    requests_before = len(transport.seen)
 
     transport.serve("AssetPairs", {"error": ["EService:Unavailable"], "result": {}})
     transport.serve("Balance", {"error": ["EService:Unavailable"], "result": {}})
+    clock.advance(timedelta(seconds=ASSET_PAIRS_TTL_S + 1))
     with pytest.raises(KrakenAPIError):
         await client.asset_pairs()
     with pytest.raises(KrakenAPIError):
         await client.balance()
+
+    # The expiry sent the call to the network. If the cache had answered instead,
+    # nothing would have raised and the assertions below would be about a value
+    # that was never in danger.
+    assert len(transport.seen) == requests_before + 2
 
     retained_pairs = client.last_known_good_asset_pairs
     retained_balances = client.last_known_good_balances
@@ -272,13 +339,32 @@ async def test_pair_rules_and_balances_are_retained_across_a_later_failure() -> 
 
 @pytest.mark.asyncio
 async def test_the_fee_tier_and_the_book_are_deliberately_not_retained() -> None:
-    """A retained stale spread is a loaded gun pointed at the cost gate."""
+    """A retained stale spread or fee is a loaded gun pointed at the cost gate.
+
+    The negative half of the test above, and it is sharpened by the cache existing:
+    `TradeVolume` is the one call that is cached and **not** retained, so after its
+    TTL expires and the re-fetch fails there is nowhere left in the client holding
+    a fee. That is the whole distinction — a TTL cache says "this is still good", a
+    last-known-good would say "use it anyway", and for a fee the second must not
+    exist. Asserting it only before the expiry would leave the interesting moment
+    untested.
+    """
     transport = FakeTransport()
     transport.serve("TradeVolume", fixture("trade_volume"))
-    client = build_client(transport)
+    clock = FixedClock(AT)
+    client = build_client(transport, clock=clock)
     await client.trade_volume()
     assert getattr(client, "last_known_good_trade_volume", None) is None
     assert set(client._retained) <= {"asset_pairs", "balance"}
+
+    transport.serve("TradeVolume", {"error": ["EService:Unavailable"], "result": {}})
+    clock.advance(timedelta(seconds=TRADE_VOLUME_TTL_S + 1))
+    with pytest.raises(KrakenAPIError):
+        await client.trade_volume()
+
+    assert getattr(client, "last_known_good_trade_volume", None) is None
+    assert "trade_volume" not in client._retained
+    assert "order_book" not in client._retained
 
 
 # --------------------------------------------------------------------------- #
@@ -288,6 +374,16 @@ async def test_the_fee_tier_and_the_book_are_deliberately_not_retained() -> None
 
 @pytest.mark.asyncio
 async def test_a_private_call_without_credentials_blocks_rather_than_defaulting() -> None:
+    """And blocks for **that** reason, which is asserted rather than assumed.
+
+    This test was green through the whole of the cache landing, and it should not
+    have been: it built the client with no TTLs as well as no credentials, so
+    `_require_ttl` raised `KrakenUnavailableError` about `cache_ttl_s.trade_volume`
+    several lines before the credential check ran. Same exception type, so nothing
+    in `pytest.raises` could notice. Every fail-closed path in this package raises
+    that one type on purpose, which makes the type alone a weak assertion — where
+    the reason is the subject, the message is what gets asserted.
+    """
     transport = FakeTransport()
     transport.serve("TradeVolume", fixture("trade_volume"))
     client = KrakenRestClient(
@@ -296,9 +392,15 @@ async def test_a_private_call_without_credentials_blocks_rather_than_defaulting(
         transport=transport,
         credentials=None,
         base_url="https://example.invalid",
+        asset_pairs_ttl_s=ASSET_PAIRS_TTL_S,
+        trade_volume_ttl_s=TRADE_VOLUME_TTL_S,
     )
-    with pytest.raises(KrakenUnavailableError):
+    with pytest.raises(KrakenUnavailableError) as caught:
         await client.trade_volume()
+    message = str(caught.value)
+    assert "credentials" in message
+    assert "cache_ttl_s" not in message
+    assert not transport.seen
 
 
 def test_the_signature_is_deterministic_and_refuses_a_malformed_secret() -> None:

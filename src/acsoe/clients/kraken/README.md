@@ -66,7 +66,52 @@ They are isolated into named functions precisely so that confirming them is a sm
 obvious edit. A renamed field shows up as a `KrakenUnavailableError` naming the field
 — a block — never as a default.
 
+## The TTL cache, and the retention, which are two different mechanisms
+
+They share the word "kept" and collapsing them breaks the kill switch, so they live
+in two separate places in `rest.py` and are described here as two separate things.
+
+**The cache answers "may I use this now."** It is bounded, and past its bound the
+answer is no.
+
+| Call | Cached for | Retained? |
+|---|---|---|
+| `AssetPairs` | `kraken.cache_ttl_s.asset_pairs` — 300s in the shipped config | yes |
+| `TradeVolume` | `kraken.cache_ttl_s.trade_volume` — 60s | **no** |
+| `Balance` | **not cached** | yes |
+| `Depth` (order book) | **not cached** | no |
+
+The two TTLs come from two separate config keys and are held in two separate fields.
+There is no single "the TTL" anywhere in the client, because one shared value is the
+shape spec 38 exists to prevent, and the easiest way to reintroduce it is to write it
+down once. `KrakenRestClient.from_config` is the construction site that reads them;
+the constructor still takes them as optional parameters, because tests and scripts
+build clients directly and an omitted TTL must fail loudly rather than be guessed at.
+
+**What expiry does.** Past its TTL the entry is dropped *before the network is
+touched*, the call re-fetches, and **if that re-fetch fails the call raises**. It
+does not return the expired entry, under any flag, config key or degraded mode.
+Invariant 2: a cache stale beyond its TTL counts as a failed fetch — for trading, a
+stale value does not exist. An entry whose age is *exactly* its TTL is expired, not
+fresh, and a negative age (a clock that stood still or was stepped back) is expired
+too: fail-closed on a boundary is a re-fetch, never a reuse.
+
+**An absent TTL is not "cache forever" and not "never cache."** It is an unanswerable
+question about whether a value is still good, so the call raises
+`KrakenUnavailableError` naming the config key an operator would have to supply, and
+spends no request finding out.
+
+Age is measured against the **injected clock**, never `time.time()`. A direct clock
+read here would make a replay unfaithful in exactly the layer replay depends on.
+
+`Balance` and `Depth` are not cached at all. Balances change on every fill and a
+cached one sizes an order that cannot fill; a stale spread is the loaded gun
+invariant 2 names.
+
 ## Retained last-known-good values
+
+**Retention answers "what is the last thing we knew."** It is unbounded, it survives
+a TTL expiry and a failed fetch alike, and it has exactly one reader.
 
 Two calls retain their last successful result with the time it was fetched, and
 **never discard it on a failure**:
@@ -84,6 +129,17 @@ about that would be a defect rather than a convenience. Their only reader is the
 gate, and invariant 2 says an assumed spread invalidates that gate outright. A
 liquidation does not need a spread: it sells as a taker at whatever the book is,
 having already decided that getting flat beats getting a good price.
+
+**The fee tier is the call where the two mechanisms are most easily confused**, and it
+is the one where getting it wrong is silent: it *is* cached and it is *never*
+retained. A TTL cache says "this is still good"; a last-known-good would say "use it
+anyway". For a fee the second must not exist. So once `cache_ttl_s.trade_volume` has
+expired and a re-fetch has failed, there is nowhere in this client holding a fee at
+all — which is the correct state, and is asserted as such.
+
+`last_known_good_asset_pairs` surviving the expiry that blocked trading is the pairing
+the other way round, and it is one test rather than two: the same snapshot that the
+cache has just refused to serve is still the one a liquidation would size against.
 
 ## Absent is never zero
 
@@ -136,8 +192,12 @@ budget is asserted exactly rather than by waiting.
 
 **The budget has no default.** `capacity` and `refill_per_second` are required
 constructor arguments: picking a number here would be a literal in the one file whose
-job is to stop the system exceeding it. Config keys have been requested from the
-lead; until they exist the construction site supplies them.
+job is to stop the system exceeding it. They come from `kraken.rest_capacity` and
+`kraken.rest_refill_per_s`, which the lead landed with spec 25's request.
+
+**It is one limiter, shared with the stream.** `KrakenRestClient.from_config` takes it
+as a parameter rather than building its own, because a factory that made one per
+client would give a single account two independent budgets against one rate limit.
 
 The balance is allowed to go very slightly negative after a wait, and that is what
 makes `acquire` terminate rather than a rounding shortcut — see the comment in

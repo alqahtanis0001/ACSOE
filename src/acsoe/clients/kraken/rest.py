@@ -60,7 +60,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 from urllib.parse import urlencode
 
 from acsoe.clients.kraken.contracts import (
@@ -76,7 +76,7 @@ from acsoe.clients.kraken.contracts import (
 from acsoe.clients.kraken.errors import KrakenAPIError, KrakenError, KrakenUnavailableError
 from acsoe.clients.kraken.limiter import RateLimiter
 from acsoe.platform.clock import Clock
-from acsoe.platform.config import Credentials
+from acsoe.platform.config import Config, Credentials
 
 __all__ = [
     "HttpResponse",
@@ -108,6 +108,11 @@ RETAINED_CALLS = frozenset({"asset_pairs", "balance"})
 CACHED_CALLS = frozenset({"asset_pairs", "trade_volume"})
 
 _MICROSECONDS_PER_SECOND = 1_000_000
+
+#: The two snapshot types that may be cached. A value-restricted ``TypeVar`` rather
+#: than a union, so :meth:`KrakenRestClient._fresh` hands each caller back its own
+#: type instead of a union both call sites would have to narrow again.
+_Cached = TypeVar("_Cached", PairRulesSnapshot, FeeTierSnapshot)
 
 
 # --------------------------------------------------------------------------- #
@@ -446,6 +451,47 @@ class KrakenRestClient:
         self._cached_asset_pairs: PairRulesSnapshot | None = None
         self._cached_trade_volume: FeeTierSnapshot | None = None
 
+    @classmethod
+    def from_config(
+        cls,
+        config: Config,
+        *,
+        clock: Clock,
+        limiter: RateLimiter,
+        transport: HttpTransport | None = None,
+        credentials: Credentials | None = None,
+        base_url: str = KRAKEN_REST_URL,
+    ) -> KrakenRestClient:
+        """Build a client whose tuning comes from ``config`` and from nowhere else.
+
+        Spec 38 step 3: the TTLs come from ``kraken.cache_ttl_s.asset_pairs`` and
+        ``kraken.cache_ttl_s.trade_volume``, **never a literal**. This exists so
+        there is one construction site that cannot forget them — the constructor
+        takes them as optional parameters because a test and a script build clients
+        directly, and an optional parameter is exactly the kind of thing a caller
+        omits by accident. It omitted them here once already, which is how the two
+        keys came to be unreadable from the daemon.
+
+        The two are read as **two separate attribute accesses on two separate
+        fields**. There is no intermediate variable holding "the TTL", because a
+        single shared TTL is the shape spec 38 exists to prevent and the easiest way
+        to reintroduce it is to write it down once.
+
+        The limiter is a parameter rather than something built here: it is the *one*
+        limiter, shared with the WebSocket client, and a factory that made its own
+        would give the account two independent budgets against one rate limit.
+        """
+        return cls(
+            clock=clock,
+            limiter=limiter,
+            transport=transport,
+            credentials=credentials,
+            base_url=base_url,
+            timeout_s=config.kraken.rest_timeout_s,
+            asset_pairs_ttl_s=config.kraken.cache_ttl_s.asset_pairs,
+            trade_volume_ttl_s=config.kraken.cache_ttl_s.trade_volume,
+        )
+
     # -- the cache: "may I use this now" ---------------------------------- #
 
     def _require_ttl(self, ttl_s: int | None, key: str) -> int:
@@ -465,18 +511,27 @@ class KrakenRestClient:
             )
         return ttl_s
 
-    def _cache_hit(self, cached: PairRulesSnapshot | FeeTierSnapshot | None, ttl_s: int) -> bool:
-        """True when ``cached`` is still inside its TTL, by the injected clock.
+    def _fresh(self, cached: _Cached | None, ttl_s: int) -> _Cached | None:
+        """``cached`` when it is still inside its TTL by the injected clock, else None.
+
+        Returns the entry rather than a boolean on purpose. A predicate leaves the
+        caller holding an optional it has already proved is present, and the only
+        ways to spend that are a narrowing ``assert`` — which ``python -O`` deletes
+        out of the function that decides whether a fee is fresh enough to price a
+        trade — or a redundant second check. Returning the value narrows it by
+        ordinary control flow instead.
 
         A negative age — the clock stood still or moved back — counts as expired.
         Fail-closed on a boundary is a re-fetch, never a reuse, and the same reason
-        makes the comparison ``>=``: at exactly its TTL an entry has reached the end
-        of the interval it was permitted, so it is fetched again.
+        makes the upper comparison strict: at exactly its TTL an entry has reached
+        the end of the interval it was permitted, so it is fetched again.
         """
         if cached is None:
-            return False
+            return None
         age = self._now_micros() - cached.fetched_at
-        return 0 <= age < ttl_s * _MICROSECONDS_PER_SECOND
+        if 0 <= age < ttl_s * _MICROSECONDS_PER_SECOND:
+            return cached
+        return None
 
     # -- retention, read only by rule 14 ---------------------------------- #
 
@@ -578,9 +633,8 @@ class KrakenRestClient:
         expiry and this failure, because rule 14 needs it during exactly this outage.
         """
         ttl_s = self._require_ttl(self._asset_pairs_ttl_s, "kraken.cache_ttl_s.asset_pairs")
-        cached = self._cached_asset_pairs
-        if self._cache_hit(cached, ttl_s):
-            assert cached is not None  # noqa: S101 - narrowing only; _cache_hit is the check
+        cached = self._fresh(self._cached_asset_pairs, ttl_s)
+        if cached is not None:
             return cached
         self._cached_asset_pairs = None
         result = await self._public("asset_pairs", ASSET_PAIRS_PATH, {})
@@ -599,9 +653,8 @@ class KrakenRestClient:
         exist for this value.
         """
         ttl_s = self._require_ttl(self._trade_volume_ttl_s, "kraken.cache_ttl_s.trade_volume")
-        cached = self._cached_trade_volume
-        if self._cache_hit(cached, ttl_s):
-            assert cached is not None  # noqa: S101 - narrowing only; _cache_hit is the check
+        cached = self._fresh(self._cached_trade_volume, ttl_s)
+        if cached is not None:
             return cached
         self._cached_trade_volume = None
         result = await self._private("trade_volume", TRADE_VOLUME_PATH, {})

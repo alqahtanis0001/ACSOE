@@ -9,7 +9,55 @@ Never edit the tracker directly.
 `feature-specs/PHASE-3-TASKS.md` and ownership rule 5. Claimed 2026-09-10, before
 any code was written.
 
+**Spec 38 — COMPLETE, 2026-09-10.** Four commands green, output pasted under
+Verification. **Spec 39 — in progress.**
+
+### Spec 38 — what landed, and the three things worth knowing
+
+`src/acsoe/clients/kraken/rest.py`, `README.md`, `tests/clients/kraken/test_cache.py`
+(new, 20 tests), and repairs to `test_rest.py` and `test_secrets.py`. 76 tests in
+`tests/clients/kraken/`, up from 50.
+
+1. **The cache and the retention are two mechanisms and the tests now meet at the
+   point where they interact.** `test_retention_survives_the_expiry_that_blocked_trading`
+   is the pairing spec 38 asks for as one test: the TTL expires, the re-fetch fails,
+   the call raises rather than returning the expired snapshot, and
+   `last_known_good_asset_pairs` still holds that same snapshot with its original
+   `fetched_at`. The fee is the mirror image — cached, never retained — so after its
+   own expiry and failure there is nowhere in the client holding a fee at all.
+2. **Every cache assertion is on the transport, never on the returned value.** A
+   `CountingTransport` records one entry per request. The cache hands back the very
+   object a fetch would have produced, so equality and identity checks pass against a
+   client with no cache in it; only the request count can tell.
+3. **The two TTLs are proved independent in both directions.** Parametrised over
+   `(asset_pairs=60, trade_volume=300)` and the reverse, with the clock parked at 90
+   seconds between them. A single shared TTL has to pick a number and whichever it
+   picks it fails one of the two orders. Verified by mutation, not by inspection:
+   forcing `self._trade_volume_ttl_s = asset_pairs_ttl_s` kills 11 tests, and making
+   `_fresh` never expire kills 18.
+
+**Two defects found on the way that were not the reported failures.** Both are in
+the build log in full:
+
+- `test_a_private_call_without_credentials_blocks_rather_than_defaulting` was
+  **green and testing nothing**. It built a client with neither credentials nor
+  TTLs, so `_require_ttl` raised `KrakenUnavailableError` about
+  `cache_ttl_s.trade_volume` before the credential check it exists to exercise ever
+  ran. Same exception type, so `pytest.raises` could not notice. It now supplies both
+  TTLs and asserts on the message. **General point for everyone: every fail-closed
+  path in `clients/kraken/` raises that one type on purpose, which makes
+  `pytest.raises(KrakenUnavailableError)` on its own a weak assertion in this
+  package.**
+- **The two config keys the lead pasted were unreachable from `src/`.** Nothing
+  outside `rest.py` and the tests named either TTL, so wiring the daemon up as it
+  stood would have made every `asset_pairs()` and `trade_volume()` call raise about a
+  missing TTL with the value sitting in `config/default.yaml`.
+  `KrakenRestClient.from_config` is the fix and is what spec 39 builds through.
+
 ### HANDOFF TO THE LEAD — spec 38 step 1, done, the YAML is now safe to paste
+
+*Kept for the record. Both halves landed on 2026-09-10 and the follow-up below was
+taken: `cache_ttl_s` is now required.*
 
 **`kraken.cache_ttl_s` exists on the config model.** `CacheTtlConfig` is declared in
 `src/acsoe/platform/config.py` and `KrakenConfig.cache_ttl_s` points at it, so the
@@ -467,6 +515,36 @@ Anything touching `core/`, `bootstrap.py`, the engine registry, an invariant, a 
 ## Verification
 
 Paste the real output of your last run. Never report a task complete without it.
+
+### Phase 3, spec 38 complete (2026-09-10)
+
+```
+$ .venv/Scripts/python.exe -m pytest tests/ -q
+1100 passed in 58.70s
+
+$ .venv/Scripts/python.exe -m mypy --strict src/
+Success: no issues found in 68 source files
+
+$ .venv/Scripts/python.exe -m ruff check src/
+All checks passed!
+
+$ .venv/Scripts/python.exe scripts/verify.py --phase 3
+ACSOE verify - phase 3
+repo: C:\Users\saad2\Documents\GitHub\ACSOE
+
+PASS    docs_vocabulary  14 files scanned, 10 retired terms, no hit
+PASS    toolchain_green  pytest, mypy --strict and ruff all green (python.exe)
+
+2 criteria: 2 PASS, 0 FAIL, 0 PENDING
+Phase 3 is green: every criterion PASS, zero PENDING.
+```
+
+`ruff check tests/clients tests/cli tests/platform` is also clean; the standard's
+four commands cover `src/` only, so I run it over my own test paths separately.
+
+**"Phase 3 is green" over two criteria is the thing nobody may read as progress** —
+it is C's spec 45 that fixes it, and it is not a claim about spec 38. Spec 38's real
+evidence is the 76 tests in `tests/clients/kraken/` and the two mutation runs above.
 
 ### Phase 2, after spec 29 (2026-09-09)
 
