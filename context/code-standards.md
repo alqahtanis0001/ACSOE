@@ -72,6 +72,21 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
 - Anything involving money uses exact `Decimal` assertions, never `pytest.approx`.
 - Use `hypothesis` for sizing and rounding logic — that is where off-by-one errors hide.
 - A test that asserts a gate can be bypassed is a defect in the test.
+- **A double must be capable of exhibiting the property under test.** Before writing the
+  assertion, ask what single property this test exists to demonstrate, and whether the fake,
+  fixture or stub can actually exhibit it. A double that is simpler than the real thing *in
+  exactly the dimension the test is about* cannot fail, and a test that cannot fail is not
+  evidence — it is worse than no test, because it reads as coverage. Phase 3 found four:
+  a fake transport that counted nothing, in tests about whether a second call makes a request;
+  a client built without a TTL, in a test about whether a missing credential blocks; a
+  `FakeTime.sleep` with no `await` in it, in a test about lock contention; and a hand-built
+  `state["exchange"]` that agreed with its caller, in tests about whether the caller reads the
+  right keys. All four were green for a whole phase.
+- **`pytest.raises(SomeError)` alone is a weak assertion wherever one error type has several
+  causes.** Every fail-closed path in `clients/kraken/` raises `KrakenUnavailableError` on
+  purpose, so the bare form cannot tell the failure you induced from one that happened first.
+  Assert on the message, or on the reason code. The same applies to any status a gate returns
+  for more than one reason: assert the reason, not only the `BLOCK`.
 
 ## Verification
 

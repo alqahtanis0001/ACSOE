@@ -232,3 +232,98 @@ passed and shipped a daemon that dies on its second minute. The clause was not w
 this defect in mind — it was about the subscription set changing between ticks — which is the
 argument for acceptance criteria that exercise a mechanism twice rather than once, whatever
 the stated reason.
+
+### Ruling: the crypto-quoted exclusion fails closed in engine 7 and fails open in engine 2, and that is not an inconsistency
+
+**Agent:** Lead · **Task:** spec 39 step 3, spec 43 step 4 · **Date:** 2026-09-10
+
+**What happened.** A escalated that invariant 7 defines a crypto-quoted pair as one whose
+"quote is BTC, ETH, or **any non-stable asset**", and that no set of stable assets exists
+anywhere in the repository. Confirmed by grep: `allow_crypto_quoted` is declared in
+`config/default.yaml` and read by two specs, and nothing anywhere says which quote currencies
+are crypto. It is not derivable from the exchange either — `AssetPairs` as this client maps it
+carries no asset class, and there is no field that would hold one.
+
+**A rejected the derivation, correctly, and the reason is worth keeping.** The available
+heuristic is "a pair is crypto-quoted if its quote also appears as a base in the same
+snapshot". It classifies our fixture perfectly. It is also wrong on real Kraken, which lists
+fiat/fiat pairs, so EUR and GBP appear as bases and every EUR-quoted pair would be called
+crypto. It fails *conservatively*, which is exactly why it would have survived every test we
+have and then quietly shrunk the universe on real data. A heuristic that is wrong in the safe
+direction is the hardest kind to find, because nothing ever complains.
+
+**The question I was asked.** What should engine 2 do in the window where the key is absent?
+A named two fail-closed directions pointing opposite ways: exclude every pair not provably
+stable and subscribe to nothing, or apply the balance rule alone and publish the fact.
+
+**Ruled: they point opposite ways because the two engines have opposite costs of being wrong,
+and the answer is different in each.**
+
+- **Engine 2 `market_data_recorder` proceeds** — balance rule only, crypto-quoted exclusion
+  skipped, `crypto_quoted_excluded: false` published in its state so the gap is visible rather
+  than silent. This is A's second option and A had already built it.
+- **Engine 7 `scout` excludes** — with no stable set, a pair whose quote is not provably
+  stable is treated as crypto-quoted and is out of the universe, and `scout` says so in its
+  reason code rather than silently narrowing.
+
+**Because the two engines are answering different questions and spec 39 step 4 already says
+so in as many words.** Engine 2 computes the *subscription scope* — what the socket pays
+attention to — and step 4 states outright that it "is **not** the tradable universe. Engine 7
+`scout` is the sole authority on that." So no trade can occur in a crypto-quoted pair on
+account of engine 2's behaviour, whatever engine 2 subscribes to; invariant 7's enforcement
+lives in one place and it is not this one.
+
+The costs are then asymmetric in opposite directions. For engine 2, over-subscribing costs
+bandwidth and under-subscribing destroys order-book history that cannot be recovered — spec 39
+step 5 calls that "the one thing this system may never do", in the neighbouring paragraph. For
+engine 7, over-including risks a trade the operator explicitly disabled, and under-including
+costs an opportunity that recurs on the next tick and every tick after. **Fail-closed is not a
+direction, it is a question about which error is irreversible**, and the irreversible error is
+data loss on one side and an unwanted position on the other.
+
+**What makes this safe rather than a fudge:** engine 2 publishes `crypto_quoted_excluded:
+false`, so the state carries the fact that the filter did not run. It is a published absence,
+not a silent default, and it is the same shape as `failed_fetches` — the system says what it
+did not manage to do rather than papering over it.
+
+**Consequence.** The key itself, `trading.stable_quote_currencies`, is escalated to the
+operator for its values and is not mine to fill in: it changes which pairs are tradable, which
+is the test the YAML header sets for an operator-required key. A's model half is already landed
+optional, the same paired-handoff shape as spec 38 step 1. **It must not land in the YAML as
+`null`** — `_refuse_nulls` would take the whole tree down, which is the trap the nine originally
+occupied and no longer do. Absent until supplied.
+
+### A third green-for-the-wrong-reason test, and now it is a standing rule
+
+**Agent:** Lead · **Task:** phase 3, cross-cutting · **Date:** 2026-09-10
+
+**What happened.** A reported that its first regression test for the limiter's event-loop
+binding **passed against the unfixed code**. `FakeTime.sleep` in
+`tests/clients/kraken/test_limiter.py` is an `async def` with no `await` in it, so it never
+suspends, so the lock is never contended, so the bug it was written to catch cannot occur. A
+consequence A drew and I am recording because it is the more useful half:
+`test_concurrent_acquirers_are_serialised_and_stay_inside_the_budget` has therefore never run
+its twenty coroutines concurrently. Its arithmetic assertion is real and A left it alone, but
+the name overclaims.
+
+**Why this is the entry and not a footnote.** It is the third instance this phase and A
+identified the shared shape: **a double that is simpler than the real thing in exactly the
+dimension the test is about.** The three:
+
+1. A fake transport that counted nothing, in tests about whether a second call makes a request.
+2. A client built without a TTL, in a test about whether a missing credential blocks — the TTL
+   raised first, same exception type, so `pytest.raises` could not tell.
+3. A sleep that does not sleep, in a test about contention.
+
+B's spec 40 fixture problem is the same family seen from the other end — a hand-built
+`state["exchange"]` that agreed with its caller, in tests about whether the caller reads the
+right keys. Four instances in one phase is a pattern, not a run of bad luck.
+
+**Fix.** Added to `context/code-standards.md` under Testing, as a rule rather than an
+observation, phrased as the question to ask: *what is the one property this test exists to
+demonstrate, and is the double capable of exhibiting it?* A double simpler than the real thing
+in the dimension under test cannot fail, and a test that cannot fail is not evidence. Also
+recorded there that a package where every fail-closed path raises one exception type makes
+`pytest.raises(ThatType)` alone a weak assertion — A's second finding, which is a special case
+of the same rule and the one most likely to recur, since `clients/kraken/` is built that way on
+purpose.
