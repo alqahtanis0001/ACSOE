@@ -100,6 +100,47 @@ it, and continue. Message them directly.
 | 46 | Operator prose for engine 7's codes | C | `src/acsoe/console/format.py`, `tests/console/` | A test **enumerates** the codes declared in `scout/contracts.py` and asserts each is a key in `REASON_PROSE` — enumerated, never hand-listed; no prose string contains a digit |
 | 47 | Register engines 7, 10, 11, 17 | Lead | `src/acsoe/bootstrap.py` | All four phase gates re-run with real output pasted into the build log; Phases 0 to 2 unchanged; `is_gate_matches_registry` PASSes with four new gates; a daemon tick completes on an empty database and on the seeded one |
 
+## Session recovery — read this first if you are a fresh lead session
+
+**Phase 3 wave 1 was interrupted once already**, on 2026-09-10, when the IDE crashed with A, B
+and C all mid-task. The `claude` process is a child of the IDE process, so an IDE crash takes the
+session and every in-process teammate with it. The operator has decided to move the session to a
+standalone terminal once wave 1 reports, which removes the mechanism entirely.
+
+**What that crash cost, and what it did not.** Source code survived, because it was on disk.
+Progress files survived, because teammates write them *before* starting work. **Every build log was
+an empty stub**, because the natural moment to write one feels like the end of a task — and that is
+the one thing that cannot be reconstructed. `script-rules.md` rule 1 already says to write the
+entry when you fix the thing. The crash is the demonstration.
+
+**If you are picking this up cold, do this in order:**
+
+1. `git log --oneline -6` — check for a commit nobody on the team made. The IDE committed the
+   working tree as `7c4f012` last time. Teammates do not commit; the lead does.
+2. `python -c "from acsoe.platform.config import load_config; load_config()"` — confirm the config
+   still loads before anything else. A half-landed config key fails every test in the tree and
+   looks like a hundred unrelated defects.
+3. `python scripts/verify.py --phase 3` — full output, never through `tail`.
+4. Read `context/progress/{a-platform,b-store,c-interface}.md`. Teammates claim there before
+   writing code, so these tell you what was in flight.
+5. Check `docs/build-log/phase-3/*.md`. A stub means that agent's reasoning was lost — ask the
+   resumed agent to write down whatever it still remembers before it continues.
+6. **Distinguish a half-finished edit from the machine fault before resuming anyone.** Last time B
+   had removed two constants from `cost/contracts.py` while `engine.py` still referenced them:
+   deterministic mypy name-errors, nothing to do with the intermittent fault, and re-running would
+   have wasted the time the standing "run it in isolation" advice is meant to save.
+
+**Wave state as of the interruption, 2026-09-10:**
+
+| Agent | Specs | Where it had got to |
+|---|---|---|
+| A | 38, 39 | Spec 38 step 1 landed — `CacheTtlConfig` on the model, handoff note published, lead's YAML pasted, both keys resolve. Approved to tighten `cache_ttl_s` to required now the YAML is in. Then 39. |
+| B | 40, 41, 42 | Mid-repair of `engines/cost/`. `CONDITION_ACTION` closure already written up correctly in its progress file. Then 41, then 42. |
+| C | 45 | Restarted from the top; nothing of C's had reached disk. |
+
+**Wave 2, not yet started:** B on 43 then 44 (scout), C on 46 (needs B's reason codes), lead on 47
+(registration, lands last, after 40–44 are green).
+
 ## The bar, mid-phase
 
 Four commands, all four green, before any task is reported complete:
