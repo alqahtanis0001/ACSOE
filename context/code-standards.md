@@ -128,6 +128,27 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   a tripwire for the day someone breaks what it stood in for; deleting it throws that away. The
   same applies to `except KeyError: continue` over a config read, which conflates *absent* with
   *present-and-null* — two different facts that `Config.get` deliberately reports differently.
+- **A handler that cannot distinguish two situations will silently pick the wrong one.**
+  `except ModuleNotFoundError` catches a module that was never written *and* one whose own
+  dependency is missing. `except KeyError` catches a config key that is absent *and* one the
+  operator has not decided. `rmtree(ignore_errors=True)` treats "I could not delete it" as "it was
+  not mine to delete". In each case two facts with different right answers arrive through one
+  channel and the code answers as though they were one. Ask of every broad `except` and every
+  fallback: **what two situations is this conflating, and does the caller have any way to tell
+  them apart?** The information is usually already there — `exc.name`, an mtime, a distinct
+  exception — and using it is a few lines.
+- **"Make it stricter" is a seductive wrong turn.** When a finding is "this could pass when it
+  should not", the instinct is to demand more of the *consumer*. Twice on one defect that made a
+  criterion stop checking what it could check — eighteen tests turned PENDING, then five — while
+  the actual fault was a *producer* conflating two cases. Tightening the consumer is the right fix
+  only when the consumer is the one making the unjustified assumption.
+- **A diagnostic procedure that cannot fail is the same defect as a test that cannot fail.**
+  "Re-run the named test in isolation, and if it passes it was the machine's intermittent fault"
+  ran for two phases and confirmed itself every time — because in isolation nothing else was
+  sweeping the temp directory, which was the actual bug. The procedure produced an answer, the
+  answer was unfalsifiable, and the surrounding prose is what made it convincing. Apply to a
+  diagnostic the question you apply to a test: **under what observation would this have told me
+  something else?**
 - **`pytest.raises(SomeError)` alone is a weak assertion wherever one error type has several
   causes.** Every fail-closed path in `clients/kraken/` raises `KrakenUnavailableError` on
   purpose, so the bare form cannot tell the failure you induced from one that happened first.
