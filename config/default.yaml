@@ -74,6 +74,34 @@ trading:
   base_reporting_currency: USD   # Operator-chosen 2026-09-08.
   allow_crypto_quoted: false     # invariant 7. Crypto-quoted pairs are a second
                                  # directional bet the system did not choose to make.
+  stable_quote_currencies:       # Operator-chosen 2026-09-10. Requested by A, spec 39.
+                                 # Which quote currencies count as STABLE. Invariant 7 disables
+                                 # crypto-quoted pairs and defines one as a pair whose quote is
+                                 # "BTC, ETH, or any non-stable asset" — that sentence needs
+                                 # this set, and nothing in the repo held it. Kraken does not
+                                 # supply it: AssetPairs carries no asset class, so it is not
+                                 # derivable at runtime and must be stated.
+                                 #
+                                 # CURRENCIES, NOT PAIRS. This does not name what may be
+                                 # traded; the tradable universe is still computed per tick by
+                                 # engine 7 from balances and live prices, which is a Locked
+                                 # Decision. This only says which quote currencies are not a
+                                 # second directional bet.
+                                 #
+                                 # The two stablecoins are here on the operator's ruling and
+                                 # are the judgement call in this list: a peg is an issuer's
+                                 # promise, not a central bank's, so USDC and USDT carry a
+                                 # depeg risk that the seven fiats do not. PROVISIONAL, like
+                                 # the other operator-chosen values, and revisable.
+    - USD
+    - EUR
+    - GBP
+    - CAD
+    - AUD
+    - CHF
+    - JPY
+    - USDC
+    - USDT
 
 paper:
   starting_balances: {USD: "5000.00"}   # Operator-chosen 2026-09-08. Currency-to-amount

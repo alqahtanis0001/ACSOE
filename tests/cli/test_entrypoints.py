@@ -87,7 +87,7 @@ OPERATOR_FIXTURE: dict[str, dict[str, Any]] = {
     "paper": {"starting_balances": {"USD": "1000.00"}},
 }
 
-#: The nine keys no agent may choose a value for. Duplicated from
+#: The eleven keys no agent may choose a value for. Duplicated from
 #: `tests/platform/test_config.py` for the reason in the module docstring.
 OPERATOR_REQUIRED_KEYS: tuple[str, ...] = (
     "safety.max_drawdown_pct",
@@ -103,6 +103,15 @@ OPERATOR_REQUIRED_KEYS: tuple[str, ...] = (
     # judgement of the first real gate, which is why the lead would not invent it
     # and the engine raised rather than defaulting until the operator set it.
     "data_guard.max_data_age_s",
+    # Eleventh, supplied 2026-09-10. Invariant 7 defines a crypto-quoted pair as one
+    # whose quote is "BTC, ETH, or any non-stable asset" and nothing in the repo held
+    # the set of stable assets; Kraken does not supply it either. It decides which
+    # pairs are tradable, which is the test the file's own header sets, so it is the
+    # operator's and not the lead's. Contrast `kraken.cache_ttl_s`, which is marked in
+    # the file but is NOT here: that one is lead-chosen client tuning, ruled 2026-09-10,
+    # and the marker test caught the lead adding it. The alarm has now fired twice and
+    # been answered both ways, deliberately, which is what it is for.
+    "trading.stable_quote_currencies",
 )
 
 #: Specified by `architecture-context.md` as the trailing hour, so it was never

@@ -177,6 +177,27 @@ Ruled by the operator, 2026-09-10. Breaching `safety.max_drawdown_pct` or `safet
 
 Freeze stops new positions while the manage chain keeps watching the open ones, and the operator decides whether to liquidate.
 
+### A suppressed escalation never swallows a freeze that was independently due
+
+Ruled by the operator, 2026-09-10. `safety` emits at most one command per tick and the more
+severe action wins — but `close_all` has its own suppressions: it is not written when there is
+no exposure to close, or when `close_intent` is already set. **When the winning action is
+suppressed, `safety` emits the strongest action that is not suppressed**, rather than emitting
+nothing.
+
+Without this, drawdown plus a data outage on an account with no open position emits nothing,
+while the drawdown alone emits `freeze`. More bad conditions would produce less action, which
+is the wrong direction for a circuit breaker and is the one shape this rule exists to forbid.
+
+The practical difference is *persistence*, not blocking: `safety` returns `BLOCK` on any tripped
+condition either way, so the opportunity chain stops regardless. What was being lost is the
+`frozen` mode itself — the console rendered a running system, and the block was re-derived every
+tick instead of recorded once. A breaker whose state cannot be read is a breaker the operator
+cannot act on.
+
+Found by Agent B while implementing spec 42, against the literal spec, and escalated rather than
+fixed: it is a change to what the breaker does.
+
 **The distinction is what the condition is a statement about.** A drawdown or a losing streak is a statement about *past* trades: the data is trustworthy, the positions are being managed correctly, and the strategy is losing. Liquidating on that turns an unrealised loss into a realised one on the system's own authority, at whatever price the book happens to hold, and it does so at the moment the system has the least evidence it is reading the market correctly. A sustained data outage is a statement about *present* knowledge — the system no longer knows what it holds or what it is worth — and that is the case this rule was written for. Unknown exposure is worse than a bad fill; a known bad position is not.
 
 An earlier version of this section listed the drawdown and loss-streak limits alongside the outage as escalation conditions. Engine 17 could not be built against it: the Phase 0 seed carries a breached drawdown, a breached streak, an open position and a resting order all at once, so under that reading the seeded drawdown liquidated the account while the Phase 3 exit criterion required it to freeze, and no fixture could satisfy both. The contradiction is what surfaced the decision.

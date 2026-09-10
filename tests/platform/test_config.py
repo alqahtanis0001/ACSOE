@@ -46,8 +46,8 @@ from acsoe.platform.logging import clear_secrets, registered_secret_count
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_YAML = REPO_ROOT / "config" / "default.yaml"
 
-#: The nine keys the context files name but never value. The operator supplied all
-#: nine on 2026-09-08 and they are marked `Operator-chosen` in the file; before
+#: The eleven keys the context files name but never value. The operator supplied the
+#: first nine on 2026-09-08 and they are marked `Operator-chosen` in the file; before
 #: that they were null and marked OPERATOR REQUIRED. Either way this is the set
 #: that no agent may choose a value for, and the set the refusal has to name.
 OPERATOR_REQUIRED_KEYS: tuple[str, ...] = (
@@ -64,6 +64,15 @@ OPERATOR_REQUIRED_KEYS: tuple[str, ...] = (
     # judgement of the first real gate, which is why the lead would not invent it
     # and the engine raised rather than defaulting until the operator set it.
     "data_guard.max_data_age_s",
+    # Eleventh, supplied 2026-09-10. Invariant 7 defines a crypto-quoted pair as one
+    # whose quote is "BTC, ETH, or any non-stable asset" and nothing in the repo held
+    # the set of stable assets; Kraken does not supply it either. It decides which
+    # pairs are tradable, which is the test the file's own header sets, so it is the
+    # operator's and not the lead's. Contrast `kraken.cache_ttl_s`, which is marked in
+    # the file but is NOT here: that one is lead-chosen client tuning, ruled 2026-09-10,
+    # and the marker test caught the lead adding it. The alarm has now fired twice and
+    # been answered both ways, deliberately, which is what it is for.
+    "trading.stable_quote_currencies",
 )
 
 #: `safety.error_rate_window_s` is the near miss: it lives beside three keys that
@@ -273,7 +282,7 @@ def test_the_starting_balance_is_quoted_in_yaml_and_keeps_its_cents() -> None:
     assert str(balances["USD"]) == "5000.00"
 
 
-def test_the_file_marks_exactly_these_ten_keys_as_the_operator_s() -> None:
+def test_the_file_marks_exactly_these_eleven_keys_as_the_operator_s() -> None:
     """The shipped file still agrees with this file about which keys are the
     operator's.
 

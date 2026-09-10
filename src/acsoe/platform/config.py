@@ -203,6 +203,37 @@ class TradingConfig(_Section):
     base_reporting_currency: str = Field(min_length=1)
     allow_crypto_quoted: bool
 
+    stable_quote_currencies: frozenset[str] | None = None
+    """The quote currencies that are **not** crypto. Requested by A, spec 39.
+
+    Invariant 7 disables crypto-quoted pairs behind :attr:`allow_crypto_quoted` and
+    defines one as a pair whose "quote is BTC, ETH, or any non-stable asset". That
+    sentence needs a set of stable assets — fiat and stablecoins — and no such set
+    exists anywhere in this repository. ``AssetPairs`` carries ``base``, ``quote``,
+    ``ordermin``, ``costmin``, ``tick_size`` and the two precisions, and no asset
+    class, so nothing about it is derivable at runtime.
+
+    **It is a list of currencies, not a list of pairs**, which is why it does not
+    collide with spec 39's scope limit or the Locked Decision behind it: the tradable
+    universe is still computed per tick by engine 7 from balances and live prices.
+    This names which currencies are stable, which is a fact about the world rather
+    than a choice about what to trade.
+
+    Two engines read it and neither may hold its own copy: engine 2's subscription
+    scope (A) and engine 7 `scout`'s universe filter (B). Contract rule 3 forbids one
+    engine importing another, so config is the seam.
+
+    **Optional at load, and deliberately so, for exactly as long as the YAML is
+    absent.** Spec 38 step 1 established the pattern and the reason: the model field
+    and the YAML key are two halves of one change with two different owners, and
+    `extra="forbid"` plus a required field means whichever half lands first breaks
+    every test that loads the committed config. A landed the field, told the lead,
+    the lead pasted the block, and the field was then tightened to required. Same
+    dance here. ``None`` is not a value and nothing is computed from it — the reader
+    in ``engines/market_data_recorder/`` says what it does with the absence, in one
+    place, and publishes it.
+    """
+
     @model_validator(mode="after")
     def _currency_is_a_bare_code(self) -> Self:
         code = self.base_reporting_currency
@@ -210,6 +241,16 @@ class TradingConfig(_Section):
             raise ValueError(
                 f"trading.base_reporting_currency must be a bare currency code, got {code!r}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _stable_quotes_are_bare_codes(self) -> Self:
+        for code in self.stable_quote_currencies or ():
+            if not code or code != code.strip() or " " in code:
+                raise ValueError(
+                    "trading.stable_quote_currencies must be bare currency codes, "
+                    f"got {code!r}"
+                )
         return self
 
 
