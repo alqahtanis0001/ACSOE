@@ -4,7 +4,11 @@
 
 ## Current Phase
 
-**Phase 3 — Economics. In progress**, opened 2026-09-10. Eleven specs, 37 to 47, approved by the operator with three rulings and two additions. Four workers: B carries five specs, A and C two each, the lead two. Engines 10, 11 and 17 already exist, built by B during the Phase 2 overlap against a mocked client and the Phase 0 seed; **they are built, not done** — the audit at planning found their `state["exchange"]` reads disagree with what engine 1 actually publishes in four places, so all three are green against a payload nothing writes. Engine 7 `scout` was deliberately left out of the overlap and is Phase 3 proper.
+**Phase 3 — Economics. GREEN AND CLOSED**, verified **2026-09-10**: 9 criteria, **9 PASS, 0 FAIL, 0 PENDING**. All eleven specs (37 to 47) delivered across A, B, C and the lead. All four gates re-run at close on a quiet tree, every one exit 0 — Phase 0 7/7, Phase 1 10/10, Phase 2 9/9, Phase 3 9/9 — with `pytest` 1340 passed, `mypy --strict src/` clean across 71 files and `ruff check src/` clean. Engines 7 `scout`, 10 `cost`, 11 `risk` and 17 `safety` are built, wired to A's real Kraken client, and registered in `bootstrap.py`: `is_gate_matches_registry` reports **8 engines registered; 0 mismatches (5 gates)**. The narrative account is `docs/build-log/phase-3.md`.
+
+The phase's opening problem was the audit: engines 10, 11 and 17 were **built, not done** — all three read a `state["exchange"]` payload engine 1 does not publish, and one read a price *nothing* publishes. They were green against a payload nothing writes, because every test built that payload by hand in the shape the engine expected. The operator ruled the fixtures be rewritten from engine 1's real output rather than repointed. **Phase 4 is next.**
+
+**Phase 4 — Memory and replay is next.** It opens carrying the deferred items under Open Questions below, including the console tally that needs engine 19 and the remaining mutation survivors A did not reach.
 
 *Phase 2 — Data spine. Green and closed*, verified **2026-09-10**: 9 criteria, **9 PASS, 0 FAIL, 0 PENDING**. Nine specs (25 to 33) across A, B, C and the lead, plus three Phase 3 engines (34 to 36) built concurrently by B and deliberately excluded from this gate. The lead re-verified independently at close and re-ran all three phase gates: Phase 0 7/7, Phase 1 10/10, Phase 2 9/9. The two criteria PENDING at the last checkpoint are both resolved — `data_guard_blocks_bad_data` once the operator supplied `data_guard.max_data_age_s`, and `recording_span_continuous` on a clean 24-hour recording reporting **99.98% of its span actually recorded** against a newly enforced 0.98 floor. The narrative account is `docs/build-log/phase-2.md`.
 
@@ -75,9 +79,64 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 
 - **Nothing is outstanding for any agent.** A, B and C all report clear. Two items deliberately survive the close and are carried in Next Up rather than hidden: `cli/engine.py` still passes a `Clients()` of three `None`s, and engine 17's `CONDITION_ACTION` table is unratified.
 
-## In Progress
+## Phase 3 — how it closed
 
-**Phase 3, opened 2026-09-10.** Shared task list: `feature-specs/PHASE-3-TASKS.md`.
+*Merged at close from the three progress files, 2026-09-10. Shared task list:
+`feature-specs/PHASE-3-TASKS.md`.*
+
+**All eleven specs delivered.** A: 38 TTL-bounded caching, 39 real clients and the derived
+subscription scope. B: 40 `cost`, 41 `risk` and the balance fallback, 42 `safety`'s ratified
+escalation table, 43 and 44 engine 7 `scout`. C: 45 the seven Phase 3 criteria, 46 the operator
+prose for all nineteen reason codes. Lead: 37 the three rulings into the authority documents, 47
+the registration of all four engines.
+
+### FINDING: three mechanisms had been charged to one cause for two phases
+
+Intermittent test failures across Phases 2 and 3 were attributed to a native memory fault on this
+machine. **There were three distinct mechanisms and two of them were deterministic, fixable
+defects.**
+
+1. **`scripts/verify.py::sweep_stale_workspaces` deleted other processes' live databases.** It
+   removed every `acsoe-verify-*` directory in the shared temporary directory, and its docstring
+   asserted that a directory in use "simply will not delete" — a POSIX assumption written as a fact
+   about Windows. `ignore_errors=True` guaranteed *partial* deletion rather than none, so one defect
+   produced two symptoms: a vanished directory gives `unable to open database file`, a surviving
+   directory with its database removed gives a freshly created empty database and then
+   `no such table`. `tests/verify/test_runner.py` calls `main()` nine times, so one `pytest tests/`
+   sweeps nine times — and three agents each running the suite is this project's normal state.
+   **Fixed:** only leftovers whose newest internal mtime predates this process's start are removed.
+2. **A Phase 1 wall-clock criterion was measuring connection setup rather than the push latency it
+   named.** Its reported figure fell from 509ms to 6ms once measured from a steady-state connection.
+   It could never have detected a promptness regression, because the quantity it reported was
+   dominated by something else. **Fixed:** safety net, assertion and evidence are now three
+   mechanisms instead of one number.
+3. **A genuine native fault remains.** It presents as an `ACCESS_VIOLATION` or `STACK_BUFFER_OVERRUN`
+   process crash, not as a test failure, and was seen again at phase close. It is now charged **only
+   with what it actually causes.**
+
+**Standing rule, so the third does not re-absorb the others:** a failure is attributed to the
+sweeper only if it carries a database error. Anything else is unexplained until it is explained, and
+*unexplained* is an acceptable thing to write in a build log. The rule exists because an agent
+warned, within an hour of the sweeper being named, that a newly named mechanism will absorb every
+flake exactly as the native fault had — and was right that it had already started.
+
+### FINDING: a diagnostic procedure that cannot fail is the same defect as a test that cannot fail
+
+The standing instruction in `PHASE-3-TASKS.md` was *re-run the named test in isolation, and if it
+passes it was the intermittent fault.* **That instruction worked every time — because in isolation
+nothing else was sweeping.** The mitigation was manufacturing the evidence for its own diagnosis,
+and it confirmed the wrong answer on every occasion it was applied, over two phases and four agents.
+It was not merely inherited: a fresh entry attributing a zero-byte report file to hardware was
+written on the last morning of the phase, by an agent reaching for the rule rather than for the
+evidence.
+
+This project spent Phase 3 cataloguing tests that cannot fail while running on a *diagnostic* that
+cannot fail. **Apply to a diagnostic the question you apply to a test: under what observation would
+this have told me something else?** Now a rule in `context/code-standards.md`, alongside the three
+shapes of unfailable test and the mutation practice that catches them.
+
+### The rest of what closed
+
 
 | Agent | Specs | State |
 |---|---|---|

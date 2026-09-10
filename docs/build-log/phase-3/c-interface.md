@@ -1079,3 +1079,75 @@ different scales: a diagnostic procedure that cannot fail told four agents for t
 that a deterministic bug was a hardware fault, and a test that cannot fail told B its ordering
 was pinned. In both cases the check ran, produced an answer, and the answer was
 unfalsifiable — and in both cases the prose around it was what made it convincing.
+
+### A rename of one class would silently delete 141 tests, and the suite would report green
+
+**Agent:** C · **Task:** A's finding 8 · **Date:** 2026-09-10
+
+**What happened.** A's fifth finding: the `engine_context` fixture in `tests/conftest.py`
+does `getattr(contracts, "EngineContext", None)` and skips if it is absent. A estimated the
+cost at 44 test functions across 7 files. I measured it rather than taking the number, by
+simulating the rename — one word changed in the `getattr`, suite run, revert:
+
+```
+1196 passed, 141 skipped in 156.84s
+SKIPPED [1] tests\engines\test_scout.py:1164: acsoe.core.contracts.EngineContext does not exist yet
+```
+
+**141 tests, not 44** — the engine suites have roughly tripled today between B's specs 43 and
+44 and A's spec 39, so A's number was right when counted and is now more than three times
+larger. **Ten and a half percent of the suite disappears, the run exits zero, and the skip
+reason is a false sentence** pointing the reader at Phase 0 work that was finished months
+ago. Every engine any of us has written is in that set: cost, risk, safety, scout,
+data_guard, exchange, market_data_recorder, market_sensor.
+
+**Why.** The same expiry-dated fallback as the other four. `core/contracts.py` did not exist
+when the fixture was written and skipping was the honest answer then. It exists now, is
+committed, and `EngineContext`'s fields are fixed in `engine-contracts.md` — so the branch is
+unreachable, nothing says so, and the day someone renames the class the fixture answers a
+question about Phase 0 that nobody asked.
+
+The measurement is the part I would not have got from reading. A's estimate and mine differ
+by a factor of three for the honest reason that the tree moved underneath both of us, and a
+number in a note about a growing codebase is a number with a date on it — the same drift that
+put a stale claim in my own progress file this morning. Simulating the failure costs a minute
+and produces a fact.
+
+**Fix.** Next entry, and it follows A's rule rather than my instinct: **not deleting the
+fallback — asserting it is unreachable.**
+
+*(Fix, completing the entry above.)* `REQUIRED_SURFACES` in `tests/conftest.py` now pairs each
+module the shared fixtures import with **the attribute that fixture actually reaches for**,
+and `pytest_sessionstart` checks both. A module that genuinely does not exist is still not an
+error — several suites run against trees where a package is unwritten, and skipping is honest
+there. An attribute missing from a module that *imports* is a different fact: once
+`core/contracts.py` exists, `EngineContext` absent from it does not mean Phase 0 is
+unfinished, it means the class moved.
+
+**The fallbacks all stay.** This is A's rule and my instinct was the other way: I would have
+deleted the `getattr`-then-skip. Deleting it breaks the fabricated trees `tests/verify/`
+depends on, which is where I went wrong twice on `migrated_store` this morning — reaching for
+the consumer, making it stricter, and taking out the legitimate case with the illegitimate
+one. Asserting the fallback is unreachable costs one line and breaks nothing.
+
+`pytest.UsageError` exits **4**, inside pytest's documented range, so `toolchain_green` reads
+it as a verdict rather than as a crash to retry. Verified, along with the message naming both
+the missing attribute and the fixture that would have gone silent — the failure this replaces
+was diagnosable only if you already knew to look, so the message has to carry the diagnosis.
+
+Three tests in `tests/harness/test_require_module.py`, and the first is the one that matters:
+`test_the_session_check_passes_against_the_real_tree` calls the hook against the live
+repository, so if a fixture ever quietly starts answering "does not exist yet" about something
+that shipped, that test says so. The other two mutate it in both directions — a renamed
+surface aborts, an unwritten module does not — because a check that aborts on everything would
+make registering a criterion ahead of its subject impossible, and that is this project's whole
+working method.
+
+**Five findings, one rule, and it is worth stating as A did.** A fallback for something that
+does not exist *yet* has an expiry date and nothing in the code records it. `try: import real
+/ except: define our own`. `getattr(mod, "Name", None)` then skip. `except KeyError: continue`.
+`rmtree(ignore_errors=True)` treating "I could not delete it" as "it was not mine". Each was
+correct when written; each became a silent branch firing on a condition that should now be
+impossible. **The fix is never to delete the fallback — it is to add the assertion that the
+fallback is unreachable.** One line turns a stale workaround into a tripwire for the day
+someone breaks the thing it used to stand in for.

@@ -1,5 +1,86 @@
 # Phase 3 — shared task list
 
+> ## HANDOFF — Phase 3 is closed. Read this first if you are a cold Phase 4 session.
+>
+> *Written at phase close, 2026-09-10. Everything below this box is the Phase 3 task list as it
+> stood during the phase, kept for the record.*
+>
+> ### What is green
+>
+> **All four gates, exit 0, verified at close on a quiet tree.**
+>
+> ```
+> phase 0    7 criteria:  7 PASS, 0 FAIL, 0 PENDING
+> phase 1   10 criteria: 10 PASS, 0 FAIL, 0 PENDING
+> phase 2    9 criteria:  9 PASS, 0 FAIL, 0 PENDING
+> phase 3    9 criteria:  9 PASS, 0 FAIL, 0 PENDING
+>
+> pytest tests/ -q       1340 passed
+> mypy --strict src/     Success: no issues found in 71 source files
+> ruff check src/        All checks passed!
+> ```
+>
+> All eleven specs (37–47) are delivered. Engines 7 `scout`, 10 `cost`, 11 `risk` and 17 `safety`
+> are built, wired to the real Kraken client, and **registered** — `is_gate_matches_registry`
+> reports 8 engines, 0 mismatches, 5 gates. The guard chain is `exchange → market_data_recorder →
+> market_sensor → data_guard → safety`; the opportunity chain is `scout → cost → risk`, which is
+> registry order with holes rather than a different order. The manage chain is still empty.
+>
+> The narrative account is `docs/build-log/phase-3.md`. Write Phase 4 entries in
+> `docs/build-log/phase-4/<agent>.md`, which already exist.
+>
+> ### What is open
+>
+> - **The ranking score in engine 7 `scout` does not exist**, deliberately. Ordering is alphabetical
+>   over the whole universe — a placeholder that cannot be mistaken for a judgement. **Phase 5**
+>   closes it at one seam, `rank_universe` in `engines/scout/contracts.py`. Test that function
+>   *directly*: the engine sorts its scan set before ranking, so an end-to-end fixture cannot tell
+>   alphabetical ordering from a ranking that merely preserves arrival order.
+> - **The console's empty state does not show engine 7's scan tally.** Structural, not a missed wire
+>   — the console is a separate process reading SQLite and never sees the in-memory state where the
+>   tally lives for one tick. **Needs engine 19 `memory`, which is Phase 4.** A stale comment in
+>   `console/reader.py` naming the wrong engine should be fixed by that same change, not before it.
+> - **A genuine native fault on this machine remains unexplained.** It presents as an
+>   `ACCESS_VIOLATION` or `STACK_BUFFER_OVERRUN` process crash, not a test failure. Two defects that
+>   were hiding behind it are fixed; it is now charged only with what it causes.
+> - **Mutation survivors not yet re-checked**: `clients/kraken/contracts.py`, `limiter.py`,
+>   `engines/market_data_recorder/contracts.py`, `platform/config.py`, and three in
+>   `clients/store/migrations.py`.
+> - **The harness stream doubles are not consolidated.** Three separate fakes exist for engine 3's
+>   stream plus a fourth workaround in the criteria. A design is sketched; `tests/harness/` owns it.
+>
+> ### Two rules this phase produced, and they are why the above is trustworthy
+>
+> **1. A diagnostic procedure that cannot fail is the same defect as a test that cannot fail.**
+>
+> This file told everyone for two phases: *re-run the named test in isolation, and if it passes it
+> was the machine's intermittent fault.* It worked every time — **because in isolation nothing else
+> was sweeping the temp directory, which was the actual bug.** The mitigation was manufacturing the
+> evidence for its own diagnosis, and it confirmed the wrong answer on every occasion it was
+> applied. Apply to a diagnostic the question you apply to a test: **under what observation would
+> this have told me something else?**
+>
+> **2. Three mechanisms had been collapsed into one, and keeping them apart is now a rule.**
+>
+> A workspace sweeper deleting other processes' live databases (fixed), a wall-clock assertion
+> measuring connection setup rather than the latency it named (fixed), and a genuine native fault
+> (open) were all charged to one cause. **A failure is attributed to the sweeper only if it carries
+> a database error.** Anything else is unexplained until explained, and *unexplained* is an
+> acceptable thing to write in a build log — writing it is what kept the second mechanism visible
+> long enough to be found.
+>
+> ### How to read a FAIL, which is different from what this file used to say
+>
+> - **Named tests that MOVE between runs, in another agent's paths** → somebody is mid-save. Judge
+>   by path, do not re-run, do not fix their file.
+> - **A STABLE wrong verdict on one test that passes in isolation and on a full re-run in the same
+>   order** → capture the traceback **before** re-running. Re-running to confirm green is what
+>   destroyed the evidence for two phases.
+> - **A defect of yours** reproduces every time, in isolation, in your own paths.
+> - **A baseline is only meaningful if the tree is quiescent when it is taken**, and with several
+>   agents writing, "before" and "after" are not separated by your change alone.
+
+
 Lead-owned. Teammates do not edit this file: **claim by recording the spec number in your own
 `context/progress/<agent>.md` before writing code**, per ownership rule 5.
 

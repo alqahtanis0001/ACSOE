@@ -30,7 +30,8 @@ from pathlib import Path
 import pytest
 from _pytest.outcomes import Skipped
 
-from tests.conftest import require_module
+from tests import conftest
+from tests.conftest import pytest_sessionstart, require_module
 
 #: A module that imports a dependency nobody has. Written into a temporary package so
 #: the fault is real rather than simulated - the import system does the raising.
@@ -119,3 +120,66 @@ def test_the_real_shared_fixtures_import_for_real() -> None:
         "acsoe.clients.store.seed",
     ):
         assert require_module(dotted, reason=f"{dotted} does not exist yet") is not None
+
+
+# --------------------------------------------------------------------------- #
+# The session check: an expiry-dated fallback, asserted unreachable
+# --------------------------------------------------------------------------- #
+#
+# A's rule from the harness sweep, and the one this file exists to make executable:
+# **the fix for a fallback that has outlived its reason is never to delete it — it is
+# to add the assertion that it cannot fire.** The `engine_context` fixture still skips
+# when `EngineContext` is absent, because trees where `core/` is unwritten are real and
+# `tests/verify/` drives criteria against them. What was missing was anything saying
+# that branch is unreachable *here*.
+#
+# Measured rather than argued: renaming `EngineContext` and running the suite gives
+# `1196 passed, 141 skipped` and exit zero.
+
+
+def test_the_session_check_passes_against_the_real_tree() -> None:
+    """The assertion that makes every fallback below it dead code, here and now.
+
+    This is the whole point. If it ever fails, a fixture somewhere has quietly started
+    answering "does not exist yet" about something that shipped.
+    """
+    pytest_sessionstart(None)  # type: ignore[arg-type]
+
+
+def test_a_renamed_surface_aborts_the_run_rather_than_skipping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rename must stop the run, not quietly remove a tenth of it.
+
+    `pytest.UsageError` exits 4, which is inside pytest's documented range, so
+    `toolchain_green` reads it as a verdict and reports FAIL rather than retrying it as
+    a crash.
+    """
+    monkeypatch.setattr(
+        conftest,
+        "REQUIRED_SURFACES",
+        (("acsoe.core.contracts", "EngineContextRenamed", "engine_context"),),
+    )
+    with pytest.raises(pytest.UsageError) as caught:
+        pytest_sessionstart(None)  # type: ignore[arg-type]
+
+    message = str(caught.value)
+    assert "EngineContextRenamed" in message
+    assert "engine_context" in message, "the message must name the fixture that goes silent"
+    assert "report green" in message, "and say what the cost of missing it would be"
+
+
+def test_an_unwritten_module_does_not_abort_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The half that keeps the fallbacks legitimate.
+
+    A package nobody has written is not an error — several suites run against trees
+    where one is genuinely absent, and skipping is the honest answer there. Only "on
+    disk and wrong" aborts. Without this the check would make it impossible to register
+    a criterion ahead of its subject, which is this project's whole working method.
+    """
+    monkeypatch.setattr(
+        conftest,
+        "REQUIRED_SURFACES",
+        (("acsoe.engines.nothing_here.contracts", "Whatever", "some_fixture"),),
+    )
+    pytest_sessionstart(None)  # type: ignore[arg-type]

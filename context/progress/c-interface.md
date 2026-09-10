@@ -109,6 +109,23 @@ Never edit the tracker directly.
   in a full run, and one of them passed for a reason that had nothing to do with the margin it
   was named after.
 
+- **Phase 3. A's finding 8. Finished, and it was three times the size A estimated.**
+  `engine_context` in `tests/conftest.py` skipped silently if `EngineContext` were renamed.
+  I measured it by simulating the rename rather than counting by eye: **`1196 passed, 141
+  skipped`, exit zero** — ten and a half percent of the suite gone, every engine any of us has
+  written among them, and the skip reason a false sentence pointing at Phase 0. A said 44 and
+  was right when counted; the engine suites tripled the same day.
+
+  Fixed per A's rule rather than my instinct: **the fallbacks all stay, and the assertion that
+  they are unreachable is what was added.** `REQUIRED_SURFACES` pairs each module with the
+  attribute its fixture reaches for, and `pytest_sessionstart` aborts with `UsageError` — exit
+  4, inside pytest's range, so `toolchain_green` reads it as a verdict rather than a crash.
+  Deleting the `getattr`-then-skip would have broken the fabricated trees `tests/verify/`
+  needs, which is the mistake I made twice on `migrated_store` this morning.
+
+  Three tests, and the load-bearing one calls the hook against the live repository — so if a
+  fixture ever starts answering "does not exist yet" about something that shipped, it says so.
+
 ### Open questions and handoffs
 
 - ~~**For the lead — `tests/conftest.py`'s shared `seed_fixtures` fixture is wrong and it is

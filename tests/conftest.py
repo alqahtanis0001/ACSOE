@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -88,27 +88,53 @@ def require_module(name: str, *, reason: str) -> ModuleType:
         raise
 
 
+#: What the shared fixtures reach for, and the fixture that would go silent without it.
+#:
+#: Every entry is a **surface that already exists and is committed**. The fixtures still
+#: carry their "does not exist yet" fallbacks, because trees where a package genuinely is
+#: unwritten are a real thing several suites depend on - `tests/verify/` drives criteria
+#: against fabricated trees with no `src/` at all. What was missing is anything asserting
+#: those fallbacks are *unreachable here*, which is A's rule from the harness sweep:
+#: **the fix for an expiry-dated fallback is never to delete it, it is to add the
+#: assertion that it cannot fire.**
+REQUIRED_SURFACES: Final[tuple[tuple[str, str, str], ...]] = (
+    ("acsoe.core.contracts", "EngineContext", "engine_context"),
+    ("acsoe.clients.store.client", "StoreClient", "store"),
+    ("acsoe.clients.store.migrations", "apply_migrations", "migrated_db"),
+    ("acsoe.clients.store.seed", "seed_database", "seed_fixtures"),
+    ("acsoe.clients.store.seed", "SeedThresholds", "seed_fixtures"),
+)
+
+
 def pytest_sessionstart(session: pytest.Session) -> None:
-    """Fail the whole run once, up front, if a module the shared fixtures need is
-    written but unimportable.
+    """Abort the run once, up front, if a surface the shared fixtures need is missing
+    from a module that exists.
 
-    Without this the same fault surfaces as several hundred separate errors, which is
-    loud but unreadable, and every one of them is a fixture failing rather than the
-    thing that actually broke. One `UsageError` naming the module and the real
-    exception is what a person can act on.
+    **Measured, not estimated.** Renaming `EngineContext` and running the suite gives
+    `1196 passed, 141 skipped` and **exit zero** - ten and a half percent of the tests
+    gone, every engine any of us has written among them, and the skip reason reading
+    "acsoe.core.contracts.EngineContext does not exist yet", which is a false sentence
+    pointing at Phase 0. A found the shape and estimated 44; the engine suites tripled
+    the same day. That is what this hook is for.
 
-    A module that genuinely does not exist is **not** an error here: several suites
-    run against trees where a package has not been written yet, and skipping is the
-    right answer for those. Only "it is on disk and it will not import" aborts.
+    Two distinctions it draws, and both matter:
+
+    **A module that genuinely does not exist is not an error.** Several suites run
+    against trees where a package has not been written, and skipping is the honest
+    answer there. Only "it is on disk and it will not import" aborts.
+
+    **An attribute missing from a module that imports *is* an error.** Once
+    `core/contracts.py` exists, `EngineContext` absent from it does not mean Phase 0 is
+    unfinished - it means the class was renamed or removed, and 141 tests are about to
+    stop running without saying so.
+
+    One `UsageError` rather than letting the fixtures answer: the same fault otherwise
+    surfaces as a hundred silent skips, or several hundred fixture errors blaming the
+    fixture rather than the thing that broke.
     """
-    for dotted in (
-        "acsoe.core.contracts",
-        "acsoe.clients.store.client",
-        "acsoe.clients.store.migrations",
-        "acsoe.clients.store.seed",
-    ):
+    for dotted, attribute, fixture in REQUIRED_SURFACES:
         try:
-            importlib.import_module(dotted)
+            module = importlib.import_module(dotted)
         except ModuleNotFoundError as exc:
             missing = exc.name or dotted
             if missing == dotted or dotted.startswith(missing + "."):
@@ -119,6 +145,14 @@ def pytest_sessionstart(session: pytest.Session) -> None:
                 "been several hundred silent skips reporting that the store does not "
                 "exist yet, which is not true and is not the problem."
             ) from exc
+        if not hasattr(module, attribute):
+            raise pytest.UsageError(
+                f"{dotted} imports but has no {attribute!r}. The `{fixture}` fixture "
+                "skips when that is absent - a fallback from before the module was "
+                "written - so every test reaching it would be silently dropped and the "
+                "run would report green. If the name has moved, update REQUIRED_SURFACES "
+                f"and the `{fixture}` fixture together."
+            )
 
 
 # --------------------------------------------------------------------------- #
