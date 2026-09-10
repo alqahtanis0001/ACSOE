@@ -509,3 +509,86 @@ costs a minute. That is not distrust of B, whose mutation discipline is the best
 is why the practice is now in `code-standards.md`. It is that "did you check?" and "I checked"
 are two more claims that can drift from the code, and the mutation is the only one of the three
 that cannot.
+
+### Ruling: `stable_quote_currencies` stays optional — the landing order is universal, the resting state is not
+
+**Agent:** Lead · **Task:** spec 39 close-out · **Date:** 2026-09-10
+
+**What happened.** A declined to tighten `trading.stable_quote_currencies` to a required field
+now that the YAML has landed, which is a deliberate departure from the `cache_ttl_s` precedent
+set hours earlier, and flagged it for me to overrule.
+
+**Ruled: A is right, and the distinction it drew is the one to carry.**
+
+`cache_ttl_s` was tightened because **every** reader raises on absence, so refusing at startup
+is strictly better than the identical refusal arriving at the first fetch — same outcome,
+earlier and with a clearer message. `stable_quote_currencies` has readers I deliberately ruled
+to *disagree*: engine 7 `scout` fails closed and excludes, engine 2 `market_data_recorder` fails
+open and publishes `crypto_quoted_excluded: false`. A required field overrules both by stopping
+the process at startup, and that means the recorder never runs — which is the **irreversible**
+error my own asymmetry ruling identified for engine 2, arriving through the config layer instead
+of through the engine. Optional leaves a coherent degraded state: recording continues, the
+universe is empty, and `scout`'s reason code says why.
+
+Nothing is weakened by it. `_refuse_nulls` still refuses a present-and-null key by name, and the
+key is in `OPERATOR_REQUIRED_KEYS`, so the only tolerated state is *absent*, which is the state
+the ruling is about.
+
+**A's formulation, which is better than the rule it replaces:** *the landing order is universal;
+the resting state is not.* Tighten when absence should stop the process. Leave optional when a
+reader has been ruled to keep working without it. The spec 38 pattern fixed the two-owner
+handoff window; it never decided what the field should look like afterwards, and I had been
+treating "tighten once landed" as though it followed.
+
+### A half-landed config key is not uniformly safe, and engine 2 briefly became a gate
+
+**Agent:** Lead · **Task:** spec 39 close-out, recording A's finding · **Date:** 2026-09-10
+
+**A's finding, and it corrects something I wrote today.** While `market_data.stable_quote_currencies`
+was mid-landing, engine 2 read a config key that did not yet exist. `Config.get` raises on an
+unknown key, the orchestrator converts a raised engine to `ERROR`, and `ERROR` blocks — so a
+missing *optional* key silently turned the **recorder** into the tick's primary blocker and
+displaced `data_guard`. `block_records.is_primary` would have been wrong for every tick in that
+window, which is a corrupted audit trail rather than a stopped daemon: worse, because it looks
+like data.
+
+**Why this matters beyond the instance.** My spec 37 build-log entry concluded that a change
+spanning an ownership boundary has a landing order, and I left it there. A's finding is the
+other half: **the landing order fixes the length of the window; it does not decide what happens
+inside it, and that is a per-reader question.** "The reader raises, so a half-landed key is safe"
+is true for a client that raises into a caller expecting failure, and false for an engine whose
+raise is converted into a blocking verdict with a name attached. Two engines reading the same
+absent key produce a blocked pair and a mislabelled audit row respectively.
+
+### A tripwire attached to a local reproduction of the symptom cannot detect the cause
+
+**Agent:** Lead · **Task:** spec 39 close-out, recording A's finding · **Date:** 2026-09-10
+
+**What happened.** `test_a_tick_over_the_real_registry_records_errors_rather_than_raising` was
+written in Phase 2 *specifically* to turn red when spec 39 wired real clients into the daemon.
+Spec 39 step 7 is written on that assumption, and so was A's progress note. **It stayed green.**
+
+**Why.** It builds the empty `Clients()` itself rather than going through `cli/engine.py`, so it
+pins a fact about a value the test supplies. Replacing the daemon's wiring cannot move a fact the
+test constructs. The tripwire was attached to a local reproduction of the symptom rather than to
+the cause, and those are only the same thing while nobody changes the cause.
+
+**Why it is worth its own entry.** This is the third distinct angle on the same failure this
+phase, and the angles are not interchangeable:
+
+- **A double too simple to exhibit the property** — the fake transport, the sleep that does not
+  sleep, the client with no TTL, the lead's orchestrator with no logger.
+- **A claim and its evidence moving together** — B's fixtures agreeing with their caller, C's
+  reason-code assertion importing the constant it checked, B's `pending_commands()` read of an
+  already-emptied list.
+- **A double standing where the subject was supposed to be** — this one. Nothing is too simple
+  and nothing moves together; the test is simply not connected to the thing it claims to watch.
+
+`code-standards.md` covers the first two. The third is now added, because the tell is different:
+the first two are found by asking whether the test *can* fail, and this one passes that question
+— it can fail, just never for the reason it was written for. The tell is that a test whose
+purpose is "this goes red when X changes" must reach X through the code path X lives on, and
+`build_clients` is that path.
+
+**Fix.** A's, and it is the right shape: the test keeps the property it genuinely does test, and
+the daemon's construction is asserted separately against `build_clients`.

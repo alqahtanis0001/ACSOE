@@ -55,7 +55,14 @@ def test_engine_status_str_is_the_value_not_the_repr() -> None:
     """
     assert str(EngineStatus.ERROR) == "ERROR"
     assert f"{EngineStatus.ERROR}" == "ERROR"
-    assert "%s" % EngineStatus.BLOCK == "BLOCK"
+    # UP031 is suppressed on the next line, and the reason is that obeying it would
+    # delete the subject. This test asserts EngineStatus renders as its bare name through
+    # every string-conversion route, and percent-formatting is one of the four routes
+    # under test: rewriting it as a format specifier makes the line duplicate the f-string
+    # case above and stop covering the route it exists for. Same shape as the RUF001
+    # minus-sign fixture in tests/console/test_format.py, which `code-standards.md` names
+    # as the standing example of a lint that is right in general and wrong on one line.
+    assert "%s" % EngineStatus.BLOCK == "BLOCK"  # noqa: UP031
     assert format(EngineStatus.OK) == "OK"
     assert EngineStatus.PASS == "PASS"
 

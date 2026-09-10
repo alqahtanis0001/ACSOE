@@ -161,6 +161,22 @@ no credential was committed. Re-run the named test on its own; if it passes, it 
 you say so in the build log rather than smoothing it over. **Never pipe gate output through `tail`** —
 the detail is what makes a FAIL diagnosable.
 
+**Judge by path first, re-run second — the two faults look different and the tell is reliable.**
+With three agents saving files into one tree, most FAILs you see are somebody else's work in
+flight, and the way to tell them apart is what *moves* between runs:
+
+- **Another agent mid-save.** The named tests **change** from run to run and sit in paths you do
+  not own. A `mypy` or `ruff` error tree-wide on a syntax error — a docstring caught without its
+  closing quotes — is the same thing. Do not re-run, do not investigate, and above all do not
+  fix another agent's file. Run your own paths and report those.
+- **This machine's intermittent fault.** A **stable** wrong verdict on one test that passes in
+  isolation, in its own file, and on a full re-run in the same order. Two full runs is what
+  separates it from an ordering dependency, which would reproduce. Record it in the build log
+  with the traceback — **capture the detail before re-running**, because there is still no
+  captured traceback for any occurrence of this fault across the whole project, and the instinct
+  to re-run and confirm green is what keeps destroying the evidence.
+- **A real defect of yours.** Reproduces every time, in isolation, in your own paths.
+
 ## Two files every session
 
 - `context/progress/<agent>.md` — what you built, what is in progress, what blocked you, open

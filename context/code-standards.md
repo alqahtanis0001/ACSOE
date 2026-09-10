@@ -88,6 +88,13 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   code, in the commit that cited the rule. Reverse the condition, delete the guard, return the
   wrong field; confirm the test fails; put it back. It takes a minute and it is the only step
   that cannot be talked past. A test you have never seen fail is a claim, not a check.
+- **A test whose purpose is "this goes red when X changes" must reach X through the code path
+  X lives on.** A tripwire built to fire when the daemon was wired to real clients stayed green
+  through exactly that change, because it constructed the empty client set *itself* rather than
+  going through `cli/engine.py` — so it pinned a fact the test supplied, and replacing the
+  daemon's wiring could not move it. This one passes the "can it fail?" question above: it can,
+  just never for the reason it exists. Attach the tripwire to the cause, not to a local
+  reproduction of the symptom.
 - **`pytest.raises(SomeError)` alone is a weak assertion wherever one error type has several
   causes.** Every fail-closed path in `clients/kraken/` raises `KrakenUnavailableError` on
   purpose, so the bare form cannot tell the failure you induced from one that happened first.
@@ -113,6 +120,20 @@ python scripts/verify.py --phase N
 - No engine reads an environment variable directly except through the config layer.
 - Every threshold is named and configurable. No magic numbers inside engines.
 - Config is validated at startup and the process refuses to start if it is invalid.
+- **A key and its model field land in one change**, field first, then YAML. Every section sets
+  `extra="forbid"`, so whichever half lands alone breaks every test that reads the committed
+  config.
+- **Whether that field is then required is a separate question, and the answer is per-reader.**
+  Required when absence should stop the process — right when every reader raises on absence
+  anyway, so startup is the same refusal delivered earlier and with a better message. Optional
+  when a reader has been ruled to keep working without it, because a required field overrules
+  that reader by never letting the process start. The landing order is universal; the resting
+  state is not.
+- **A half-landed key is not uniformly safe just because the reader raises.** `Config.get`
+  raises on an unknown key, the orchestrator turns a raised engine into `ERROR`, and `ERROR`
+  blocks — so a missing key once made engine 2 the tick's *primary blocker* and displaced
+  `data_guard`, writing a wrong `block_records.is_primary` for every tick in that window. A
+  corrupted audit row is worse than a stopped daemon, because it looks like data.
 
 ## File organisation
 
