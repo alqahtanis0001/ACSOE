@@ -1,0 +1,275 @@
+{
+  "schema_version": 1,
+  "source_files": [
+    "kraken_v2_2026-09-08.jsonl",
+    "kraken_v2_2026-09-09.jsonl",
+    "kraken_v2_2026-09-10.jsonl"
+  ],
+  "silence_threshold_s": 60.0,
+  "window": null,
+  "span": {
+    "start": 1788883282326062,
+    "end": 1789053344415070,
+    "start_iso": "2026-09-08T16:01:22.326062Z",
+    "end_iso": "2026-09-10T15:15:44.415070Z",
+    "seconds": 170062.089008,
+    "hours": 47.23946916888889
+  },
+  "segments": [
+    {
+      "start": 1788883282326062,
+      "end": 1788883337341913,
+      "start_iso": "2026-09-08T16:01:22.326062Z",
+      "end_iso": "2026-09-08T16:02:17.341913Z"
+    },
+    {
+      "start": 1788919459242789,
+      "end": 1788920686909945,
+      "start_iso": "2026-09-09T02:04:19.242789Z",
+      "end_iso": "2026-09-09T02:24:46.909945Z"
+    },
+    {
+      "start": 1788921025404243,
+      "end": 1788923507677874,
+      "start_iso": "2026-09-09T02:30:25.404243Z",
+      "end_iso": "2026-09-09T03:11:47.677874Z"
+    },
+    {
+      "start": 1788924090216650,
+      "end": 1788925068148281,
+      "start_iso": "2026-09-09T03:21:30.216650Z",
+      "end_iso": "2026-09-09T03:37:48.148281Z"
+    },
+    {
+      "start": 1788926478255153,
+      "end": 1788947593006022,
+      "start_iso": "2026-09-09T04:01:18.255153Z",
+      "end_iso": "2026-09-09T09:53:13.006022Z"
+    },
+    {
+      "start": 1788947595342149,
+      "end": 1788951307987467,
+      "start_iso": "2026-09-09T09:53:15.342149Z",
+      "end_iso": "2026-09-09T10:55:07.987467Z"
+    },
+    {
+      "start": 1788952043908915,
+      "end": 1788955103294423,
+      "start_iso": "2026-09-09T11:07:23.908915Z",
+      "end_iso": "2026-09-09T11:58:23.294423Z"
+    },
+    {
+      "start": 1788956360807400,
+      "end": 1788959197068337,
+      "start_iso": "2026-09-09T12:19:20.807400Z",
+      "end_iso": "2026-09-09T13:06:37.068337Z"
+    },
+    {
+      "start": 1788959199075240,
+      "end": 1788964241421058,
+      "start_iso": "2026-09-09T13:06:39.075240Z",
+      "end_iso": "2026-09-09T14:30:41.421058Z"
+    },
+    {
+      "start": 1788964242915273,
+      "end": 1788968107852082,
+      "start_iso": "2026-09-09T14:30:42.915273Z",
+      "end_iso": "2026-09-09T15:35:07.852082Z"
+    },
+    {
+      "start": 1788968110938047,
+      "end": 1788972534216898,
+      "start_iso": "2026-09-09T15:35:10.938047Z",
+      "end_iso": "2026-09-09T16:48:54.216898Z"
+    },
+    {
+      "start": 1788972536824219,
+      "end": 1788979039115597,
+      "start_iso": "2026-09-09T16:48:56.824219Z",
+      "end_iso": "2026-09-09T18:37:19.115597Z"
+    },
+    {
+      "start": 1788979041750011,
+      "end": 1788980606603533,
+      "start_iso": "2026-09-09T18:37:21.750011Z",
+      "end_iso": "2026-09-09T19:03:26.603533Z"
+    },
+    {
+      "start": 1788980608664961,
+      "end": 1788983394369235,
+      "start_iso": "2026-09-09T19:03:28.664961Z",
+      "end_iso": "2026-09-09T19:49:54.369235Z"
+    },
+    {
+      "start": 1788983396924783,
+      "end": 1789021103383200,
+      "start_iso": "2026-09-09T19:49:56.924783Z",
+      "end_iso": "2026-09-10T06:18:23.383200Z"
+    },
+    {
+      "start": 1789021105569006,
+      "end": 1789022461690206,
+      "start_iso": "2026-09-10T06:18:25.569006Z",
+      "end_iso": "2026-09-10T06:41:01.690206Z"
+    },
+    {
+      "start": 1789022464387949,
+      "end": 1789026816289459,
+      "start_iso": "2026-09-10T06:41:04.387949Z",
+      "end_iso": "2026-09-10T07:53:36.289459Z"
+    },
+    {
+      "start": 1789026817219197,
+      "end": 1789053344415070,
+      "start_iso": "2026-09-10T07:53:37.219197Z",
+      "end_iso": "2026-09-10T15:15:44.415070Z"
+    }
+  ],
+  "gaps": [
+    {
+      "start": 1788883337341913,
+      "end": 1788919459242789,
+      "start_iso": "2026-09-08T16:02:17.341913Z",
+      "end_iso": "2026-09-09T02:04:19.242789Z",
+      "gap_ms": 36121900,
+      "cause": "unrecorded silence: 36122s with no frame, longer than the 60s a live connection can stay quiet \u2014 the recorder was not running"
+    },
+    {
+      "start": 1788920686909945,
+      "end": 1788921025404243,
+      "start_iso": "2026-09-09T02:24:46.909945Z",
+      "end_iso": "2026-09-09T02:30:25.404243Z",
+      "gap_ms": 338494,
+      "cause": "unrecorded silence: 338s with no frame, longer than the 60s a live connection can stay quiet \u2014 the recorder was not running"
+    },
+    {
+      "start": 1788923507677874,
+      "end": 1788924090216650,
+      "start_iso": "2026-09-09T03:11:47.677874Z",
+      "end_iso": "2026-09-09T03:21:30.216650Z",
+      "gap_ms": 582538,
+      "cause": "unrecorded silence: 583s with no frame, longer than the 60s a live connection can stay quiet \u2014 the recorder was not running"
+    },
+    {
+      "start": 1788925068148281,
+      "end": 1788926478255153,
+      "start_iso": "2026-09-09T03:37:48.148281Z",
+      "end_iso": "2026-09-09T04:01:18.255153Z",
+      "gap_ms": 1410106,
+      "cause": "unrecorded silence: 1410s with no frame, longer than the 60s a live connection can stay quiet \u2014 the recorder was not running"
+    },
+    {
+      "start": 1788947593006022,
+      "end": 1788947595342149,
+      "start_iso": "2026-09-09T09:53:13.006022Z",
+      "end_iso": "2026-09-09T09:53:15.342149Z",
+      "gap_ms": 2336,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1788951307987467,
+      "end": 1788952043908915,
+      "start_iso": "2026-09-09T10:55:07.987467Z",
+      "end_iso": "2026-09-09T11:07:23.908915Z",
+      "gap_ms": 735921,
+      "cause": "unrecorded silence: 736s with no frame, longer than the 60s a live connection can stay quiet \u2014 the recorder was not running"
+    },
+    {
+      "start": 1788955103294423,
+      "end": 1788956360807400,
+      "start_iso": "2026-09-09T11:58:23.294423Z",
+      "end_iso": "2026-09-09T12:19:20.807400Z",
+      "gap_ms": 1257512,
+      "cause": "unrecorded silence: 1258s with no frame, longer than the 60s a live connection can stay quiet \u2014 the recorder was not running"
+    },
+    {
+      "start": 1788959197068337,
+      "end": 1788959199075240,
+      "start_iso": "2026-09-09T13:06:37.068337Z",
+      "end_iso": "2026-09-09T13:06:39.075240Z",
+      "gap_ms": 2006,
+      "cause": "disconnect: OSError: [Errno 28] No space left on device"
+    },
+    {
+      "start": 1788964241421058,
+      "end": 1788964242915273,
+      "start_iso": "2026-09-09T14:30:41.421058Z",
+      "end_iso": "2026-09-09T14:30:42.915273Z",
+      "gap_ms": 1494,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1788968107852082,
+      "end": 1788968110938047,
+      "start_iso": "2026-09-09T15:35:07.852082Z",
+      "end_iso": "2026-09-09T15:35:10.938047Z",
+      "gap_ms": 3085,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1788972534216898,
+      "end": 1788972536824219,
+      "start_iso": "2026-09-09T16:48:54.216898Z",
+      "end_iso": "2026-09-09T16:48:56.824219Z",
+      "gap_ms": 2607,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1788979039115597,
+      "end": 1788979041750011,
+      "start_iso": "2026-09-09T18:37:19.115597Z",
+      "end_iso": "2026-09-09T18:37:21.750011Z",
+      "gap_ms": 2634,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1788980606603533,
+      "end": 1788980608664961,
+      "start_iso": "2026-09-09T19:03:26.603533Z",
+      "end_iso": "2026-09-09T19:03:28.664961Z",
+      "gap_ms": 2061,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1788983394369235,
+      "end": 1788983396924783,
+      "start_iso": "2026-09-09T19:49:54.369235Z",
+      "end_iso": "2026-09-09T19:49:56.924783Z",
+      "gap_ms": 2555,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1789021103383200,
+      "end": 1789021105569006,
+      "start_iso": "2026-09-10T06:18:23.383200Z",
+      "end_iso": "2026-09-10T06:18:25.569006Z",
+      "gap_ms": 2185,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1789022461690206,
+      "end": 1789022464387949,
+      "start_iso": "2026-09-10T06:41:01.690206Z",
+      "end_iso": "2026-09-10T06:41:04.387949Z",
+      "gap_ms": 2697,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1789026816289459,
+      "end": 1789026817219197,
+      "start_iso": "2026-09-10T07:53:36.289459Z",
+      "end_iso": "2026-09-10T07:53:37.219197Z",
+      "gap_ms": 929,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    }
+  ],
+  "totals": {
+    "lines": 17870629,
+    "ticks": 17870607,
+    "gap_markers": 11,
+    "session_markers": 11,
+    "recorded_seconds": 129591.018553,
+    "missing_seconds": 40471.070455,
+    "recorded_fraction": 0.7620217963270098
+  }
+}

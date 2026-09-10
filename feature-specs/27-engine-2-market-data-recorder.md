@@ -23,13 +23,41 @@ evidence Phase 2's first criterion reads.
    **continuous span of at least 24 hours with every break accounted for** — each gap carrying its
    start, end and cause, so a silent outage cannot be mistaken for a quiet market. A gap is
    marked, never interpolated away.
-5. The `--live` half of the criterion confirms the real `data/raw/` matches the committed report.
+
+   **The report also carries `totals.recorded_fraction`, and the criterion enforces a floor of
+   0.98 on it.** Operator's decision, 2026-09-10, and the reason is worth stating in full because
+   the omission survived three drafts of this spec:
+
+   *Accounting for a break is not the same as not having one.* The tiling requirement is good and
+   stays — but a report can tile the span perfectly, name a cause for every hole, and still
+   describe a recorder that was down for a quarter of the day. The criterion measured start-to-end
+   elapsed time and called it continuity, so a 24-hour span with eleven hours missing and one with
+   none passed identically. The first real archive would have gone into the repository on that
+   basis: **10.93 hours recorded of a 22.16-hour span, reported as PASS.**
+
+   The fixture exists to answer one question — *did the recorder survive a day?* — and a run that
+   was down for a quarter of it answers no while reporting success. That is the eighth instance
+   this phase of a check whose output looks like the claim while the claim is not true.
+
+   0.98 of 24 hours leaves about 29 minutes. The observed clean run lost **15 seconds** across
+   nine websocket reconnects, or 0.9998, so the floor is generous against what it must tolerate
+   and still far tighter than any outage worth caring about.
+
+5. **The digest describes a window, not necessarily the whole archive.** `scripts/recording_report.py`
+   takes `--from` and `--to`, and the committed fixture covers the clean 24-hour run alone. This
+   narrows what the *report* describes and **never filters or rewrites the archive** — invariant 11
+   keeps a recording immutable. Digesting the whole archive answers a different question and
+   answers it worse: holes from before the run began drag the fraction down while saying nothing
+   about the run under test. The whole-archive digest is kept beside it as
+   `tests/fixtures/recording_report_full_archive.json`, because a ten-hour outage and a disk-full
+   failure are honest history and deleting them would be the dishonest move.
+6. The `--live` half of the criterion confirms the real `data/raw/` matches the committed report.
    `--live` is opt-in and is never required for the phase to be green, because `data/` is
    gitignored and a criterion may not depend on it.
-6. `scripts/record.py` stays on disk and stays working. It is superseded, not deleted: it is the
+7. `scripts/record.py` stays on disk and stays working. It is superseded, not deleted: it is the
    fallback if the engine framework is down, and `architecture-context.md` describes it as the
    day-one recorder.
-7. Write `README.md`, and batch the `bootstrap.py` registration request to the lead.
+8. Write `README.md`, and batch the `bootstrap.py` registration request to the lead.
 
 ## Scope Limits
 
@@ -44,8 +72,10 @@ evidence Phase 2's first criterion reads.
 
 ## Check When Done
 
-- `tests/fixtures/recording_report.json` is committed, parses, and shows at least 24 continuous
-  hours with every break accounted for.
+- `tests/fixtures/recording_report.json` is committed, parses, shows at least 24 continuous hours
+  with every break accounted for, **and reports `recorded_fraction` at or above 0.98**.
+- A perfectly tiled report describing a recorder down for six of twenty-five hours **FAILs**, and
+  a report predating the field reports PENDING rather than FAIL. Both asserted.
 - A test proves an injected gap appears in the report as a gap rather than being closed silently.
 - `record_sample_valid` still passes — Phase 0 stays green.
 - The recorder still runs on a tick where the mode is `frozen`.

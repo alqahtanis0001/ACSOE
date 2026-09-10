@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from acsoe.clients.recorder.report import (  # noqa: E402
     DEFAULT_SILENCE_THRESHOLD_S,
+    parse_iso,
     build_report,
 )
 
@@ -55,6 +56,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="refuse to write a digest whose span is shorter than this",
     )
     parser.add_argument(
+        "--from",
+        dest="window_from",
+        default=None,
+        help=(
+            "ISO-8601 UTC. Digest only frames at or after this moment. Narrows what the "
+            "REPORT describes; the archive is never filtered or rewritten."
+        ),
+    )
+    parser.add_argument(
+        "--to",
+        dest="window_to",
+        default=None,
+        help="ISO-8601 UTC. Digest only frames at or before this moment.",
+    )
+    parser.add_argument(
         "--write",
         action="store_true",
         help="write the fixture; without it the digest is printed and nothing is written",
@@ -70,16 +86,31 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no recording found in {raw_dir}", file=sys.stderr)
         return 2
 
-    report = build_report(paths, silence_threshold_s=args.silence_threshold_s)
+    window_start = parse_iso(args.window_from) if args.window_from else None
+    window_end = parse_iso(args.window_to) if args.window_to else None
+    report = build_report(
+        paths,
+        silence_threshold_s=args.silence_threshold_s,
+        window_start=window_start,
+        window_end=window_end,
+    )
     span = report["span"]
     hours = float(span["hours"])
 
+    window = report.get("window")
+    if window is not None:
+        print(
+            f"window {window['start_iso']} -> {window['end_iso']}"
+            "   (the archive itself is untouched)",
+            file=sys.stderr,
+        )
     print(
         f"span {span['start_iso']} -> {span['end_iso']}  ({hours:.2f}h)\n"
         f"segments {len(report['segments'])}  gaps {len(report['gaps'])}  "
         f"lines {report['totals']['lines']}\n"
         f"recorded {report['totals']['recorded_seconds'] / 3600:.2f}h  "
-        f"missing {report['totals']['missing_seconds'] / 3600:.2f}h",
+        f"missing {report['totals']['missing_seconds'] / 3600:.2f}h  "
+        f"recorded_fraction {report['totals']['recorded_fraction']:.4f}",
         file=sys.stderr,
     )
     for gap in report["gaps"]:

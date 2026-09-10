@@ -38,6 +38,7 @@ __all__ = [
     "ScanResult",
     "build_report",
     "iter_events",
+    "parse_iso",
     "scan_events",
 ]
 
@@ -55,7 +56,7 @@ _KIND_KEY = b'"kind"'
 _MICROS = 1_000_000
 
 
-def _parse_iso(text: str) -> int:
+def parse_iso(text: str) -> int:
     """ISO-8601 UTC to microseconds since the epoch."""
     moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
     if moment.tzinfo is None:
@@ -145,7 +146,7 @@ def _extract_ts(raw: bytes) -> int | None:
     if value is None:
         return None
     try:
-        return _parse_iso(value.decode("ascii"))
+        return parse_iso(value.decode("ascii"))
     except (ValueError, UnicodeDecodeError):
         return None
 
@@ -255,8 +256,8 @@ def _explicit_break(raw: bytes, ts: int) -> Break | None:
     ended = payload.get("reconnected_at")
     reason = str(payload.get("reason") or "unknown disconnect")
     try:
-        start = _parse_iso(str(started)) if started else ts
-        end = _parse_iso(str(ended)) if ended else ts
+        start = parse_iso(str(started)) if started else ts
+        end = parse_iso(str(ended)) if ended else ts
     except ValueError:
         return None
     return Break(start=start, end=end, cause=f"disconnect: {reason}")
@@ -266,14 +267,39 @@ def build_report(
     paths: Sequence[Path],
     *,
     silence_threshold_s: float = DEFAULT_SILENCE_THRESHOLD_S,
+    window_start: int | None = None,
+    window_end: int | None = None,
 ) -> dict[str, Any]:
     """The committed digest, as `scripts/verify.py` reads it.
 
     Every moment is microseconds since the epoch, with an ISO-8601 twin beside it for
     a human. Only file **names** are recorded, never paths: a criterion that only
     passes on the machine that produced it is a broken criterion.
+
+    `window_start` and `window_end` restrict the scan to one interval of the archive,
+    both inclusive, both microseconds since the epoch. **The archive itself is never
+    filtered or rewritten** — invariant 11 keeps a recording immutable, so this narrows
+    what the *digest* describes and nothing else.
+
+    It exists because the fixture answers a specific question — "did the recorder
+    survive a day?" — and the archive on disk spans more than that day. Digesting the
+    whole archive answers a different question and answers it worse: a ten-hour hole
+    from before the run began drags `recorded_fraction` down while saying nothing about
+    the run under test. The full-archive digest is still worth keeping, as history; it
+    is simply not the artefact the criterion should read.
+
+    The reported `span` is the first and last frame **inside** the window, not the
+    requested bounds, exactly as it is for a whole archive. A window whose edges fall
+    in a quiet period therefore reports a slightly shorter span than asked for, which is
+    the honest number: the recorder cannot prove it was running at a moment it wrote
+    nothing.
     """
-    result = scan_events(iter_events(paths), silence_threshold_s=silence_threshold_s)
+    events = iter_events(paths)
+    if window_start is not None or window_end is not None:
+        lo = window_start if window_start is not None else -(2**63)
+        hi = window_end if window_end is not None else 2**63 - 1
+        events = ((ts, raw) for ts, raw in events if lo <= ts <= hi)
+    result = scan_events(events, silence_threshold_s=silence_threshold_s)
     if result.first is None or result.last is None:
         raise ValueError("no usable line found in the recording")
 
@@ -290,6 +316,19 @@ def build_report(
         "schema_version": 1,
         "source_files": sorted(path.name for path in paths),
         "silence_threshold_s": silence_threshold_s,
+        # Null when the digest covers the whole archive. When set, it names the
+        # interval the digest describes, so a reader can never mistake a windowed
+        # report for a whole-archive one.
+        "window": (
+            None
+            if window_start is None and window_end is None
+            else {
+                "start": window_start,
+                "end": window_end,
+                "start_iso": None if window_start is None else _iso(window_start),
+                "end_iso": None if window_end is None else _iso(window_end),
+            }
+        ),
         "span": {
             "start": result.first,
             "end": result.last,

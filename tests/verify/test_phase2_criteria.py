@@ -50,6 +50,7 @@ _DOCSTRING = __import__("re").compile(r"(\"\"\"|''')(?:.|\n)*?\1")
 _COMMENT = __import__("re").compile(r"(?m)^\s*#.*$")
 
 HOUR_US = 3_600_000_000
+MINUTE_US = 60 * 1_000_000
 DAY_US = 24 * HOUR_US
 BASE_US = 1_800_000_000_000_000
 
@@ -202,20 +203,44 @@ def write_report(root: Path, payload: Any) -> None:
     (fixtures / "recording_report.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
-def tiled_report(*, gap_cause: str | None = "websocket reconnect") -> dict[str, Any]:
-    """25 hours: 12h recorded, a 1h break, 12h recorded. Tiles the span exactly."""
+def tiled_report(
+    *,
+    gap_cause: str | None = "websocket reconnect",
+    gap_us: int = 6 * MINUTE_US,
+) -> dict[str, Any]:
+    """25 hours, tiling the span exactly, broken once by a short reconnect.
+
+    `recorded_fraction` is **computed from the intervals below**, never written as a
+    literal. A hand-written number could agree with a report it does not describe, and
+    the criterion would then be checking the fixture's opinion of itself rather than its
+    contents.
+
+    The default break is six minutes because the criterion gained a
+    `MIN_RECORDED_FRACTION` floor of 0.98 on 2026-09-10. The old default was an hour,
+    which is 96% of a 25-hour span and now correctly FAILs - a report describing a
+    recorder down for an hour is not evidence that it survives a day. `gap_us` is a
+    parameter so the negative test can push it back under the floor deliberately.
+    """
     start = BASE_US
     end = start + 25 * HOUR_US
-    gap: dict[str, Any] = {"start": start + 12 * HOUR_US, "end": start + 13 * HOUR_US}
+    gap_start = start + 12 * HOUR_US
+    gap_end = gap_start + gap_us
+    gap: dict[str, Any] = {"start": gap_start, "end": gap_end}
     if gap_cause is not None:
         gap["cause"] = gap_cause
+    span_us = end - start
     return {
         "span": {"start": start, "end": end},
         "segments": [
-            {"start": start, "end": start + 12 * HOUR_US},
-            {"start": start + 13 * HOUR_US, "end": end},
+            {"start": start, "end": gap_start},
+            {"start": gap_end, "end": end},
         ],
         "gaps": [gap],
+        "totals": {
+            "recorded_seconds": (span_us - gap_us) / 1_000_000,
+            "missing_seconds": gap_us / 1_000_000,
+            "recorded_fraction": (span_us - gap_us) / span_us,
+        },
     }
 
 
@@ -234,6 +259,44 @@ def test_recording_span_passes_on_a_tiled_report(
     outcome = run(verify_module, "recording_span_continuous", bare_tree)
     assert_pass(outcome, verify_module)
     assert "1 accounted break" in outcome.message
+
+
+def test_a_perfectly_tiled_report_still_fails_below_the_recorded_fraction_floor(
+    verify_module: ModuleType, bare_tree: Path
+) -> None:
+    """Accounting for a break is not the same as not having one.
+
+    This report is impeccable by every other measure the criterion applies: the span is
+    over 24 hours, the segments and the gap tile it exactly, and the break carries a
+    stated cause. It describes a recorder that was down for six of twenty-five hours.
+
+    Until 2026-09-10 that PASSed, and the first real archive would have gone into the
+    repository on the strength of it at 49% recorded. The fixture exists to prove the
+    recorder survives a day; a run that was down for a quarter of it proves the opposite
+    while reporting success. The floor is the only assertion that can tell those apart.
+    """
+    write_report(bare_tree, tiled_report(gap_us=6 * HOUR_US))
+    outcome = run(verify_module, "recording_span_continuous", bare_tree)
+    assert_fail(outcome, verify_module)
+    assert "76.0%" in outcome.message
+    assert "98%" in outcome.message
+
+
+def test_a_report_with_no_recorded_fraction_is_pending_not_a_pass(
+    verify_module: ModuleType, bare_tree: Path
+) -> None:
+    """An older digest predates the floor and cannot answer it.
+
+    PENDING rather than FAIL: a report written before `recorded_fraction` existed is not
+    a bad recording, it is a report that cannot speak to the question. Treating it as a
+    FAIL would blame the recorder for the criterion changing under it.
+    """
+    report = tiled_report()
+    del report["totals"]["recorded_fraction"]
+    write_report(bare_tree, report)
+    outcome = run(verify_module, "recording_span_continuous", bare_tree)
+    assert_pending(outcome, verify_module)
+    assert "recorded_fraction" in outcome.message
 
 
 def test_a_break_nobody_accounted_for_is_a_fail(

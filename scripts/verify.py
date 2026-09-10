@@ -3003,6 +3003,25 @@ RECORDING_REPORT = Path("tests") / "fixtures" / "recording_report.json"
 #: a person is a reasonable place for one.
 MIN_RECORDING_SPAN_US = 24 * 60 * 60 * 1_000_000
 
+#: The floor on how much of the span was actually recorded, 0.0 to 1.0.
+#:
+#: **The span alone does not say the recorder survived the day, and until 2026-09-10
+#: this criterion could not tell the difference.** A 24-hour span with eleven hours of
+#: accounted holes and a 24-hour span with none tile identically, carry causes
+#: identically, and passed identically - the check measured start-to-end elapsed time,
+#: which made the word *continuous* in the phase row do no work at all. The first real
+#: archive would have PASSed at 10.93h recorded of a 22.16h span: a recorder that was
+#: down a quarter of the time, reporting success.
+#:
+#: 0.98 of 24h leaves roughly 29 minutes. That is generous for what it must tolerate -
+#: the observed clean run lost 15 seconds across nine websocket reconnects, which is
+#: 0.9998 - and still far too tight for an outage anybody would care about. The gap
+#: between 0.9998 and 0.98 is the margin; the gap between 0.98 and 0.76 is the defect.
+#:
+#: Operator's decision, 2026-09-10. A threshold on this is trading-adjacent - it decides
+#: what evidence the cost model is allowed to rest on - so it is not the lead's to pick.
+MIN_RECORDED_FRACTION = 0.98
+
 RECORDING_REPORT_CONTRACT = (
     "expected tests/fixtures/recording_report.json: "
     '{"span": {"start": .., "end": ..}, '
@@ -3054,6 +3073,12 @@ def check_recording_span_continuous(ctx: VerifyContext) -> Outcome:
     it is either recorded or is inside a break carrying a stated cause, and no
     moment is both. A hole in the tiling is a break nobody accounted for, and it
     is a FAIL however few gap entries the report happens to carry.
+
+    **And the tiling is not enough on its own.** Accounting for a break is not the same
+    as not having one: a report can tile perfectly, name a cause for every hole, and
+    still describe a recorder that was down for a quarter of the day. So the span must
+    also be at least `MIN_RECORDED_FRACTION` actually recorded. That floor was added on
+    2026-09-10, after the first real archive would have passed at 49% recorded.
     """
     path = ctx.root / RECORDING_REPORT
     if not path.is_file():
@@ -3129,10 +3154,27 @@ def check_recording_span_continuous(ctx: VerifyContext) -> Outcome:
     if cursor > span_end:
         return failed("the segments and gaps run past the end of the declared span")
 
+    totals = report.get("totals")
+    fraction = totals.get("recorded_fraction") if isinstance(totals, Mapping) else None
+    if not isinstance(fraction, (int, float)) or isinstance(fraction, bool):
+        return pending(
+            "the report carries no numeric `totals.recorded_fraction` - "
+            + RECORDING_REPORT_CONTRACT
+        )
+    if fraction < MIN_RECORDED_FRACTION:
+        return failed(
+            f"only {fraction:.1%} of the span was actually recorded, and the floor is "
+            f"{MIN_RECORDED_FRACTION:.0%}. The span tiles and every break carries a "
+            "cause, so this report is honest - it is the recording that is not good "
+            "enough. This fixture exists to prove the recorder survives a day, and a "
+            "run that was down for the rest of it proves the opposite."
+        )
+
     hours = (span_end - span_start) / 3_600_000_000
     return passed(
         f"{hours:.1f}h span tiled exactly by {len(segments_raw)} recorded segment(s) and "
-        f"{len(gaps_raw)} accounted break(s); every break carries a cause"
+        f"{len(gaps_raw)} accounted break(s); every break carries a cause; "
+        f"{fraction:.2%} of the span actually recorded, floor {MIN_RECORDED_FRACTION:.0%}"
     )
 
 

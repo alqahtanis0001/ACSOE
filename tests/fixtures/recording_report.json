@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "source_files": [
+    "kraken_v2_2026-09-08.jsonl",
+    "kraken_v2_2026-09-09.jsonl",
+    "kraken_v2_2026-09-10.jsonl"
+  ],
+  "silence_threshold_s": 60.0,
+  "window": {
+    "start": 1788963329000000,
+    "end": 1789050000000000,
+    "start_iso": "2026-09-09T14:15:29Z",
+    "end_iso": "2026-09-10T14:20:00Z"
+  },
+  "span": {
+    "start": 1788963329997349,
+    "end": 1789049999953476,
+    "start_iso": "2026-09-09T14:15:29.997349Z",
+    "end_iso": "2026-09-10T14:19:59.953476Z",
+    "seconds": 86669.956127,
+    "hours": 24.074987813055554
+  },
+  "segments": [
+    {
+      "start": 1788963329997349,
+      "end": 1788964241421058,
+      "start_iso": "2026-09-09T14:15:29.997349Z",
+      "end_iso": "2026-09-09T14:30:41.421058Z"
+    },
+    {
+      "start": 1788964242915273,
+      "end": 1788968107852082,
+      "start_iso": "2026-09-09T14:30:42.915273Z",
+      "end_iso": "2026-09-09T15:35:07.852082Z"
+    },
+    {
+      "start": 1788968110938047,
+      "end": 1788972534216898,
+      "start_iso": "2026-09-09T15:35:10.938047Z",
+      "end_iso": "2026-09-09T16:48:54.216898Z"
+    },
+    {
+      "start": 1788972536824219,
+      "end": 1788979039115597,
+      "start_iso": "2026-09-09T16:48:56.824219Z",
+      "end_iso": "2026-09-09T18:37:19.115597Z"
+    },
+    {
+      "start": 1788979041750011,
+      "end": 1788980606603533,
+      "start_iso": "2026-09-09T18:37:21.750011Z",
+      "end_iso": "2026-09-09T19:03:26.603533Z"
+    },
+    {
+      "start": 1788980608664961,
+      "end": 1788983394369235,
+      "start_iso": "2026-09-09T19:03:28.664961Z",
+      "end_iso": "2026-09-09T19:49:54.369235Z"
+    },
+    {
+      "start": 1788983396924783,
+      "end": 1789021103383200,
+      "start_iso": "2026-09-09T19:49:56.924783Z",
+      "end_iso": "2026-09-10T06:18:23.383200Z"
+    },
+    {
+      "start": 1789021105569006,
+      "end": 1789022461690206,
+      "start_iso": "2026-09-10T06:18:25.569006Z",
+      "end_iso": "2026-09-10T06:41:01.690206Z"
+    },
+    {
+      "start": 1789022464387949,
+      "end": 1789026816289459,
+      "start_iso": "2026-09-10T06:41:04.387949Z",
+      "end_iso": "2026-09-10T07:53:36.289459Z"
+    },
+    {
+      "start": 1789026817219197,
+      "end": 1789049999953476,
+      "start_iso": "2026-09-10T07:53:37.219197Z",
+      "end_iso": "2026-09-10T14:19:59.953476Z"
+    }
+  ],
+  "gaps": [
+    {
+      "start": 1788964241421058,
+      "end": 1788964242915273,
+      "start_iso": "2026-09-09T14:30:41.421058Z",
+      "end_iso": "2026-09-09T14:30:42.915273Z",
+      "gap_ms": 1494,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1788968107852082,
+      "end": 1788968110938047,
+      "start_iso": "2026-09-09T15:35:07.852082Z",
+      "end_iso": "2026-09-09T15:35:10.938047Z",
+      "gap_ms": 3085,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1788972534216898,
+      "end": 1788972536824219,
+      "start_iso": "2026-09-09T16:48:54.216898Z",
+      "end_iso": "2026-09-09T16:48:56.824219Z",
+      "gap_ms": 2607,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1788979039115597,
+      "end": 1788979041750011,
+      "start_iso": "2026-09-09T18:37:19.115597Z",
+      "end_iso": "2026-09-09T18:37:21.750011Z",
+      "gap_ms": 2634,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1788980606603533,
+      "end": 1788980608664961,
+      "start_iso": "2026-09-09T19:03:26.603533Z",
+      "end_iso": "2026-09-09T19:03:28.664961Z",
+      "gap_ms": 2061,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1788983394369235,
+      "end": 1788983396924783,
+      "start_iso": "2026-09-09T19:49:54.369235Z",
+      "end_iso": "2026-09-09T19:49:56.924783Z",
+      "gap_ms": 2555,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1789021103383200,
+      "end": 1789021105569006,
+      "start_iso": "2026-09-10T06:18:23.383200Z",
+      "end_iso": "2026-09-10T06:18:25.569006Z",
+      "gap_ms": 2185,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1789022461690206,
+      "end": 1789022464387949,
+      "start_iso": "2026-09-10T06:41:01.690206Z",
+      "end_iso": "2026-09-10T06:41:04.387949Z",
+      "gap_ms": 2697,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    },
+    {
+      "start": 1789026816289459,
+      "end": 1789026817219197,
+      "start_iso": "2026-09-10T07:53:36.289459Z",
+      "end_iso": "2026-09-10T07:53:37.219197Z",
+      "gap_ms": 929,
+      "cause": "disconnect: ConnectionClosedError: no close frame received or sent"
+    }
+  ],
+  "totals": {
+    "lines": 11924857,
+    "ticks": 11924847,
+    "gap_markers": 9,
+    "session_markers": 1,
+    "recorded_seconds": 86649.703949,
+    "missing_seconds": 20.252178,
+    "recorded_fraction": 0.9997663298920987
+  }
+}
