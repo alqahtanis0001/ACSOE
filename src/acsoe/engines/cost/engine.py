@@ -122,7 +122,7 @@ class CostEngine(BaseEngine):
             hurdle_pct=hurdle,
             clears_hurdle=clears,
             reason_code=None if clears else self._reason_code(inputs),
-            fallbacks_used=self._fallbacks(state),
+            fallbacks_used=self._fallbacks(),
         )
         duration_ms = (time.perf_counter() - started) * 1000.0
 
@@ -159,7 +159,7 @@ class CostEngine(BaseEngine):
         pair = _require(state.get(candidate_key), pair_field, candidate_key)
 
         exchange = state.get(EXCHANGE_KEY)
-        fees = _require(exchange, EXCHANGE_FEES_KEY, EXCHANGE_KEY)
+        fees = _require(exchange, EXCHANGE_FEE_TIER_KEY, EXCHANGE_KEY)
 
         # Spread comes from engine 3, not engine 1: `market_sensor` is the market-data
         # engine and `exchange` is the account engine, and `data_guard` needs every
@@ -176,10 +176,10 @@ class CostEngine(BaseEngine):
                 state.get(PREDICTION_KEY), "expected_move_pct", PREDICTION_KEY
             ),
             "maker_fee_pct": _require(
-                fees, "maker_pct", f"{EXCHANGE_KEY}.{EXCHANGE_FEES_KEY}"
+                fees, FEE_MAKER_FIELD, f"{EXCHANGE_KEY}.{EXCHANGE_FEE_TIER_KEY}"
             ),
             "taker_fee_pct": _require(
-                fees, "taker_pct", f"{EXCHANGE_KEY}.{EXCHANGE_FEES_KEY}"
+                fees, FEE_TAKER_FIELD, f"{EXCHANGE_KEY}.{EXCHANGE_FEE_TIER_KEY}"
             ),
             "spread_pct": _require(pair_quote, "spread_pct", f"{quote_where}.{pair}"),
             "slippage_pct": _require(
@@ -217,20 +217,24 @@ class CostEngine(BaseEngine):
         except (InvalidOperation, ValueError) as exc:
             raise MissingInputError(f"config {HURDLE_MULTIPLE_KEY} is not a number: {value!r}") from exc
 
-    def _fallbacks(self, state: State) -> tuple[str, ...]:
-        """Which paper-mode fallbacks engine 1 reported, carried through unchanged.
+    def _fallbacks(self) -> tuple[str, ...]:
+        """The fallbacks **this engine applied**. There are none, and that is the point.
 
         Invariant 2: "Every decision affected by a fallback records which fallback
-        fired." A gate outcome is such a decision, and this engine is where the fee tier
-        fallback actually changes an answer.
+        fired", and `CostAssessment.fallbacks_used` is the `rejections` column that
+        records it. Spec 37 retired the fee-tier row of the paper-mode table on
+        2026-09-10 — `AssetPairs` carries no fee schedule, so there was no runtime source
+        the named tier could have come from, and the only way to honour that row was to
+        write a fee percentage into the code. A confirmed pair with no fee data now
+        blocks, in every mode, and this gate has no fallback left to apply.
+
+        It used to read `state["exchange"]["fallbacks_used"]`, which **engine 1 does not
+        publish and never did**, so it returned an empty tuple on every tick regardless.
+        The dead read is deleted rather than re-pointed at `failed_fetches`: a failed
+        fetch is not a fallback, and putting one in this column would misreport exactly
+        the thing invariant 2 asks to be recorded.
         """
-        exchange = state.get(EXCHANGE_KEY)
-        if not isinstance(exchange, dict):
-            return ()
-        used = exchange.get(EXCHANGE_FALLBACKS_KEY)
-        if not isinstance(used, (list, tuple)):
-            return ()
-        return tuple(str(item) for item in used)
+        return ()
 
     # ------------------------------------------------------------------ reasons
 
@@ -266,19 +270,56 @@ class CostEngine(BaseEngine):
             f"on {format_signed_pct(assessment.friction_pct)} friction"
         )
 
-    def _blocked_on_missing_input(self, detail: str, started: float) -> EngineResult:
+    def _failed_fetch_reason(self, state: State, call: str) -> str | None:
+        """Why engine 1 says `call` did not answer this tick, or `None` if it did.
+
+        `failed_fetches` is a list of `{call, kind, reason}`. It is **not** a fallback
+        record — see the module docstring of `contracts.py` — and it is read here for one
+        purpose only: so the operator sentence can name the call rather than the state
+        key.
+        """
+        exchange = state.get(EXCHANGE_KEY)
+        if not isinstance(exchange, dict):
+            return None
+        failures = exchange.get(EXCHANGE_FAILED_FETCHES_KEY)
+        if not isinstance(failures, (list, tuple)):
+            return None
+        for failure in failures:
+            if isinstance(failure, dict) and failure.get("call") == call:
+                kind = failure.get("kind")
+                reason = failure.get("reason")
+                return f"{kind}: {reason}" if kind else str(reason)
+        return None
+
+    def _blocked_on_missing_input(
+        self, detail: str, state: State, started: float
+    ) -> EngineResult:
         """Fail closed, naming what was missing.
 
         `data` is deliberately empty rather than a half-filled assessment: publishing
         three of four economics figures would put numbers into `rejections` that were
         never used to decide anything, and a partially populated row is worse research
         data than an absent one.
+
+        **When the fee tier is the missing thing, the sentence names the call, not the
+        key.** "missing exchange.fee_tier" is true and sends the operator to look at
+        `state`, where they will find a `None` that tells them nothing. The useful
+        sentence is the one that says `trade_volume` failed and why, because that is
+        where the problem is and it is the only thing they can act on.
         """
+        reason = f"Cost gate could not price this candidate: missing {detail}"
+        if detail.startswith(f"{EXCHANGE_KEY}.{EXCHANGE_FEE_TIER_KEY}"):
+            failure = self._failed_fetch_reason(state, FEE_TIER_CALL)
+            if failure is not None:
+                reason = (
+                    f"Cost gate could not price this candidate: {FEE_TIER_CALL} failed "
+                    f"({failure}), so there is no fee for this pair"
+                )
         return EngineResult(
             engine=self.name,
             status=EngineStatus.BLOCK,
             blocks_trading=True,
-            reason=f"Cost gate could not price this candidate: missing {detail}",
+            reason=reason,
             data={"reason_code": REASON_INPUTS_UNAVAILABLE, "clears_hurdle": False},
             duration_ms=(time.perf_counter() - started) * 1000.0,
         )

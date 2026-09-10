@@ -291,22 +291,28 @@ class KrakenConfig(_Section):
     rest_timeout_s: int = Field(gt=0)
     """HTTP timeout for one REST call."""
 
-    cache_ttl_s: CacheTtlConfig | None = None
+    cache_ttl_s: CacheTtlConfig
     """How long ``AssetPairs`` and ``TradeVolume`` may be reused. Spec 38 step 1.
 
-    **Optional here, and refused at the point of use.** Every other threshold in this
-    file is required, and this one will be too once the lead pastes the block from
-    spec 37's appendix — but the two halves land in one change and this half lands
-    first. A required field would make ``load_config()`` raise on the committed
-    ``config/default.yaml`` until the YAML catches up, which is precisely the failure
-    that reverted the lead's attempt on 2026-09-10, mirrored.
+    **Required, since 2026-09-10, and it was deliberately optional for the few hours
+    before that.** The two halves of spec 38 step 1 land in one change: A adds this
+    field, the lead pastes the block from spec 37's appendix. While the YAML had not
+    landed, a required field would have made ``load_config()`` raise on the committed
+    ``config/default.yaml`` — the same failure that reverted the lead's attempt
+    earlier the same day, with the halves reversed. It was declared
+    ``CacheTtlConfig | None = None`` for exactly as long as that gap existed, with
+    every reader raising on the ``None`` rather than defaulting, and tightened the
+    moment the YAML was in. The build log carries the decision and the reversal.
 
-    ``None`` is not a value and nothing is defaulted from it. ``Config.get`` raises
-    :class:`ConfigKeyError` when asked to descend through it, and
-    ``clients/kraken/rest.py`` raises rather than caching for a guessed interval, so
-    an absent TTL fails closed exactly as an absent ``data_guard.max_data_age_s``
-    did. A ``null`` in the YAML is refused by :func:`_refuse_nulls` before pydantic
-    ever sees it, which is what spec 38 step 3 asks for.
+    Required is the stronger of the two and is the right resting state: a withdrawn
+    TTL now refuses at startup, by name, rather than blocking at the first fetch. A
+    ``null`` is refused by :func:`_refuse_nulls` before pydantic ever sees it, which
+    is what spec 38 step 3 asks for.
+
+    ``clients/kraken/rest.py`` still raises on an absent TTL rather than assuming one,
+    and that is not now-dead code: :class:`KrakenRestClient` is constructed directly
+    by tests and by ``scripts/``, not only from a validated :class:`Config`, so the
+    fail-closed path is the one a caller that forgot to pass a TTL takes.
     """
 
 

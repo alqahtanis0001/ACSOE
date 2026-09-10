@@ -5,6 +5,14 @@ Never edit the tracker directly.
 
 ## Current Task
 
+- **Phase 3. Claimed: spec 45.** Claimed 2026-09-10, before any code was written, and first in
+  the phase for the same reason spec 00 was first in Phase 0 and spec 16 was first in Phase 1:
+  `verify.py --phase 3` reported `2 criteria: 2 PASS, 0 FAIL, 0 PENDING` and printed
+  *"Phase 3 is green: every criterion PASS, zero PENDING"* over a phase where engines 7, 10, 11
+  and 17 are unbuilt or unwired. `docs_vocabulary` and `toolchain_green` alone were claiming a
+  finished phase. Seven criteria, each PENDING until its subject lands. **In progress.**
+  Spec 46 is claimed but not started; it waits on B declaring engine 7's reason codes.
+
 - **Phase 2. Claimed: specs 33 then 32.** Claimed 2026-09-09, before any code was written, in the
   order `PHASE-2-TASKS.md` sets: 33 concurrently with A from the first commit, so the criteria
   exist and report PENDING while A builds the engines they judge; then 32, the Phase 1 debt.
