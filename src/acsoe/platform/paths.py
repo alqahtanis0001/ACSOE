@@ -13,6 +13,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
+
+#: The database file inside ``data/db/``.
+#:
+#: Named here because ``context/architecture-context.md`` documents the layout as
+#: ``db/  acsoe.sqlite`` and nothing in the code said so — every caller until now
+#: either took a path from a fixture or built one by hand. The daemon has to open
+#: *the* database rather than *a* database, and the console will open the same one.
+DB_FILENAME: Final = "acsoe.sqlite"
 
 
 @dataclass(frozen=True)

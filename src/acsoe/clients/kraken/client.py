@@ -12,7 +12,7 @@ of them knowing the other half exists.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from acsoe.clients.kraken.contracts import (
@@ -69,6 +69,14 @@ class KrakenClient:
         return self._rest.last_known_good_balances
 
     # -- stream ----------------------------------------------------------- #
+
+    def set_subscription(self, pairs: Sequence[str]) -> bool:
+        """Forwarded so engine 2 can move the scope without knowing about `ws.py`."""
+        return self._stream.set_subscription(pairs)
+
+    @property
+    def subscription(self) -> tuple[str, ...]:
+        return self._stream.subscription
 
     def drain(self) -> tuple[RawFrame, ...]:
         return self._stream.drain()

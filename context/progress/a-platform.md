@@ -9,8 +9,72 @@ Never edit the tracker directly.
 `feature-specs/PHASE-3-TASKS.md` and ownership rule 5. Claimed 2026-09-10, before
 any code was written.
 
-**Spec 38 — COMPLETE, 2026-09-10.** Four commands green, output pasted under
-Verification. **Spec 39 — in progress.**
+**Spec 38 — COMPLETE, 2026-09-10.** **Spec 39 — COMPLETE, 2026-09-10.** Four commands
+green for both; output pasted under Verification.
+
+### Spec 39 — what landed
+
+`src/acsoe/cli/engine.py` (`build_clients`, `start_stream`, `close_clients`),
+`src/acsoe/engines/market_data_recorder/{contracts,engine,README}.py`,
+`src/acsoe/clients/kraken/{ws,client,limiter}.py`, `src/acsoe/platform/paths.py`
+(`DB_FILENAME`). New `tests/engines/test_subscription_scope.py` (11 tests), four new
+tests in `tests/clients/kraken/test_ws.py`, one in `test_limiter.py`, three in
+`tests/cli/test_entrypoints.py`.
+
+1. **The subscription scope is derived per tick and lives in the stream, not the
+   engine.** That is what makes "a failed `AssetPairs` leaves it unchanged" true by
+   construction rather than by an engine keeping a copy of last tick's answer.
+   `subscription_scope` returns `None` for "no basis to decide" and `()` for "nothing
+   qualifies" — two different answers that must not be one value, because
+   unsubscribing on a transient failure destroys order-book history that cannot be
+   recovered.
+2. **Moving the scope is a delta on the live socket**, never a reconnect: a
+   `subscribe` for what arrived, an `unsubscribe` for what left, silence for what
+   stayed, and nothing at all on a tick where it has not moved — which is the common
+   case, since this runs every minute.
+3. **No test hand-builds `state["exchange"]`.** Every test drives the real
+   `ExchangeEngine` through the real `Orchestrator` against C's fake and varies the
+   *fake*. The stream in those tests is the real `KrakenWebSocketClient`, constructed
+   and never started, so the delta bookkeeping under test is the production one rather
+   than a double that would agree with whatever engine 2 did.
+
+**Three defects found by wiring the real thing up**, all in the build log:
+
+- **`RateLimiter` could not be held across ticks.** It serialises with an
+  `asyncio.Lock` while `platform/aio.py` gives every engine call a fresh event loop.
+  Binds on contention, so it does not fire on the shipped budget at all and arms once
+  a tick makes ~30 REST calls — engine 7 plus per-pair order books. Fixed: the lock is
+  per running loop, the token state is not. Rebuilding the limiter per tick is not a
+  fix; it hands every tick a full bucket and removes the rate limit.
+- **Engine 2 became a gate by reading a config key that had not landed.** `Config.get`
+  raises on a key that does not exist, the orchestrator turns that into ERROR, and
+  ERROR blocks — so a missing optional key made the *recorder* the tick's primary
+  blocker and displaced `data_guard`. **The general point: a half-landed config key is
+  not uniformly safe because the reader raises. Whether raising is safe depends
+  entirely on who is reading.** Spec 38's landing order fixes the window; it does not
+  decide what happens inside it.
+- **The orchestrator crashed on tick 1 with a real store** — duplicate `run_id` in
+  `_log`. `core/` is the lead's; escalated, and the lead had found it independently
+  and fixed it.
+
+**And one of my own tripwires did not go off.**
+`test_a_tick_over_the_real_registry_records_errors_rather_than_raising` was written in
+Phase 2 to turn red when the real clients landed. It stayed green, because it builds
+the empty `Clients()` itself instead of going through `cli/engine.py` — it pinned a
+fact about a value the test supplies, not about the daemon. **A tripwire attached to a
+local reproduction of the symptom cannot detect the cause.** Rewritten to keep the
+property it actually tests, with the daemon's own construction asserted separately.
+
+**One decision that deliberately departs from the spec 38 pattern.**
+`trading.stable_quote_currencies` stays `frozenset[str] | None = None` rather than
+being tightened to required now the YAML has landed. `cache_ttl_s` was tightened
+because its reader raises on absence, so refusing at startup is strictly better. This
+key's readers were *ruled to disagree*: engine 7 fails closed, engine 2 fails open and
+publishes `crypto_quoted_excluded: false`. A required field overrules both — an absent
+key would stop the process, so the recorder would never run, which is the irreversible
+error the lead's ruling identifies for engine 2. **The landing order is universal; the
+resting state is not.** Tighten when absence should stop the process; leave optional
+when a reader has been ruled to keep working without it.
 
 ### Spec 38 — what landed, and the three things worth knowing
 
@@ -424,6 +488,24 @@ Two other things worth carrying forward:
 
 ## Known gap I own but have not closed
 
+**CLOSED 2026-09-10 by spec 39.** Kept below for the record, and it is worth reading
+against what actually happened, because the note was wrong in two ways.
+
+It was wrong about the **blocker**: it says the gap is blocked on `market_data.pairs`
+and `market_data.book_depth`, and offers two ways forward that both assume those keys
+ought to exist. The operator ruled that neither key exists — the universe is computed
+per tick, a Locked Decision — so the subscription set is *derived* in engine 2 from
+`state["exchange"]`, and the book depth is the recorder's own parameter. I leaned to
+"refuse to start without the keys", which would have been the wrong answer to a
+question that turned out not to be a question. Recorded rather than deleted: the
+reasoning was sound given what I believed, and what was missing was a ruling, not an
+argument.
+
+It was also wrong about the **tripwire**.
+`test_a_tick_over_the_real_registry_records_errors_rather_than_raising` did not turn
+red when the real clients landed, because it constructs the empty `Clients()` itself
+instead of going through `cli/engine.py`. See the build log.
+
 - **`cli/engine.py` still passes a `Clients()` of three `None`s**, so `acsoe engine` now
   blocks every tick: engine 1 raises on `None.asset_pairs` and engine 4 on its missing
   config key, both converted to `ERROR`. The tick **completes** and records both, which
@@ -516,11 +598,11 @@ Anything touching `core/`, `bootstrap.py`, the engine registry, an invariant, a 
 
 Paste the real output of your last run. Never report a task complete without it.
 
-### Phase 3, spec 38 complete (2026-09-10)
+### Phase 3, specs 38 and 39 complete (2026-09-10)
 
 ```
 $ .venv/Scripts/python.exe -m pytest tests/ -q
-1100 passed in 58.70s
+1198 passed in 95.13s
 
 $ .venv/Scripts/python.exe -m mypy --strict src/
 Success: no issues found in 68 source files
@@ -532,19 +614,49 @@ $ .venv/Scripts/python.exe scripts/verify.py --phase 3
 ACSOE verify - phase 3
 repo: C:\Users\saad2\Documents\GitHub\ACSOE
 
-PASS    docs_vocabulary  14 files scanned, 10 retired terms, no hit
-PASS    toolchain_green  pytest, mypy --strict and ruff all green (python.exe)
+PASS    docs_vocabulary                                       14 files scanned, 10 retired terms, no hit
+PASS    toolchain_green                                       pytest, mypy --strict and ruff all green (python.exe)
+PASS    cost_gate_uses_live_fee_tier                          BTC/USD: net edge 0.0075 at maker/taker 0.0005/0.0010 and 0.0020 at 0.0025/0.0045, moving by exactly the 0.0055 fee difference; the cheap tier clears the hurdle and the expensive tier is blocked
+PASS    risk_rejects_sub_ordermin                             BTC/USD: sized 5.97481259, then refused at an `ordermin` of 5.97481260 - one lot increment (1E-8) above it - with reason 'below_ordermin' and no quantity returned
+PENDING universe_varies_with_balance                          engine 7 `scout` does not exist yet (spec 43 and 44) ...
+PASS    safety_freezes_on_drawdown_without_opportunity_chain   the seeded drawdown froze the system on a tick with an empty opportunity chain ...
+PASS    safety_escalates_on_sustained_outage                   counted from the seeded block_records: 15 consecutive blocked tick(s) does not trip the outage and writes no `close_all`; 16 trips it and writes one ...
+PASS    safety_inputs_all_from_the_seed                       all six inputs match the seeded tables ... and none of them moved when state was poisoned with an engine 19 payload
+PENDING phase_3_gates_have_both_tests                         no test file yet for engine 7 `scout` (tests/engines/test_scout.py, spec 43 and 44) ...
 
-2 criteria: 2 PASS, 0 FAIL, 0 PENDING
-Phase 3 is green: every criterion PASS, zero PENDING.
+9 criteria: 7 PASS, 0 FAIL, 2 PENDING
+Phase 3 is not green: 2 PENDING. Mid-phase the bar is no FAIL, so this is expected.
 ```
 
-`ruff check tests/clients tests/cli tests/platform` is also clean; the standard's
-four commands cover `src/` only, so I run it over my own test paths separately.
+Both PENDING are engine 7 `scout`, which is B's specs 43 and 44. Nothing of mine is
+outstanding in the gate.
 
-**"Phase 3 is green" over two criteria is the thing nobody may read as progress** —
-it is C's spec 45 that fixes it, and it is not a claim about spec 38. Spec 38's real
-evidence is the 76 tests in `tests/clients/kraken/` and the two mutation runs above.
+**On reading a FAIL while three agents are working in one tree.** Several runs while I
+was finishing spec 39 reported `FAIL toolchain_green` naming a *different* pair of
+tests each time, always under `tests/verify/` or `tests/engines/test_safety.py`. One
+run also had `mypy` and `ruff` fail tree-wide on a syntax error in
+`engines/safety/contracts.py` — a docstring caught mid-save without its opening quotes.
+None of it was mine and none of it was the machine's intermittent fault: it is what a
+shared working tree looks like while B and C are saving files. The tell is that the
+named tests move between runs and all sit in another agent's paths, where the
+intermittent fault produces a *stable* wrong verdict on one test. My own paths were
+green throughout: 565 passed over `tests/cli`, `tests/clients`, `tests/platform`,
+`tests/research` and my `tests/engines/` files, with `ruff` clean over my `src/`
+directories. **Judge by path first, and only then consider re-running.**
+
+`ruff check` is clean over `tests/cli`, `tests/clients`, `tests/platform` and
+`tests/engines/test_guard_chain_rehearsal.py`; the standard's four commands cover
+`src/` only, so I run it over my own test paths separately. Two lint errors remain in
+`tests/` that are not mine and I have not touched: `UP031` in
+`tests/core/test_contracts.py` (lead) and `F401` in `tests/engines/test_risk.py` (B).
+Both reported.
+
+**Note for the record: at the time spec 38 was reported, `verify.py --phase 3` printed
+"Phase 3 is green" over two criteria** — `docs_vocabulary` and `toolchain_green` — and
+that was the empty-phase problem C's spec 45 exists to fix rather than a statement
+about spec 38. Spec 45 has since landed and the gate now has nine criteria and reports
+honestly. Spec 38's own evidence is the 76 tests in `tests/clients/kraken/` and the two
+mutation runs recorded in the build log.
 
 ### Phase 2, after spec 29 (2026-09-09)
 

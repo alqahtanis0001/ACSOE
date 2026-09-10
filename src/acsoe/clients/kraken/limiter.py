@@ -59,8 +59,36 @@ class RateLimiter:
         self._tokens = float(capacity)
         self._updated_at = monotonic()
         self._lock = asyncio.Lock()
+        self._lock_loop: asyncio.AbstractEventLoop | None = None
         self._granted = 0
         self._waits = 0
+
+    def _loop_lock(self) -> asyncio.Lock:
+        """The lock, belonging to the loop that is running right now.
+
+        **The limiter outlives the event loop and the lock cannot.** The runtime
+        loop is synchronous and ``platform/aio.py`` runs one ``asyncio.run`` per
+        engine call, so there is a fresh loop every tick — while this object is
+        held for the life of the daemon, because the budget is an account-level
+        fact and a limiter rebuilt each tick would hand every tick a full bucket
+        and remove the rate limit entirely.
+
+        An ``asyncio.Lock`` binds to the first loop it needs a future on and raises
+        on any later one. It binds on *contention*, not on construction, so the
+        failure arrives after however many ticks it takes for the bucket to run
+        short — which is a daemon that works and then stops, not one that never
+        started.
+
+        Replacing the lock when the loop changes is safe because concurrency only
+        ever exists inside one ``asyncio.run``: the previous loop is closed and
+        nothing can still be waiting. The token state is deliberately **not**
+        touched here — it is the thing that has to survive.
+        """
+        loop = asyncio.get_running_loop()
+        if self._lock_loop is not loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = loop
+        return self._lock
 
     @property
     def capacity(self) -> float:
@@ -101,7 +129,7 @@ class RateLimiter:
                 f"a cost of {cost} can never be granted by a bucket of capacity "
                 f"{self._capacity}; it would wait forever"
             )
-        async with self._lock:
+        async with self._loop_lock():
             self._refill()
             if self._tokens < cost:
                 self._waits += 1

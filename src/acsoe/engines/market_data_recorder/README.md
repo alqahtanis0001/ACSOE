@@ -8,7 +8,77 @@ since the last tick and appends it, verbatim, to the append-only archive in
 
 ## What it reads from `state`
 
-**Nothing.** It records the feed; it reads nothing another engine wrote.
+`state["exchange"]`, published by engine 1 on the same tick, and nothing else. It uses
+`pair_rules` and `balances` to work out what the socket should be subscribed to — see
+the next section. Everything else about the recording is read from the stream.
+
+The key `"exchange"` is **written out** in `contracts.py` rather than imported from
+`engines/exchange/contracts.py`: contract rule 3 says an engine never imports another
+engine. The duplicate is held honest by
+`tests/engines/test_subscription_scope.py::test_the_duplicated_state_key_still_matches_engine_ones`,
+which imports both and asserts they are equal — a test may reach across the boundary
+that production code may not.
+
+## The subscription scope, which is not the tradable universe
+
+**This is the distinction to get right, and the second name must not leak into this
+code.** The subscription scope is what the socket pays attention to: the pairs worth
+asking for, so that a thousand books the account could never trade in any currency are
+not carried across the network and into the archive. The *tradable universe* is what
+may be traded, engine 7 `scout` is its sole authority, it is recomputed every tick, and
+a pair inside this scope is routinely outside that universe.
+
+It is **derived every tick, never configured.** There is no pair list, no default and
+no config key holding one — `market_data.pairs` and `book_depth` do not exist and are
+not going to, because the universe is computed per tick and a typed list of three
+symbols would contradict that. The daemon starts subscribed to nothing and engine 1's
+first tick is what tells the socket where to listen.
+
+A pair is in scope when all three hold:
+
+1. it has rules in `state["exchange"]["pair_rules"]["pairs"]`;
+2. the account holds a **strictly positive** balance in its `quote` currency, per
+   `state["exchange"]["balances"]` — invariant 7, and zero is not spendable;
+3. it is not crypto-quoted, unless `trading.allow_crypto_quoted`. A quote counts as
+   crypto when it is not in `trading.stable_quote_currencies`.
+
+**Nothing economic enters this filter.** No `ordermin`, no `costmin`, no spread, no
+equity, no price. That is engine 7's job and this is not it.
+
+### When a fetch failed, the scope is left exactly as it was
+
+If `pair_rules` or `balances` did not arrive, the scope is **not recomputed** and
+nothing is unsubscribed. "I do not know" is a different answer from "nothing
+qualifies", and the two are different values in the code: `subscription_scope` returns
+`None` rather than `()`. Unsubscribing on a transient private-call failure would put a
+hole in the order-book history of every pair, and that history cannot be recovered
+afterwards.
+
+This engine remembers nothing between ticks and does not need to. **The subscription
+belongs to the stream, not to the engine**, so leaving it alone is the absence of an
+action rather than the restoration of a remembered value.
+
+Moving the scope is a **delta on the live socket** — a `subscribe` for what arrived, an
+`unsubscribe` for what left, and silence for everything that stayed. Never a reconnect:
+dropping the socket to change one symbol would break the history of every other pair.
+A tick where the scope has not moved sends nothing at all, which is the common case.
+
+### When the stable-quote set is absent, the exclusion is skipped and says so
+
+`crypto_quoted_excluded` reports whether the crypto-quoted rule actually ran, which is
+not the same as `trading.allow_crypto_quoted` being false: the rule also needs
+`trading.stable_quote_currencies`, and while that key is absent the rule cannot be
+applied. Engine 2 then proceeds with the balance rule alone and publishes the fact.
+
+That is a **lead ruling**, and it is deliberately the opposite of engine 7's, which
+excludes every pair not provably stable. The two engines answer different questions and
+have opposite irreversible errors: over-subscribing here costs bandwidth while
+under-subscribing destroys data that cannot be recovered, whereas over-including in the
+universe risks a trade the operator explicitly disabled. No trade can occur in a
+crypto-quoted pair on account of what this engine subscribes to; invariant 7's
+enforcement lives in engine 7 and only there.
+
+A published absence, not a silent default — the same shape as `failed_fetches`.
 
 ## What it writes into `state["market_data_recorder"]`
 
@@ -20,6 +90,9 @@ since the last tick and appends it, verbatim, to the append-only archive in
 | `gaps_recorded` | Breaks written into the archive this tick, each with its own cause |
 | `dropped_frames` | **Cumulative** frames the stream lost to a full buffer |
 | `unparsed_frames` | **Cumulative** frames recorded verbatim that yielded neither a trade nor a quote |
+| `subscription` | The pairs the stream is subscribed to at the end of this tick, sorted |
+| `subscription_derived` | True when this tick recomputed the scope; false when it left it alone |
+| `crypto_quoted_excluded` | Whether the crypto-quoted rule actually ran this tick |
 
 The last two are cumulative on purpose. A buffer overflow is a fault about the
 *process*, not about the minute it happened in, and zeroing it every tick would make
@@ -90,6 +163,14 @@ zero-dependency property. `tests/clients/recorder/test_schema.py` asserts the tw
 agree by running both over the same committed sample — which is a stronger guarantee
 than sharing the code would give, since it also proves the *committed evidence* still
 validates.
+
+## Book depth is the recorder's own parameter, not a config key
+
+`BOOK_DEPTH` in `contracts.py`, and it is 10 because that is `DEFAULT_DEPTH` in
+`scripts/record.py`. Engine 2 supersedes that script, so a depth that disagreed with it
+would split the archive into two datasets at the moment the daemon took over — and
+invariant 11 makes that unrepairable afterwards. Changing it is a decision about the
+recording, so it lives beside the recording rather than in an operator's YAML.
 
 ## `ts_recv` is stamped by the stream, not by this engine
 

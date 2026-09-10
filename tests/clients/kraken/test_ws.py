@@ -517,3 +517,150 @@ def _release_logging() -> None:
         root.removeHandler(handler)
         handler.close()
     structlog.reset_defaults()
+
+
+# --------------------------------------------------------------------------- #
+# Spec 39 — moving the subscription without dropping the socket
+# --------------------------------------------------------------------------- #
+
+
+class _ScriptedSocket:
+    """Waits for the test to say what happens next, so a resubscribe can be timed.
+
+    `FakeSocket` above returns its frames as fast as they are asked for, which is
+    fine for the reconnect tests and useless here: the point of these tests is what
+    happens to a socket that is *idle* when the subscription moves, and an idle
+    socket is one whose `recv` has not returned yet.
+    """
+
+    def __init__(self, owner: Any) -> None:
+        self._owner = owner
+        self._release = asyncio.Event()
+        self.sent: list[str] = []
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+
+    async def recv(self) -> str:
+        await self._release.wait()
+        self._owner._stopping.set()
+        if self._owner._async_stop is not None:
+            self._owner._async_stop.set()
+        return trade_frame("BTC/USD", "1", "1", "2026-03-01T12:00:00Z")
+
+    def finish(self) -> None:
+        self._release.set()
+
+
+def _sent_pairs(sent: list[str], method: str) -> list[list[str]]:
+    """The symbol lists of every frame in `sent` whose verb is `method`."""
+    frames = [json.loads(raw) for raw in sent]
+    return [frame["params"]["symbol"] for frame in frames if frame["method"] == method]
+
+
+def _client(pairs: list[str]) -> KrakenWebSocketClient:
+    return KrakenWebSocketClient(
+        clock=StillClock(),
+        pairs=pairs,
+        channels=[StreamChannel.TRADE],
+        connect=lambda *a, **k: None,
+        jitter=lambda: 0.0,
+        backoff_initial_s=0.001,
+    )
+
+
+def test_an_empty_scope_asks_for_nothing_rather_than_an_empty_symbol_list() -> None:
+    """The daemon starts subscribed to nothing, and that is a normal state.
+
+    `{"symbol": []}` is a request, and a request for nothing is not the same as no
+    request. The scope is empty until engine 1's first tick fills it.
+    """
+    assert subscriptions([StreamChannel.TRADE], [], 10) == []
+
+
+def test_set_subscription_is_idempotent_and_reports_whether_it_moved() -> None:
+    client = _client(["BTC/USD"])
+
+    assert client.set_subscription(["BTC/USD"]) is False
+    assert client.set_subscription(["ETH/USD", "BTC/USD"]) is True
+    # Sorted, so the scope is a value rather than the order the caller happened to
+    # build it in — otherwise "did it change" answers yes to a reordering.
+    assert client.subscription == ("BTC/USD", "ETH/USD")
+    assert client.set_subscription(["BTC/USD", "ETH/USD"]) is False
+
+
+@pytest.mark.asyncio
+async def test_moving_the_scope_subscribes_the_new_and_unsubscribes_the_gone() -> None:
+    """A delta on the live socket, never a reconnect.
+
+    Dropping and rebuilding the socket to change one symbol would put a hole in the
+    order-book history of every *other* pair, and that history cannot be recovered
+    afterwards. So the pair that arrived gets a `subscribe`, the pair that left gets
+    an `unsubscribe`, and the pair that stayed is not mentioned at all — asserted,
+    because re-subscribing it would look identical in the resulting book.
+    """
+    client = _client(["BTC/USD", "ETH/USD"])
+    socket = _ScriptedSocket(client)
+    client._connect = FakeConnect([socket])
+
+    async def move() -> None:
+        # Let the session open and send its opening subscription first.
+        while not socket.sent:
+            await asyncio.sleep(0)
+        client.set_subscription(["BTC/USD", "SOL/USD"])
+        while len(socket.sent) < 3:
+            await asyncio.sleep(0)
+        socket.finish()
+
+    await asyncio.gather(client._run(), move())
+
+    opening, *deltas = socket.sent
+    assert json.loads(opening)["params"]["symbol"] == ["BTC/USD", "ETH/USD"]
+    assert _sent_pairs(deltas, "subscribe") == [["SOL/USD"]]
+    assert _sent_pairs(deltas, "unsubscribe") == [["ETH/USD"]]
+    # BTC/USD stayed and is mentioned in neither delta. Re-subscribing it would look
+    # identical in the resulting book, which is why it is asserted rather than assumed.
+    assert client.subscription == ("BTC/USD", "SOL/USD")
+
+
+@pytest.mark.asyncio
+async def test_an_unchanged_scope_sends_nothing_on_a_live_socket() -> None:
+    """The tick that changes nothing must touch the socket not at all.
+
+    This is called every tick and the scope usually has not moved, so the silent
+    case is the common one rather than the edge one.
+    """
+    client = _client(["BTC/USD"])
+    socket = _ScriptedSocket(client)
+    client._connect = FakeConnect([socket])
+
+    async def move() -> None:
+        while not socket.sent:
+            await asyncio.sleep(0)
+        assert client.set_subscription(["BTC/USD"]) is False
+        for _ in range(20):
+            await asyncio.sleep(0)
+        socket.finish()
+
+    await asyncio.gather(client._run(), move())
+
+    assert len(socket.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_reconnect_resubscribes_to_the_current_scope_not_the_original() -> None:
+    """The scope survives the socket, because the socket is the thing that fails.
+
+    A reconnect that re-sent the pairs the client was *constructed* with would
+    silently revert every derivation engine 2 had made since — and the daemon is
+    constructed with none at all, so it would come back subscribed to nothing.
+    """
+    client = _client(["BTC/USD"])
+    client.set_subscription(["ETH/USD", "SOL/USD"])
+    first = FakeSocket([], OSError("connection reset"), client)
+    second = FakeSocket([], None, client)
+    client._connect = FakeConnect([first, second])
+
+    await client._run()
+
+    assert _sent_pairs(second.sent, "subscribe") == [["ETH/USD", "SOL/USD"]]

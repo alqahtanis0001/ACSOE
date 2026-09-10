@@ -65,6 +65,23 @@ pay. `value_at_bid` is `qty x bid`, what the position is immediately worth and t
 publishing one of them under both names would put the number a decision was *not* made on
 into the record of that decision.
 
+**Open for Phase 6: does `value_at_bid` need a column?** The other percentage fields on
+this payload are named after `rejections` columns deliberately, so that engine 19 `memory`
+fills the table with no translation step between the engine that computes a number and the
+table that stores it. `value_at_bid` has no column, because it did not exist when the
+schema was written. Two readings, and the decision belongs with engines 16 and 18 in Phase
+6 rather than here:
+
+- **Transient.** It is derivable from `qty` and the bid, and the only decision it feeds —
+  the `costmin` test — already records its outcome in `reason_code` and its number in the
+  rejection prose. Nothing needs to read it back.
+- **A column.** It is the figure a real gate decision was made on, and the rejection prose
+  is text rather than a queryable number, so research asking "how close were the refused
+  candidates to `costmin`" would have to parse sentences.
+
+Noted here now, while the reason it exists is fresh, rather than left for Phase 6 to
+reconstruct. A schema change is the lead's approval either way.
+
 **On a rejection, `qty` is absent from the payload entirely** — not `null`, not zero, not
 the minimum. There is no field an execution engine could read a size out of, and no field
 a later refactor could quietly start filling with `ordermin`.

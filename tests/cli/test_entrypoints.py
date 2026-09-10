@@ -52,15 +52,25 @@ from typing import Any
 import pytest
 import structlog
 import yaml
+from tests.harness.fake_kraken import FakeKrakenClient
 
 from acsoe.cli import main as cli_main
 from acsoe.cli import research as research_cmd
 from acsoe.cli.console import build_app
-from acsoe.cli.engine import Clients, build_orchestrator, run_loop
+from acsoe.cli.engine import (
+    Clients,
+    build_clients,
+    build_orchestrator,
+    close_clients,
+    run_loop,
+)
+from acsoe.clients.recorder.writer import JsonlRecorder
+from acsoe.clients.store.client import StoreClient
 from acsoe.core.contracts import Chains
 from acsoe.core.orchestrator import Orchestrator
 from acsoe.platform.clock import FixedClock, SystemClock
 from acsoe.platform.config import Config, load_config
+from acsoe.platform.paths import DB_FILENAME, ensure_runtime_directories
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_YAML = REPO_ROOT / "config" / "default.yaml"
@@ -360,18 +370,22 @@ def test_the_registered_guard_chain_is_the_four_phase_2_engines(
     ]
 
 
-def test_a_tick_over_the_real_registry_records_errors_rather_than_raising(
+def test_a_tick_with_no_clients_at_all_records_errors_rather_than_raising(
     startable_config: Path,
 ) -> None:
-    """`cli/engine.py` still passes a `Clients()` of three `None`s, so every engine that
-    reaches for a client fails - and the tick **completes anyway**, recording each
-    failure as an `ERROR` blocker.
+    """Contract rule 7: an engine that cannot reach a client fails the tick, not the loop.
 
-    That is contract rule 7 working, and it is the honest current state rather than
-    something to hide: the CLI's client wiring is outstanding, it needs a config key
-    that does not exist yet, and until it lands `acsoe engine` blocks every tick instead
-    of trading on nothing. Asserted rather than left implicit, so that wiring the real
-    clients turns this test red and forces it to be rewritten deliberately.
+    **Rewritten for spec 39, and worth saying why rather than quietly repointing it.**
+    This was the Phase 2 pin on the daemon's broken state — three `None` client slots
+    — written so that wiring the real clients would turn it red. It did not: it builds
+    the empty `Clients()` itself rather than going through `cli/engine.py`, so it
+    pinned a fact about a value the test supplies, not a fact about the daemon. A
+    tripwire attached to a local reproduction of the symptom cannot detect the cause.
+
+    What it actually tests is still true and still worth keeping, so it keeps that and
+    loses the claim it could not support: a chain handed no clients records an `ERROR`
+    per engine, never breaks early, and completes. The daemon's own wiring is asserted
+    in the two tests below, against what `build_clients` builds.
     """
     orchestrator = build_orchestrator(load(startable_config), FixedClock(FIXED_NOW), Clients())
     state = orchestrator.tick()
@@ -383,6 +397,92 @@ def test_a_tick_over_the_real_registry_records_errors_rather_than_raising(
     # Every guard engine still ran: the chain never breaks early.
     for name in ("exchange", "market_data_recorder", "market_sensor", "data_guard"):
         assert name in state, name
+
+
+def test_the_daemon_builds_three_real_clients_and_needs_no_credentials(
+    startable_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec 39 step 1 and step 2, asserted on the daemon's own construction path.
+
+    **A missing API key is not a startup refusal.** Paper mode is the default and has
+    to run on a fresh clone with no `.env`: the private calls then fail, engine 1
+    records it, and the gates block on their own — which is invariant 3. Refusing here
+    would be a live-mode guard, and that is invariant 1's job and a Phase 8
+    deliverable. The environment is cleared explicitly rather than hoped about, so this
+    proves the no-key path on a machine that happens to have a key.
+
+    **The stream starts subscribed to nothing.** No pair list, no default, no config
+    key holding one — the scope is derived per tick by engine 2 from what engine 1
+    publishes. Asserted because an empty scope is the correct initial state and looks
+    exactly like a bug if nobody has written down that it is not.
+    """
+    monkeypatch.delenv("KRAKEN_API_KEY", raising=False)
+    monkeypatch.delenv("KRAKEN_API_SECRET", raising=False)
+    paths = ensure_runtime_directories(tmp_path)
+
+    clients = build_clients(load(startable_config), FixedClock(FIXED_NOW), paths)
+
+    assert clients.kraken is not None
+    assert clients.store is not None
+    assert clients.recorder is not None
+    assert clients.kraken.subscription == ()
+    # The database is the documented one, migrated, under the temporary root.
+    assert clients.store.db_path == paths.db / DB_FILENAME
+    assert clients.store.db_path.is_file()
+    close_clients(clients)
+
+
+def test_the_daemon_completes_two_ticks_with_real_clients(
+    startable_config: Path, tmp_path: Path, fixed_clock: Any
+) -> None:
+    """Spec 39's first acceptance check, over the **real** `bootstrap` registry.
+
+    C's fake Kraken client for the exchange, because no test may reach the network;
+    B's real store against a temporary database; A's real JSONL recorder writing into
+    a temporary `data/raw/`. Two ticks rather than one, because `state` is fresh every
+    tick except `state["system"]` and an engine that quietly depended on something
+    surviving passes a single-tick test and fails the second.
+
+    The chains come from `build_chains()` rather than being assembled here: a CLI that
+    built its own would be a second registry, and two registries drift.
+    """
+    store = StoreClient(tmp_path / DB_FILENAME)
+    store.migrate()
+    recorder = JsonlRecorder(tmp_path / "raw")
+    clients = Clients(kraken=FakeKrakenClient(), store=store, recorder=recorder)
+    orchestrator = build_orchestrator(load(startable_config), fixed_clock, clients)
+
+    try:
+        completed = run_loop(orchestrator, tick_seconds=0.0, max_ticks=2)
+    finally:
+        close_clients(clients)
+
+    assert completed == 2
+    assert orchestrator.cycle_id == 2
+
+
+def test_the_daemon_stops_cleanly_on_the_stop_event_with_real_clients(
+    startable_config: Path, tmp_path: Path, fixed_clock: Any
+) -> None:
+    """And closes both the stream and the database on the way out.
+
+    `close_clients` runs in a `finally` in `run()`, so it has to survive an interrupt
+    as well as a clean exit — the recording is the half that cannot be recovered, and
+    a database left open on Windows is a file the next run cannot replace.
+    """
+    store = StoreClient(tmp_path / DB_FILENAME)
+    store.migrate()
+    clients = Clients(
+        kraken=FakeKrakenClient(), store=store, recorder=JsonlRecorder(tmp_path / "raw")
+    )
+    orchestrator = build_orchestrator(load(startable_config), fixed_clock, clients)
+    stop = threading.Event()
+
+    assert run_loop(orchestrator, tick_seconds=0.0, max_ticks=1, stop=stop) == 1
+    stop.set()
+    close_clients(clients)
+
+    assert run_loop(orchestrator, tick_seconds=0.0, stop=stop) == 0
 
 
 def test_a_stop_request_is_answered_before_the_next_tick(startable_config: Path) -> None:

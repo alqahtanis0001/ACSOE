@@ -77,15 +77,24 @@ REPEAT_ESCALATION = 3
 
 
 def subscriptions(
-    channels: Sequence[str], pairs: Sequence[str], depth: int
+    channels: Sequence[str], pairs: Sequence[str], depth: int, *, method: str = "subscribe"
 ) -> list[dict[str, Any]]:
-    """The subscribe payloads, in a stable order."""
+    """The subscribe payloads, in a stable order.
+
+    ``method`` is a parameter because an unsubscribe is the same frame with the same
+    parameters and a different verb, and writing it out twice is how the two drift.
+    An empty ``pairs`` produces **no frames at all** rather than one asking for an
+    empty symbol list: the daemon starts with nothing subscribed and learns its scope
+    from engine 1's first tick, so "no pairs yet" is a normal state and not an error.
+    """
+    if not pairs:
+        return []
     subs: list[dict[str, Any]] = []
     for channel in channels:
         params: dict[str, Any] = {"channel": channel, "symbol": list(pairs)}
         if channel == StreamChannel.BOOK:
             params["depth"] = depth
-        subs.append({"method": "subscribe", "params": params})
+        subs.append({"method": method, "params": params})
     return subs
 
 
@@ -200,7 +209,14 @@ class KrakenWebSocketClient:
     ) -> None:
         self._clock = clock
         self._url = url
-        self._subs = subscriptions(channels, pairs, depth)
+        self._channels = tuple(channels)
+        self._depth = depth
+        self._pairs = tuple(dict.fromkeys(pairs))
+        self._subs = subscriptions(self._channels, self._pairs, depth)
+        #: Delta frames waiting for a live socket. Cleared on connect, because the
+        #: full subscription is re-sent there and a stale delta would be noise.
+        self._pending: list[dict[str, Any]] = []
+        self._resubscribe: asyncio.Event | None = None
         self._connect = connect if connect is not None else _ws_connect
         self._jitter = jitter
         self._backoff_initial_s = backoff_initial_s
@@ -226,6 +242,68 @@ class KrakenWebSocketClient:
         self._backoff = backoff_initial_s
         self._last_cause: str | None = None
         self._repeated_cause = 0
+
+    # -- lifecycle -------------------------------------------------------- #
+
+    # -- the subscription scope, set from the loop thread ------------------ #
+
+    @property
+    def subscription(self) -> tuple[str, ...]:
+        """The pairs currently subscribed to, sorted. Never a configured list."""
+        with self._lock:
+            return self._pairs
+
+    def set_subscription(self, pairs: Sequence[str]) -> bool:
+        """Move the subscription to ``pairs``. Returns whether anything changed.
+
+        Called once a tick by engine 2 with the scope it derived from engine 1's
+        output. It is a **delta**, not a reconnect: the pairs that are new get a
+        `subscribe` and the pairs that have gone get an `unsubscribe`, and everything
+        already subscribed is left completely alone. Dropping and rebuilding the
+        socket to change one symbol would put a hole in the order-book history of
+        every other pair, and that history cannot be recovered afterwards.
+
+        Idempotent, and that matters rather than being a nicety: this is called every
+        tick and the scope usually has not moved, so the common case must send no
+        frames at all.
+
+        Safe to call before ``start()``. There is no socket to send a delta on, and
+        none is needed — the full subscription is sent on every connect.
+
+        Called from the runtime loop's thread, while the socket lives on this
+        client's own thread. The desired scope is written under the same lock the
+        reader uses, and the socket thread is woken to do the sending; nothing here
+        touches the socket directly.
+        """
+        desired = tuple(sorted(dict.fromkeys(pairs)))
+        with self._lock:
+            if desired == self._pairs:
+                return False
+            added = [pair for pair in desired if pair not in self._pairs]
+            removed = [pair for pair in self._pairs if pair not in desired]
+            self._pairs = desired
+            self._subs = subscriptions(self._channels, desired, self._depth)
+            self._pending.extend(subscriptions(self._channels, added, self._depth))
+            self._pending.extend(
+                subscriptions(self._channels, removed, self._depth, method="unsubscribe")
+            )
+        self._wake_for_resubscribe()
+        return True
+
+    def _wake_for_resubscribe(self) -> None:
+        """Nudge the socket thread to send whatever is pending, if it is running."""
+        loop, event = self._loop, self._resubscribe
+        if loop is None or event is None or loop.is_closed():
+            return
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(event.set)
+
+    async def _flush_pending(self, socket: Any) -> None:
+        with self._lock:
+            frames = list(self._pending)
+            self._pending.clear()
+        for frame in frames:
+            await socket.send(orjson.dumps(frame).decode())
 
     # -- lifecycle -------------------------------------------------------- #
 
@@ -444,6 +522,7 @@ class KrakenWebSocketClient:
     async def _run(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._async_stop = asyncio.Event()
+        self._resubscribe = asyncio.Event()
         if self._stopping.is_set():
             return
         while not self._stopping.is_set():
@@ -552,23 +631,55 @@ class KrakenWebSocketClient:
             self._backoff = self._backoff_initial_s
             with self._lock:
                 self._connected = True
-            for sub in self._subs:
+                # The full scope is about to be sent, so any delta queued while the
+                # socket was down is already covered and would only be noise.
+                self._pending.clear()
+                subs = list(self._subs)
+            for sub in subs:
                 await socket.send(orjson.dumps(sub).decode())
             event = self._async_stop
-            assert event is not None
-            while not self._stopping.is_set():
-                receive = asyncio.ensure_future(socket.recv())
-                stop = asyncio.ensure_future(event.wait())
-                done, pending = await asyncio.wait(
-                    {receive, stop}, return_when=asyncio.FIRST_COMPLETED
-                )
-                for task in pending:
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
-                if receive in done:
-                    self.ingest(receive.result())
-                else:
-                    return
+            resubscribe = self._resubscribe
+            if event is None or resubscribe is None:  # pragma: no cover - set in _run
+                return
+            await self._pump(socket, event, resubscribe)
         with self._lock:
             self._connected = False
+
+    async def _pump(
+        self, socket: Any, stop_event: asyncio.Event, resubscribe: asyncio.Event
+    ) -> None:
+        """Receive frames until stopped, waking to send subscription deltas.
+
+        **The receive future is created once and carried across iterations**, and
+        that is the whole reason this is a separate method rather than three lines in
+        ``_session``. The obvious loop re-creates it each time round and cancels
+        whichever future did not win — which is harmless when the only other future
+        is the stop event, and is data loss the moment a resubscribe can win the
+        race: cancelling an in-flight ``recv`` throws away a frame that had already
+        left the exchange. This client exists to not do that.
+        """
+        receive = asyncio.ensure_future(socket.recv())
+        stop = asyncio.ensure_future(stop_event.wait())
+        resub = asyncio.ensure_future(resubscribe.wait())
+        try:
+            while not self._stopping.is_set():
+                done, _ = await asyncio.wait(
+                    {receive, stop, resub}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if resub in done:
+                    resubscribe.clear()
+                    resub = asyncio.ensure_future(resubscribe.wait())
+                    await self._flush_pending(socket)
+                if receive in done:
+                    # `.result()` re-raises a transport failure here, which is what
+                    # sends the session up to `_run` to be recorded as a gap.
+                    frame = receive.result()
+                    self.ingest(frame)
+                    receive = asyncio.ensure_future(socket.recv())
+                if stop in done:
+                    return
+        finally:
+            for task in (receive, stop, resub):
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, *_TRANSPORT_ERRORS):
+                    await task

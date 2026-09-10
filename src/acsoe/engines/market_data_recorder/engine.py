@@ -33,7 +33,11 @@ from acsoe.core.contracts import (
     EngineStatus,
     State,
 )
-from acsoe.engines.market_data_recorder.contracts import RecorderState
+from acsoe.engines.market_data_recorder.contracts import (
+    EXCHANGE_STATE_KEY,
+    RecorderState,
+    subscription_scope,
+)
 
 __all__ = ["MarketDataRecorderEngine"]
 
@@ -44,6 +48,34 @@ def _iso(moment: Any) -> str:
     return text.replace("+00:00", "Z") if text.endswith("+00:00") else text + "Z"
 
 
+def _optional_setting(context: EngineContext, key: str) -> Any:
+    """A config key that may not have landed yet, without making this engine a gate.
+
+    ``Config.get`` raises on a key that does not exist, deliberately: an engine
+    silently receiving ``None`` for a threshold is the failure this project exists to
+    prevent. For every gate that is the right behaviour, because the orchestrator
+    turns the exception into ``ERROR`` and ``ERROR`` blocks.
+
+    **Engine 2 must never block.** It is not a gate, it runs in every mode including
+    frozen, and a tick it fails is a minute of order-book history that cannot be
+    recovered. So a key whose YAML half is still in flight — currently
+    ``trading.stable_quote_currencies``, which is requested and not yet pasted —
+    would otherwise make the recorder the tick's primary blocker and displace
+    ``data_guard``, which is both wrong and hard to read.
+
+    ``KeyError`` only, and only for keys this engine has already decided it can work
+    without. ``ConfigKeyError`` is a ``KeyError`` subclass and the test double raises
+    a plain one, so this covers both without either being special-cased. A key that
+    is present and ``null`` is a different state and reaches the caller as ``None``
+    through the normal path, exactly as it should: "the operator has not decided yet"
+    is not the same as "this key does not exist".
+    """
+    try:
+        return context.config.get(key)
+    except KeyError:
+        return None
+
+
 class MarketDataRecorderEngine(BaseEngine):
     """Raw market data to `data/raw/`, every tick, in every mode."""
 
@@ -52,13 +84,12 @@ class MarketDataRecorderEngine(BaseEngine):
     #: Registry table in `context/engine-contracts.md` marks engine 2 with no Gate.
     is_gate: ClassVar[bool] = False
 
-    # ARG002: `state` is unused and stays in the signature — the interface is fixed
-    # and the orchestrator calls it positionally. This engine records the feed; it
-    # reads nothing another engine wrote.
-    def process(self, context: EngineContext, state: State) -> EngineResult:  # noqa: ARG002
+    def process(self, context: EngineContext, state: State) -> EngineResult:
         started = time.perf_counter()
         stream = context.clients.kraken
         recorder = context.clients.recorder
+
+        scope, derived, crypto_excluded = self._apply_subscription(context, state, stream)
 
         drain = getattr(stream, "drain", None)
         if not callable(drain):
@@ -72,6 +103,9 @@ class MarketDataRecorderEngine(BaseEngine):
                 gaps_recorded=0,
                 dropped_frames=0,
                 unparsed_frames=0,
+                subscription=scope,
+                subscription_derived=derived,
+                crypto_quoted_excluded=crypto_excluded,
             )
             return EngineResult(
                 engine=self.name,
@@ -118,6 +152,9 @@ class MarketDataRecorderEngine(BaseEngine):
             gaps_recorded=len(gaps),
             dropped_frames=int(getattr(stream, "dropped_frames", 0)),
             unparsed_frames=int(getattr(stream, "unparsed_frames", 0)),
+            subscription=scope,
+            subscription_derived=derived,
+            crypto_quoted_excluded=crypto_excluded,
         )
         return EngineResult(
             engine=self.name,
@@ -125,6 +162,56 @@ class MarketDataRecorderEngine(BaseEngine):
             data=payload.to_state(),
             duration_ms=(time.perf_counter() - started) * 1000.0,
         )
+
+    # ------------------------------------------------------- subscription scope
+
+    def _apply_subscription(
+        self, context: EngineContext, state: State, stream: Any
+    ) -> tuple[tuple[str, ...], bool, bool]:
+        """Move the stream's subscription to the scope this tick implies.
+
+        Returns the scope now in force, whether this tick derived it, and whether the
+        crypto-quoted exclusion was actually applied.
+
+        **This engine remembers nothing between ticks**, which is architecture
+        invariant 1 and is not a limitation to work around here. When the inputs are
+        absent there is nothing to compare against and nothing to restore, because
+        the subscription is the *stream's* state, not the engine's: the engine simply
+        does not call ``set_subscription`` and reads back what is already there. That
+        is what makes "a failed `AssetPairs` leaves the subscription unchanged" true
+        by construction rather than by an engine holding a copy of last tick's answer
+        and hoping it is still right.
+        """
+        current: tuple[str, ...] = tuple(getattr(stream, "subscription", ()) or ())
+
+        exchange = state.get(EXCHANGE_STATE_KEY)
+        if not isinstance(exchange, Mapping):
+            # Engine 1 did not publish this tick — it errored, or it is not
+            # registered. Nothing to derive from, so nothing changes.
+            return current, False, False
+
+        # `allow_crypto_quoted` is a required field and is read with a bare `get`, so
+        # a genuinely missing required key still fails loudly. The stable-quote set is
+        # the one key that may legitimately not exist yet — see `_optional_setting`.
+        allow_crypto = bool(context.config.get("trading.allow_crypto_quoted"))
+        stable = _optional_setting(context, "trading.stable_quote_currencies")
+        stable_quotes = frozenset(stable) if stable is not None else None
+
+        scope = subscription_scope(
+            pair_rules=exchange.get("pair_rules"),
+            balances=exchange.get("balances"),
+            allow_crypto_quoted=allow_crypto,
+            stable_quotes=stable_quotes,
+        )
+        if scope is None:
+            return current, False, False
+
+        applied_crypto_rule = not allow_crypto and stable_quotes is not None
+        set_subscription = getattr(stream, "set_subscription", None)
+        if callable(set_subscription):
+            set_subscription(scope)
+            scope = tuple(getattr(stream, "subscription", scope) or scope)
+        return scope, True, applied_crypto_rule
 
     @staticmethod
     def _drain_gaps(stream: Any) -> tuple[Mapping[str, Any], ...]:
