@@ -275,6 +275,27 @@ class StoreClient:
         ).fetchone()
         return None if row is None else EquitySnapshotRow(**_row_to_dict(row))
 
+    def peak_equity(self) -> Decimal | None:
+        """The running maximum equity the store holds, or `None` on an empty series.
+
+        Engine 19 `memory` needs this every tick and must not recompute it from `state`,
+        which is rebuilt fresh each tick and therefore has no memory of a peak reached
+        before the last restart. Reading it here costs one indexed row.
+
+        **The peak is carried forward on the row, not aggregated over the column.** The
+        obvious query, `SELECT MAX(peak_equity) FROM equity_snapshots`, is wrong and
+        wrong silently: money is stored as an exact decimal *string*, so SQLite compares
+        it lexicographically and decides `'9.50'` is larger than `'10000.00'`. That
+        returns a plausible number, a too-small peak, and therefore a drawdown smaller
+        than the real one — the circuit breaker sits quiet through exactly the loss it
+        exists to stop. The comparison has to happen in `Decimal`, and the cheapest way
+        to have it already done is the newest row's own `peak_equity`, which is the
+        running maximum by construction and is the same value engine 17 `safety` reads
+        through :meth:`latest_equity_snapshot`. Both readers therefore see one number.
+        """
+        snapshot = self.latest_equity_snapshot()
+        return None if snapshot is None else snapshot.peak_equity
+
     def recent_closed_trades(self, limit: int) -> tuple[TradeRow, ...]:
         """Closed trades, most recent first, ordered by `closed_at`.
 
@@ -324,6 +345,103 @@ class StoreClient:
         return len(
             self.block_records_in_window(
                 start_ts=start_ts, end_ts=end_ts, status=status, blocked_by=blocked_by
+            )
+        )
+
+    def recent_block_records(self, limit: int) -> tuple[BlockRecordRow, ...]:
+        """The most recent `limit` block record **rows**, newest first.
+
+        **Ordered by `ts`, never by `cycle_id`.** `cycle_id` is minted per tick within a
+        run and restarts at 1 with the process, so a `cycle_id` ordering over a
+        cross-restart sequence puts the *old* run's high cycle numbers in front of the
+        new run's low ones and reports a stale tick as the newest thing that happened.
+        B's Phase 0 seed reuses `cycle_id` values across two `run_id`s deliberately, so
+        the two orderings genuinely disagree there.
+
+        **The limit is the caller's and there is no default.** This read replaces
+        `block_records_in_window(start_ts=0, end_ts=<maxint>)`, which materialised a
+        `BlockRecordRow` for every row in the table. That was harmless while the table
+        held nothing but the Phase 0 seed and stops being harmless the moment engine 19
+        `memory` starts writing a row per guard per tick. `idx_block_records_ts` serves
+        the ordering, so the cost is the limit and not the table.
+
+        **A row is a blocker, not a tick.** The guard chain never breaks early, so one
+        tick can produce several rows and `limit` rows can be fewer than `limit` ticks.
+        A caller that wants one row per tick wants :meth:`recent_blocked_ticks`, which
+        never returns a tick it has only half of.
+        """
+        rows = self.connection.execute(
+            "SELECT * FROM block_records ORDER BY ts DESC, id DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        return tuple(BlockRecordRow(**_row_to_dict(row)) for row in rows)
+
+    def recent_blocked_ticks(self, limit: int) -> tuple[BlockRecordRow, ...]:
+        """One row per blocked tick, newest tick first, at most `limit` ticks.
+
+        What the console's cycle feed renders: a tick on which `data_guard` and `safety`
+        both blocked is **one thing that happened**, not two. The row kept is the primary
+        blocker — the one that gated the opportunity chain — falling back to the lowest
+        `id` on the tick when nothing on it is marked primary, which is what a seeded
+        fixture or a partially-written tick looks like.
+
+        **Why this is not `recent_block_records` with a dictionary over it.** Truncating
+        rows and *then* grouping can cut a tick in half: the oldest tick in the window
+        keeps whichever of its rows survived the limit, and if the primary row was the
+        one cut, the feed renders that tick as blocked by the wrong engine. Nothing
+        raises and the row looks well-formed. This method picks whole ticks first and
+        reads only their rows, so a tick is either absent or complete.
+
+        **Bounded the same way, by `ts`.** The first statement is the newest `limit`
+        ticks by `ts`; the second reads back only rows at or after the oldest of those
+        timestamps. Engine 19 stamps every row it writes for a tick with the same
+        `context.now`, which is what makes the second bound exact. Were a tick ever
+        written across two timestamps it would appear as two entries in the first
+        statement and this method would return fewer than `limit` ticks — it under-fills,
+        it does not mis-attribute.
+        """
+        # The tie-break after `ts DESC` is `cycle_id` then `run_id`, the opposite order
+        # from the outage walk below. Within one `ts` either is arbitrary and both are
+        # deterministic, and the difference is deliberate: C's
+        # `test_an_outage_counted_by_cycle_id_is_a_fail` proves the Phase 3 outage
+        # criterion can fail by rewriting that walk's ORDER BY *by its literal text*, and
+        # a second identical clause in this file makes the anchor ambiguous. Do not
+        # "tidy" the two into one wording.
+        wanted = self.connection.execute(
+            """
+            SELECT DISTINCT run_id, cycle_id, ts
+            FROM block_records
+            ORDER BY ts DESC, cycle_id DESC, run_id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+        if not wanted:
+            return ()
+
+        ticks = {(str(row["run_id"]), int(row["cycle_id"])) for row in wanted}
+        oldest_ts = min(int(row["ts"]) for row in wanted)
+        rows = self.connection.execute(
+            "SELECT * FROM block_records WHERE ts >= ? ORDER BY ts DESC, id ASC",
+            (oldest_ts,),
+        ).fetchall()
+
+        chosen: dict[tuple[str, int], BlockRecordRow] = {}
+        for raw in rows:
+            tick = (str(raw["run_id"]), int(raw["cycle_id"]))
+            if tick not in ticks:
+                continue
+            record = BlockRecordRow(**_row_to_dict(raw))
+            held = chosen.get(tick)
+            # Rows arrive ascending by `id` within a tick, so the first one seen is
+            # already the lowest-id fallback; only a primary displaces it.
+            if held is None or (record.is_primary and not held.is_primary):
+                chosen[tick] = record
+        return tuple(
+            sorted(
+                chosen.values(),
+                key=lambda row: (row.ts, row.run_id, row.cycle_id),
+                reverse=True,
             )
         )
 

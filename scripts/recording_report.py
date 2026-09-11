@@ -131,7 +131,12 @@ def main(argv: list[str] | None = None) -> int:
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    # `newline="\n"` is load-bearing. `write_text` opens in TEXT mode, text mode on
+    # Windows turns every `\n` into `\r\n`, and `tests/fixtures/**` is `-text` in
+    # `.gitattributes` — so unlike everywhere else in this repository there is no clean
+    # filter to normalise it, and a bare call changes the **committed bytes** of an
+    # evidence file. Found 2026-09-11 by C.
+    out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(f"wrote {out}", file=sys.stderr)
     return 0
 

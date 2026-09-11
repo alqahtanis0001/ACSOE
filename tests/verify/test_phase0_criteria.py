@@ -983,17 +983,59 @@ def test_a_criterion_reports_fail_when_yaml_is_unavailable(
 # --------------------------------------------------------------------------- #
 
 
-def test_no_phase_zero_criterion_reads_data_models_or_logs(repo_root: Path) -> None:
+def test_no_registered_criterion_reads_data_models_or_logs(verify_module: ModuleType) -> None:
     """Spec 00 step 7. `data/`, `models/` and `logs/` are gitignored, so a criterion
-    depending on anything inside one of them passes only on the machine that
-    produced it - which is a broken criterion, not a passing phase."""
-    source = (repo_root / "scripts" / "verify.py").read_text(encoding="utf-8")
-    for line in source.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#") or "gitignore" in stripped:
-            continue
-        for forbidden in ('"data"', "'data'", '"models"', '"logs"'):
-            assert forbidden not in stripped, line
+    depending on anything inside one of them passes only on the machine that produced
+    it - which is a broken criterion, not a passing phase.
+
+    **Per registered criterion, not per line of the file.** This was a line scan over
+    the whole of `scripts/verify.py`, which was correct only for as long as no
+    criterion was `--live`. Phase 4 registers the project's first one:
+    `replay_full_archive` reads `data/historical/` on purpose, spec 48 criterion 8
+    names the directory, and `ai-workflow-rules.md` makes a `--live` criterion opt-in
+    and never required for a phase to be green. A whole-file scan cannot tell that
+    sanctioned read from a defect, so it is now walked the way the Phase 3 equivalent
+    already walks it - `inspect.getsource` of each criterion the ordinary
+    (non-`--live`) run would execute. That covers strictly more than the line scan did,
+    because it reaches every phase's criteria rather than only the ones that happen to
+    sit in this file's Phase 0 section.
+    """
+    import inspect
+
+    seen = 0
+    for phase in range(verify_module.MIN_PHASE, verify_module.MAX_PHASE + 1):
+        to_run, _skipped = verify_module.criteria_for(phase, False)
+        for criterion in to_run:
+            seen += 1
+            source = inspect.getsource(criterion.check)
+            for line in source.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#") or "gitignore" in stripped:
+                    continue
+                for forbidden in ('"data"', "'data'", '"models"', '"logs"'):
+                    assert forbidden not in stripped, f"{criterion.name}: {line}"
+    assert seen, "no criteria were walked; the registry lookup is wrong, not the rule"
+
+
+def test_the_only_criterion_reading_a_gitignored_path_is_live_only(
+    verify_module: ModuleType,
+) -> None:
+    """The exception above is pinned, so it cannot widen by accident.
+
+    `replay_full_archive` is allowed to read `data/historical/` **because it is
+    `--live`**. Registering it as an ordinary criterion would admit a gitignored read
+    into the path a phase has to pass on a fresh clone, and the scan above - which
+    skips live criteria - would say nothing. This is the assertion that notices.
+    """
+    live = {
+        criterion.name
+        for criteria in verify_module._REGISTRY.values()
+        for criterion in criteria
+        if criterion.live
+    }
+    assert "replay_full_archive" in live, (
+        "replay_full_archive reads data/historical/ and must be registered live=True"
+    )
 
 
 # --------------------------------------------------------------------------- #

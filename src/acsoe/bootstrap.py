@@ -57,6 +57,7 @@ from acsoe.engines.data_guard.engine import DataGuardEngine
 from acsoe.engines.exchange.engine import ExchangeEngine
 from acsoe.engines.market_data_recorder.engine import MarketDataRecorderEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
+from acsoe.engines.memory.engine import MemoryEngine
 from acsoe.engines.risk.engine import RiskEngine
 from acsoe.engines.safety.engine import SafetyEngine
 from acsoe.engines.scout.engine import ScoutEngine
@@ -123,7 +124,29 @@ OPPORTUNITY_CHAIN: tuple[BaseEngine, ...] = (
 
 #: Engines 21, 22, 19. Every tick, every mode. Watches positions, exits them, records
 #: everything — including on the fourteen ticks in fifteen where no bar closed.
-MANAGE_CHAIN: tuple[BaseEngine, ...] = ()
+#:
+#: **Phase 4 registers 19 `memory`, spec 58.** 21 `position_manager` and 22 `exit` are
+#: Phase 6 and stay absent, so this is registry order with holes exactly as the
+#: opportunity chain has been since Phase 3. The order matters when they land: 19 runs
+#: **last**, because it records what 21 and 22 did on this tick, and an engine cannot
+#: record a decision that has not been taken yet.
+#:
+#: Registration was held until engine 19 had been driven through **two real orchestrator
+#: ticks** by an agent that did not build it — B, in
+#: `tests/engines/test_manage_chain_rehearsal.py` — the same deferral Phase 2 and Phase 3
+#: both took and the third time it paid. Two ticks rather than one because `state` is
+#: fresh every tick except `state["system"]`, so an engine quietly depending on something
+#: surviving passes a single-tick test and fails the second. The rehearsal's mutation N5
+#: measured that rather than asserting it: with `cycle_id` cached on the engine across
+#: ticks, the single-tick test still passes and five two-tick assertions fail.
+#:
+#: One thing the rehearsal established that is worth knowing before reading this chain.
+#: `ux_equity_snapshots_tick` has now been **seen to fire**: two orchestrators sharing one
+#: `run_id` — a process restarting under a reused id — each mint `cycle_id` 1, which is
+#: the same tick by the only identity the schema recognises. Contract rule 7 turns the
+#: `IntegrityError` into `ERROR`, the tick completes, engine 19 publishes nothing, and the
+#: first tick's row survives untouched. That is the fail-closed outcome, not a defect.
+MANAGE_CHAIN: tuple[BaseEngine, ...] = (MemoryEngine(),)
 
 
 def build_chains() -> Chains:

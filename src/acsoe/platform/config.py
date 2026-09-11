@@ -387,8 +387,34 @@ class DataGuardConfig(_Section):
 
 
 class BacktestConfig(_Section):
+    """Walk-forward training cadence, plus the embargo the splitter purges on.
+
+    ``embargo_bars`` was declared ``int | None = None`` for one day — 2026-09-11 — while
+    spec 38's two-halves landing was in flight. ``extra="forbid"`` means the YAML key and
+    the model field cannot be separated in either order: the key alone is refused at load,
+    and a required field alone makes the committed ``config/default.yaml`` fail to parse,
+    taking ``scripts/verify.py`` and every test that reads the shipped config with it.
+    Optional was the only state in which both halves load. **Both halves have landed and
+    it is required again**, so a later removal now refuses at startup rather than blocking
+    at the point of use.
+
+    **The reason that window was dangerous is worth keeping, because it is not the reason
+    the ``kraken.cache_ttl_s`` handoff would have led you to expect.** ``cache_ttl_s`` is a
+    nested *section*: ``Config.get("kraken.cache_ttl_s.asset_pairs")`` raised
+    ``ConfigKeyError`` while it was ``None``, because the walk had to descend *into* the
+    ``None`` and descending into a non-model raises. ``embargo_bars`` **is** the leaf, so
+    the walk ends on it and ``Config.get`` returns ``None`` — exactly as
+    ``trading.stable_quote_currencies`` does. **The optional-field handoff pattern only
+    fails closed for keys nested under an optional section. For an optional leaf the window
+    between the two halves is a window in which a reader silently gets ``None``**, and a
+    zero embargo is the Phase 4 failure that looks like success: no crash, no red test, just
+    a flattering model. ``research/walkforward.py`` refuses a missing or null key rather than
+    defaulting, which is the half of that seam this model cannot enforce.
+    """
+
     training_window_days: int = Field(gt=0)
     retrain_interval_days: int = Field(gt=0)
+    embargo_bars: int = Field(gt=0)
 
 
 class SeedsConfig(_Section):

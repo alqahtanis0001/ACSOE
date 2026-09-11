@@ -5,6 +5,124 @@ Never edit the tracker directly.
 
 ## Current Task
 
+**Phase 4. Claimed: specs 54 and 55**, in that order, per `feature-specs/PHASE-4-TASKS.md`
+and ownership rule 5. Claimed 2026-09-11, before any code was written. Plus the spec 38
+two-halves handoff for `backtest.embargo_bars`, which the lead is blocked on and which
+ships first.
+
+### HANDOFF TO THE LEAD — `backtest.embargo_bars`, done, the YAML is now safe to paste
+
+`BacktestConfig.embargo_bars` is declared in `src/acsoe/platform/config.py` as
+`int | None = Field(default=None, gt=0)`. The `extra="forbid"` refusal that reverted the
+lead's attempt today is gone: `backtest.embargo_bars: <positive int>` can be pasted under
+`backtest:` and will parse. Four tests in `tests/platform/test_config.py`, all proven red
+by mutation (build log).
+
+**One thing the lead must know before pasting, because it is *not* how the
+`kraken.cache_ttl_s` handoff behaved.** That key was a nested section, so
+`Config.get("kraken.cache_ttl_s.asset_pairs")` raised while it was `None` — the walk had to
+descend *into* the `None`. `embargo_bars` is a **leaf**, so `Config.get("backtest.embargo_bars")`
+returns `None` rather than raising, exactly like `trading.stable_quote_currencies`. Absence
+therefore does **not** fail closed at the point of use. Whatever purges on this key must
+refuse `None` explicitly and must never treat it as zero. I did not change `Config.get` to
+raise on a `None` leaf: that would change `trading.stable_quote_currencies`, whose two
+readers were ruled in Phase 3 to disagree about absence, and overturning that ruling from
+the config loader is not mine to do.
+
+**Follow-up, one line, the lead's call:** once the YAML key is in, change
+`embargo_bars: int | None = Field(default=None, gt=0)` to `embargo_bars: int = Field(gt=0)`.
+`test_the_committed_config_and_the_embargo_bars_handoff` asserts both worlds and stays green
+across the paste, so it does not need touching either way.
+
+### Spec 54 — COMPLETE, 2026-09-11. Archive and replay.
+
+**The spec changed under me mid-task.** The original worked around an empty
+`data/historical/` by reducing `data/raw/` into archive-shaped CSVs; the operator then
+supplied Kraken's own published time-and-sales history, ~27 GB across 1,119 pair files in
+two directories, and the lead amended the spec to retire the workaround. Both halves are
+built and the first one is kept, retired, with its output moved out of the way.
+
+**What is in `data/historical/` now** (gitignored; rebuild with
+`scripts/build_ohlcvt.py --pairs XBTUSD ETHUSD SOLUSD --write`):
+
+| file | bars | span | gaps |
+|---|---|---|---|
+| `XBTUSD_15.csv` | 361,584 | 2013-10-06T21:30Z to 2025-12-31T23:45Z | 11,654 |
+| `ETHUSD_15.csv` | 339,125 | 2015-08-07T14:00Z to 2025-12-31T23:45Z | 6,793 |
+| `SOLUSD_15.csv` | 158,539 | 2021-06-17T15:30Z to 2025-12-31T23:45Z | 298 |
+
+859,248 bars over 4,469 days, reduced from **179,701,248 real Kraken trades**. 0 out-of-order
+rows, 0 late rows, 0 malformed rows, 0 duplicate timestamps. `PROVENANCE.json` sits beside
+them. `replay_full_archive` PASSes under `--live` and PENDINGs without it.
+
+Built at the **top level** of `data/historical/`, not in a subdirectory, because
+`replay_full_archive` globs `data/historical/*.csv` non-recursively. The operator's source
+files are one level down in `KRAKEN_TimeAndSales_Combined/` and `TimeAndSales_Combined/`, so
+source and derived never share a directory, and the `_15` suffix distinguishes seven-column
+OHLCVT from three-column time-and-sales. Agreeing with the criterion was worth more than a
+tidier tree; C did not have to change a line.
+
+**Files:** `scripts/build_ohlcvt.py` (new), `scripts/build_archive.py` (the retired
+recording-derived builder, kept with its output moved to `data/derived/archive_from_raw/`),
+`src/acsoe/research/replay.py`, `tests/research/test_replay.py`,
+`tests/scripts/test_build_ohlcvt.py`, `tests/scripts/test_build_archive.py`.
+
+**Three things worth knowing.**
+
+1. **The coverage analysis was a measurement, not wasted work.** The recording-derived archive
+   had to separate a quiet interval from an interval nobody watched, and it measured
+   `missing_quiet = 0` on all three pairs: every hole in it was a recorder outage, and 12 rows
+   per pair were built from partly covered intervals. Against Kraken's published archive that
+   class of hazard is gone, because Kraken never stops watching. `replay.report`
+   carries the answer as `holes_mean_no_trades: bool | None`, **three values not two** — `None`
+   is unknown and a consumer must treat it the way it would treat `False`.
+2. **Two silent separator bugs, both in code that read JSON without parsing it.** The trade
+   prefilter and the `ts_recv` reader both matched `orjson`'s compact separators and would have
+   found nothing against any other writer. The second was the dangerous one: it would have
+   classified the entire history as unrecorded, which is plausible enough to be believed. Both
+   in the build log; the general rule is that a cheap prefilter is a second, weaker parser and
+   must be strictly broader than the check it fronts.
+3. **Two of my own assertions could not fail**, found by mutation and not by review, both in
+   canonicalisation code. Build log.
+
+### Spec 55 — COMPLETE, 2026-09-11. Engine 23 and the offline chain.
+
+`src/acsoe/research/backtest.py` (`BacktestEngine`, name `backtest`, number 23,
+`is_gate=False`), registered in `OFFLINE_CHAIN` in `src/acsoe/cli/research.py` and **never in
+`bootstrap.py`**. `acsoe research` now reports a real run. `tests/research/test_backtest.py`,
+27 tests.
+
+- **The labeller seam is `acsoe.research.labelling.label_frame`**, C's real signature —
+  `label_frame(frame, *, pair, config, interval_s) -> (labels_frame, LabelledSeries)` — called
+  once per pair over `ArchiveReplay.frame(pair)`, never over the merged stream.
+- **I built the engine against a different seam first and every test was green against it.**
+  `label_bars(bars, *, target_pct, stop_pct, timeout_bars)`, agreed by message while C's module
+  did not exist. C's landed as `label_frame` and **nothing went red**, because every test drove
+  a double. There are now two end-to-end tests with no injection at all. The general rule is in
+  the build log: a mock for a module that does not exist yet needs a test that fails once it
+  does — the same shape `code-standards.md` already states for `try/except ImportError`.
+- **The barriers never cross the seam.** `label_frame` takes the `Config` and reads the three
+  `barriers.*` keys itself, so there is exactly one reader in the project; the engine reports
+  them through C's own `read_barriers` rather than becoming a second one. C converts a YAML
+  float with `repr` — `Decimal(0.015)` is `0.01499999999999999944...` — and two readers
+  disagreeing in the sixteenth decimal is a defect nobody would find.
+- **Without the labeller module the engine refuses to run.** It does not write an unlabelled
+  slice and report success — that is the Phase 4 failure mode exactly. A result it cannot read
+  raises rather than becoming a slice of nulls.
+- The slice goes to `data/derived/labelled_<run_id>_<stamp>.parquet`, named by the run so a
+  second run with different barriers cannot silently replace the first.
+- The output carries `has_spread: False`, the no-book note, the no-spread note, a note saying
+  what a Phase 4 backtest is *not*, `holes_mean_no_trades`, `label_counts`,
+  `decision_bars_considered` and `ambiguous_labels`.
+
+**Forty-seven mutations run across both specs; forty-six red.** The one survivor is an
+equivalent mutant and is written up rather than quietly dropped. Two more went red only after
+they exposed defects in my own tests — a double that made `considered` equal the label count,
+and a reported field nothing asserted. Full table with exact red messages in
+`docs/build-log/phase-4/a-platform.md`.
+
+### Phase 3 (closed, kept for the record)
+
 **Phase 3. Claimed: specs 38 and 39**, in that order, per
 `feature-specs/PHASE-3-TASKS.md` and ownership rule 5. Claimed 2026-09-10, before
 any code was written.
@@ -505,6 +623,69 @@ test-supplied value rather than about the daemon. Both errors are written up in
 `docs/build-log/phase-3/a-platform.md`; the lesson worth carrying is the second one —
 **a test whose purpose is "this goes red when X changes" has to reach X through the
 code path X lives on.**
+
+## Phase 4 — the second round, after the lead's four rulings (2026-09-11)
+
+**`embargo_bars` is required again.** The YAML landed, the field is `int = Field(gt=0)`, and
+the both-worlds test no longer branches — its "key absent" arm was dead, and a dead branch in a
+test is a claim nobody checks. It asserts `field.is_required()` instead, so reopening the
+`None` window goes red.
+
+**The invariant-5 guard is a transitive reachability property now, not a file scan.** The
+version I shipped earlier the same day removed `cli` from a forbidden-directory list — right in
+substance, still **one hop deep**. It walks the whole `acsoe` import graph from `bootstrap`,
+`core` and `cli/engine` and asserts nothing reachable at any depth is `acsoe.research`, with the
+trail in the failure message. No allow-list: a reachability property has nowhere to put an
+exception. **M48** (import added to `bootstrap.py`, at the lead's direct request; restored
+byte-identical) is red; **M49** (the same import two hops away, in `engines/data_guard/`) is red
+*and the old direct scan stayed green under it* — that is the gap, and the reason the rewrite
+was worth more than a widening.
+
+**CRLF.** My CSV writers already pinned `newline="
+"`; the two provenance writers did not and
+now do. Three mutations red, all asserted on **bytes** — no higher level can see this, because
+`read_text`, `splitlines`, `csv.reader` and `json.loads` all normalise. Also pinned the
+direction the rule does not cover: we must never write CRLF and must always read it, because
+the operator's 27 GB came out of an extraction and `iter_trades` *counts* unparseable rows
+rather than raising — so a stray `\r` would present as a silently empty archive.
+
+**Fifty-two mutations across the phase, fifty-one red.** One equivalent mutant, written up.
+
+## Open Questions — Phase 4
+
+**1. `bootstrap.py` mutation: RUN, at the lead's direct request.** Resolved. M48 red across four
+tests; the file was restored and asserted byte-identical in the same statement that mutated it.
+The substitute test stays, because it costs nothing and covers the case where someone runs the
+suite without the mutation.
+
+**1b. Superseded: the original wording of this item.** Spec 55 asks
+for "the engine registered in `bootstrap.py` instead of the offline chain — the test that
+forbids it must be observed red when the import is added". `bootstrap.py` is lead-only under
+ownership rule 2 and a transient mutation is still a write to another agent's path in a shared
+checkout. I built a substitute that proves the detector can fail and separately proves it reads
+the real file, and said in the build log where that is weaker. **One line for the lead:** add
+`from acsoe.research.backtest import BacktestEngine` to `bootstrap.py`, run
+`pytest tests/research/test_backtest.py`, confirm red, revert.
+
+**2. Closed: `backtest.embargo_bars` is required.** The YAML landed 2026-09-11 and the field
+is tightened. The finding it produced outlives it: **the optional-field handoff pattern only
+fails closed for keys nested under an optional section.** For an optional *leaf*, `Config.get`
+returns `None` rather than raising, and the window between the two halves is a window in which
+a reader silently gets nothing. Kept in the `BacktestConfig` docstring where the next person to
+run this dance will meet it.
+
+**3. Two pytest ERRORs appeared once under `verify.py`'s `toolchain_green` and did not
+reproduce.** `tests/engines/test_market_data_recorder.py` and `tests/engines/test_scout.py`,
+reported as ERROR rather than FAILED, during a run concurrent with another agent's saves. Two
+subsequent full runs and the named test in isolation were green, and the error text was not
+captured. **Recorded rather than dismissed**, because "it passed on a re-run" is exactly the
+unfalsifiable diagnostic `code-standards.md` warns about. If it recurs, capture the traceback
+before re-running.
+
+**4. `scripts/recording_report.py` has two pre-existing ruff findings** (I001 import order,
+RUF100 unused `noqa: E402`) from Phase 2, on a committed and unmodified file. Both are
+autofixable. Left alone: `ruff check src/` is clean, the file is unrelated to specs 54 and 55,
+and churning a committed file mid-phase in a shared checkout is not worth two lines of lint.
 
 ## Open Questions
 

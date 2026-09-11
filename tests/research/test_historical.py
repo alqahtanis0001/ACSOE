@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import itertools
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -312,16 +313,191 @@ def test_the_module_imports_nothing_from_the_live_loop() -> None:
     assert offenders == [], offenders
 
 
+#: The entry points of the live loop. Everything reachable from these, transitively, is
+#: the daemon's import graph — the thing invariant 5 is actually about.
+#:
+#: `acsoe.cli.main` is deliberately **not** here. It is the dispatcher, and it reaches
+#: `acsoe.cli.research` through an import inside `resolve_handler`, executed only for
+#: `acsoe research`. That edge is covered at module scope by
+#: `test_the_dispatcher_does_not_import_research` and at runtime by
+#: `test_running_the_engine_does_not_import_the_research_entry_point` in
+#: `tests/cli/test_entrypoints.py`, which asserts on a real subprocess's `sys.modules`.
+DAEMON_ROOTS = (
+    "acsoe.bootstrap",
+    "acsoe.core.contracts",
+    "acsoe.core.orchestrator",
+    "acsoe.cli.engine",
+)
+
+
+def _module_name(path: Path, src: Path) -> str:
+    parts = path.relative_to(src).with_suffix("").parts
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _imports_of(path: Path, module: str) -> set[str]:
+    """Every ``acsoe.*`` name this file imports, **including inside functions**.
+
+    Function-scope imports are counted on purpose. A lazy import is still an edge in
+    the graph the moment the function runs, and treating it as absent is how a deferred
+    import becomes a way *round* the rule rather than a way of honouring it. The one
+    deliberately lazy edge in the project — the dispatcher's — is excluded by not being
+    a root, which is a decision recorded above rather than a silent gap.
+
+    Both the module and the names imported from it are recorded, so a forbidden
+    *symbol* import is caught as well as a forbidden module import.
+    """
+    found: set[str] = set()
+    package = module.rpartition(".")[0]
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                base = package
+                for _ in range(node.level - 1):
+                    base = base.rpartition(".")[0]
+                root = f"{base}.{node.module}" if node.module else base
+            elif node.module:
+                root = node.module
+            else:  # pragma: no cover - defensive
+                continue
+            found.add(root)
+            found.update(f"{root}.{alias.name}" for alias in node.names)
+    return {name for name in found if name == "acsoe" or name.startswith("acsoe.")}
+
+
+def _import_graph(src: Path) -> dict[str, set[str]]:
+    graph: dict[str, set[str]] = {}
+    for path in sorted((src / "acsoe").rglob("*.py")):
+        name = _module_name(path, src)
+        graph[name] = _imports_of(path, name)
+    return graph
+
+
+def _reachable(graph: dict[str, set[str]], roots: Sequence[str]) -> dict[str, list[str]]:
+    """Everything reachable from ``roots``, each with the trail that got there.
+
+    The trail is kept because "acsoe.research is reachable" is not an actionable
+    failure message, and "acsoe.bootstrap -> acsoe.engines.memory.engine ->
+    acsoe.research.labelling" is.
+    """
+    seen: dict[str, list[str]] = {}
+    queue: list[tuple[str, list[str]]] = [(root, [root]) for root in roots]
+    while queue:
+        module, trail = queue.pop()
+        if module in seen:
+            continue
+        seen[module] = trail
+        for target in sorted(graph.get(module, ())):
+            if target not in seen:
+                queue.append((target, [*trail, target]))
+    return seen
+
+
 def test_the_live_loop_does_not_import_research() -> None:
-    """The other direction of invariant 5, which is the one that actually costs money
-    if it breaks: a live engine reaching into research code."""
+    """Invariant 5, as a property of the daemon's **transitive** import graph.
+
+    This used to be a file scan over five directories with `cli` among them, and it was
+    wrong in both directions at once. **Too strict**, because `cli/research.py` is where
+    `context/engine-contracts.md` requires the offline chain to be assembled, and the
+    scan forbade exactly that the first time engine 23 made it matter. **Too weak**,
+    because a direct-import scan sees one hop only: `bootstrap.py` importing an engine
+    that imports `research/` would have passed it every single time.
+
+    The replacement walks from the live loop's own entry points and asserts that
+    nothing reachable from them, at any depth, is `acsoe.research`.
+
+    **Deliberately not an allow-list.** An exception carved into a scan invites the next
+    module to be added to it by the same argument, and the guard degrades into "the
+    live loop does not import research, except where it does". A reachability property
+    has nowhere to put an exception: the only way to satisfy it is not to create the
+    edge.
+    """
     src = MODULE.resolve().parents[2]
-    offenders: list[str] = []
-    for area in ("engines", "core", "clients", "cli", "console"):
-        for module in (src / "acsoe" / area).rglob("*.py"):
-            text = module.read_text(encoding="utf-8")
-            for line in text.splitlines():
-                stripped = line.strip()
-                if stripped.startswith(("import acsoe.research", "from acsoe.research")):
-                    offenders.append(f"{module.name}: {stripped}")
-    assert offenders == [], offenders
+    reached = _reachable(_import_graph(src), DAEMON_ROOTS)
+    offenders = {
+        name: " -> ".join(trail)
+        for name, trail in sorted(reached.items())
+        if name.startswith("acsoe.research")
+    }
+    assert offenders == {}, offenders
+
+
+def test_that_guard_can_see_an_edge_two_hops_away() -> None:
+    """Proof the reachability check is not vacuous, at a depth the old file scan could
+    not have reached.
+
+    Without it, the test above would pass identically against a `_reachable` that
+    returned an empty dict — which is what a refactor of `_module_name` or a changed
+    spelling in `DAEMON_ROOTS` would silently produce.
+    """
+    graph = {
+        "acsoe.bootstrap": {"acsoe.engines.memory.engine"},
+        "acsoe.engines.memory.engine": {"acsoe.research.labelling"},
+        "acsoe.research.labelling": set(),
+    }
+    reached = _reachable(graph, ("acsoe.bootstrap",))
+    assert "acsoe.research.labelling" in reached
+    assert reached["acsoe.research.labelling"] == [
+        "acsoe.bootstrap",
+        "acsoe.engines.memory.engine",
+        "acsoe.research.labelling",
+    ]
+
+
+def test_the_daemon_roots_are_real_modules() -> None:
+    """A root that does not exist contributes nothing to the closure and fails nothing.
+
+    Rename `bootstrap`, move `core/orchestrator.py`, or typo the tuple, and the guard
+    above quietly starts walking from fewer places until it walks from none — passing
+    louder the less it checks. This is the line that notices.
+    """
+    src = MODULE.resolve().parents[2]
+    graph = _import_graph(src)
+    missing = [root for root in DAEMON_ROOTS if root not in graph]
+    assert missing == [], missing
+    assert len(_reachable(graph, DAEMON_ROOTS)) > 20
+
+
+def test_cli_research_is_the_only_module_outside_research_that_imports_it() -> None:
+    """The permitted edge, stated positively: outside `research/` itself, **exactly one**
+    module may name `acsoe.research`, and it is `cli/research.py`, where the offline
+    chain is assembled.
+
+    Note what is *not* in this list: `cli/main.py`. The dispatcher imports
+    `acsoe.cli.research`, which is a different module from `acsoe.research` — the
+    offline command module, not the research package. It reaches research code only
+    through that one hop, and only when the command is `research`. I asserted
+    `cli/main.py` was here and it was not; the truth is narrower than I guessed and the
+    assertion is stronger for it.
+
+    Red in both directions. A second module reaching across appears here; and if
+    `cli/research.py` stops being the one that does, the offline chain has moved
+    somewhere it should not be.
+    """
+    src = MODULE.resolve().parents[2]
+    graph = _import_graph(src)
+    importers = sorted(
+        module
+        for module, targets in graph.items()
+        if not module.startswith("acsoe.research")
+        and any(target.startswith("acsoe.research") for target in targets)
+    )
+    assert importers == ["acsoe.cli.research"], importers
+
+
+def test_the_dispatcher_does_not_import_research() -> None:
+    """`cli/main.py` imports each command module lazily, inside its handler. An eager
+    import there would pull `research/` into the daemon process every time anyone ran
+    `acsoe engine` — and nothing would fail, which is exactly the problem."""
+    src = MODULE.resolve().parents[2]
+    main = src / "acsoe" / "cli" / "main.py"
+    offending = [
+        line.strip()
+        for line in main.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith(("import acsoe.research", "from acsoe.research"))
+    ]
+    assert offending == [], offending

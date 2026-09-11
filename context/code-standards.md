@@ -133,6 +133,28 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   on contact with tests in another file. A false survivor is worse than a missed one, because it
   sends someone to write a test for a case already covered and makes the real survivors look less
   urgent. Without this caveat the practice produces confident noise.
+- **A mutation harness must restore every file BEFORE the next mutation, not in a `finally` at
+  the end of the run.** B's rehearsal harness restored only at the end, so one mutation was
+  still on disk while the next was applied and the second verdict was really *first plus
+  second*. **Compounded mutants fail more tests, so every verdict drifts toward KILLED and a
+  real survivor hides** — the harness produces its most confident output exactly when it is
+  most wrong, which is the same shape as sweeping a red tree. It nearly cost the rehearsal its
+  central claim: B was about to write that a one-tick rehearsal also catches a cached-`cycle_id`
+  bug, on the strength of a check that was measuring a different mutation. Caught only because
+  a hand run disagreed with the harness about *which* tests failed — so compare the failing set,
+  not the verdict.
+- **An equivalent mutant is a checked negative, not a survivor.** Report it as one. B's N3 —
+  dropping a `dict.fromkeys(...)` initialiser whose keys are all assigned unconditionally
+  further down — changes nothing observable and no test can kill it. Filed as a survivor it
+  sends the next person to write a test for a case that cannot fail and makes the real
+  survivors look less urgent; filed as a checked negative alongside the non-equivalent form of
+  the same claim, it is evidence.
+- **Verify a cross-lane mutation restored, by hash, in the same statement that applied it.**
+  A file that is not yet tracked by git has no `git checkout --` behind it, and Phase 4's
+  mutations ran against `engines/memory/engine.py` and `core/orchestrator.py` while both were
+  untracked. The hash check was the only safety net there was. The lead made the matching
+  mistake from the other side — a backup written to an unresolved shell variable, discovered
+  at the moment of restore — and was saved only because that file happened to be committed.
 - **Coverage counts executions; a mutation asks whether anything would object.** They are not
   two measures of the same thing, and where they disagree the mutation is right. Spec 39's
   twelve mutations killed eleven; the survivor was a branch with *excellent* line coverage —

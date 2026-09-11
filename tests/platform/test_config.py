@@ -763,3 +763,76 @@ def test_get_has_no_default_parameter() -> None:
 
     parameters = list(inspect.signature(Config.get).parameters)
     assert parameters == ["self", "dotted_key"]
+
+
+# --------------------------------------------------------------------------
+# Spec 38's two-halves landing: `backtest.embargo_bars`
+# --------------------------------------------------------------------------
+
+
+def test_the_embargo_handoff_is_closed_and_the_key_is_required() -> None:
+    """Both halves of spec 38's landing are in, so this no longer asserts two worlds.
+
+    It used to branch on whether `embargo_bars` was in the YAML, because the field was
+    optional for the day the two halves were in flight. **That branch is now dead, and a
+    dead branch in a test is a claim nobody is checking** — the same shape as an
+    `except ImportError` fallback that stays armed after the real thing lands. So the
+    test asserts the closed state instead: the key is present, it is a positive int, and
+    the model requires it.
+    """
+    raw = yaml.safe_load(DEFAULT_YAML.read_text(encoding="utf-8"))
+    assert "embargo_bars" in raw["backtest"], (
+        "the YAML key was removed while the model field is required; that is the half "
+        "of spec 38's dance that refuses at startup, and this says which half"
+    )
+
+    config = Config.load(DEFAULT_YAML)
+    value = config.get("backtest.embargo_bars")
+    assert isinstance(value, int) and not isinstance(value, bool)
+    assert value > 0
+    assert config.backtest.embargo_bars == value
+
+    field = Config.model_fields["backtest"].annotation.model_fields["embargo_bars"]
+    assert field.is_required(), (
+        "`embargo_bars` is optional again. It is optional only while the YAML key and "
+        "the model field are landing separately; at rest it must be required, so that "
+        "removing the key refuses at startup instead of handing a reader None. It is a "
+        "leaf, not a section, so `Config.get` returns None rather than raising - see "
+        "the docstring on BacktestConfig."
+    )
+
+
+def test_removing_the_embargo_key_is_refused_at_startup(tmp_path: Path) -> None:
+    """The whole point of tightening. While the field was optional this config loaded
+    and handed `None` to whatever purged on it; now it does not start at all."""
+    raw = complete_config_dict()
+    del raw["backtest"]["embargo_bars"]
+    with pytest.raises(ConfigError, match="embargo_bars"):
+        Config.load(write_config(tmp_path, raw))
+
+
+def test_an_embargo_of_zero_is_refused_rather_than_meaning_no_embargo(tmp_path: Path) -> None:
+    """`gt=0` applies whether or not the YAML key has landed. Zero is the value a
+    typo produces and the one that silently disables the purge."""
+    raw = complete_config_dict()
+    raw["backtest"]["embargo_bars"] = 0
+    # Matched on the constraint, not just on the key name: `extra="forbid"` also
+    # names the key, so `match="embargo_bars"` alone stays green against a model
+    # with no such field at all. Proven by mutation, 2026-09-11.
+    with pytest.raises(ConfigError, match="embargo_bars: Input should be greater than 0"):
+        Config.load(write_config(tmp_path, raw))
+
+
+def test_a_negative_embargo_is_refused(tmp_path: Path) -> None:
+    raw = complete_config_dict()
+    raw["backtest"]["embargo_bars"] = -1
+    with pytest.raises(ConfigError, match="embargo_bars: Input should be greater than 0"):
+        Config.load(write_config(tmp_path, raw))
+
+
+def test_the_embargo_key_is_accepted_once_supplied(tmp_path: Path) -> None:
+    """The half the lead is waiting on: with the field declared, the key parses
+    instead of being refused by `extra="forbid"`."""
+    raw = complete_config_dict()
+    raw["backtest"]["embargo_bars"] = 48
+    assert Config.load(write_config(tmp_path, raw)).backtest.embargo_bars == 48

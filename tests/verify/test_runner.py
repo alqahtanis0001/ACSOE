@@ -163,7 +163,20 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
         "safety_inputs_all_from_the_seed",
         "phase_3_gates_have_both_tests",
     }
-    for phase in range(4, verify_module.MAX_PHASE + 1):
+    # Spec 48, registered first in Phase 4 and ahead of every subject it judges.
+    # `replay_full_archive` is the project's first `--live` criterion and is in this
+    # set because `_REGISTRY` holds it; `criteria_for(4, False)` is what leaves it out.
+    assert {c.name for c in verify_module._REGISTRY[4]} == every_phase | {
+        "memory_records_every_blocker",
+        "memory_writes_safety_inputs_live",
+        "rejections_survive_restart",
+        "labelled_sample_replayed_from_archive",
+        "labeller_matches_hand_verified_labels",
+        "walkforward_folds_purged_and_embargoed",
+        "console_history_reads_real_rows",
+        "replay_full_archive",
+    }
+    for phase in range(5, verify_module.MAX_PHASE + 1):
         assert {c.name for c in verify_module._REGISTRY[phase]} == every_phase
 
 

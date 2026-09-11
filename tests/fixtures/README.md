@@ -28,8 +28,23 @@ the shared fixtures, not its contents.
 | `record_sample.jsonl` | A | `record_sample_valid` | 0 |
 | `recording_report.json` | A | continuous 24h span with every break accounted for | 2 |
 | `soak_digest.json` | A | one unbroken `run_id`, contiguous `cycle_id`s, 7 days | 8 |
-| `labelled_sample.parquet` | C | labelled slice replayed from the historical CSVs | 4 |
+| `labelled_sample.parquet` | C | `labelled_sample_replayed_from_archive` | 4 |
+| `labels_hand_verified.json` | C | `labeller_matches_hand_verified_labels` | 4 |
 | `kraken/*.json` | C | recorded responses backing the fake Kraken client | 0 |
+
+`labelled_sample.parquet` carries its own provenance **inside the file**, as parquet
+key-value metadata under `acsoe_provenance`: which archive, which span, the barrier
+settings it was labelled under, how many of its labels were decided by the
+both-barriers-touched ruling, and the statement that the source carries no spread and no
+book. A parquet that cannot say where it came from is indistinguishable from one written
+by hand, and `labelled_sample_replayed_from_archive` is written to notice.
+
+`labels_hand_verified.json` carries **its own candle windows**. The archive lives under
+`data/historical/`, which is gitignored, so a criterion that read it would pass only on
+the machine that downloaded it. Each entry's window runs from the decision bar to the
+timeout horizon plus one candle — the least context in which "does the series cover this
+window" is answerable, which matters because three entries were wrongly excluded when the
+window stopped exactly at the horizon.
 
 `kraken/` holds `asset_pairs.json`, `balance.json`, `order_book.json` and
 `trade_volume.json` — the recorded responses `tests/harness/fake_kraken.py` serves.

@@ -97,15 +97,17 @@ DEFAULT_FEED_LIMIT: Final = 60
 DEFAULT_HISTORY_LIMIT: Final = 100
 DEFAULT_LEADERBOARD_LIMIT: Final = 25
 
-#: The whole `ts` range, for the reads that take an explicit window.
+#: Why no read here anchors a window on the clock.
 #:
 #: The console is built against a **seeded** database whose timestamps have no
 #: relationship to wall time, so a window anchored on the clock would render an
 #: empty cycle feed against a perfectly good seed and look like a bug in the
-#: screen. Ordering and limiting therefore happen here, on the rows that come
-#: back, rather than in a `WHERE ts >=` the console cannot pick honestly.
-_TS_MIN: Final = 0
-_TS_MAX: Final = 9_223_372_036_854_775_807
+#: screen. Every read here is therefore bounded by a **count** — the newest N —
+#: rather than by a `WHERE ts >=` the console cannot pick honestly.
+#:
+#: The two sentinel bounds that used to live here are gone with the last unbounded
+#: read: the cycle feed now goes through B's `recent_blocked_ticks`, which bounds by
+#: ticks and never returns a tick it has only half of.
 
 _MICROS_PER_MILLI: Final = 1_000
 
@@ -119,7 +121,27 @@ _REJECTED_OUTCOME: Final = "Rejected"
 _COST_STAGE_ENGINES: Final = frozenset({"cost"})
 
 #: What a stage line says when nothing in the store records it.
-_NOT_RECORDED: Final = "not recorded yet \N{EM DASH} the universe filter arrives in Phase 2"
+#:
+#: **The engine and the phase in the old sentence were both wrong**, and the comment was
+#: mine from Phase 1. The universe filter is engine 7 `scout`, not engine 4, and it
+#: landed in Phase 3, not Phase 2 - so this line was telling an operator to wait for
+#: something that had already shipped. Corrected under spec 57, which is where the
+#: Phase 3 handoff put it.
+#:
+#: The counts are still not shown, and the reason is no longer "the engine does not
+#: exist". Engine 7 publishes `scanned`, `entered` and a per-reason `excluded` tally into
+#: `state`, where it lives for exactly one tick; the console is a separate process
+#: reading SQLite and never sees `state`. **No column in any table holds that tally**, so
+#: there is nothing here to read. Persisting it is a schema question for the lead and B,
+#: raised under spec 57 and recorded as an open question in
+#: `context/progress/c-interface.md`.
+#:
+#: A zero is still not shown in the meantime, and that is the half that matters: a zero
+#: in this column reads as "no pair qualified", which is a result, when the truth is that
+#: nobody wrote the number down.
+_NOT_RECORDED: Final = (
+    "not recorded yet \N{EM DASH} engine 7 counts this on the tick and no table stores it"
+)
 
 #: The SHAP pane's whole content. Written once, here, so the API payload and the
 #: page cannot disagree about what is missing or about which phase produces it.
@@ -445,32 +467,51 @@ class ConsoleReader:
         rows: list[FeedRowView] = [
             _rejection_feed_row(row) for row in self._store.recent_rejections(count)
         ]
-        rows.extend(_block_feed_row(row) for row in self._blocked_ticks())
+        rows.extend(_block_feed_row(row) for row in self._blocked_ticks(count))
         rows.sort(key=_feed_order, reverse=True)
         return tuple(rows[:count])
 
-    def _blocked_ticks(self) -> list[BlockRecordRow]:
-        """One `block_records` row per tick, keyed on ``(run_id, cycle_id)``."""
-        chosen: dict[tuple[str, int], BlockRecordRow] = {}
-        for row in self._store.block_records_in_window(start_ts=_TS_MIN, end_ts=_TS_MAX):
-            tick = (row.run_id, row.cycle_id)
-            held = chosen.get(tick)
-            if held is None or (row.is_primary and not held.is_primary):
-                chosen[tick] = row
-        return list(chosen.values())
+    def _blocked_ticks(self, limit: int) -> tuple[BlockRecordRow, ...]:
+        """The newest `limit` blocked ticks, one row each. B's `recent_blocked_ticks`.
+
+        **This used to read the whole table.** It selected every `block_records` row
+        with an unbounded window and grouped them here, which was harmless for as long
+        as the table held nothing but B's Phase 0 seed. Engine 19 `memory` now writes a
+        row per guard per tick, so the table grows by a row a minute for as long as the
+        daemon runs, and the console polls this on every watermark change. The tracker
+        carried it as a **before Phase 4** item and spec 51 is where B landed the
+        bounded read.
+
+        The grouping goes with it, and that matters more than the bound. Truncating rows
+        and *then* grouping can cut a tick in half: if the primary row of the oldest tick
+        in the window is the one the limit dropped, the feed renders that tick as blocked
+        by the wrong engine, and nothing raises. `recent_blocked_ticks` picks whole ticks
+        first, so a tick is either absent or complete.
+        """
+        ticks: tuple[BlockRecordRow, ...] = self._store.recent_blocked_ticks(limit)
+        return ticks
 
     def feed_summary(self) -> FeedSummary:
         """What the system did, for the state the console is in most of the time.
 
         Four stages, in the order ``ui-context.md`` writes them. Two of them have
         **no source in the store at all**: nothing records how many pairs were
-        scanned on a tick or how many entered the tradable universe, because the
-        universe filter is engine 4 and its counts are Phase 2. Those lines say so.
-        They do not show a zero — a zero in that column would read as "no pair
-        qualified", which is a result, when the truth is that nobody counted.
+        scanned on a tick or how many entered the tradable universe.
+
+        The reason for that changed in Phase 3 and this sentence did not, which is the
+        defect spec 57 carries over from that handoff. It used to say the universe
+        filter was engine 4 and its counts were Phase 2. It is engine 7 ``scout`` and it
+        shipped in Phase 3. What is missing is no longer the engine — it is a place to
+        put the number: engine 7 publishes ``scanned``, ``entered`` and the per-reason
+        ``excluded`` tally into ``state``, the console is a separate process reading
+        SQLite, and no column anywhere holds them. See :data:`_NOT_RECORDED`.
+
+        Those lines say so, and they still do not show a zero — a zero in that column
+        would read as "no pair qualified", which is a result, when the truth is that
+        nobody wrote the number down.
         """
         rejections = self._store.recent_rejections(self._feed_limit)
-        blocked = self._blocked_ticks()
+        blocked = self._blocked_ticks(self._feed_limit)
         reached_cost = sum(1 for row in rejections if row.rejected_by in _COST_STAGE_ENGINES)
         cleared = self._store.count_open_positions()
         stages = (

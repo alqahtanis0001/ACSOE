@@ -73,6 +73,120 @@ exercises replay. One line and one constant to reverse; full reasoning in the bu
   `PASS` and not `BLOCK`; the handoff run as one tick through the real engines 10 and 11.
   Ordering is alphabetical, isolated as `rank_universe` in `contracts.py`.
 
+### Phase 4 — claimed 2026-09-11
+
+- **Spec 51** — the store surface engine 19 `memory` and the cycle feed need.
+  `src/acsoe/clients/store/client.py`, `src/acsoe/clients/store/__init__.py`,
+  `tests/clients/store/test_store.py`. *Claimed, in progress.* Three parts: a bounded
+  most-recent-N read for `block_records` ordered by `ts`; an audit of every write and
+  read engine 19 needs against what `StoreClient` already has; and a `peak_equity`
+  read that does not walk the whole equity series. **No schema change, no migration,
+  no edit to `console/` or to any `safety` read path.** ***Complete 2026-09-11.***
+  Three methods, 14 tests, eight mutations run and all eight red — including the one
+  spec 51 names by hand. `pytest tests/ -q` clean in my lane; `mypy --strict src/` and
+  `ruff check src/` green.
+
+#### Spec 51 — what landed, and the one thing that is C's to finish
+
+Three methods on `StoreClient`, all handed to C by `SendMessage` the moment they
+existed rather than at the end of the task:
+
+- `recent_block_records(limit: int) -> tuple[BlockRecordRow, ...]` — most recent
+  `limit` **rows**, `ORDER BY ts DESC, id DESC`, no default limit.
+- `recent_blocked_ticks(limit: int) -> tuple[BlockRecordRow, ...]` — most recent
+  `limit` **ticks**, one row each, primary blocker preferred, lowest `id` on the tick
+  as the fallback. This is the one the cycle feed wants; a rows-limited read can cut a
+  tick in half and render it as blocked by the wrong engine. Reasoned out in the build
+  log and proved by mutation M8 against the real Phase 0 seed.
+- `peak_equity(self) -> Decimal | None` — spec 51 item 3 and spec 50's running maximum.
+  **`SELECT MAX(peak_equity)` is the wrong query**: money is an exact decimal string,
+  SQLite compares it lexicographically, and `'9.50' > '10000.00'`. A too-small peak is
+  a too-small drawdown and a breaker that sits quiet through the loss it exists to
+  stop. Build log entry, and a test that asserts the wrong query is actually wrong on
+  its own fixture before asserting the right answer.
+
+**Audited and found sound, nothing added:** all six writes engine 19 needs already
+exist — `write_block_record`, `write_equity_snapshot`, `write_position`, `write_order`,
+`write_trade`, `write_rejection` — as do `count_open_positions` and
+`latest_equity_snapshot`. Specs 49 and 50 need no new write surface.
+
+**Still open, and it is C's:** `console/reader.py:453` `_blocked_ticks` still calls
+`block_records_in_window(start_ts=_TS_MIN, end_ts=_TS_MAX)` and builds a row model for
+every record in the table. Spec 51 says hand C the method name and stop, so I have.
+Spec 51's "the cycle feed no longer performs an unbounded scan" is not satisfied until
+C makes that one-line swap to `recent_blocked_ticks(self._feed_limit)`.
+
+- **Manage-chain rehearsal for engine 19** — `tests/engines/test_manage_chain_rehearsal.py`,
+  new file, my lane. *Claimed 2026-09-11, in progress.* Lead task, and the deliberate
+  exception to "nobody writes a test for another agent's code": the rehearsal tests the
+  **orchestrator wiring**, which is the lead's, not engine 19, which is C's. Held before
+  registration, the same way A's guard-chain rehearsal was held before engines 7, 10, 11
+  and 17 were registered. Two real ticks, not one. **If it goes red for a real reason I do
+  not fix engine 19** — report to the lead and to C.
+  ***Complete and green 2026-09-11. Ten tests, all passing — nothing to report about
+  engine 19.*** It records a `data_guard` block with the manage chain still running on a
+  blocked tick, writes no row on a clean tick while still reporting per-table counts
+  including zeros, reports Phase 6 publishers absent rather than zero, and its second tick
+  is genuinely its own. `ux_equity_snapshots_tick` has now been *seen* to fire: two
+  orchestrators sharing a `run_id` collide on `cycle_id` 1, contract rule 7 turns the
+  `IntegrityError` into ERROR, the tick completes and the first row survives. Six
+  mutations, five killed, one equivalent and recorded as such. **N5 is the one that
+  justifies the file**: with `cycle_id` cached on `self`, a single-tick rehearsal passes
+  and five two-tick assertions fail — the two-tick rule measured rather than asserted.
+
+  **One defect of my own, in the harness rather than the tests.** It restored mutated
+  files only at the end of the run, so a mutation of `core/orchestrator.py` was still on
+  disk while `engines/memory/engine.py` was mutated, and that verdict was really both
+  together. Compounded mutants fail more tests, so every verdict drifts toward KILLED and
+  a real survivor can hide. It very nearly cost the rehearsal its central claim — I would
+  have written that a one-tick rehearsal catches N5, on a check that was measuring
+  something else. Both files verified byte-identical by sha256 afterwards; neither is
+  tracked by git, so `git checkout` was never a safety net and the verify step is the only
+  reason this was recoverable.
+
+#### Phase 3 branch-coverage backlog — `discover_migrations` closed 2026-09-11
+
+Backlog item, not phase-gate work, picked up after spec 51. `tests/db/test_migrations.py`,
+my lane. **The backlog said three survivors; the function has five refusal branches plus a
+sixth path, and two survived wide — not three.** The count was overstated in one direction
+and understated in the other, which is a better argument for re-checking wide than the
+handoff's own. The item itself lives in `feature-specs/PHASE-3-TASKS.md` and in neither
+the consolidated build log nor the tracker — the lead has since carried the whole backlog
+into the tracker's open items.
+
+Genuine survivors, now tested: **duplicate migration version** (unrefused, the second file
+silently overwrites the first in a dict keyed on version and the set still looks
+contiguous) and **no migration files in the directory** (unrefused, returns `()`, which
+passes the contiguity check trivially and reports success over a database with no tables).
+
+**The finding I was not sent to make, and it is the one worth keeping.** Two further
+branches — directory-not-found and the non-`.sql` skip — are killed *only* by tests in
+other agents' files that are not about migrations: a Phase 4 engine test that happens to
+build a store over a missing path, and a research import-boundary test that happens to walk
+this directory. They read as covered in any sweep and are covered by nobody. **An
+incidental kill is worse than a survivor, because a survivor is at least on a list.** Both
+now have tests next to the code they are about. All six branches are killed by
+`tests/db/test_migrations.py` itself; every assertion is on the message and not the bare
+type, because all five refusals raise `MigrationError`.
+
+Sweep excluded `tests/scripts/`, which was red in A's lane at the time; the harness refuses
+to report at all unless its baseline is green, because a sweep over a red tree marks every
+mutation killed and manufactures a clean result out of someone else's broken tree. Shape of
+that hole recorded in the build log.
+
+#### For C — the ORDER BY anchor in `test_phase3_criteria.py` is single-occurrence by convention only
+
+My first cut of `recent_blocked_ticks` reached for the same literal
+`ORDER BY ts DESC, run_id DESC, cycle_id DESC` the outage walk uses, and
+`test_an_outage_counted_by_cycle_id_is_a_fail` correctly refused: *anchor appears 2
+times, expected exactly once*. Fixed in my lane — the feed query now tie-breaks
+`cycle_id` before `run_id` — with a comment at the site saying not to tidy the two into
+one wording. **C's count assertion is the only reason this surfaced at all**: a patcher
+taking the first match would have mutated my new query, left the outage counter intact,
+watched the Phase 3 criterion stay PASS, and reported a can-it-fail proof that had
+itself stopped being able to fail. Worth knowing the anchor is textual and that the
+next query in that file can collide with it again.
+
 #### OPEN QUESTION for the tracker — engine 7 has no ranking score, and that is recorded
 
 **Ruled by the operator on 2026-09-10 and not a defect**, but it belongs in
@@ -429,6 +543,36 @@ wrong, but the bare form would have been satisfied by any of the four.
 Nothing else in my lane raises one type from many places. `MissingInputError` in the three
 engines is per-module and every assertion on it goes through `reason_code`, which is the
 generalisation the standard actually asks for: **assert the reason, not only the `BLOCK`.**
+
+## Reading a moving tree by path, and not re-running to find out — 2026-09-11
+
+Recorded at the lead's request because it is process rather than code, and because the
+habit is the deliverable.
+
+Four times in Phase 4 the tree was red while I was working in it, and none of them was
+mine. Each was settled **by path and by lane, without re-running anything and without
+opening a file I do not own**:
+
+- 26 failures in `tests/scripts/test_build_archive.py` — A's spec 54, mid-save. Left
+  alone; green again on its own later, which is what landing looks like.
+- `rejections_survive_restart` and `console_history_reads_real_rows` raising
+  `AttributeError: module 'acsoe.engines.memory.contracts' has no attribute
+  'DECISION_KEY'` — C's engine 19, mid-save.
+- 2 pytest failures, 1 `mypy` error and 1 `ruff` error, all in
+  `research/walkforward.py` and `tests/research/test_walkforward.py` — C's spec 53,
+  mid-save.
+- One failure that **was** mine, `test_an_outage_counted_by_cycle_id_is_a_fail`, which
+  sits in C's `tests/verify/` by path and was still my defect. Path is the first
+  question, not the last one: it named my file, it reproduced every time, and it was
+  caused by a string I had just written.
+
+**The rule that makes this work is the one Phase 3 paid for:** a defect of mine
+reproduces every time, in isolation, in my own paths — and *re-running to see whether the
+result changes* is the diagnostic that cannot fail, because in isolation nothing else is
+touching the temp directory. The counter-example above is the important half. "It is in
+another agent's path" is evidence, not a verdict; the verdict came from asking whether
+the failure names my code and whether it reproduces, and once it did I stopped and wrote
+the diagnosis before the fix.
 
 ## Blocked on
 

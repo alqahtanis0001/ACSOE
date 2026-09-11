@@ -5,6 +5,100 @@ Never edit the tracker directly.
 
 ## Current Task
 
+### Phase 4 — claimed 2026-09-11, before any code was written
+
+Seven specs, claimed here in the order the task list fixes:
+
+- **Spec 48 — the Phase 4 exit criteria in `scripts/verify.py`. Claimed, first in the
+  phase.** `--phase 4` registers `docs_vocabulary` and `toolchain_green` alone and prints
+  *"Phase 4 is green: every criterion PASS, zero PENDING"* over a phase in which nothing
+  exists. Seven non-live criteria plus one `--live`, each PENDING until its subject lands.
+- **Spec 49 — engine 19 `memory`, the block record on every blocked tick. Claimed.**
+- **Spec 50 — engine 19 `memory`, the five live-row tables. Claimed.**
+- **Spec 52 — triple-barrier labelling, `research/labelling.py`. Claimed.**
+- **Spec 53 — the purged, embargoed walk-forward splitter. Claimed.**
+- **Spec 56 — `tests/fixtures/labelled_sample.parquet`. Claimed.**
+- **Spec 57 — the console on real rows. Claimed.**
+
+### Phase 4 state at handoff
+
+`python scripts/verify.py --phase 4` reports **9 criteria: 9 PASS, 0 FAIL, 0 PENDING**, with
+`replay_full_archive` skipped as `--live`. Phases 0, 1, 2 and 3 all still report green and
+byte-identical summaries to what they reported before this phase: 7/7, 10/10, 9/9, 9/9.
+**I have not closed the phase and have not consolidated the build logs.** Both are the lead's.
+
+All seven specs are finished except one numbered step, recorded under Open Questions below.
+
+- **48 — the Phase 4 criteria. Done.** Seven non-live criteria plus `replay_full_archive`
+  (`--live`). Each observed PENDING against an unbuilt tree, PASS against the real repository,
+  and **FAIL against a deliberately broken subject** — 34 tests in
+  `tests/verify/test_phase4_criteria.py`, every induced failure and its message written up in
+  `docs/build-log/phase-4/c-interface.md`.
+
+  One change outside Phase 4 and it touches a Phase 0 test.
+  `test_no_phase_zero_criterion_reads_data_models_or_logs` enforced "no criterion reads a
+  gitignored path" as a **line scan over the whole of `scripts/verify.py`**, which was correct
+  only while no criterion was `--live`. `replay_full_archive` is the project's first, and
+  reading `data/historical/` is the point of it. The test now walks `inspect.getsource` per
+  **registered non-live** criterion across every phase — strictly more coverage than before —
+  and a second test pins the exception: `replay_full_archive` must be registered `live=True`.
+  Both mutated, both observed red.
+
+- **49 — engine 19 `memory`, block records. Done.** `MemoryEngine` in `engines/memory/`,
+  contracts, README and `tests/engines/test_memory.py`. Six mutations, six red.
+
+- **50 — engine 19, the five live-row tables. Done.** `tests/engines/test_memory_rows.py`.
+  Eight mutations: six red on the first pass, **two survived and both were real gaps** — no
+  test covered a balance response that omits the reporting currency, and no fixture ever made
+  the store's and `state`'s position counts disagree. Both now covered, both mutations red.
+
+  **The six totals match.** `safety` reading engine 19's live rows reaches the same six numbers
+  it reaches against B's Phase 0 seed: drawdown 0.2000017843760037115020877199, 8 losing
+  trades, 23 error blocks, 18 outage ticks, 2 open positions, 2 resting entry orders. That is
+  the forward dependency Phase 3 was forced to seed around, closed.
+
+- **52 — triple-barrier labelling. Done.** `research/labelling.py`, 41 tests, and
+  `tests/fixtures/labels_hand_verified.json` — 20 labels from the real SOLUSD archive whose
+  expectations came from a **second implementation written from the spec's prose**, with three
+  verified by hand and the working in the build log. Eight mutations: seven red,
+  **one survived** — `label_window_end_ts` set to the decision bar, which is the field the
+  splitter purges on. Two tests added, mutation now red.
+
+- **53 — the purged, embargoed splitter. Done.** `research/walkforward.py`, 12 tests. All three
+  named mutations — embargo zero, purge no-op, purge on `decision_ts` — observed red **twice
+  each**: against the unit tests and against the phase criterion. Writing the tests found a
+  real defect in the module (a malformed call raised when there were rows and returned `[]`
+  when there were not).
+
+- **56 — `labelled_sample.parquet`. Done.** 960 labelled bars, produced by running A's
+  `ArchiveReplay` over A's archive and my labeller over the frame it returned. Provenance lives
+  **in the file** as parquet key-value metadata. 25,111 bytes, byte-identical through a git
+  round trip.
+
+- **Late additions after the lead's, A's and B's review messages.** The CRLF mechanism the
+  lead explained was live in two of my own deposits: `tests/fixtures/README.md` (73 CRLF, 0
+  bare LF, against a committed file that is pure LF) and `labels_hand_verified.json` (7,015
+  CRLF), both from `Path.write_text()`, both under the `-text` attribute where no clean filter
+  normalises them. Fixed by writing bytes; the builder can no longer reintroduce it; all three
+  fixtures verify byte-identical through a git round trip. `tests/fixtures/recording_report.json`
+  has the same signature and is A's — reported, not touched.
+
+  `replay_full_archive` now has five observations including **both** PENDING branches, reached
+  in a tree with no `data/` because the real archive makes them unreachable here. `--live`
+  reports `3 archive(s), 859248 bars spanning 4469 days, 18745 gap run(s)`.
+
+  A's `holes_mean_no_trades` warning changed the fixture builder and the criterion, and caught
+  two real mistakes: `from_archives` never reads `PROVENANCE.json` so the flag came back `None`,
+  and `from_directory`'s merged report was giving the sample XBTUSD's 2013 span as SOLUSD's —
+  which would have silently weakened the timeout-horizon assertion.
+
+- **57 — the console on real rows. Done except step 3.** History renders live rows, the cycle
+  feed goes through B's bounded `recent_blocked_ticks`, the two sentinel `_TS_MIN`/`_TS_MAX`
+  bounds are gone with the last unbounded read, and all 19 reason codes across engines 7, 10,
+  11 and 17 are confirmed present in `REASON_PROSE`. 10 tests in
+  `tests/console/test_real_rows.py`. **Step 3 stopped** — see Open Questions.
+
+
 - **Phase 3. Claimed: spec 45.** Claimed 2026-09-10, before any code was written, and first in
   the phase for the same reason spec 00 was first in Phase 0 and spec 16 was first in Phase 1:
   `verify.py --phase 3` reported `2 criteria: 2 PASS, 0 FAIL, 0 PENDING` and printed
@@ -317,6 +411,34 @@ and a later "simplification" would break the gate without saying so.
   leaves that tuple, so the deferral is enforced by the suite rather than remembered.
 
 ## Open Questions
+
+### Phase 4 — one open, for the lead
+
+- **Nothing persists engine 7 `scout`'s scan tally, so spec 57 step 3 cannot be done.**
+  Engine 7 publishes `scanned`, `pairs` (from which `entered` derives) and a per-reason
+  `excluded` tally into `state["scout"]`, where they live for one tick. The console is a
+  separate process reading SQLite and never sees `state`, and **no column in any table holds
+  any of those three numbers.** Engine 19 can only write what the schema has room for, so the
+  empty state still says the counts are not recorded.
+
+  I have not invented a place to put them. Three options, and the choice is a schema decision:
+
+  1. **`rejections.details` as JSON, one row per tick.** No schema change. But a rejection is
+     one *candidate* and the tally is a fact about the *tick*, so it puts a tick-level fact in
+     a candidate-level table and anyone counting refused trades would count it.
+  2. **One `rejections` row per excluded pair.** More defensible than it first looks: engine 7
+     is a gate, an excluded pair is a refused candidate, and B asked me to map all six of its
+     per-exclusion codes into `REASON_PROSE` in Phase 3 — which only makes sense if those codes
+     were meant to reach this table. It reconstructs `scanned` but **not** `entered`, and it
+     writes tens of rows per tick.
+  3. **A column or a small table.** The lead's approval and B's edit.
+
+  **What I did do**, because spec 57 puts it in scope: the line was factually wrong and is now
+  right. It said the universe filter was engine 4 and its counts arrived in Phase 2 — it is
+  engine 7 and it shipped in Phase 3, so the console was telling an operator to wait for
+  something already built. The stage still shows no count and still refuses to show a zero,
+  because a zero there reads as "no pair qualified", which is a result, when the truth is that
+  nobody wrote the number down.
 
 ### Phase 0 — both resolved
 

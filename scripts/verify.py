@@ -5947,6 +5947,1559 @@ def check_phase_3_gates_have_both_tests(ctx: VerifyContext) -> Outcome:
 
 
 # --------------------------------------------------------------------------- #
+# Phase 4 - memory and replay (spec 48)
+# --------------------------------------------------------------------------- #
+#
+# Phase 4 is the phase where a mistake looks like success. A purging bug or a short
+# embargo produces a model that appears excellent and is worthless; a missed block
+# record makes the circuit breaker inert. Neither crashes, neither turns a test red,
+# neither is visible to an operator. Every criterion below is therefore written to be
+# sensitive to a *named* wrong implementation rather than to the shape of the evidence,
+# and every one has been observed PENDING, PASS and FAIL - the last against a
+# deliberately broken subject, recorded in `docs/build-log/phase-4/c-interface.md`.
+
+#: Engine number and owning spec, for the PENDING message. Same shape as
+#: `PHASE3_ENGINES`, and for the same reason: a PENDING that does not name the spec
+#: sends the reader to the task list to find out who is late.
+PHASE4_ENGINES: Final[Mapping[str, tuple[int, str]]] = {
+    "memory": (19, "spec 49 and spec 50, agent C"),
+}
+
+#: The research modules Phase 4 adds, and who owes them.
+PHASE4_RESEARCH: Final[Mapping[str, str]] = {
+    "acsoe.research.labelling": "spec 52, agent C",
+    "acsoe.research.walkforward": "spec 53, agent C",
+    "acsoe.research.replay": "spec 54, agent A",
+}
+
+KEY_TARGET_PCT: Final = "barriers.target_pct"
+KEY_STOP_PCT: Final = "barriers.stop_pct"
+KEY_TIMEOUT_BARS: Final = "barriers.timeout_bars"
+KEY_EMBARGO_BARS: Final = "backtest.embargo_bars"
+KEY_REPORTING_CURRENCY: Final = "trading.base_reporting_currency"
+
+#: The three outcomes of the triple barrier. There is no fourth, and spec 52 forbids
+#: inventing one.
+BARRIER_LABELS: Final[tuple[str, ...]] = ("target", "stop", "timeout")
+
+#: C's committed evidence. Both are deposited under `tests/fixtures/`, which is the
+#: only place a criterion may read committed artefacts from - `data/`, `models/` and
+#: `logs/` are gitignored and a criterion that reads one passes only on the machine
+#: that produced it.
+LABELLED_SAMPLE_REL: Final = "tests/fixtures/labelled_sample.parquet"
+HAND_VERIFIED_REL: Final = "tests/fixtures/labels_hand_verified.json"
+
+#: Columns `labelled_sample.parquet` must carry. Asserted as a superset test rather
+#: than an equality one: a producer adding a column is not a defect, a producer
+#: dropping the window end is, because the splitter purges on it.
+LABELLED_SAMPLE_COLUMNS: Final[tuple[str, ...]] = (
+    "pair",
+    "decision_ts",
+    "close",
+    "target_price",
+    "stop_price",
+    "label",
+    "touch_ts",
+    "bars_elapsed",
+    "touch_price",
+    "label_window_end_ts",
+    "ambiguous",
+    "candles_in_window",
+)
+
+#: Provenance keys the parquet must carry *in the file*. A parquet that cannot say
+#: where it came from is indistinguishable from one written by hand, and spec 56 is
+#: explicit that this criterion is written to notice.
+LABELLED_SAMPLE_PROVENANCE: Final[tuple[str, ...]] = (
+    "archive",
+    "pair",
+    "interval_s",
+    "span_start_ts",
+    "span_end_ts",
+    "target_pct",
+    "stop_pct",
+    "timeout_bars",
+    "ambiguous_count",
+    "holes_mean_no_trades",
+    "source_note",
+)
+
+
+def _phase4_engine_class(module_name: str, engine: str) -> tuple[Any, Outcome | None]:
+    """The Phase 4 `BaseEngine` subclass, or the PENDING that names its spec."""
+    number, spec = PHASE4_ENGINES[engine]
+    module, problem = try_import(module_name)
+    if module is None:
+        if problem is not None and problem.result is Result.FAIL:
+            return None, problem
+        return None, pending(f"engine {number} `{engine}` does not exist yet ({spec})")
+    cls = _engine_named(module, engine)
+    if cls is None:
+        return None, pending(f"{module_name} exposes no class with name == {engine!r}")
+    return cls, None
+
+
+def _memory_engine() -> tuple[Any, Any, Outcome | None]:
+    """(engine class, its contracts module, early outcome).
+
+    The contracts module comes back with the class because every criterion here
+    builds a `state` payload and **the key names are not this script's to remember**.
+    They are imported from `acsoe.engines.memory.contracts`, which is the real
+    contract engine 19 is held to. `check_data_guard_blocks_bad_data` is the standing
+    example of what happens otherwise: it fabricated the contract it was judging
+    against, the fabrication agreed with the mistake, and the criterion's body never
+    executed while both halves of its proof passed.
+    """
+    engine_cls, problem = _phase4_engine_class("acsoe.engines.memory.engine", "memory")
+    if engine_cls is None:
+        return None, None, problem
+    contracts, problem = try_import("acsoe.engines.memory.contracts")
+    if contracts is None:
+        return None, None, problem or pending(
+            "acsoe.engines.memory.contracts does not exist yet (spec 49, agent C)"
+        )
+    return engine_cls, contracts, None
+
+
+def _migrated_db(tmp: Path, name: str = "live.sqlite") -> tuple[Path | None, Any, Outcome | None]:
+    """An empty database with every migration applied, plus the `StoreClient` class.
+
+    Empty on purpose. The whole point of `memory_writes_safety_inputs_live` is that
+    the numbers arrive from engine 19 rather than from B's seed generator, so the
+    database engine 19 writes into must start with nothing in it - a criterion that
+    seeded it first would be comparing the seed with itself.
+    """
+    store_cls, problem = _store_class()
+    if store_cls is None:
+        return None, None, problem
+    db_path = tmp / name
+    with store_cls(db_path) as store:
+        store.migrate()
+    return db_path, store_cls, None
+
+
+def _memory_tick_state(
+    contracts: Any,
+    *,
+    cycle_id: int,
+    blockers: Sequence[Mapping[str, Any]] = (),
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """`state` as the manage chain has it when engine 19 runs.
+
+    `guard_blockers` is always present - the contract says an empty list on an
+    unblocked tick, never absent - and `trading_blocked_by` is set from the first
+    blocker exactly as the orchestrator sets it, so a tick handed to engine 19 here
+    is one the orchestrator could actually produce.
+    """
+    state: dict[str, Any] = {
+        "system": {"mode": "running", "close_intent": False},
+        str(contracts.CYCLE_ID_KEY): cycle_id,
+        str(contracts.GUARD_BLOCKERS_KEY): [dict(entry) for entry in blockers],
+    }
+    if blockers:
+        state["trading_blocked_by"] = blockers[0]["engine"]
+        state["block_reason"] = blockers[0]["reason"]
+    if extra:
+        state.update(copy.deepcopy(dict(extra)))
+    return state
+
+
+def _rejection_extra(
+    contracts: Any,
+    *,
+    pair: str,
+    rejected_by: str,
+    reason: str,
+    reason_code: str,
+    economics: Mapping[str, str] = {},
+) -> dict[str, Any]:
+    """`state` as it stands when the **opportunity** chain refused a candidate.
+
+    Built the way the orchestrator builds it rather than as a list of rejection rows,
+    because engine 19 derives the rejection: a guard-chain block is one *tick*, an
+    opportunity-chain block on a tick that had a candidate is one *rejection*, and the
+    engine tells them apart by whether the blocking engine is among this tick's
+    `guard_blockers`. Handing it a pre-made list of rows would skip exactly that
+    derivation and test nothing about it.
+    """
+    scout_key, pair_field = contracts.CANDIDATE_PAIR_PATH
+    blocker: dict[str, Any] = {str(contracts.REASON_CODE_FIELD): reason_code}
+    blocker.update(dict(economics))
+    return {
+        str(scout_key): {str(pair_field): pair},
+        str(contracts.TRADING_BLOCKED_BY_KEY): rejected_by,
+        str(contracts.BLOCK_REASON_KEY): reason,
+        rejected_by: blocker,
+    }
+
+
+def _block_rows(db_path: Path) -> list[dict[str, Any]]:
+    """Every `block_records` row, oldest first by `ts`."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT run_id, cycle_id, ts, blocked_by, block_reason, is_primary, status "
+            "FROM block_records ORDER BY ts, rowid"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(row) for row in rows]
+
+
+# --- memory_records_every_blocker ------------------------------------------ #
+
+
+def check_memory_records_every_blocker(ctx: VerifyContext) -> Outcome:
+    """Engine 19 writes one `block_records` row per entry in `state["guard_blockers"]`.
+
+    Three cases in one criterion, because each hides a different bug and each of the
+    three is a defect that leaves every test green:
+
+    * **A blocked tick with no candidate still writes a row.** An implementer reading
+      invariant 12 as "rejections are logged" writes a row only where a candidate was
+      rejected - and `safety`'s outage counter is then built from a table that is
+      empty on exactly the ticks it counts. The breaker never fires.
+    * **Two guards blocking at once writes two rows, `is_primary` on the first only.**
+      The guard chain never breaks early, so `data_guard` and `safety` can both block.
+      One row per tick passes a naive count and destroys invariant 12.
+    * **An unblocked tick writes no row.** A row on every tick makes every count that
+      reads this table meaningless, the outage run included.
+
+    The store is the **real** `StoreClient` over a temporary database. A double that
+    accepts any row and remembers nothing cannot fail a test about what was written.
+    """
+    with root_import_path(ctx.root):
+        engine_cls, contracts, problem = _memory_engine()
+        if engine_cls is None:
+            return problem or pending("engine 19 `memory` does not exist yet")
+        config, problem = _phase3_config()
+        if config is None:
+            return problem or pending("the committed config could not be loaded")
+
+        with console_workspace() as tmp:
+            db_path, store_cls, problem = _migrated_db(tmp)
+            if db_path is None:
+                return problem or pending("acsoe.clients.store.client does not exist yet")
+
+            run_id = "verify-phase-4-blocks"
+            base = PHASE3_NOW
+            with store_cls(db_path) as store:
+                clients, problem = _fake_clients(store=store)
+                if clients is None:
+                    return problem or pending("test doubles unavailable")
+                engine = engine_cls()
+
+                # Tick 1: `data_guard` blocked and no candidate ever existed. Nothing
+                # anywhere in this state names a pair, a score or a rejection reason.
+                context, problem = _engine_context(config, clients, run_id=run_id, now=base)
+                if context is None:
+                    return problem or pending("acsoe.core.contracts does not exist yet")
+                engine.process(
+                    context,
+                    _memory_tick_state(
+                        contracts,
+                        cycle_id=1,
+                        blockers=[
+                            {
+                                "engine": "data_guard",
+                                "reason": "stale candles",
+                                "status": "BLOCK",
+                            }
+                        ],
+                    ),
+                )
+
+                # Tick 2: two guards at once, in chain order.
+                context, _ = _engine_context(
+                    config, clients, run_id=run_id, now=base + timedelta(minutes=1)
+                )
+                engine.process(
+                    context,
+                    _memory_tick_state(
+                        contracts,
+                        cycle_id=2,
+                        blockers=[
+                            {
+                                "engine": "data_guard",
+                                "reason": "stale candles",
+                                "status": "BLOCK",
+                            },
+                            {
+                                "engine": "safety",
+                                "reason": "drawdown past the limit",
+                                "status": "BLOCK",
+                            },
+                        ],
+                    ),
+                )
+
+                # Tick 3: nothing blocked.
+                context, _ = _engine_context(
+                    config, clients, run_id=run_id, now=base + timedelta(minutes=2)
+                )
+                engine.process(context, _memory_tick_state(contracts, cycle_id=3))
+
+                # Tick 4: an ERROR rather than a BLOCK. `EngineStatus` is a `StrEnum`
+                # precisely so this reaches the column as `ERROR` and not as
+                # `EngineStatus.ERROR`; `safety` counts the error rate with
+                # `status = 'ERROR'` and the mismatch would never raise - the count
+                # would simply read zero forever.
+                context, _ = _engine_context(
+                    config, clients, run_id=run_id, now=base + timedelta(minutes=3)
+                )
+                engine.process(
+                    context,
+                    _memory_tick_state(
+                        contracts,
+                        cycle_id=4,
+                        blockers=[
+                            {
+                                "engine": "market_sensor",
+                                "reason": "engine raised",
+                                "status": "ERROR",
+                            }
+                        ],
+                    ),
+                )
+
+            rows = _block_rows(db_path)
+
+    by_cycle: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_cycle.setdefault(int(row["cycle_id"]), []).append(row)
+
+    candidateless = by_cycle.get(1, [])
+    if len(candidateless) != 1:
+        return failed(
+            "a tick where `data_guard` blocked and no candidate ever existed wrote "
+            + str(len(candidateless))
+            + " block_records rows, expected exactly 1. Invariant 12 is not `rejections "
+            "are logged`: `safety`'s outage counter is built from this table and most "
+            "blocked ticks never had a candidate, so a writer that needs one leaves the "
+            "breaker reading zero through the entire outage."
+        )
+    if str(candidateless[0]["blocked_by"]) != "data_guard":
+        return failed(
+            "the candidate-less blocked tick recorded blocked_by = "
+            + repr(candidateless[0]["blocked_by"])
+            + ", not the engine that blocked it"
+        )
+
+    doubled = by_cycle.get(2, [])
+    if len(doubled) != 2:
+        return failed(
+            "a tick on which two guards blocked wrote "
+            + str(len(doubled))
+            + " block_records rows, expected 2. The guard chain never breaks early, so "
+            "`data_guard` and `safety` can both block on one tick; one row per tick "
+            "passes a naive count and loses half of invariant 12's record."
+        )
+    order = [str(row["blocked_by"]) for row in doubled]
+    if order != ["data_guard", "safety"]:
+        return failed("the two blockers were not recorded in chain order; got " + repr(order))
+    primaries = [bool(row["is_primary"]) for row in doubled]
+    if primaries != [True, False]:
+        return failed(
+            "is_primary on the two-blocker tick was "
+            + repr(primaries)
+            + ", expected [True, False]. The primary blocker is the one that gated the "
+            "opportunity chain, and it is the first; marking every row primary makes "
+            "`ux_block_records_primary` meaningless and marking none loses which gate "
+            "actually stopped the tick."
+        )
+
+    unblocked = by_cycle.get(3, [])
+    if unblocked:
+        return failed(
+            "an unblocked tick wrote "
+            + str(len(unblocked))
+            + " block_records row(s). A row on every tick makes every count that reads "
+            "this table meaningless - the outage run becomes the uptime."
+        )
+
+    errored = by_cycle.get(4, [])
+    if len(errored) != 1:
+        return failed(
+            "a tick whose blocker reported ERROR wrote "
+            + str(len(errored))
+            + " block_records rows, expected 1"
+        )
+    status = errored[0]["status"]
+    if status != "ERROR":
+        return failed(
+            "block_records.status for an ERROR blocker reached the column as "
+            + repr(status)
+            + " rather than 'ERROR'. `safety` counts the error rate with "
+            "`status = 'ERROR'`; this mismatch never raises and the count simply "
+            "reads zero forever."
+        )
+
+    return passed(
+        "4 ticks, "
+        + str(len(rows))
+        + " rows: candidate-less block wrote 1, two-guard tick wrote 2 with is_primary "
+        "on the first only, unblocked tick wrote 0, and an ERROR blocker reached the "
+        "column as the string 'ERROR'"
+    )
+
+
+# --- memory_writes_safety_inputs_live -------------------------------------- #
+
+
+def _safety_readings(
+    engine_cls: Any, config: Any, store_cls: Any, db_path: Path, now: datetime
+) -> tuple[Mapping[str, Any] | None, Outcome | None]:
+    """Engine 17's six readings against whatever is in `db_path`.
+
+    Cycle 1 under a `run_id` neither database carries: the first tick of a new
+    process, which the outage walk must treat as continuing an outage across a
+    restart rather than resetting it. Anchoring under one of the stored `run_id`s
+    makes the walk refuse to cross into itself and reports zero - correct behaviour,
+    wrong question.
+    """
+    with store_cls(db_path) as store:
+        clients, problem = _fake_clients(store=store)
+        if clients is None:
+            return None, problem
+        context, problem = _engine_context(
+            config, clients, run_id="verify-phase-4-safety", now=now
+        )
+        if context is None:
+            return None, problem
+        result = engine_cls().process(context, _safety_state(cycle_id=1))
+    return dict(result.data or {}), None
+
+
+def check_memory_writes_safety_inputs_live(ctx: VerifyContext) -> Outcome:
+    """`safety` reading engine 19's **live** rows reaches the seed's six totals.
+
+    This is the criterion that closes the one forward dependency in the project. Every
+    one of `safety`'s six inputs is produced by engine 19, which is Phase 4; `safety`
+    was built in Phase 3 and was proved against B's Phase 0 seed because its producer
+    did not exist. The proof that the seam is real is **the same six numbers from two
+    independent producers** - B's seed generator, and C's engine 19 - so the assertion
+    is on the numbers and never on the tables being non-empty.
+
+    The facts engine 19 is driven with are the seed's own facts, replayed as `state`
+    payloads through the real `EngineContext` and the real store contracts. That is
+    fabricating the *subject* - engines 18, 21 and 22 are Phase 6 and there is nothing
+    else to publish those payloads - and never the contract.
+
+    **The equity replay is two ticks on purpose.** The first establishes the peak, the
+    second drops to the seed's closing equity. An engine 19 that recomputed
+    `peak_equity` from the current tick rather than reading the running maximum out of
+    the store reports a peak equal to that tick's equity, a drawdown of zero, and this
+    criterion FAILs on `drawdown_pct`. A one-tick replay could not tell the two apart.
+    """
+    with root_import_path(ctx.root):
+        memory_cls, contracts, problem = _memory_engine()
+        if memory_cls is None:
+            return problem or pending("engine 19 `memory` does not exist yet")
+        safety_cls, problem = _engine_class("acsoe.engines.safety.engine", "safety")
+        if safety_cls is None:
+            return problem or pending("engine 17 `safety` does not exist yet")
+        store_contracts, problem = try_import("acsoe.clients.store.contracts")
+        if store_contracts is None:
+            return problem or pending("acsoe.clients.store.contracts does not exist yet")
+        config, problem = _phase3_config()
+        if config is None:
+            return problem or pending("the committed config could not be loaded")
+        currency = str(config.get(KEY_REPORTING_CURRENCY))
+
+        with console_workspace() as tmp:
+            seed_path, _config, early = _seed_workspace(ctx, tmp)
+            if seed_path is None:
+                return early or pending("the Phase 0 seed is not available")
+            store_cls, problem = _store_class()
+            if store_cls is None:
+                return problem or pending("acsoe.clients.store.client does not exist yet")
+
+            seed_now = _seed_now(seed_path)
+            seeded, problem = _safety_readings(
+                safety_cls, config, store_cls, seed_path, seed_now
+            )
+            if seeded is None:
+                return problem or pending("engine 17 could not be driven over the seed")
+
+            live_path, _cls, problem = _migrated_db(tmp)
+            if live_path is None:
+                return problem or pending("acsoe.clients.store.client does not exist yet")
+
+            replayed, problem = _replay_seed_through_memory(
+                memory_cls,
+                contracts,
+                config,
+                store_cls,
+                store_contracts,
+                seed_path,
+                live_path,
+                currency=currency,
+                now=seed_now,
+            )
+            if problem is not None:
+                return problem
+
+            live, problem = _safety_readings(
+                safety_cls, config, store_cls, live_path, seed_now
+            )
+            if live is None:
+                return problem or pending("engine 17 could not be driven over the live rows")
+
+    missing = [f for f in SAFETY_INPUT_FIELDS if f not in live or f not in seeded]
+    if missing:
+        return failed(
+            "engine 17 published no reading for " + ", ".join(missing) + " on one side"
+        )
+
+    disagreements: list[str] = []
+    for field in SAFETY_INPUT_FIELDS:
+        left, right = seeded[field], live[field]
+        same = (
+            as_decimal(left, "seed." + field) == as_decimal(right, "live." + field)
+            if isinstance(left, str) and "." in str(left)
+            else str(left) == str(right)
+        )
+        if not same:
+            disagreements.append(f"{field}: seed={left!r} live={right!r}")
+    if disagreements:
+        return failed(
+            "`safety` read different numbers from engine 19's live rows than from the "
+            "Phase 0 seed - " + "; ".join(disagreements) + ". The seam Phase 3 was "
+            "forced to seed around is not closed: one of the two producers is wrong and "
+            "the live one is the new arrival."
+        )
+
+    return passed(
+        "engine 19 wrote "
+        + str(replayed)
+        + " rows across five tables and `safety` reached the same six totals from them "
+        "as from the Phase 0 seed (drawdown "
+        + str(live["drawdown_pct"])
+        + f", {live['consecutive_losses']} losing trade(s), "
+        + f"{live['errors_in_window']} error block(s), {live['stored_data_blocks']} "
+        + f"outage tick(s), {live['open_positions']} position(s), "
+        + f"{live['resting_entry_orders']} resting order(s))"
+    )
+
+
+def _rows_as_state(rows: Sequence[Any]) -> list[dict[str, Any]]:
+    """Row models as JSON payloads an engine could legally publish in `state`.
+
+    `mode="json"` because `state` carries no `Decimal` - contract rule 8 - and money
+    crosses it as an exact decimal string. Dumping with `mode="python"` here would
+    hand engine 19 `Decimal` objects it will never see from a real engine, and a
+    writer that only works on those is a writer that fails on its first live tick.
+    """
+    return [row.model_dump(mode="json") for row in rows]
+
+
+def _replay_seed_through_memory(
+    memory_cls: Any,
+    contracts: Any,
+    config: Any,
+    store_cls: Any,
+    store_contracts: ModuleType,
+    seed_path: Path,
+    live_path: Path,
+    *,
+    currency: str,
+    now: datetime,
+) -> tuple[int, Outcome | None]:
+    """Drive engine 19 with the seed's own facts and return the row count it wrote.
+
+    Read out of the seed through B's real `StoreClient` rather than by SQL wherever a
+    method exists, so the payloads engine 19 is handed are the real row models.
+    """
+    written = 0
+    with store_cls(seed_path) as seed_store:
+        positions = _rows_as_state(seed_store.open_positions())
+        orders = _rows_as_state(
+            seed_store.resting_orders(intent=store_contracts.OrderIntent.ENTRY)
+        )
+        trades = _rows_as_state(seed_store.recent_closed_trades(100_000))
+        peak, closing = _seed_equity_bounds(seed_path)
+    blocks = _block_rows(seed_path)
+    if peak is None or closing is None:
+        return 0, pending("the Phase 0 seed carries no equity_snapshots row")
+
+    # Trades come back newest first; `safety` walks the trailing run ordered by
+    # `closed_at`, so they are replayed oldest first and the run is rebuilt in order.
+    trades = sorted(trades, key=lambda row: int(row["closed_at"]))
+
+    engine = memory_cls()
+    with store_cls(live_path) as store:
+        clients, problem = _fake_clients(store=store)
+        if clients is None:
+            return 0, problem
+
+        # 1. The block records, tick by tick, under the seed's own run_ids, cycle_ids
+        #    and timestamps. The outage run and the error-rate window are both
+        #    properties of *which ticks* carry a `data_guard` row and *when*, so
+        #    replaying them under fresh identifiers would answer a different question.
+        grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+        order: list[tuple[str, int]] = []
+        for row in blocks:
+            tick = (str(row["run_id"]), int(row["cycle_id"]))
+            if tick not in grouped:
+                grouped[tick] = []
+                order.append(tick)
+            grouped[tick].append(row)
+        for run_id, cycle_id in order:
+            rows = sorted(grouped[(run_id, cycle_id)], key=lambda r: not bool(r["is_primary"]))
+            context, problem = _engine_context(
+                config,
+                clients,
+                run_id=run_id,
+                now=datetime.fromtimestamp(int(rows[0]["ts"]) / MICROSECONDS, tz=UTC),
+            )
+            if context is None:
+                return 0, problem
+            engine.process(
+                context,
+                _memory_tick_state(
+                    contracts,
+                    cycle_id=cycle_id,
+                    blockers=[
+                        {
+                            "engine": str(r["blocked_by"]),
+                            "reason": str(r["block_reason"]),
+                            "status": str(r["status"]),
+                        }
+                        for r in rows
+                    ],
+                ),
+            )
+            written += len(rows)
+
+        # 2. Positions and resting orders, as engines 18, 21 and 22 will publish them.
+        context, problem = _engine_context(
+            config, clients, run_id="verify-phase-4-replay", now=now
+        )
+        if context is None:
+            return 0, problem
+        engine.process(
+            context,
+            _memory_tick_state(
+                contracts,
+                cycle_id=1,
+                extra={
+                    str(contracts.POSITION_MANAGER_KEY): {
+                        str(contracts.POSITIONS_FIELD): positions,
+                        str(contracts.ORDERS_FIELD): orders,
+                        str(contracts.HOLD_REASON_FIELD): None,
+                    }
+                },
+            ),
+        )
+        written += len(positions) + len(orders)
+
+        # 3. The closed trades, oldest first.
+        context, _ = _engine_context(
+            config, clients, run_id="verify-phase-4-replay", now=now
+        )
+        engine.process(
+            context,
+            _memory_tick_state(
+                contracts,
+                cycle_id=2,
+                extra={
+                    str(contracts.EXIT_KEY): {
+                        str(contracts.CLOSED_TRADES_FIELD): trades,
+                        "positions_closed": True,
+                    }
+                },
+            ),
+        )
+        written += len(trades)
+
+        # 4. Equity: the peak first, then the close. Two ticks, because one cannot
+        #    tell a `peak_equity` read from the store from one recomputed here.
+        for index, equity in enumerate((peak, closing), start=3):
+            context, _ = _engine_context(
+                config, clients, run_id="verify-phase-4-replay", now=now
+            )
+            engine.process(
+                context,
+                _memory_tick_state(
+                    contracts,
+                    cycle_id=index,
+                    extra={
+                        str(contracts.EXCHANGE_KEY): {
+                            str(contracts.BALANCES_FIELD): {currency: format(equity, "f")},
+                            "fetched_at": int(now.timestamp() * MICROSECONDS),
+                        }
+                    },
+                ),
+            )
+            written += 1
+    return written, None
+
+
+def _seed_equity_bounds(db_path: Path) -> tuple[Decimal | None, Decimal | None]:
+    """(peak_equity, equity) of the seed's most recent `equity_snapshots` row.
+
+    `safety`'s drawdown is `(peak_equity - equity) / peak_equity` on the **latest**
+    row - `architecture-context.md`'s input table says so - so these two numbers are
+    the whole of what the live rows have to reproduce.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT equity, peak_equity FROM equity_snapshots ORDER BY ts DESC, rowid DESC "
+            "LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None, None
+    return (
+        as_decimal(row[1], "equity_snapshots.peak_equity"),
+        as_decimal(row[0], "equity_snapshots.equity"),
+    )
+
+
+# --- rejections_survive_restart -------------------------------------------- #
+
+#: Deliberately specific, and deliberately not a value any seed generator would
+#: produce. A restart test that only counts rows passes against a writer that loses
+#: every column, so the assertion is on the values.
+REJECTION_PROBE: Final[Mapping[str, str]] = {
+    "reason_code": "net_edge_below_hurdle",
+    "reason": "Net edge -0.2137% after fees",
+    "expected_move_pct": "0.0191",
+    "friction_pct": "0.0093",
+    "net_edge_pct": "-0.002137",
+    "hurdle_pct": "0.01395",
+}
+
+
+def check_rejections_survive_restart(ctx: VerifyContext) -> Outcome:
+    """A rejection written under one `run_id` is intact after a restart under another.
+
+    Invariant 12: a rejection that does not reach storage counts as a defect equal to
+    a lost trade. "Reaches storage" means the row and **its columns** - the reason
+    code the console maps to prose, the operator-facing reason, and the economics that
+    make it analysable later. A criterion that counted rows would pass against a
+    writer that lost every one of them.
+
+    The store is closed and reopened between the write and the read, and the reader
+    runs under a different `run_id`, because "still in this process's memory" and
+    "on disk" are the two things this criterion exists to tell apart.
+    """
+    with root_import_path(ctx.root):
+        engine_cls, contracts, problem = _memory_engine()
+        if engine_cls is None:
+            return problem or pending("engine 19 `memory` does not exist yet")
+        config, problem = _phase3_config()
+        if config is None:
+            return problem or pending("the committed config could not be loaded")
+
+        with console_workspace() as tmp:
+            db_path, store_cls, problem = _migrated_db(tmp)
+            if db_path is None:
+                return problem or pending("acsoe.clients.store.client does not exist yet")
+
+            pair = "VERIFY/PROBE"
+            economics = {
+                key: value for key, value in REJECTION_PROBE.items() if key.endswith("_pct")
+            }
+            with store_cls(db_path) as store:
+                clients, problem = _fake_clients(store=store)
+                if clients is None:
+                    return problem or pending("test doubles unavailable")
+                context, problem = _engine_context(
+                    config, clients, run_id="verify-phase-4-before", now=PHASE3_NOW
+                )
+                if context is None:
+                    return problem or pending("acsoe.core.contracts does not exist yet")
+                engine_cls().process(
+                    context,
+                    _memory_tick_state(
+                        contracts,
+                        cycle_id=7,
+                        extra=_rejection_extra(
+                            contracts,
+                            pair=pair,
+                            rejected_by="cost",
+                            reason=REJECTION_PROBE["reason"],
+                            reason_code=REJECTION_PROBE["reason_code"],
+                            economics=economics,
+                        ),
+                    ),
+                )
+
+            # The process boundary this criterion exists to cross.
+            with store_cls(db_path) as reopened:
+                rows = reopened.recent_rejections(50)
+
+    found = [row for row in rows if row.pair == pair]
+    if not found:
+        return failed(
+            "no rejection survived the restart. Invariant 12 puts a lost rejection on "
+            "the same footing as a lost trade, and the console's history screen reads "
+            "this table."
+        )
+    row = found[0]
+    for field, expected in REJECTION_PROBE.items():
+        actual = getattr(row, field, None)
+        if actual is None:
+            return failed(
+                "the rejection survived the restart with `" + field + "` null. A "
+                "restart test that only counts rows passes against a writer that loses "
+                "every column, which is why this one asserts the values."
+            )
+        same = (
+            as_decimal(actual, "rejection." + field) == Decimal(expected)
+            if field.endswith("_pct")
+            else str(actual) == expected
+        )
+        if not same:
+            return failed(
+                f"the rejection's `{field}` came back as {actual!r}, not {expected!r}"
+            )
+    if row.run_id != "verify-phase-4-before":
+        return failed(
+            "the rejection came back stamped with run_id "
+            + repr(row.run_id)
+            + "; it must carry the run that wrote it, not the one that read it"
+        )
+    return passed(
+        "a rejection written under one run_id survived a close and reopen under "
+        "another with its reason_code, its operator-facing reason and all four "
+        "economics columns intact"
+    )
+
+
+# --- labelled_sample_replayed_from_archive --------------------------------- #
+
+
+def _polars() -> tuple[Any, Outcome | None]:
+    module, problem = try_import("polars")
+    if module is None:
+        return None, problem or pending("polars is not installed")
+    return module, None
+
+
+def check_labelled_sample_replayed_from_archive(ctx: VerifyContext) -> Outcome:
+    """`tests/fixtures/labelled_sample.parquet` is a real replay, not a hand-written file.
+
+    The question to ask of this criterion is the one spec 56 asks: **would it still
+    pass if the parquet had been written by hand?** Three assertions exist because the
+    answer has to be no.
+
+    * **Provenance in the file.** The archive it came from, the span, the barrier
+      settings it was labelled under, the ambiguous count, and the statement that the
+      source carries no spread and no book. A parquet that cannot say where it came
+      from is indistinguishable from one somebody typed.
+    * **The barrier settings in the provenance match the committed config.** A fixture
+      labelled under different barriers is evidence about a system nobody is building.
+    * **The horizon.** No labelled decision bar may sit within `barriers.timeout_bars`
+      of the end of its pair's series. Labelling such a bar `timeout` records an
+      outcome that has not happened yet, and it is the single easiest mistake to make
+      in the labeller - invariant 10 with a different face.
+    """
+    fixture = ctx.root / LABELLED_SAMPLE_REL
+    if not fixture.is_file():
+        return pending(
+            LABELLED_SAMPLE_REL + " has not been deposited yet (spec 56, agent C); it "
+            "needs A's archive from spec 54 and the labeller from spec 52"
+        )
+    config, problem = load_config(ctx.root)
+    if config is None:
+        return problem or pending("config/default.yaml could not be read")
+    thresholds, problem = required_thresholds(
+        config, (KEY_TARGET_PCT, KEY_STOP_PCT, KEY_TIMEOUT_BARS)
+    )
+    if problem is not None:
+        return problem
+
+    with root_import_path(ctx.root):
+        pl, problem = _polars()
+        if pl is None:
+            return problem or pending("polars is not installed")
+        try:
+            frame = pl.read_parquet(fixture)
+            metadata = pl.read_parquet_metadata(fixture)
+        except Exception as exc:  # a corrupt payload is a FAIL, not a crash
+            return failed(
+                LABELLED_SAMPLE_REL
+                + " did not parse as parquet: "
+                + f"{type(exc).__name__}: {exc}"[:300]
+                + ". `.gitattributes` marks tests/fixtures/** as -text precisely "
+                "because a CRLF conversion on a parquet payload corrupts it."
+            )
+
+    missing = [c for c in LABELLED_SAMPLE_COLUMNS if c not in frame.columns]
+    if missing:
+        return failed(
+            LABELLED_SAMPLE_REL + " is missing column(s) " + ", ".join(missing) + ". "
+            "`label_window_end_ts` in particular is what the walk-forward splitter "
+            "purges on; without it a fold cannot be purged at all."
+        )
+    if frame.height == 0:
+        return failed(LABELLED_SAMPLE_REL + " holds no rows")
+
+    provenance_raw = metadata.get("acsoe_provenance") if metadata else None
+    if provenance_raw is None:
+        return failed(
+            LABELLED_SAMPLE_REL + " carries no `acsoe_provenance` key-value metadata. "
+            "Spec 56 requires the provenance to live *in the file*: which archive, "
+            "which span, which barrier settings, how many labels were ambiguous, and "
+            "the statement that the source carries no spread and no book."
+        )
+    try:
+        provenance = json.loads(provenance_raw)
+    except json.JSONDecodeError as exc:
+        return failed("acsoe_provenance is not JSON: " + str(exc)[:200])
+    absent = [k for k in LABELLED_SAMPLE_PROVENANCE if k not in provenance]
+    if absent:
+        return failed("acsoe_provenance is missing " + ", ".join(absent))
+
+    labels = [str(value) for value in frame["label"].to_list()]
+    unknown = sorted({label for label in labels if label not in BARRIER_LABELS})
+    if unknown:
+        return failed(
+            "labels outside the triple barrier: "
+            + ", ".join(unknown)
+            + ". There is no fourth outcome."
+        )
+    for label in BARRIER_LABELS:
+        if label not in labels:
+            return failed(
+                "no `" + label + "` label in the sample. All three outcomes must occur "
+                "or the criterion cannot tell a labeller that emits one from one that "
+                "emits three."
+            )
+
+    for key, dotted in (
+        ("target_pct", KEY_TARGET_PCT),
+        ("stop_pct", KEY_STOP_PCT),
+        ("timeout_bars", KEY_TIMEOUT_BARS),
+    ):
+        stated = str(provenance[key])
+        configured = str(thresholds[dotted])
+        if Decimal(stated) != Decimal(configured):
+            return failed(
+                "the sample was labelled with "
+                + key
+                + " = "
+                + stated
+                + " but config/default.yaml says "
+                + configured
+                + ". A fixture labelled under different barriers is evidence about a "
+                "system nobody is building."
+            )
+
+    # Read as `is not True`, never as falsiness. The field is `bool | None`: `True` is
+    # Kraken's own published history, where a hole can only mean no trades occurred;
+    # `False` is an archive built from our own recording, where a hole is *either* a
+    # quiet interval *or* an interval nobody was watching; and `None` is a sidecar that
+    # never heard of the question. A triple barrier walked across a not-recorded stretch
+    # reads as a calm market and returns `timeout` where the real market touched a
+    # barrier - a fabricated outcome with nothing to say so. Invariant 3: the absence of
+    # a no is not a yes.
+    if provenance["holes_mean_no_trades"] is not True:
+        return failed(
+            "the sample's archive does not state that its holes mean no trades occurred "
+            "(holes_mean_no_trades="
+            + repr(provenance["holes_mean_no_trades"])
+            + "). Every gapped window in this fixture is then a label walked across an "
+            "interval that may simply not have been recorded, which fabricates the "
+            "outcome the model learns from."
+        )
+
+    interval_s = int(provenance["interval_s"])
+    timeout_bars = int(thresholds[KEY_TIMEOUT_BARS])
+    span_end = int(provenance["span_end_ts"])
+    horizon = timeout_bars * interval_s
+    latest = max(int(value) for value in frame["decision_ts"].to_list())
+    if latest + horizon > span_end:
+        return failed(
+            "a labelled decision bar at "
+            + str(latest)
+            + " sits inside the timeout horizon of the series end at "
+            + str(span_end)
+            + " (horizon "
+            + str(horizon)
+            + "s). A bar whose window runs past the end of the data is excluded, never "
+            "labelled `timeout` - labelling it records an outcome that has not happened "
+            "yet, which is invariant 10 with a different face."
+        )
+
+    ambiguous = int(provenance["ambiguous_count"])
+    stated_ambiguous = sum(1 for value in frame["ambiguous"].to_list() if bool(value))
+    if ambiguous != stated_ambiguous:
+        return failed(
+            "acsoe_provenance says "
+            + str(ambiguous)
+            + " ambiguous label(s) but the frame carries "
+            + str(stated_ambiguous)
+        )
+
+    return passed(
+        str(frame.height)
+        + " labelled bars from "
+        + str(provenance["archive"])
+        + " ("
+        + str(provenance["pair"])
+        + "), all three outcomes present, "
+        + str(ambiguous)
+        + " ambiguous, latest decision bar "
+        + str(span_end - latest)
+        + "s before the series end against a "
+        + str(horizon)
+        + "s horizon"
+    )
+
+
+# --- labeller_matches_hand_verified_labels --------------------------------- #
+
+
+def check_labeller_matches_hand_verified_labels(ctx: VerifyContext) -> Outcome:
+    """The labeller reproduces every row of the hand-verified fixture, exactly.
+
+    One mismatch is a FAIL, not a tolerance. The fixture's value is that it was
+    checked against the printed candle window by hand rather than produced by running
+    the labeller and saving the output - a fixture built that way proves only that the
+    labeller equals itself.
+
+    The candles travel **in the fixture**. The archive lives under `data/`, which is
+    gitignored, and a criterion that read one would pass only on the machine that
+    downloaded it.
+    """
+    fixture = ctx.root / HAND_VERIFIED_REL
+    if not fixture.is_file():
+        return pending(
+            HAND_VERIFIED_REL + " has not been deposited yet (spec 52, agent C)"
+        )
+    try:
+        document = json.loads(fixture.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return failed(HAND_VERIFIED_REL + " did not parse: " + str(exc)[:200])
+    entries = document.get("entries") if isinstance(document, Mapping) else None
+    if not isinstance(entries, list) or not entries:
+        return failed(HAND_VERIFIED_REL + " carries no `entries` list")
+    if len(entries) != 20:
+        return failed(
+            HAND_VERIFIED_REL
+            + " carries "
+            + str(len(entries))
+            + " entries; spec 52 requires 20 hand-verified labels"
+        )
+
+    config, problem = load_config(ctx.root)
+    if config is None:
+        return problem or pending("config/default.yaml could not be read")
+    _thresholds, problem = required_thresholds(
+        config, (KEY_TARGET_PCT, KEY_STOP_PCT, KEY_TIMEOUT_BARS)
+    )
+    if problem is not None:
+        return problem
+
+    with root_import_path(ctx.root):
+        module, problem = try_import("acsoe.research.labelling")
+        if module is None:
+            if problem is not None and problem.result is Result.FAIL:
+                return problem
+            return pending(
+                "acsoe.research.labelling does not exist yet ("
+                + PHASE4_RESEARCH["acsoe.research.labelling"]
+                + ")"
+            )
+        labeller, missing = module_attr(module, "label_candles")
+        if labeller is None:
+            return pending(missing)
+        engine_config, problem = _phase3_config()
+        if engine_config is None:
+            return problem or pending("the committed config could not be loaded")
+
+        mismatches: list[str] = []
+        excluded_seen = 0
+        ambiguous_seen = 0
+        for index, entry in enumerate(entries):
+            candles = [
+                {
+                    "ts": int(row["ts"]),
+                    "open": Decimal(str(row["open"])),
+                    "high": Decimal(str(row["high"])),
+                    "low": Decimal(str(row["low"])),
+                    "close": Decimal(str(row["close"])),
+                    "volume": Decimal(str(row.get("volume", "0"))),
+                    "trades": int(row.get("trades", 0)),
+                }
+                for row in entry["candles"]
+            ]
+            produced = labeller(
+                candles,
+                pair=str(entry["pair"]),
+                decision_ts=int(entry["decision_ts"]),
+                config=engine_config,
+                interval_s=int(entry["interval_s"]),
+            )
+            expected_label = entry["expected_label"]
+            if expected_label is None:
+                excluded_seen += 1
+                if produced is not None:
+                    mismatches.append(
+                        f"[{index}] {entry['pair']}@{entry['decision_ts']}: expected to "
+                        f"be excluded (its window runs past the end of the series) but "
+                        f"the labeller returned {produced.label!r}"
+                    )
+                continue
+            if produced is None:
+                mismatches.append(
+                    f"[{index}] {entry['pair']}@{entry['decision_ts']}: expected "
+                    f"{expected_label!r}, the labeller excluded it"
+                )
+                continue
+            if bool(entry.get("ambiguous")):
+                ambiguous_seen += 1
+            checks: list[tuple[str, Any, Any]] = [
+                ("label", expected_label, produced.label),
+                ("touch_ts", entry["expected_touch_ts"], produced.touch_ts),
+                ("bars_elapsed", entry["expected_bars_elapsed"], produced.bars_elapsed),
+                ("target_price", entry["target_price"], format(produced.target_price, "f")),
+                ("stop_price", entry["stop_price"], format(produced.stop_price, "f")),
+                ("ambiguous", bool(entry.get("ambiguous")), bool(produced.ambiguous)),
+            ]
+            for field, expected, actual in checks:
+                if field in ("target_price", "stop_price"):
+                    same = Decimal(str(expected)) == Decimal(str(actual))
+                else:
+                    same = expected == actual
+                if not same:
+                    mismatches.append(
+                        f"[{index}] {entry['pair']}@{entry['decision_ts']} {field}: "
+                        f"hand-verified {expected!r}, labeller {actual!r}"
+                    )
+
+    if mismatches:
+        return failed(
+            str(len(mismatches))
+            + " disagreement(s) with the hand-verified fixture, and one is a FAIL: "
+            + "; ".join(mismatches[:4])
+        )
+    if excluded_seen == 0:
+        return failed(
+            "the hand-verified fixture carries no entry that must be excluded for "
+            "running past the end of its series. That is the case spec 52 names, and "
+            "a fixture without it cannot fail against a labeller that labels those "
+            "bars `timeout`."
+        )
+    if ambiguous_seen == 0:
+        return failed(
+            "the hand-verified fixture carries no bar that touched both barriers. "
+            "Ruling 1 - both barriers touched is `stop` - is untested without one, and "
+            "it is the ruling that stops the labels flattering the strategy."
+        )
+    return passed(
+        "all 20 hand-verified labels reproduced exactly, including "
+        + str(excluded_seen)
+        + " end-of-series exclusion(s) and "
+        + str(ambiguous_seen)
+        + " bar(s) that touched both barriers"
+    )
+
+
+# --- walkforward_folds_purged_and_embargoed -------------------------------- #
+
+#: One bar, in seconds. The constructed fold below is expressed in bars so the
+#: embargo - which config states in bars - lands on a boundary this criterion can
+#: reason about without restating a duration anywhere.
+_FOLD_INTERVAL_S: Final = 900
+
+
+def check_walkforward_folds_purged_and_embargoed(ctx: VerifyContext) -> Outcome:
+    """A straddling label window is purged, and an embargoed row is dropped - by identity.
+
+    **An end-to-end "the folds do not overlap" check cannot see the difference between
+    a correct embargo and none at all**, because the fold *indices* do not overlap in
+    either case. The leak is in the **label windows**, and it is invisible unless the
+    criterion builds one that straddles the boundary on purpose. So this criterion
+    constructs the dataset rather than reading one.
+
+    Four rows, and each exists to be distinguishable from the others:
+
+    * `safe` - decision bar and label window both comfortably inside training. Must
+      survive, or the criterion is passing a splitter that returns nothing.
+    * `straddler` - decision bar comfortably inside training, label window ending
+      **inside the test window**. Must be purged. A splitter that purged on the
+      decision bar timestamp instead of the window end keeps this row, which is the
+      single most plausible wrong implementation.
+    * `embargoed` - decision bar and label window both **after** the test window,
+      inside the embargo span. Must be dropped. Nothing about its label window
+      straddles anything, so a purge alone cannot remove it and an embargo of zero
+      keeps it.
+    * `after_embargo` - past the embargo span. Must survive, or the criterion would
+      pass against a splitter that dropped everything after the test window.
+
+    The last two are what make the embargo assertion independent of the purge
+    assertion: a test that would pass with the embargo set to zero is not testing the
+    embargo.
+    """
+    config_map, problem = load_config(ctx.root)
+    if config_map is None:
+        return problem or pending("config/default.yaml could not be read")
+    values, problem = required_thresholds(config_map, (KEY_EMBARGO_BARS,))
+    if problem is not None:
+        return pending(
+            "config/default.yaml carries no `"
+            + KEY_EMBARGO_BARS
+            + "`. Only the lead adds a config key (spec 58), and the splitter must "
+            "refuse to run without an embargo rather than default one to zero - a "
+            "silent zero is exactly the defect this criterion exists to catch."
+        )
+    embargo_bars = int(values[KEY_EMBARGO_BARS])
+    if embargo_bars <= 0:
+        return failed(
+            KEY_EMBARGO_BARS
+            + " is "
+            + str(embargo_bars)
+            + ". An embargo of zero is no embargo: serial correlation carries "
+            "information across the boundary even where no label window literally "
+            "straddles it."
+        )
+
+    with root_import_path(ctx.root):
+        module, problem = try_import("acsoe.research.walkforward")
+        if module is None:
+            if problem is not None and problem.result is Result.FAIL:
+                return problem
+            return pending(
+                "acsoe.research.walkforward does not exist yet ("
+                + PHASE4_RESEARCH["acsoe.research.walkforward"]
+                + ")"
+            )
+        splitter, missing = module_attr(module, "purged_walk_forward")
+        if splitter is None:
+            return pending(missing)
+        engine_config, problem = _phase3_config()
+        if engine_config is None:
+            return problem or pending("the committed config could not be loaded")
+
+        train_days = int(engine_config.get("backtest.training_window_days"))
+        test_days = int(engine_config.get("backtest.retrain_interval_days"))
+        day = 86_400
+        origin = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp())
+        test_start = origin + train_days * day
+        test_end = test_start + test_days * day
+        embargo_end = test_end + embargo_bars * _FOLD_INTERVAL_S
+
+        rows = [
+            {
+                "label_id": "safe",
+                "decision_ts": test_start - 30 * day,
+                "label_window_end_ts": test_start - 29 * day,
+            },
+            {
+                # Comfortably inside training by its decision bar, and its label window
+                # ends a day *inside* the test window. This is the leak.
+                "label_id": "straddler",
+                "decision_ts": test_start - 2 * day,
+                "label_window_end_ts": test_start + day,
+            },
+            {
+                "label_id": "embargoed",
+                "decision_ts": test_end + _FOLD_INTERVAL_S,
+                "label_window_end_ts": test_end + 2 * _FOLD_INTERVAL_S,
+            },
+            {
+                "label_id": "after_embargo",
+                "decision_ts": embargo_end + day,
+                "label_window_end_ts": embargo_end + day + _FOLD_INTERVAL_S,
+            },
+        ]
+        try:
+            folds = splitter(
+                rows,
+                config=engine_config,
+                interval_s=_FOLD_INTERVAL_S,
+                test_start_ts=test_start,
+                test_end_ts=test_end,
+            )
+        except TypeError as exc:
+            return pending(
+                "acsoe.research.walkforward.purged_walk_forward does not accept the "
+                "constructed-fold call this criterion makes: " + str(exc)[:200]
+            )
+
+    if not folds:
+        return failed(
+            "the splitter returned no folds for a dataset spanning the training "
+            "window, the test window and the embargo. Spec 53 forbids silently "
+            "dropping a fold that comes out empty - report it."
+        )
+    fold = folds[0]
+    train_ids = [str(rows[i]["label_id"]) for i in fold.train_index]
+
+    if "safe" not in train_ids:
+        return failed(
+            "the splitter dropped `safe`, whose decision bar and label window are both "
+            "a month inside the training window. A splitter that returns an empty "
+            "training set satisfies every purge assertion and trains nothing."
+        )
+    if "straddler" in train_ids:
+        return failed(
+            "`straddler` survived into the training index. Its decision bar is two days "
+            "inside the training window but its label window ends a day inside the test "
+            "window, so the row's outcome is built from test-period bars. A splitter "
+            "purging on `decision_ts` rather than on `label_window_end_ts` keeps exactly "
+            "this row, and nothing downstream will ever say so: the backtest simply "
+            "reports a Sharpe the live system will never see."
+        )
+    if "embargoed" in train_ids:
+        return failed(
+            "`embargoed` survived into the training index. It sits "
+            + str(embargo_bars)
+            + " bars or fewer after the test window, inside the configured embargo. No "
+            "part of its label window straddles the boundary, so the purge cannot "
+            "remove it - only the embargo can, and an embargo of zero keeps it."
+        )
+    if "after_embargo" not in train_ids:
+        return failed(
+            "`after_embargo` was dropped although it sits past the embargo span. The "
+            "embargo is a bounded span, not a truncation of everything after the test "
+            "window."
+        )
+
+    purged = getattr(fold, "purged_count", None)
+    embargoed = getattr(fold, "embargoed_count", None)
+    if purged is None or embargoed is None:
+        return failed(
+            "the fold does not expose `purged_count` and `embargoed_count`. Spec 53 "
+            "makes them public because a count of zero purged rows on a dataset with "
+            "overlapping windows is the symptom of the bug, and it is visible only if "
+            "the number is reported."
+        )
+    if int(purged) != 1 or int(embargoed) != 1:
+        return failed(
+            "the fold reported purged="
+            + str(purged)
+            + ", embargoed="
+            + str(embargoed)
+            + "; the constructed dataset has exactly one of each, and a splitter that "
+            "reports them in the wrong column is one whose two mechanisms are the same "
+            "mechanism."
+        )
+
+    return passed(
+        "a training row whose label window ends inside the test window was purged by "
+        "identity, and a row "
+        + str(embargo_bars)
+        + " bars past the test window was embargoed, while a row a month earlier and a "
+        "row past the embargo span both survived (purged=1, embargoed=1)"
+    )
+
+
+# --- console_history_reads_real_rows --------------------------------------- #
+
+#: Values no seed generator produces. Spec 57 requires the seed and the live rows to
+#: be distinguishable *by value* - a history test that passes against a seeded
+#: database is not testing what this spec is for.
+LIVE_ROW_PROBE: Final[Mapping[str, str]] = {
+    "pair": "ZZZ/QQQ",
+    "reason": "Net edge -0.4471% after fees",
+    "reason_code": "net_edge_below_hurdle",
+}
+
+
+def check_console_history_reads_real_rows(ctx: VerifyContext) -> Outcome:
+    """The history screen renders rows a live engine 19 wrote, not the seed's.
+
+    The database is seeded first and then written to by engine 19, which is the
+    honest picture: the console reads one table and cannot know which producer filled
+    it. What makes the criterion mean something is that the live row carries a pair
+    and a reason **no seed generator produces**, so the assertion cannot be satisfied
+    by the seed. A rendering check that asserted only that the page came back cannot
+    fail for the reason it exists.
+    """
+    with root_import_path(ctx.root):
+        engine_cls, contracts, problem = _memory_engine()
+        if engine_cls is None:
+            return problem or pending("engine 19 `memory` does not exist yet")
+        config, problem = console_config()
+        if config is None:
+            return problem or pending("the console config could not be built")
+        store_cls, problem = _store_class()
+        if store_cls is None:
+            return problem or pending("acsoe.clients.store.client does not exist yet")
+        # Read out of `console/format.py` rather than retyped here. The string is the
+        # console's, and a criterion that retyped it could be wrong about it in exactly
+        # the way it exists to catch - the sentence changes, this script keeps comparing
+        # against the old one, and the silent-render check stops checking anything.
+        format_mod, problem = try_import("acsoe.console.format")
+        if format_mod is None:
+            return problem or pending("acsoe.console.format does not exist yet")
+        no_reason, missing = module_attr(format_mod, "NO_REASON_RECORDED")
+        if no_reason is None:
+            return pending(missing)
+
+        with console_workspace() as tmp:
+            db_path, early = seeded_console_db(tmp)
+            if db_path is None:
+                return early or pending("the Phase 0 seed is not available")
+
+            with store_cls(db_path) as store:
+                clients, problem = _fake_clients(store=store)
+                if clients is None:
+                    return problem or pending("test doubles unavailable")
+                # Five minutes past the seed's own most recent instant, so the live
+                # row is the newest thing in the table and cannot fall off the end of
+                # a limit-bounded read. A criterion that depended on the seed being
+                # small would pass here and fail on somebody's larger fixture.
+                context, problem = _engine_context(
+                    config,
+                    clients,
+                    run_id="verify-phase-4-console",
+                    now=_seed_now(db_path) + timedelta(minutes=5),
+                )
+                if context is None:
+                    return problem or pending("acsoe.core.contracts does not exist yet")
+                engine_cls().process(
+                    context,
+                    _memory_tick_state(
+                        contracts,
+                        cycle_id=11,
+                        extra=_rejection_extra(
+                            contracts,
+                            pair=LIVE_ROW_PROBE["pair"],
+                            rejected_by="cost",
+                            reason=LIVE_ROW_PROBE["reason"],
+                            reason_code=LIVE_ROW_PROBE["reason_code"],
+                        ),
+                    ),
+                )
+
+            app, problem = console_app(config, db_path)
+            if app is None:
+                return problem or pending("the console could not be built")
+            try:
+                # The history *screen* is `/` plus `/api/history`; the rows themselves
+                # reach the page through this endpoint, and it is the one that runs
+                # `console/format.py` over them. Asserting on the shell alone would be
+                # asserting that a page came back, which cannot fail for the reason
+                # this criterion exists.
+                shell = asgi_request(app, "GET", "/")
+                response = asgi_request(app, "GET", "/api/history")
+            finally:
+                close_console(app)
+
+    if shell.status != 200:
+        return failed("the console shell returned " + str(shell.status))
+    if response.status != 200:
+        return failed("/api/history returned " + str(response.status))
+    try:
+        payload = json.loads(response.text)
+    except json.JSONDecodeError as exc:
+        return failed("/api/history did not return JSON: " + str(exc)[:200])
+
+    rejections = payload.get("rejections") or []
+    live = [row for row in rejections if row.get("pair") == LIVE_ROW_PROBE["pair"]]
+    if not live:
+        return failed(
+            "the history screen rendered "
+            + str(len(rejections))
+            + " rejection(s) and none of them is the pair "
+            + LIVE_ROW_PROBE["pair"]
+            + ", which only a live engine 19 wrote into this database. The screen is "
+            "still showing the seed, and the seed alone would satisfy any assertion "
+            "that only counted rows."
+        )
+    rendered = str(live[0].get("reason") or "")
+    if rendered == str(no_reason):
+        return failed(
+            "the live rejection rendered as "
+            + repr(str(no_reason))
+            + ". A `reason_code` engine 19 can write is missing from `REASON_PROSE` in "
+            "console/format.py, and the console fails silently on exactly that - no "
+            "error, no log line, just a row with nothing in its reason column."
+        )
+    if rendered != LIVE_ROW_PROBE["reason"]:
+        return failed(
+            "the live rejection rendered as "
+            + repr(rendered)
+            + " rather than the operator-facing reason engine 19 stored, "
+            + repr(LIVE_ROW_PROBE["reason"])
+        )
+    if str(live[0].get("run_id")) != "verify-phase-4-console":
+        return failed(
+            "the rendered rejection is stamped with run_id "
+            + repr(live[0].get("run_id"))
+            + "; the live row carries the run that wrote it"
+        )
+    return passed(
+        "the history screen rendered a rejection written by a live engine 19 - pair "
+        + LIVE_ROW_PROBE["pair"]
+        + ", run_id verify-phase-4-console, reason "
+        + repr(rendered)
+        + " - over a database that also carries the Phase 0 seed's "
+        + str(len(rejections) - len(live))
+        + " seeded rejection(s)"
+    )
+
+
+# --- replay_full_archive (--live only) ------------------------------------- #
+
+
+def check_replay_full_archive(ctx: VerifyContext) -> Outcome:
+    """`--live` only: replay the operator's real archive and report what it held.
+
+    **PENDING rather than FAIL when no archive is present.** The operator has not
+    downloaded one, and an opt-in criterion that FAILs on its absence makes `--live`
+    useless for every other check in every other phase.
+    """
+    archive_dir = ctx.root / "data" / "historical"
+    if not archive_dir.is_dir():
+        return pending(
+            "no archive under data/historical/ - download one and re-run with --live"
+        )
+    archives = sorted(archive_dir.glob("*.csv"))
+    if not archives:
+        return pending(
+            "data/historical/ carries no .csv archive - this criterion is opt-in and "
+            "reports PENDING rather than FAIL when the operator has not downloaded one"
+        )
+    with root_import_path(ctx.root):
+        module, problem = try_import("acsoe.research.historical")
+        if module is None:
+            return problem or pending("acsoe.research.historical does not exist yet")
+        loader, missing = module_attr(module, "load_archive")
+        if loader is None:
+            return pending(missing)
+        reports = []
+        for archive in archives:
+            try:
+                reports.append(loader(archive, interval_s=_FOLD_INTERVAL_S))
+            except Exception as exc:
+                return failed(
+                    archive.name + " did not load: " + f"{type(exc).__name__}: {exc}"[:300]
+                )
+    spans = [
+        (report.first_ts, report.last_ts)
+        for report in reports
+        if report.first_ts is not None and report.last_ts is not None
+    ]
+    if not spans:
+        return failed("every archive under data/historical/ was empty")
+    earliest = min(start for start, _ in spans)
+    latest = max(end for _, end in spans)
+    bars = sum(report.row_count for report in reports)
+    gaps = sum(report.gap_count for report in reports)
+    return passed(
+        str(len(reports))
+        + " archive(s), "
+        + str(bars)
+        + " bars spanning "
+        + str((latest - earliest) // 86_400)
+        + " days, "
+        + str(gaps)
+        + " gap run(s)"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Registration
 # --------------------------------------------------------------------------- #
 
@@ -6026,6 +7579,52 @@ register(
 )
 register(3, Criterion("safety_inputs_all_from_the_seed", check_safety_inputs_all_from_the_seed))
 register(3, Criterion("phase_3_gates_have_both_tests", check_phase_3_gates_have_both_tests))
+
+# Phase 4 - memory and replay. Spec 48, registered first in the phase and ahead of
+# every subject it judges, for the reason spec 00 was first in Phase 0, spec 16 first
+# in Phase 1 and spec 45 first in Phase 3. Until these existed `--phase 4` registered
+# `docs_vocabulary` and `toolchain_green` alone and printed "Phase 4 is green: every
+# criterion PASS, zero PENDING" over a phase in which engine 19, the labeller, the
+# splitter and both committed fixtures did not exist. A phase with nothing in it must
+# not be able to report as finished, and PENDING is how it says so.
+#
+# Phase 4 is also the phase where a mistake looks like success: a purging bug or a
+# short embargo produces a model that appears excellent and is worthless, and a missed
+# block record makes the circuit breaker inert. Neither crashes and neither turns a
+# test red, so each of these is written to be sensitive to a named wrong
+# implementation rather than to the shape of the evidence.
+register(4, Criterion("memory_records_every_blocker", check_memory_records_every_blocker))
+register(
+    4,
+    Criterion("memory_writes_safety_inputs_live", check_memory_writes_safety_inputs_live),
+)
+register(4, Criterion("rejections_survive_restart", check_rejections_survive_restart))
+register(
+    4,
+    Criterion(
+        "labelled_sample_replayed_from_archive",
+        check_labelled_sample_replayed_from_archive,
+    ),
+)
+register(
+    4,
+    Criterion(
+        "labeller_matches_hand_verified_labels",
+        check_labeller_matches_hand_verified_labels,
+    ),
+)
+register(
+    4,
+    Criterion(
+        "walkforward_folds_purged_and_embargoed",
+        check_walkforward_folds_purged_and_embargoed,
+    ),
+)
+register(4, Criterion("console_history_reads_real_rows", check_console_history_reads_real_rows))
+# `--live` only, and never required for green. It reports PENDING rather than FAIL
+# when no archive is present: the operator has not downloaded one, and an opt-in
+# criterion that FAILs on its absence makes `--live` useless for every other check.
+register(4, Criterion("replay_full_archive", check_replay_full_archive, live=True))
 
 
 # --------------------------------------------------------------------------- #

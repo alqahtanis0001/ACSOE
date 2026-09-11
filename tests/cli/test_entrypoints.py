@@ -591,21 +591,41 @@ def test_the_daemon_builds_a_real_utc_clock() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_research_reports_an_empty_offline_chain_and_exits_zero(
+def test_research_reports_the_registered_offline_chain_and_exits_zero(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """Phase 4: the chain is no longer empty and the command no longer says it is.
+
+    The Phase 0 version of this test asserted the "no offline engines are registered"
+    message. That message was true of Phase 0 and is now a wrong answer, so the
+    assertion is replaced rather than relaxed — asserting the *name* of the engine that
+    ran is what an empty chain cannot satisfy.
+    """
     assert cli_main.main(["research"]) == 0
     out = capsys.readouterr().out
-    assert "no offline engines are registered" in out
-    assert "20" in out and "23" in out
+    assert "no offline engines are registered" not in out
+    assert "backtest" in out
 
 
-def test_build_offline_chain_is_importable_and_empty_in_phase_0() -> None:
-    """`scripts/verify.py`'s `is_gate_matches_registry` reaches engines 20 and 23
-    through this function, not through `bootstrap.py`, so it has to exist and be
-    callable without running the CLI."""
-    assert research_cmd.build_offline_chain() == ()
-    assert research_cmd.OFFLINE_CHAIN == ()
+def test_build_offline_chain_holds_engine_23_and_not_engine_20() -> None:
+    """`scripts/verify.py`'s `is_gate_matches_registry` reaches engine 23 through this
+    function, not through `bootstrap.py`, so it has to exist and be callable without
+    running the CLI — and the engine it finds has to carry the registry's own number
+    and gate flag.
+
+    Engine 20 `tournament` is Phase 7 and its absence is asserted, not assumed: the
+    phase gate forbids building it here, and a chain that quietly grew it would be
+    later-phase work nobody had decided to start.
+    """
+    chain = research_cmd.build_offline_chain()
+    assert chain == research_cmd.OFFLINE_CHAIN
+    names = [engine.name for engine in chain]
+    assert names == ["backtest"]
+    assert "tournament" not in names
+
+    backtest = chain[0]
+    assert backtest.number == 23
+    assert backtest.is_gate is False
 
 
 def test_the_offline_chain_is_not_in_bootstrap() -> None:

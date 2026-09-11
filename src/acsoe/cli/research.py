@@ -13,6 +13,14 @@ honest answer rather than an error.
 ``build_offline_chain`` is importable without running the CLI, because
 ``scripts/verify.py``'s ``is_gate_matches_registry`` criterion has to inspect
 engines 20 and 23 and cannot reach them through ``bootstrap.py``.
+
+**This is the only module outside ``research/`` that may import from
+``acsoe.research``, and it is why the import in it is at module scope rather than
+inside a function.** The rule that matters is not "``cli/`` never imports research"
+— that would leave the offline chain with nowhere to live — it is that
+**``core/``, ``bootstrap.py``, ``engines/`` and ``clients/`` never do**, because
+those are the live loop. ``acsoe engine`` dispatches through ``cli/main.py``, which
+imports this module's sibling, not this module.
 """
 
 from __future__ import annotations
@@ -21,17 +29,21 @@ import argparse
 import sys
 from typing import Any
 
-#: The offline chain, in registry order. Empty in Phase 0.
+from acsoe.research.backtest import BacktestEngine
+
+#: The offline chain, in registry order.
 #:
-#: From Phase 4 this holds engine 20 `tournament` and engine 23 `backtest`, in
-#: that order. Nothing here may ever be added to `bootstrap.py`.
-OFFLINE_CHAIN: tuple[Any, ...] = ()
+#: Engine 20 `tournament` is Phase 7 and is deliberately absent. Engine 23
+#: `backtest` lands here in Phase 4 and **never in `bootstrap.py`** — that single
+#: fact is what keeps architecture invariant 5 true, and
+#: `test_bootstrap_never_imports_research` is the tripwire on it.
+OFFLINE_CHAIN: tuple[Any, ...] = (BacktestEngine(),)
 
 
 def build_offline_chain() -> tuple[Any, ...]:
     """Return the offline chain in registry order.
 
-    Called by ``acsoe research`` and by ``scripts/verify.py``. Empty in Phase 0.
+    Called by ``acsoe research`` and by ``scripts/verify.py``.
     """
     return OFFLINE_CHAIN
 

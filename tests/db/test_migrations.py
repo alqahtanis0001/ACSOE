@@ -256,6 +256,77 @@ def test_malformed_migration_sets_are_refused(tmp_path: Path, filename: str, mat
         discover_migrations(migrations)
 
 
+def test_a_duplicate_migration_version_is_refused(tmp_path: Path) -> None:
+    """Two files claiming version 1. Found by a wide branch sweep with no test on it.
+
+    Silent if unrefused: `found` is a dict keyed on version, so the second file simply
+    overwrites the first and `discover_migrations` returns a set that looks contiguous
+    and well-formed while one migration has vanished from it. The database then records
+    a `schema_migrations` row whose checksum belongs to a file nobody applied.
+    """
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    (migrations / "0001_initial.sql").write_text("CREATE TABLE a (x INTEGER);", encoding="utf-8")
+    (migrations / "0001_also_initial.sql").write_text(
+        "CREATE TABLE b (x INTEGER);", encoding="utf-8"
+    )
+
+    # On the message, not the bare type: all five refusal branches in this function
+    # raise `MigrationError`, so `pytest.raises(MigrationError)` alone would be
+    # satisfied by any of them and this test would pass for the wrong reason.
+    with pytest.raises(MigrationError, match="duplicate migration version 0001"):
+        discover_migrations(migrations)
+
+
+def test_a_directory_with_no_migrations_is_refused(tmp_path: Path) -> None:
+    """An empty directory is not an empty schema. Also a survivor of the wide sweep.
+
+    Unrefused it returns `()`, and an empty tuple satisfies the contiguity check
+    trivially — `expected` and `actual` are both `[]`. `apply_migrations` would then
+    report success over a database with no tables in it, which surfaces later as
+    `no such table` from whichever engine got there first.
+    """
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    (migrations / "README.md").write_text("not a migration", encoding="utf-8")
+
+    with pytest.raises(MigrationError, match="no migration files in"):
+        discover_migrations(migrations)
+
+
+def test_a_missing_migrations_directory_is_refused(tmp_path: Path) -> None:
+    """Distinct from the empty directory above, and the messages say which is which.
+
+    This branch was killed in the wide sweep only by a Phase 4 engine test that happens
+    to construct a store over a path that does not exist. That test asserts something
+    else entirely and could be rewritten tomorrow, taking the only coverage of this
+    branch with it. The coverage now lives next to the code it is about.
+    """
+    with pytest.raises(MigrationError, match="migrations directory not found"):
+        discover_migrations(tmp_path / "nowhere")
+
+
+def test_non_sql_files_beside_the_migrations_are_ignored(tmp_path: Path) -> None:
+    """The skip is behaviour, not a refusal, and it is the reason the two directory
+    failures above are reachable at all.
+
+    Killed in the wide sweep only by a research import-boundary test that happens to
+    walk this directory — incidental coverage of a path that decides whether a stray
+    `.md`, a `.gitkeep` or an editor backup file turns a working checkout into a
+    `migration filename must be NNNN_lower_snake_case.sql` crash at startup.
+    """
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    (migrations / "0001_initial.sql").write_text("CREATE TABLE a (x INTEGER);", encoding="utf-8")
+    (migrations / "README.md").write_text("notes", encoding="utf-8")
+    (migrations / "notes.txt").write_text("scratch", encoding="utf-8")
+    (migrations / "0002_not_really.sql.bak").write_text("backup", encoding="utf-8")
+
+    found = discover_migrations(migrations)
+
+    assert [(m.version, m.name) for m in found] == [(1, "initial")]
+
+
 def test_the_real_migrations_directory_is_discoverable() -> None:
     migrations = discover_migrations(default_migrations_dir())
     assert [m.version for m in migrations] == list(range(1, len(migrations) + 1))

@@ -645,6 +645,251 @@ def test_the_counter_matches_the_timeline_across_a_restart(
 
 
 # --------------------------------------------------------------------------- #
+# Spec 51 — the bounded `block_records` reads the cycle feed and engine 19 need
+#
+# Every fixture below writes MORE rows than the limit under test. A limit-bounded
+# read whose test uses fewer rows than the limit cannot fail: it returns everything
+# either way, and so does the implementation with the LIMIT clause deleted.
+# --------------------------------------------------------------------------- #
+
+#: Two runs whose `cycle_id` ordering and `ts` ordering disagree completely. `run-b`
+#: restarts at cycle 1, so a `cycle_id` walk puts the *older* run's high numbers in
+#: front of the newer run's low ones. This is the shape of B's Phase 0 seed and it is
+#: the only fixture on which the two orderings can be told apart.
+TWO_RUNS: list[tuple[str, int, int, list[str]]] = [
+    ("run-a", 900, 1_000, ["data_guard"]),
+    ("run-a", 901, 2_000, ["data_guard"]),
+    ("run-a", 902, 3_000, ["data_guard"]),
+    ("run-b", 1, 4_000, ["data_guard"]),
+    ("run-b", 2, 5_000, ["data_guard"]),
+]
+
+
+def test_recent_block_records_are_ordered_by_ts_and_not_by_cycle_id(
+    store: StoreClient,
+) -> None:
+    """The named mutation for this spec: order by `cycle_id` and this goes red.
+
+    `cycle_id` restarts at 1 with the process, so ordering a cross-restart sequence by
+    it reports `run-a`'s stale cycle 902 as the newest thing that happened and never
+    reaches `run-b` at all.
+    """
+    write_timeline(store, TWO_RUNS)
+
+    assert [(row.run_id, row.cycle_id) for row in store.recent_block_records(5)] == [
+        ("run-b", 2),
+        ("run-b", 1),
+        ("run-a", 902),
+        ("run-a", 901),
+        ("run-a", 900),
+    ]
+    # Truncated, the two orderings do not merely reorder — they disagree about which
+    # rows exist at all. A `cycle_id` ordering answers `run-a` 902 and 901 here.
+    assert [(row.run_id, row.cycle_id) for row in store.recent_block_records(2)] == [
+        ("run-b", 2),
+        ("run-b", 1),
+    ]
+
+
+def test_recent_block_records_returns_no_more_than_the_limit(store: StoreClient) -> None:
+    """Nine rows, a limit of four. The count is the assertion the LIMIT clause owns."""
+    write_timeline(
+        store,
+        [("run-a", index, index * 1_000, ["data_guard"]) for index in range(1, 10)],
+    )
+
+    rows = store.recent_block_records(4)
+
+    assert len(rows) == 4
+    assert [row.cycle_id for row in rows] == [9, 8, 7, 6]
+
+
+def test_recent_block_records_counts_rows_and_not_ticks(store: StoreClient) -> None:
+    """A row is a blocker. Three two-blocker ticks under a limit of four is four rows
+    spanning two ticks, which is exactly why `recent_blocked_ticks` exists."""
+    write_timeline(
+        store,
+        [
+            ("run-a", 1, 1_000, ["data_guard", "safety"]),
+            ("run-a", 2, 2_000, ["data_guard", "safety"]),
+            ("run-a", 3, 3_000, ["data_guard", "safety"]),
+        ],
+    )
+
+    rows = store.recent_block_records(4)
+
+    assert len(rows) == 4
+    assert {(row.run_id, row.cycle_id) for row in rows} == {("run-a", 3), ("run-a", 2)}
+
+
+def test_recent_block_records_is_empty_on_an_empty_table(store: StoreClient) -> None:
+    assert store.recent_block_records(10) == ()
+
+
+def test_recent_blocked_ticks_are_ordered_by_ts_and_not_by_cycle_id(
+    store: StoreClient,
+) -> None:
+    """The same named mutation, against the method the console will actually call."""
+    write_timeline(store, TWO_RUNS)
+
+    assert [(row.run_id, row.cycle_id) for row in store.recent_blocked_ticks(2)] == [
+        ("run-b", 2),
+        ("run-b", 1),
+    ]
+
+
+def test_recent_blocked_ticks_limits_ticks_and_not_rows(store: StoreClient) -> None:
+    """Five two-blocker ticks, a limit of three: three ticks, not three rows.
+
+    A row-limited implementation returns one and a half ticks here and the half is
+    silent — it renders as a tick blocked by whichever engine happened to survive the
+    truncation.
+    """
+    write_timeline(
+        store,
+        [
+            ("run-a", index, index * 1_000, ["data_guard", "safety"])
+            for index in range(1, 6)
+        ],
+    )
+
+    rows = store.recent_blocked_ticks(3)
+
+    assert [(row.run_id, row.cycle_id) for row in rows] == [
+        ("run-a", 5),
+        ("run-a", 4),
+        ("run-a", 3),
+    ]
+    # Every one of them is the tick's primary blocker, the oldest included. That is
+    # the assertion a row-limited implementation fails on the boundary tick.
+    assert [row.blocked_by for row in rows] == ["data_guard"] * 3
+    assert all(row.is_primary for row in rows)
+
+
+def test_recent_blocked_ticks_keeps_the_primary_row_whatever_order_it_was_written(
+    store: StoreClient,
+) -> None:
+    """`is_primary` decides, not insertion order. Written second here, kept anyway."""
+    store.write_block_record(
+        make_block(run_id="run-a", cycle_id=1, ts=1_000, blocked_by="safety", is_primary=False)
+    )
+    store.write_block_record(
+        make_block(
+            run_id="run-a", cycle_id=1, ts=1_000, blocked_by="data_guard", is_primary=True
+        )
+    )
+
+    rows = store.recent_blocked_ticks(5)
+
+    assert len(rows) == 1
+    assert rows[0].blocked_by == "data_guard"
+
+
+def test_recent_blocked_ticks_falls_back_to_the_lowest_id_with_no_primary(
+    store: StoreClient,
+) -> None:
+    """What a seeded fixture and a half-written tick look like: no row marked primary.
+
+    The tick still happened and still renders, so it is reported rather than dropped.
+    """
+    store.write_block_record(
+        make_block(run_id="run-a", cycle_id=1, ts=1_000, blocked_by="data_guard", is_primary=False)
+    )
+    store.write_block_record(
+        make_block(run_id="run-a", cycle_id=1, ts=1_000, blocked_by="safety", is_primary=False)
+    )
+
+    rows = store.recent_blocked_ticks(5)
+
+    assert len(rows) == 1
+    assert rows[0].blocked_by == "data_guard"
+
+
+def test_recent_blocked_ticks_is_empty_on_an_empty_table(store: StoreClient) -> None:
+    assert store.recent_blocked_ticks(10) == ()
+
+
+def test_recent_blocked_ticks_matches_the_seeded_feed_row_for_row(seeded_db: Path) -> None:
+    """The bounded read answers what the unbounded scan answered, on the real seed.
+
+    The console has grouped the whole table in Python since Phase 1. Replacing that with
+    a bounded query is only safe if the two agree, and the seed is the one fixture that
+    spans two `run_id`s with reused `cycle_id` values.
+    """
+    with StoreClient(seeded_db) as client:
+        every_row = client.block_records_in_window(start_ts=0, end_ts=2**62)
+        chosen: dict[tuple[str, int], BlockRecordRow] = {}
+        for row in every_row:
+            tick = (row.run_id, row.cycle_id)
+            held = chosen.get(tick)
+            if held is None or (row.is_primary and not held.is_primary):
+                chosen[tick] = row
+        expected = sorted(
+            chosen.values(), key=lambda row: (row.ts, row.run_id, row.cycle_id), reverse=True
+        )
+        assert len(expected) > 5, "the seed must span more ticks than the limit under test"
+
+        bounded = client.recent_blocked_ticks(len(expected))
+
+        assert [(row.run_id, row.cycle_id, row.blocked_by) for row in bounded] == [
+            (row.run_id, row.cycle_id, row.blocked_by) for row in expected
+        ]
+
+
+# --------------------------------------------------------------------------- #
+# Spec 51 — `peak_equity` without walking the series
+# --------------------------------------------------------------------------- #
+
+
+def test_peak_equity_is_not_a_lexicographic_max_over_the_column(store: StoreClient) -> None:
+    """`SELECT MAX(peak_equity)` is wrong, and wrong quietly.
+
+    Money is stored as an exact decimal *string*, so SQLite compares it
+    lexicographically: `'9.50' > '10000.00'`. A too-small peak is a too-small drawdown,
+    and the circuit breaker sits quiet through exactly the loss it exists to stop.
+    """
+    store.write_equity_snapshot(
+        make_equity(ts=1_000, equity="9.50", peak="9.50", cycle_id=1)
+    )
+    store.write_equity_snapshot(
+        make_equity(ts=2_000, equity="10000.00", peak="10000.00", cycle_id=2)
+    )
+    store.write_equity_snapshot(
+        make_equity(ts=3_000, equity="4000.00", peak="10000.00", cycle_id=3)
+    )
+
+    lexicographic = store.connection.execute(
+        "SELECT MAX(peak_equity) AS m FROM equity_snapshots"
+    ).fetchone()["m"]
+    assert lexicographic == "9.50", "the wrong query has to actually be wrong here"
+
+    assert store.peak_equity() == Decimal("10000.00")
+
+
+def test_peak_equity_survives_a_drawdown_and_a_restart(store: StoreClient) -> None:
+    """The peak is carried forward on the row, so it outlives the run that set it.
+
+    Recomputing it from `state` — which is rebuilt every tick — would report the peak as
+    the current equity and a drawdown of zero.
+    """
+    store.write_equity_snapshot(
+        make_equity(ts=1_000, equity="1000.00", peak="1000.00", cycle_id=1, run_id="run-a")
+    )
+    store.write_equity_snapshot(
+        make_equity(ts=2_000, equity="800.00", peak="1000.00", cycle_id=1, run_id="run-b")
+    )
+
+    assert store.peak_equity() == Decimal("1000.00")
+    assert store.peak_equity() != store.latest_equity_snapshot().equity  # type: ignore[union-attr]
+
+
+def test_peak_equity_is_none_on_an_empty_series(store: StoreClient) -> None:
+    """`None` is not `Decimal("0")`. A zero peak makes every drawdown a division by
+    zero or a 100% loss, and engine 19 writes no row at all when there is no equity."""
+    assert store.peak_equity() is None
+
+
+# --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
 

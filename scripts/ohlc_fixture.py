@@ -239,7 +239,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(fixture, indent=1) + "\n", encoding="utf-8")
+    # `newline="\n"` is load-bearing here and nowhere more than here. `write_text` opens
+    # in TEXT mode and text mode on Windows turns every `\n` into `\r\n`, and
+    # `json.dumps(..., indent=1)` is one newline per line — so a bare call rewrote all
+    # 12,094 of them. `tests/fixtures/**` is `-text` in `.gitattributes`, deliberately,
+    # so there is no clean filter to normalise it on the way into the index: unlike
+    # everywhere else in this repository, a text-mode write here changes the **committed
+    # bytes**. Found 2026-09-11 by C, after my own audit missed it by using `grep`.
+    out.write_text(json.dumps(fixture, indent=1) + "\n", encoding="utf-8", newline="\n")
     print(f"wrote {out} ({out.stat().st_size / 1024:.0f} KiB)", file=sys.stderr)
     return 0
 
