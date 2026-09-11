@@ -11,6 +11,11 @@ data/raw/
 data/derived/
 data/historical/
 data/db/
+# Tier 2 was never listed here. `*.jsonl` below hid that, because the summary
+# archive is all .jsonl - but the recorder also writes `.recorder.lock` and
+# `heartbeat__*.ndjson` into it, and `git add -A` fails outright on the lock while
+# a recorder holds it. Found by hitting exactly that.
+data/summaries/
 
 # Recording Manager runtime output. `*.jsonl` below covers the archive files it
 # moves around; these three do not contain only archive files. `data/nodes/`

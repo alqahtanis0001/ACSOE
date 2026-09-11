@@ -1317,3 +1317,56 @@ nothing worth having.
 **Consequence.** The test now covers both halves, because the first one alone is satisfied
 by a cache that never caches: a recent file must be re-measured, and a backdated one must
 come back from the cache. Three consecutive runs, no flake.
+
+---
+
+### The archive lock was taken after pair discovery, so a second copy lied for a minute
+
+**Agent:** A · **Task:** operator request, restart the recorder · **Date:** 2026-09-11
+
+**What happened.** Testing `master.bat` the way `shell:startup` will run it - a second copy
+launched from `C:\Windows\system32` while the first was recording - the status block read
+**RECORDING** for eighty seconds before flipping to `waiting: the archive is locked`.
+
+**Why.** `_run` acquired the locks immediately before the first write, which is the obvious
+place and is one line after where they are useful. Everything ahead of it ran first: the
+`instrument` snapshot, then a `ticker` snapshot of all 618 online pairs, then the ranking.
+About 60-75 seconds of exchange traffic from a process that was never going to write a
+byte.
+
+**The traffic is the smaller half.** The serious part is that the supervisor's status block
+said `RECORDING` throughout, because the recorder had not failed yet - and an operator who
+has just double-clicked the shortcut a second time is looking at that block *right then*.
+It was answering the question they were actually asking with the opposite of the truth,
+and then correcting itself a minute later when they had stopped watching.
+
+**Fix.** The locks move to the top of `_run`, before discovery, held in an outer
+`ExitStack` for the life of the process. `--dry-run` skips them: it writes nothing and must
+not fence out the recorder that is legitimately running.
+
+**Confirmed on the real thing, not in a test.** Second copy from `C:\Windows\system32`
+against the live recorder: `state waiting: the archive is locked by another live recorder`
+inside one second, `restarts` still 0, no orphan process, and the primary recorder's file
+kept growing at 0.11 MB/s throughout.
+
+**Also in this change:** `chcp 65001` in `master.bat`. The status block's em dash rendered
+as `RECORDING â€” msi` in a console left on the default code page - which looks like a broken
+program at the exact moment somebody is checking whether recording started.
+
+---
+
+### The old recorder was two processes, and neither was a second recorder
+
+**Agent:** A · **Date:** 2026-09-11
+
+Worth writing down because it looks alarming and is not. `Get-CimInstance Win32_Process`
+shows **two** `python.exe scriptsecord.py` entries with the same command line and the
+same creation second, and the instinct is that two recorders are running - which is the
+one thing the lock exists to prevent.
+
+They are parent and child: `.venv\Scripts\python.exe` on Windows is a launcher stub that
+re-execs the base interpreter, so every venv-launched script shows as a pair. The new
+supervisor shows the same shape - four processes for one recorder, two of them stubs.
+
+The check that actually answers the question is the archive: `ts_recv` monotonic across
+the file. After the restart, 111,553 lines and zero out of order.

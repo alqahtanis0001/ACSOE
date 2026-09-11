@@ -59,7 +59,16 @@ REM  app, not this window. Start it with:
 REM      python scripts\recording\manager\serve.py
 REM ===========================================================================
 
+REM Render UTF-8 correctly. The status block contains an em dash, and a console
+REM left on the default code page shows it as mojibake - which looks like a broken
+REM program at the exact moment you are checking whether recording started.
+chcp 65001 > nul
+
 REM Run from the repository root whatever folder the shortcut was launched from.
+REM %~dp0 is THIS FILE's own directory, so a shortcut in shell:startup - which
+REM launches with a working directory of C:\Windows\system32 - still finds the
+REM repository. Relying on the working directory is how a startup shortcut ends up
+REM recording somewhere under C:\Windows\system32, or not starting at all.
 cd /d "%~dp0..\.."
 
 REM Prefer the project's virtual environment; fall back to whatever `python` is.

@@ -2104,6 +2104,35 @@ async def _run(args: argparse.Namespace) -> int:
         flush=True,
     )
 
+    # One lock per distinct output directory, taken **before pair discovery** and
+    # held for the life of the process. `dict.fromkeys` rather than a set so that
+    # a configuration pointing both tiers at one directory takes one lock rather
+    # than deadlocking against itself.
+    #
+    # **Before discovery, and that ordering was learned the hard way.** It used to
+    # be taken after, just before the first write, which is the obvious place. Two
+    # things were wrong with it. A second copy spent 60-75 seconds pulling a full
+    # `instrument` and `ticker` snapshot of 618 pairs off Kraken before finding out
+    # it could not write a byte — traffic from a process that was never going to
+    # record. And worse, for that whole minute the supervisor's status block read
+    # `RECORDING`, because the recorder had not failed yet. An operator who has
+    # just double-clicked the shortcut a second time is looking at that block
+    # *right then*, and it was telling them the opposite of the truth.
+    #
+    # Skipped entirely for `--dry-run`, which writes nothing and must not fence out
+    # the recorder that is legitimately running.
+    lock_dirs = list(dict.fromkeys((raw_dir.resolve(), summary_dir.resolve())))
+    with contextlib.ExitStack() as locks:
+        if not args.dry_run:
+            for directory in lock_dirs:
+                locks.enter_context(ArchiveLock(directory))
+        return await _record(args, raw_dir, summary_dir, source_id)
+
+
+async def _record(
+    args: argparse.Namespace, raw_dir: Path, summary_dir: Path, source_id: str
+) -> int:
+    """Discover, subscribe and record. The archive locks are already held."""
     ranked, unranked = await discover_with_retry(args.url, quote=args.quote)
     tier1, tier2 = derive_tiers(
         ranked,
@@ -2136,13 +2165,10 @@ async def _run(args: argparse.Namespace) -> int:
     }
 
     stopping = asyncio.Event()
-    # One lock per distinct output directory, taken before a single byte is
-    # written and held for the life of the process. `dict.fromkeys` rather than a
-    # set so that a configuration pointing both tiers at one directory takes one
-    # lock rather than deadlocking against itself.
-    lock_dirs = list(dict.fromkeys((raw_dir.resolve(), summary_dir.resolve())))
+    # The archive locks are already held — `_run` took them before discovery, so a
+    # second copy refuses in milliseconds rather than after a minute of snapshot
+    # traffic it cannot use.
     with (
-        contextlib.ExitStack() as locks,
         JsonlWriter(raw_dir, source_id=source_id) as raw_writer,
         JsonlWriter(
             summary_dir,
@@ -2154,8 +2180,6 @@ async def _run(args: argparse.Namespace) -> int:
         HeartbeatWriter(raw_dir, source_id=source_id) as raw_heartbeat,
         HeartbeatWriter(summary_dir, source_id=source_id) as summary_heartbeat,
     ):
-        for directory in lock_dirs:
-            locks.enter_context(ArchiveLock(directory))
         summariser = Summariser(
             writer=summary_writer,
             depth=args.depth,
