@@ -46,6 +46,18 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
 
 ## Money and numbers
 
+
+- **Never let SQLite compare a money column.** Money is stored as an exact decimal *string*,
+  so SQL comparison is lexicographic and decides `'9.50' > '10000.00'`. No `MAX()`, `MIN()`,
+  `ORDER BY`, `>` or `BETWEEN` on a money column, ever. B found this building
+  `peak_equity()` in Phase 4, before it shipped: the obvious `SELECT MAX(peak_equity)` returns
+  a peak that is too small, a too-small peak is a too-small drawdown, and the breaker then sits
+  quiet through exactly the loss it exists to stop. Read the row you want by `ts` and compare
+  in Python as `Decimal`, which is what `safety` already does.
+  Checked across `src/` at the time of writing: every `ORDER BY` is on `ts`, `id`, `cycle_id`
+  or a timestamp column, and the only `max`/`min` over prices is a polars `Decimal` dtype.
+  The rule is here to keep it that way, because the next one will look just as reasonable.
+
 - **`Decimal` for prices, quantities, fees, and balances.** Never `float`. Floating-point drift in an order size is a real defect that will get an order rejected by Kraken.
 - `float` and `numpy` are fine for features, indicators, model inputs, and statistics.
 - Round order sizes and prices using the pair's own `lot_decimals` and `pair_decimals` from `AssetPairs`, and always round *down* for quantity.
@@ -173,6 +185,15 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   answer was unfalsifiable, and the surrounding prose is what made it convincing. Apply to a
   diagnostic the question you apply to a test: **under what observation would this have told me
   something else?**
+- **A test that anchors on a literal string must assert the literal occurs exactly once.**
+  A mutation harness that rewrites code *by its literal text* silently mutates whichever
+  occurrence it finds first. B's new store query in Phase 4 copied an `ORDER BY` clause
+  character-for-character from the one the Phase 3 outage counter uses, and C's criterion
+  refused it: *anchor appears 2 times, expected exactly once*. Without that count, a patcher
+  taking the first match would have mutated the new query, left the outage counter untouched,
+  watched the Phase 3 criterion stay PASS, and reported a can-it-fail proof **that had itself
+  stopped being able to fail**. The count assertion is the part that keeps the proof honest,
+  not decoration on it.
 - **`pytest.raises(SomeError)` alone is a weak assertion wherever one error type has several
   causes.** Every fail-closed path in `clients/kraken/` raises `KrakenUnavailableError` on
   purpose, so the bare form cannot tell the failure you induced from one that happened first.
