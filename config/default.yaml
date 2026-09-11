@@ -161,6 +161,31 @@ market_sensor:                   # Engine 3. Requested by A, spec 28.
 backtest:
   training_window_days: 90       # Locked decision: rolling 90-day cap
   retrain_interval_days: 7       # Locked decision: weekly, matching the live cadence
+  embargo_bars: 48               # Lead-chosen 2026-09-11, spec 58. Invariant 10 requires folds
+                                 # to be purged AND embargoed; it does not name the embargo's
+                                 # length and nothing else in the repository did.
+                                 #
+                                 # PROVISIONAL and flagged to the operator, like
+                                 # market_sensor.published_bars and kraken.cache_ttl_s. It is a
+                                 # research-methodology bound rather than a trading threshold:
+                                 # no gate reads it and no order is sized from it. It does
+                                 # decide whether a model is honestly validated, which is why
+                                 # it is written down with its reasoning rather than defaulted
+                                 # quietly.
+                                 #
+                                 # 48 is one full label horizon, matching barriers.timeout_bars.
+                                 # The purge already removes every training row whose label
+                                 # window literally overlaps the test window; the embargo exists
+                                 # for the serial correlation that survives the purge, so a span
+                                 # equal to the horizon is the defensible starting value.
+                                 # Raising it costs training rows; lowering it risks a leak that
+                                 # no test can see from the outside.
+                                 #
+                                 # NOT OPTIONAL AT THE POINT OF USE. This is a leaf key, so
+                                 # Config.get returns None rather than raising while it is
+                                 # absent (A, spec 58 handoff). Whatever reads it must refuse a
+                                 # None explicitly. A zero or absent embargo is exactly the
+                                 # Phase 4 defect that looks like success.
 
 seeds:
   global: 20260908               # Every random seed comes from config, so a training run

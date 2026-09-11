@@ -16,6 +16,25 @@
 - `pathlib.Path` for every path. This is a Windows target; never assume `/`.
 - Prefer pure functions. Anything that touches the network, the clock, or the disk is injected, not imported.
 
+### Editing a file in place
+
+- **Write bytes, or pass an empty `newline` argument. Never a bare `Path.write_text()`.**
+  Text mode on Windows translates every line feed into a carriage-return/line-feed pair, so
+  the round trip everyone reaches for — read the file, replace a string, write it back —
+  rewrites the **whole file's** line endings, not the lines you edited. A two-line file
+  written as LF comes back out as CRLF, every line of it.
+- It hides for the same reason it is easy to do. `.gitattributes` carries `* text=auto
+  eol=lf`, so git's clean filter normalises on the way into the index: the blob is correct,
+  `git status` reports nothing, and 120 tracked files in this repository are already CRLF in
+  the working tree without anyone noticing across three phases of audits. Phase 3 recorded
+  it as an unexplained conversion "of the kind that hides"; this is the mechanism.
+- **Where it stops being cosmetic is `tests/fixtures/`, marked `-text` precisely so no
+  conversion happens near an evidence fixture.** There is no clean filter there, so a
+  text-mode round trip changes the committed bytes — on a parquet payload that is
+  corruption, and the criterion that reads it fails with a parse error naming nothing useful.
+- `csv.writer` needs the same empty `newline` on the file object, or it doubles the carriage
+  return before every line feed.
+
 ### Suppressing a lint
 
 A `noqa` is a claim that the linter is wrong *here*, and it has to be readable as one.
@@ -159,6 +178,13 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   purpose, so the bare form cannot tell the failure you induced from one that happened first.
   Assert on the message, or on the reason code. The same applies to any status a gate returns
   for more than one reason: assert the reason, not only the `BLOCK`.
+  **The same defect wearing a pydantic hat: in a model with `extra="forbid"`, matching a
+  refusal on the key name cannot fail.** The refusal message for an unknown key *always*
+  contains the key name, so `match="embargo_bars"` passes whether the constraint rejected
+  the value or the field does not exist at all — A found one of its own new assertions
+  surviving the delete-the-field mutation for exactly that reason, in Phase 4, in the same
+  hour it was written. Match on the constraint (`Input should be greater than 0`), not on
+  the name of the thing being constrained.
 
 ## Verification
 
