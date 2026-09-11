@@ -688,3 +688,110 @@ same statement that mutated it.
 `{acsoe.cli.main, acsoe.cli.research}`. It is `{acsoe.cli.research}` alone: `cli/main.py`
 imports `acsoe.cli.research`, which is a different module from `acsoe.research`. The truth is
 narrower than I guessed and the assertion is stronger for it.
+
+### My CRLF audit used `grep`, and `grep` is a text-mode reader
+
+**Agent:** A · **Task:** lead's CRLF ruling, correcting my own entry above · **Date:** 2026-09-11
+
+**Correction to the entry "`Path.write_text` is a text-mode writer, and two of mine needed
+pinning".** That entry says my committed evidence under `tests/fixtures/` "carries zero carriage
+returns". **That was wrong, and the way it was wrong is worse than the fact.**
+
+**What happened.** C read my deposits and reported `tests/fixtures/recording_report.json` as 168
+CRLF, 0 bare LF. I had checked the same file an hour earlier and recorded it as clean.
+
+**Why.** I audited with `grep -c $'\r'`. MSYS `grep` treats CRLF as a line terminator and strips
+the carriage return before matching, so it reports **zero** against a file that is entirely
+CRLF. I had, in the entry immediately above this one, written that "`read_text`, `splitlines`,
+`csv.reader` and `json.loads` all normalise line endings, so a test written at any level above
+bytes passes against LF, CRLF and `\r\r\n`" — and then conducted the audit with a tool that does
+exactly that. **The rule was right and I did not apply it to the check that was verifying the
+rule.**
+
+Re-audited with `read_bytes`, which found two files, not one:
+
+| file | before | after |
+|---|---|---|
+| `tests/fixtures/recording_report.json` | 168 CRLF, 0 bare LF, 5,274 bytes | 0 CRLF, 168 LF, 5,106 bytes |
+| `tests/fixtures/kraken/ohlc.json` | 12,094 CRLF, 0 bare LF, 230,742 bytes | 0 CRLF, 12,094 LF, 218,648 bytes |
+| `tests/fixtures/record_sample.jsonl` | 0 CRLF, 25 LF | unchanged — it was written with bytes |
+
+`ohlc.json` is the one my audit would never have reached anyway: I only checked the three files
+`context/ownership.md` names as A's evidence, and `ohlc.json` is not in that list even though
+`scripts/ohlc_fixture.py` produces it and `candles_match_kraken_ohlc` judges it. **An audit
+scoped by a document rather than by who writes the file misses the files the document forgot.**
+
+**Why it matters here and nowhere else in the repository.** `.gitattributes` marks
+`tests/fixtures/**` as `-text`, deliberately, with a comment saying why — every committed-fixture
+criterion compares bytes git would otherwise rewrite between commit and clone. The consequence
+is that **there is no clean filter under that directory**: everywhere else a text-mode write is
+normalised into the index and is invisible, and here it changes the committed blob. The lead's
+rule and the `-text` marking interact, and the interaction is the whole hazard.
+
+**Fix.** Three parts, because fixing only the artefacts would let the next regeneration undo it:
+
+1. Both producers pinned — `scripts/ohlc_fixture.py` and `scripts/recording_report.py` now pass
+   `newline="\n"`, with the reason at the call site. (The lead asked me to leave
+   `recording_report.py`'s two pre-existing ruff findings alone; I have. This is a separate line
+   and a correctness fix, not lint churn.)
+2. Both artefacts converted, and **proven to be a pure line-ending change**: the JSON object is
+   parsed before and after and compared for equality, and the byte-length delta must equal
+   exactly the CRLF count. 5,274 − 5,106 = 168. 230,742 − 218,648 = 12,094. Anything other than
+   line endings changing would have failed the conversion rather than shipping.
+3. `tests/scripts/test_fixture_bytes.py`, which asserts on `read_bytes` and on nothing else.
+
+**The mechanism, measured on this machine rather than asserted:** a five-newline JSON payload
+through a bare `write_text` is 5 CRLF and 38 bytes; through `newline="\n"` it is 0 CRLF and 33
+bytes; `json.loads` returns an equal object from both. That last clause is why every consumer in
+the project is blind to it — `verify.py` reads both files with
+`json.loads(path.read_text(...))`, so both criteria passed throughout and would have kept
+passing.
+
+**Four mutations, all red:**
+
+| # | Mutation | Result |
+|---|---|---|
+| M53 | `recording_report.json` rewritten as CRLF | **RED** — the parametrised byte assertion for that file |
+| M54 | `tests/fixtures/** -text` commented out of `.gitattributes` | **RED** — `test_the_fixtures_directory_is_still_marked_minus_text` |
+| M55 | mechanism: bare `write_text` on a 5-newline payload | 5 CRLF where the pinned call gives 0 |
+| M56 | `test_the_line_ending_check_is_capable_of_failing` | the predicate run against a deliberately CRLF file, so "no CR" is not passing for want of newlines |
+
+M54 is the one worth keeping. Without it, every byte assertion in that file becomes
+**unfalsifiable** the day someone removes the `-text` marking: the clean filter would start
+normalising the fixtures and the tests would pass because git was hiding the problem, not
+because the producers were correct. A test whose premise can silently become true is the same
+defect as a test that cannot fail.
+
+**The general point, and it is the one I would keep.** *Audit a byte-level property with a
+byte-level tool.* Every convenient tool for looking at a file — `grep`, `cat`, an editor,
+`read_text`, `splitlines` — normalises line endings, so a line-ending audit conducted with any
+of them returns clean against a file that is entirely wrong. This is the same shape as the
+prefilter finding from earlier today (a cheap check standing in for an exact one, silently
+weaker), arriving in the *verification* step rather than in the code. **I wrote the rule and
+then verified it with a tool that could not see the thing the rule is about.**
+
+### Why the derived bars are at the top level of `data/historical/`
+
+**Agent:** A · **Task:** spec 54, at the lead's request · **Date:** 2026-09-11
+
+Recorded because the next person will otherwise tidy it into a subdirectory and break a
+criterion.
+
+`data/historical/` holds the operator's Kraken archive in two subdirectories,
+`KRAKEN_TimeAndSales_Combined/` and `TimeAndSales_Combined/`, and the three derived
+`*_15.csv` files at the **top level** beside them. That looks untidy and is deliberate.
+
+`scripts/verify.py`'s `replay_full_archive` globs `data/historical/*.csv`,
+**non-recursively**. Non-recursive is itself load-bearing: a recursive glob would sweep up all
+1,119 three-column time-and-sales files and hand them to a seven-column OHLCVT loader. So the
+derived bars have to sit exactly one level up from the source files — deeper and the criterion
+does not see them, shallower is not possible.
+
+The alternative was a `data/historical/ohlcvt_15m/` subdirectory and one changed line in C's
+`verify.py`. Agreeing with the criterion was worth more than the tidier tree, and it is C's file
+rather than mine.
+
+Confusion between source and derived is prevented by two things rather than by the nesting:
+source files are one level down and never at the top, and the derived files carry an `_15`
+suffix the source files do not — `XBTUSD.csv` is three-column time-and-sales, `XBTUSD_15.csv` is
+seven-column OHLCVT. `tests/scripts/test_build_ohlcvt.py` asserts both, in both directions.

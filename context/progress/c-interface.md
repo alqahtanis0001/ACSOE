@@ -92,7 +92,25 @@ All seven specs are finished except one numbered step, recorded under Open Quest
   and `from_directory`'s merged report was giving the sample XBTUSD's 2013 span as SOLUSD's —
   which would have silently weakened the timeout-horizon assertion.
 
-- **57 — the console on real rows. Done except step 3.** History renders live rows, the cycle
+- **One more defect, found by A's answer about `interval_s`.** `check_replay_full_archive`
+  was loading the operator's real archive at a **hardcoded 900** rather than at
+  `timeframes.decision_bar_s`. The interval is the grid every gap statistic is measured
+  against, so the wrong one makes most real gaps vanish and prints a confident, plausible,
+  wrong number. Harmless only because the constant equalled the config value — the condition
+  that makes a remembered value invisible. Now read from config, PENDING if unset, and proved
+  by mutation: at 1800 the reported gap total moves over the same files. The constructed-fold
+  interval stays a literal and is renamed `_CONSTRUCTED_INTERVAL_S`, because one name serving
+  both uses is how the archive read borrowed it.
+
+- **Spec 51's swap is landed and B verified it independently.** `console/reader.py` calls
+  `recent_blocked_ticks(self._feed_limit)`; the primary-preference loop and both
+  `_TS_MIN`/`_TS_MAX` sentinels are gone.
+
+- **57 — the console on real rows. Done except step 3, which the lead has now deferred.**
+  The lead ruled step 3 a spec error rather than a gap: engine 19 arriving is not sufficient,
+  because no column holds the tally, and option 2 would change what `rejections` means — a
+  tick-level fact in a candidate-level table. Recorded in the tracker with Phase 7's attribution
+  named as the forcing function. History renders live rows, the cycle
   feed goes through B's bounded `recent_blocked_ticks`, the two sentinel `_TS_MIN`/`_TS_MAX`
   bounds are gone with the last unbounded read, and all 19 reason codes across engines 7, 10,
   11 and 17 are confirmed present in `REASON_PROSE`. 10 tests in

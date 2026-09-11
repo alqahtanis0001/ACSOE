@@ -21,6 +21,7 @@ reporting as orderly progress is worse than a red gate, because the phase sits a
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 from types import ModuleType
@@ -61,6 +62,28 @@ def run(verify_module: ModuleType, check: str, root: Path) -> Any:
         verify_module.Criterion(check, getattr(verify_module, "check_" + check)),
         verify_module.VerifyContext(root=root),
     )
+
+
+#: How many engines `orchestrator_empty_registry` reported finding in the registry.
+#:
+#: **Read out of the message rather than matched as a substring**, and the difference is
+#: a lesson rather than a preference. Two tests below used to assert
+#: `"0 registered engines" in outcome.message`, and both went red the day the message
+#: gained one clarifying word — a change that improved the report and broke nothing.
+#: A substring match on an English sentence taxes exactly the improvements you most want
+#: someone to make, and the tax is paid in red tests that look like regressions.
+#:
+#: What these tests care about is the **count**. The wording is a separate claim with a
+#: separate hazard, and it has its own test — `test_the_engine_count_says_runtime_so_it_
+#: cannot_be_read_against_the_registry_total` — so that "the number is right" and "the
+#: sentence is unambiguous" fail independently and for their own reasons.
+_ENGINE_COUNT = re.compile(r"(\d+) registered(?: \w+)? engines")
+
+
+def reported_engine_count(message: str) -> int:
+    match = _ENGINE_COUNT.search(message)
+    assert match is not None, f"no engine count in the message: {message!r}"
+    return int(match.group(1))
 
 
 def sql_tables(db_path: Path) -> set[str]:
@@ -177,7 +200,47 @@ def test_orchestrator_passes_against_a_minimal_registry_and_tick(
     fabricate_orchestrator(tree_with_harness)
     outcome = run(verify_module, "orchestrator_empty_registry", tree_with_harness)
     assert outcome.result is verify_module.Result.PASS, outcome.message
-    assert "0 registered engines" in outcome.message
+    assert reported_engine_count(outcome.message) == 0
+
+
+def test_the_engine_count_says_which_engines_it_counted(
+    verify_module: ModuleType, repo_root: Path
+) -> None:
+    """Two PASS lines in one report quote different totals, and both are right.
+
+    `orchestrator_empty_registry` counts `acsoe.bootstrap`'s three **runtime** chains.
+    `is_gate_matches_registry` counts those *plus* the offline chain in
+    `cli/research.py`, where engine 23 `backtest` lives and is deliberately never
+    registered in `bootstrap.py`. Nine and ten, adjacent, in the report somebody reads
+    to decide whether a phase closes — which invites either a hunt for a bug that does
+    not exist, or a shrug that trains the reader past the day the numbers genuinely
+    disagree.
+
+    One word fixes it and one word is easy to tidy away, so it is pinned here rather
+    than left to the comment at the call site. **This is a separate claim from the
+    count**, which is why it is a separate test: the counts above read the number out of
+    the message and no longer care how the sentence is worded, and this one cares about
+    nothing else. Each fails for its own reason.
+
+    Run against the real repository on purpose. The ambiguity only exists when both
+    criteria are reporting real registries, and a fabricated tree would make the
+    assertion true of a sentence nobody will ever read.
+    """
+    empty = run(verify_module, "orchestrator_empty_registry", repo_root)
+    total = run(verify_module, "is_gate_matches_registry", repo_root)
+    assert empty.result is verify_module.Result.PASS, empty.message
+    assert total.result is verify_module.Result.PASS, total.message
+
+    # The premise: the two counts really do differ, so the disambiguation is load
+    # bearing rather than a precaution. If they ever coincide this test should be
+    # reconsidered, not deleted - it would mean engine 23 had moved.
+    assert reported_engine_count(empty.message) != reported_engine_count(total.message)
+    assert reported_engine_count(empty.message) + 1 == reported_engine_count(total.message)
+
+    assert "runtime engines" in empty.message, (
+        "the smaller count no longer says which engines it counted; beside "
+        "is_gate_matches_registry's larger total it reads as a contradiction"
+    )
 
 
 def test_orchestrator_is_pending_when_a_chain_symbol_is_missing(
@@ -1109,7 +1172,7 @@ def test_a_registered_blocking_gate_does_not_fail_the_empty_registry_criterion(
     outcome = run(verify_module, "orchestrator_empty_registry", tree_with_harness)
     assert outcome.result is verify_module.Result.PASS, outcome.message
     assert "explicitly empty registry" in outcome.message
-    assert "1 registered engines" in outcome.message
+    assert reported_engine_count(outcome.message) == 1
 
 
 def test_the_blocking_registry_really_would_have_failed_the_old_criterion(

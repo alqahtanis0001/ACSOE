@@ -651,6 +651,41 @@ rather than raising — so a stray `\r` would present as a silently empty archiv
 
 **Fifty-two mutations across the phase, fifty-one red.** One equivalent mutant, written up.
 
+## Phase 4 - the CRLF correction (2026-09-11)
+
+**I reported my evidence fixtures clean and they were not.** C read them and found
+`tests/fixtures/recording_report.json` at 168 CRLF, 0 bare LF. I had audited the same file an
+hour earlier with `grep -c $'\r'`, and MSYS `grep` strips the carriage return as a line
+terminator before matching - so it reports zero against a file that is entirely CRLF. I had
+written in the build log, one entry earlier, that every reader above bytes normalises line
+endings, and then ran the audit with one. **The rule was right; I did not apply it to the check
+that was verifying the rule.**
+
+Re-audited with `read_bytes` and found **two** files, not one. The second, `kraken/ohlc.json`
+at 12,094 CRLF, my audit would never have reached: I scoped it to the three files
+`ownership.md` names as A's evidence, and `ohlc.json` is not in that list even though
+`scripts/ohlc_fixture.py` produces it. **An audit scoped by a document rather than by who
+writes the file misses the files the document forgot.**
+
+Fixed in three parts, because fixing the artefacts alone would let the next regeneration undo
+it: both producers pinned to `newline="
+"`; both artefacts converted with the change *proven*
+to be line endings only (JSON parsed and compared either side, byte delta equal to the CRLF
+count - 5,274-5,106=168 and 230,742-218,648=12,094); and `tests/scripts/test_fixture_bytes.py`,
+which asserts on `read_bytes` and nothing else.
+
+It matters under `tests/fixtures/**` and nowhere else because `.gitattributes` marks that
+directory `-text`. There is no clean filter there, so unlike everywhere else in this repository
+a text-mode write changes the **committed blob**. `verify.py` reads both files through
+`json.loads(read_text(...))`, so both criteria passed throughout and would have kept passing.
+
+Four mutations red, including one on `.gitattributes` itself: remove the `-text` marking and
+every byte assertion in that file becomes unfalsifiable, passing because git is hiding the
+problem rather than because the producers are correct.
+
+**All five phases re-verified after changing committed fixture bytes:** 0, 1, 2, 3 green and
+`--phase 4 --live` 10/10.
+
 ## Open Questions — Phase 4
 
 **1. `bootstrap.py` mutation: RUN, at the lead's direct request.** Resolved. M48 red across four

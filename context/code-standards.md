@@ -258,6 +258,28 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   out of four is exactly the kind that gets promoted to a rule and then hides the fourth case.
   Ask the three questions underneath it — does it name my file, does it reproduce every time,
   does it reproduce in isolation — and let the path narrow the search rather than end it.
+- **The evidence is destroyed at the pipe, before re-running is even a decision.** The Phase 3
+  rule says capture the traceback before you re-run. Phase 4 found the step before it: two
+  agents independently, within an hour, ran the gate through `grep "criteria:"` and `tail -2`,
+  kept the summary line and binned the criterion name and message. Both then re-ran to find out
+  what had failed, and one of the two failures never recurred and is now unattributable for
+  good. **Redirect to a file and read the file.** A summary line is not evidence; it is the
+  receipt for evidence you did not keep.
+- **A wrong answer that is in range survives; a zero or a crash is found on day one.** The two
+  worst defects of Phase 4 share this property and nothing else: `SELECT MAX(peak_equity)` over
+  a decimal string returns *a* peak, plausible and too small, and a hardcoded `900` where
+  `timeframes.decision_bar_s` belonged returns *a* gap count, plausible and wrong. Both would
+  have been reported confidently over real data. When reviewing a calculation, ask not only
+  whether it can fail loudly but **what it returns when it is quietly wrong, and whether anyone
+  downstream could tell.**
+- **A mutation harness in a shared checkout can turn another agent's run red, and a spurious
+  failure reads as KILLED.** That is the direction that hides a survivor, and it is invisible
+  from inside either agent's results. Phase 4 saw a live mutation surface in a second agent's
+  run as two ruff findings that agent then reported as real. Two protections, both cheap: run
+  the sweep that your conclusions rest on **narrowly**, against the test file that owns the
+  code, and say so; and treat "it is probably the other agent's harness" as a hypothesis to
+  check rather than an explanation to accept, because it is exactly the assumption that makes
+  a real finding invisible.
 - **A diagnostic procedure that cannot fail is the same defect as a test that cannot fail.**
   "Re-run the named test in isolation, and if it passes it was the machine's intermittent fault"
   ran for two phases and confirmed itself every time — because in isolation nothing else was

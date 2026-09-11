@@ -481,6 +481,17 @@ class MemoryEngine(BaseEngine):
         )
         equity = cash + positions_value
 
+        # The whole previous row, not `store.peak_equity()`, because this tick needs the
+        # carried-forward `realised_pnl_cum` as well as the peak. The two readers cannot
+        # disagree - `peak_equity()` is a thin read over exactly this row.
+        #
+        # **Read B's docstring on `StoreClient.peak_equity` before touching the peak
+        # below.** It carries the reasoning that has no home on this side and is the
+        # trap anyone revisiting this line will fall into: money is stored as an exact
+        # decimal string, so `SELECT MAX(peak_equity)` compares lexicographically and
+        # decides '9.50' > '10000.00'. That returns a plausible number, a too-small
+        # peak, a too-small drawdown, and a breaker that sits quiet through exactly the
+        # loss it exists to stop. Nothing raises.
         previous = store.latest_equity_snapshot()
         realised_cum = previous.realised_pnl_cum if previous is not None else Decimal(0)
         realised_cum = realised_cum + sum(

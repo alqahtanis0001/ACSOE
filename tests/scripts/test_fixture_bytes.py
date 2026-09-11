@@ -61,8 +61,11 @@ def test_a_s_evidence_fixtures_are_committed_with_unix_line_endings(name: str) -
     path = REPO_ROOT / name
     assert path.is_file(), f"{name} is missing"
     raw = path.read_bytes()
+    # Counted outside the f-string: the project's ruff target is Python 3.11, where a
+    # backslash escape inside an f-string expression is a syntax error.
+    crlf = raw.count(b"\x0d\x0a")
     assert b"\x0d" not in raw, (
-        f"{name} carries {raw.count(b'\x0d\x0a')} CRLF line ending(s). "
+        f"{name} carries {crlf} CRLF line ending(s). "
         "tests/fixtures/** is `-text`, so there is no clean filter and this is in the "
         "committed blob. Its producer is writing in text mode: pass newline='\\n'."
     )

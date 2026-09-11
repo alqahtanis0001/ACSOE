@@ -795,3 +795,65 @@ def test_an_empty_archive_file_is_a_fail(
     outcome = run(verify_module, "replay_full_archive", phase4_tree)
     assert_fail(outcome, verify_module)
     assert "empty" in outcome.message
+
+
+def test_replay_full_archive_reads_the_interval_from_config(
+    verify_module: ModuleType, phase4_tree: Path
+) -> None:
+    """The interval is the grid every gap statistic is measured against.
+
+    Load a 15-minute archive at 30 minutes and `load_archive` expects half as many bars,
+    so most real gaps vanish and the criterion prints a confident, plausible, wrong
+    number. Nothing raises. This was a module constant equal to 900 until A pointed out
+    that `timeframes.decision_bar_s` is the only honest source — harmless while the two
+    agreed, which is exactly the condition that makes a remembered value invisible.
+
+    Proved by moving the config key and watching the reported gap count change over the
+    *same* files. Asserting only that it PASSes would be satisfied by the constant.
+    """
+    directory = phase4_tree / "data" / "historical"
+    directory.mkdir(parents=True)
+    step = 900
+    start = 1_700_000_000 - (1_700_000_000 % (2 * step))
+    # A three-bar hole on the 900s grid. On an 1800s grid the same timestamps are not a
+    # contiguous series at all, so the gap arithmetic answers differently.
+    rows = "\n".join(
+        f"{start + i * step},100,101,99,100,1.5,7" for i in range(40) if not 10 <= i < 13
+    )
+    (directory / "AAAUSD_15.csv").write_bytes((rows + "\n").encode("utf-8"))
+
+    config = phase4_tree / "config" / "default.yaml"
+    original = config.read_bytes()
+    at_900 = run(verify_module, "replay_full_archive", phase4_tree)
+    assert_pass(at_900, verify_module)
+    assert "1 gap run(s)" in at_900.message
+
+    config.write_bytes(original.replace(b"decision_bar_s: 900", b"decision_bar_s: 1800"))
+    at_1800 = run(verify_module, "replay_full_archive", phase4_tree)
+
+    assert at_1800.message != at_900.message, (
+        "the reported gaps did not move when timeframes.decision_bar_s did; the "
+        "criterion is measuring against a constant, not against the configured grid"
+    )
+
+
+def test_replay_full_archive_is_pending_when_the_decision_bar_is_unset(
+    verify_module: ModuleType, phase4_tree: Path
+) -> None:
+    """Fail closed, and as unfinished work rather than as a broken archive.
+
+    A missing threshold is the operator not having chosen one. Defaulting it would put
+    the criterion back where it started, measuring against a number nobody picked.
+    """
+    directory = phase4_tree / "data" / "historical"
+    directory.mkdir(parents=True)
+    (directory / "AAAUSD_15.csv").write_bytes(b"1700000100,100,101,99,100,1.5,7\n")
+
+    config = phase4_tree / "config" / "default.yaml"
+    config.write_bytes(
+        config.read_bytes().replace(b"decision_bar_s: 900", b"decision_bar_s: null")
+    )
+
+    outcome = run(verify_module, "replay_full_archive", phase4_tree)
+    assert_pending(outcome, verify_module)
+    assert "timeframes.decision_bar_s" in outcome.message

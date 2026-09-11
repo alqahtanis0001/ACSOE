@@ -206,8 +206,24 @@ class ReplayReport(BaseModel):
     and a report that added them would have lost the distinction."""
 
     bar_count: int
+
     first_ts: int | None
     last_ts: int | None
+    """The span **across every pair loaded**, not any one pair's.
+
+    **Read these only when you mean all of them.** For a single pair's span use
+    `archives[pair].first_ts` / `.last_ts`, which come from that pair's own
+    `ArchiveReport`.
+
+    The trap is specific and it has already been walked into once: `from_directory`
+    loads all three pairs, so `last_ts` is XBTUSD's 2025 end and `first_ts` is XBTUSD's
+    **2013** start — and a consumer computing "is this decision bar within the timeout
+    horizon of the end of its series?" against the shared span gets a much roomier
+    answer than the truth. SOLUSD starts in 2021. C hit exactly this while cutting
+    `labelled_sample.parquet`: the check still passed, on a span the pair never had, and
+    it would have kept passing. **A borrowed span does not make a horizon assertion
+    fail, it makes it lenient**, which is the Phase 4 failure mode in miniature.
+    """
 
     coverage_known: bool
     """False when no sidecar was found. A real Kraken archive has none and does not need

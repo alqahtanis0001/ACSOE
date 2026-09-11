@@ -747,3 +747,101 @@ claimed XBTUSD's 2013 start as SOLUSD's. That is not cosmetic: the criterion ass
 bar sits within the timeout horizon of `span_end_ts`, so a span borrowed from whichever pair ran
 latest weakens that check and says nothing. The provenance now takes its span from
 `report.archives[pair]`, the per-pair `ArchiveReport`, which is what A exposed it for.
+
+### `replay_full_archive` loaded the real archive at a hardcoded 900 seconds
+
+**Agent:** C · **Task:** spec 48, criterion 8 · **Date:** 2026-09-11
+
+**What happened.** A answered my question about where engine 23 gets `interval_s` — from
+`timeframes.decision_bar_s` in config, never from the `ArchiveReport`, because the report's
+interval "is whatever the *caller* loaded the archive at, so taking it from there makes it agree
+with itself by construction and proves nothing." Reading that, I looked at my own criterion and
+found it doing neither: `check_replay_full_archive` passed `interval_s=_FOLD_INTERVAL_S`, a
+module constant equal to 900, straight into `load_archive`.
+
+**Why it matters, and it is the shape of defect this phase exists to catch.** The interval is
+the grid every gap statistic is computed against. Load a 15-minute archive at 30 minutes and
+`load_archive` reports **half** the expected bars, so most real gaps vanish and the criterion
+prints a confident, plausible, wrong number: fewer gap runs and a shorter span than the archive
+holds. Nothing raises and nothing looks odd. The operator reads it as a clean archive.
+
+Today it is harmless because the constant happens to equal the config value. That is precisely
+the condition under which a hardcoded threshold is invisible — `AGENTS.md` opens by saying a
+remembered value is stale, and this one is remembered. The day the operator retunes
+`decision_bar_s` the live criterion silently starts measuring a different archive from the one
+the system trades.
+
+**Fix.** The criterion reads `timeframes.decision_bar_s` from the committed config and reports
+PENDING naming the key if it is unset, the same fail-closed shape every other threshold read
+here uses. Proved by mutation: with the config key changed to 1800 the criterion reports a
+different bar count and gap total over the same files, which is what makes it a read rather than
+a coincidence.
+
+**The constructed-fold interval stays a literal, and is now named for what it is.**
+`walkforward_folds_purged_and_embargoed` builds its own four-row dataset, and the interval there
+is a property of that fixture rather than of the system — the criterion would be no more correct
+for tracking config, and coupling a constructed fixture to a threshold the operator may retune
+is how a criterion starts failing for reasons that have nothing to do with its subject. Renamed
+`_CONSTRUCTED_INTERVAL_S` with the distinction written at the definition, because a reader
+meeting `_FOLD_INTERVAL_S` twice in one file would reasonably assume both uses meant the same
+thing — which is how the archive read came to use it in the first place.
+
+### I destroyed the evidence for a transient FAIL, by the exact mechanism the rule warns about
+
+**Agent:** C · **Task:** spec 48 · **Date:** 2026-09-11
+
+**What happened.** A sweep across every phase reported `phase 4 --live: 10 criteria: 9 PASS,
+1 FAIL, 0 PENDING`. My command had piped the run through `grep "criteria:"`, so the summary line
+was all I kept — **the criterion's name and its message went to the bin**. I then ran the gate
+again to find out which one it was, and it came back 10/10.
+
+**Why this is worth an entry rather than a shrug.** The lead's standing instruction, from the
+Phase 3 rule, is to capture the output **before** re-running, because re-running to confirm
+green is what destroyed the evidence for two phases. I did not break that rule by re-running
+carelessly; I broke it earlier, by filtering the first run's output down to a summary. A
+criterion that has reached a verdict has reached it, and `verify.py` streams and flushes each
+line precisely so a killed run leaves its verdicts on disk — and I threw them away at the pipe.
+
+There is a second, quieter cost. The earlier `phase 0: 6 PASS, 1 FAIL` in the same sweep is now
+also unattributable. It resolved on the next run with `is_gate_matches_registry` reporting **10
+engines registered** where it had said 9, so the lead was mid-edit on `bootstrap.py` registering
+engine 19 — that one I can reconstruct from a changed message. The Phase 4 one I cannot, beyond
+"B was writing the manage-chain rehearsal at the time and `toolchain_green` runs the whole
+suite".
+
+**Fix, and it is a habit rather than code.** When sweeping phases, keep the full output —
+`tail -8` at minimum, and the whole run when anything is red. `grep "criteria:"` is for a run I
+already expect to be green, and expecting a run to be green is not a reason to stop being able
+to explain it.
+
+### Two true numbers in one report that read as a contradiction
+
+**Agent:** C · **Task:** spec 48 · **Date:** 2026-09-11
+
+**What happened.** Reading a `--phase 0` report after the lead registered engine 19, two lines
+of the same run disagreed:
+
+```
+PASS  orchestrator_empty_registry  ... (acsoe.bootstrap holds 9 registered engines ...)
+PASS  is_gate_matches_registry     10 engines registered; 0 mismatches (5 gates ...)
+```
+
+**Why.** Both are right. `orchestrator_empty_registry` counts `acsoe.bootstrap`'s three runtime
+chains; `is_gate_matches_registry` counts those **plus** the offline chain in
+`cli/research.py`, where engine 23 `backtest` lives and is deliberately never registered in
+`bootstrap.py`. Nine runtime plus one offline is ten.
+
+So there is no defect in either count — the defect is in a sentence I wrote, and it is worth an
+entry because of *when* it is read. This report is what somebody looks at to decide whether a
+phase closes, and two adjacent PASS lines quoting different totals for "registered engines"
+invites either a hunt for a bug that does not exist or, worse, a shrug that trains the reader to
+stop noticing when the numbers genuinely disagree.
+
+**Fix.** One word: `9 registered **runtime** engines`, with the reason at the call site. The two
+tests that pinned the old phrasing, `test_orchestrator_passes_against_a_minimal_registry_and_tick`
+and the blocking-gate one, were updated with a comment saying the word is part of the pinned
+wording rather than decoration — otherwise the next person tidying the sentence removes it and
+the ambiguity comes back silently.
+
+Those two tests going red is the system working, incidentally. A message an operator reads is a
+contract, and it should not be possible to change one by accident.

@@ -610,9 +610,17 @@ def check_orchestrator_empty_registry(ctx: VerifyContext) -> Outcome:
             "one tick completed over an explicitly empty registry; empty chains are "
             'valid, state["system"]["mode"]='
             + repr(system["mode"])
+            # "runtime" is load-bearing in this sentence rather than decorative. This
+            # counts the three chains in `acsoe.bootstrap`; `is_gate_matches_registry`
+            # counts those *plus* the offline chain in `cli/research.py`, where engine 23
+            # `backtest` lives and is deliberately never registered in bootstrap. Both
+            # numbers are right and they differ by one, so without the word they read as
+            # a contradiction in a single report - at exactly the moment somebody is
+            # reading that report to decide whether a phase closes.
             + " (acsoe.bootstrap holds "
             + str(registered)
-            + " registered engines, which this criterion deliberately does not tick over "
+            + " registered runtime engines, which this criterion deliberately does not "
+            "tick over "
             "- is_gate_matches_registry and console_shows_live_rows judge those)"
         )
 
@@ -5976,6 +5984,10 @@ KEY_TARGET_PCT: Final = "barriers.target_pct"
 KEY_STOP_PCT: Final = "barriers.stop_pct"
 KEY_TIMEOUT_BARS: Final = "barriers.timeout_bars"
 KEY_EMBARGO_BARS: Final = "backtest.embargo_bars"
+#: The decision-bar grid. The same key engine 3 `market_sensor` reads for the live
+#: bar and engine 23 `backtest` reads for the replay, so an archive can never be
+#: measured on a different grid from the one the system trades.
+KEY_DECISION_BAR_S: Final = "timeframes.decision_bar_s"
 KEY_REPORTING_CURRENCY: Final = "trading.base_reporting_currency"
 
 #: The three outcomes of the triple barrier. There is no fourth, and spec 52 forbids
@@ -7105,10 +7117,21 @@ def check_labeller_matches_hand_verified_labels(ctx: VerifyContext) -> Outcome:
 
 # --- walkforward_folds_purged_and_embargoed -------------------------------- #
 
-#: One bar, in seconds. The constructed fold below is expressed in bars so the
-#: embargo - which config states in bars - lands on a boundary this criterion can
-#: reason about without restating a duration anywhere.
-_FOLD_INTERVAL_S: Final = 900
+#: One bar, in seconds, **of the four-row dataset this criterion constructs** - not of
+#: the system. The constructed fold is expressed in bars so the embargo, which config
+#: states in bars, lands on a boundary this criterion can reason about without restating
+#: a duration anywhere.
+#:
+#: Deliberately a literal and deliberately **not** `timeframes.decision_bar_s`. The rows
+#: here are built by this criterion, so the interval is a property of the fixture; making
+#: it track a threshold the operator may retune would let a criterion start failing for
+#: reasons that have nothing to do with its subject.
+#:
+#: Named `_CONSTRUCTED_` rather than `_FOLD_` because the earlier name read as "the
+#: interval", and `check_replay_full_archive` reached for it to load a **real** archive -
+#: where the interval is the grid every gap statistic is measured against and config is
+#: the only honest source. That criterion now reads the config key.
+_CONSTRUCTED_INTERVAL_S: Final = 900
 
 
 def check_walkforward_folds_purged_and_embargoed(ctx: VerifyContext) -> Outcome:
@@ -7185,7 +7208,7 @@ def check_walkforward_folds_purged_and_embargoed(ctx: VerifyContext) -> Outcome:
         origin = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp())
         test_start = origin + train_days * day
         test_end = test_start + test_days * day
-        embargo_end = test_end + embargo_bars * _FOLD_INTERVAL_S
+        embargo_end = test_end + embargo_bars * _CONSTRUCTED_INTERVAL_S
 
         rows = [
             {
@@ -7202,20 +7225,20 @@ def check_walkforward_folds_purged_and_embargoed(ctx: VerifyContext) -> Outcome:
             },
             {
                 "label_id": "embargoed",
-                "decision_ts": test_end + _FOLD_INTERVAL_S,
-                "label_window_end_ts": test_end + 2 * _FOLD_INTERVAL_S,
+                "decision_ts": test_end + _CONSTRUCTED_INTERVAL_S,
+                "label_window_end_ts": test_end + 2 * _CONSTRUCTED_INTERVAL_S,
             },
             {
                 "label_id": "after_embargo",
                 "decision_ts": embargo_end + day,
-                "label_window_end_ts": embargo_end + day + _FOLD_INTERVAL_S,
+                "label_window_end_ts": embargo_end + day + _CONSTRUCTED_INTERVAL_S,
             },
         ]
         try:
             folds = splitter(
                 rows,
                 config=engine_config,
-                interval_s=_FOLD_INTERVAL_S,
+                interval_s=_CONSTRUCTED_INTERVAL_S,
                 test_start_ts=test_start,
                 test_end_ts=test_end,
             )
@@ -7449,6 +7472,15 @@ def check_replay_full_archive(ctx: VerifyContext) -> Outcome:
     **PENDING rather than FAIL when no archive is present.** The operator has not
     downloaded one, and an opt-in criterion that FAILs on its absence makes `--live`
     useless for every other check in every other phase.
+
+    **The interval comes from `timeframes.decision_bar_s`, never from a constant here
+    and never from the archive's own report.** It is the grid every gap statistic is
+    measured against: load a 15-minute archive at 30 minutes and `load_archive` reports
+    half the expected bars, so most real gaps vanish and this criterion prints a
+    confident, plausible, wrong number. Taking it from the report instead would be
+    worse - the report's interval is whatever the caller loaded at, so it would agree
+    with itself by construction. Config is the same authority engine 3 `market_sensor`
+    and engine 23 `backtest` both read.
     """
     archive_dir = ctx.root / "data" / "historical"
     if not archive_dir.is_dir():
@@ -7461,6 +7493,13 @@ def check_replay_full_archive(ctx: VerifyContext) -> Outcome:
             "data/historical/ carries no .csv archive - this criterion is opt-in and "
             "reports PENDING rather than FAIL when the operator has not downloaded one"
         )
+    config, problem = load_config(ctx.root)
+    if config is None:
+        return problem or pending("config/default.yaml could not be read")
+    values, problem = required_thresholds(config, (KEY_DECISION_BAR_S,))
+    if problem is not None:
+        return problem
+    interval_s = int(values[KEY_DECISION_BAR_S])
     with root_import_path(ctx.root):
         module, problem = try_import("acsoe.research.historical")
         if module is None:
@@ -7471,7 +7510,7 @@ def check_replay_full_archive(ctx: VerifyContext) -> Outcome:
         reports = []
         for archive in archives:
             try:
-                reports.append(loader(archive, interval_s=_FOLD_INTERVAL_S))
+                reports.append(loader(archive, interval_s=interval_s))
             except Exception as exc:
                 return failed(
                     archive.name + " did not load: " + f"{type(exc).__name__}: {exc}"[:300]

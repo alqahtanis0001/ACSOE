@@ -613,3 +613,65 @@ def test_no_sidecar_at_all_is_also_unknown(
     replay = ArchiveReplay.from_directory(directory, interval_s=INTERVAL_S, clock=clock)
     assert replay.report.holes_mean_no_trades is None
     assert "a hole means UNKNOWN" in replay.report.summary()
+
+
+def test_the_reports_span_is_across_every_pair_and_each_pair_keeps_its_own(
+    tmp_path: Path, clock: FixedClock
+) -> None:
+    """The sharp edge C walked into while cutting the labelled fixture.
+
+    `report.first_ts` / `last_ts` are the span across **every** pair loaded. A consumer
+    asking "is this bar within the timeout horizon of the end of its series?" against
+    the shared span gets a roomier answer than the truth — and a borrowed span does not
+    make that assertion fail, it makes it **lenient**, which is exactly the kind of
+    defect this phase exists to keep out.
+
+    Asserted in both directions so neither reading can drift: the shared span is the
+    union, and each `archives[pair]` still carries that pair's own.
+    """
+    directory = tmp_path / "historical"
+    write_archive(directory / "OLDPAIR_15.csv", [0, 1, 2])
+    write_archive(directory / "NEWPAIR_15.csv", [40, 41, 42])
+    replay = ArchiveReplay.from_directory(directory, interval_s=INTERVAL_S, clock=clock)
+    report = replay.report
+
+    assert report.first_ts == BASE_TS
+    assert report.last_ts == BASE_TS + 42 * INTERVAL_S
+
+    # ...and neither pair actually spans that.
+    assert report.archives["OLDPAIR"].last_ts == BASE_TS + 2 * INTERVAL_S
+    assert report.archives["NEWPAIR"].first_ts == BASE_TS + 40 * INTERVAL_S
+    assert report.archives["NEWPAIR"].first_ts > report.first_ts
+    assert report.archives["OLDPAIR"].last_ts < report.last_ts
+
+
+def test_from_archives_reports_coverage_unknown_because_it_reads_no_sidecar(
+    holed_archive: tuple[Path, list[int]], clock: FixedClock
+) -> None:
+    """The other half of the same near-miss, and this one failed safe.
+
+    `from_archives` takes paths the caller names and never looks for a
+    `PROVENANCE.json`, because the sidecar describes a *directory* and there is no
+    directory in that call. So it reports `holes_mean_no_trades is None` — unknown —
+    even when a sidecar exists beside the files. C's fixture builder refuses to write a
+    slice unless the replay reports `True`, and that guard fired on exactly this.
+
+    Pinned rather than fixed: making `from_archives` go looking for a sidecar next to a
+    path it was handed would make the answer depend on a directory the caller never
+    named, which is a worse property than reporting unknown.
+    """
+    directory, _ = holed_archive
+    (directory / PROVENANCE_FILENAME).write_text(
+        json.dumps({"holes_mean_no_trades": True, "pairs": {}}), encoding="utf-8"
+    )
+
+    by_path = ArchiveReplay.from_archives(
+        {"BTCUSD": directory / "BTCUSD_15.csv"}, interval_s=INTERVAL_S, clock=clock
+    )
+    assert by_path.report.holes_mean_no_trades is None
+    assert by_path.report.coverage_known is False
+
+    by_directory = ArchiveReplay.from_directory(
+        directory, interval_s=INTERVAL_S, clock=clock
+    )
+    assert by_directory.report.holes_mean_no_trades is True
