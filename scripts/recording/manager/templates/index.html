@@ -14,17 +14,51 @@
   console uses, for the same reason: this has to be runnable from a checkout with
   nothing installed beyond the project's own dependencies.
 
-  It is read-mostly. The three things it writes are all deliberate and all
-  verified first: a node package, an entry in sources.yaml, and files that have
-  been parsed end to end in staging. It never records, and it never touches the
+  It is read-mostly. The things it writes are all deliberate and all verified
+  first: a node package, an entry in sources.yaml, and files that have been
+  parsed end to end in staging. It never records, and it never touches the
   SQLite store.
+
+  The prose on each screen is written for somebody who has never seen the
+  project. Each screen says what it is for, how to read it, and what to do next.
+  The longer reasoning behind each rule sits in a collapsed "Why" block so it is
+  there when wanted and out of the way when not.
 -->
 
 <div class="band">
   <h1>Recording manager</h1>
   <span class="where" id="where">reading …</span>
   <span class="spacer"></span>
-  <span class="where">it does not record, and it does not write to the store</span>
+  <span class="where">Reads the recorded files. Never records, never touches the trading store.</span>
+</div>
+
+<!--
+  The status strip: the one reading worth having at a glance, on every screen.
+  It is composed from the same three endpoints the screens use, so it can never
+  disagree with them. The master's state keeps the same four-way liveness as the
+  Sources table; the strip never collapses it into a light.
+-->
+<div class="strip" role="region" aria-label="Status">
+  <div class="stat">
+    <span class="stat-label">This machine</span>
+    <span class="stat-value">
+      <span class="liveness" data-state="none" id="strip-state">reading …</span>
+    </span>
+  </div>
+  <div class="stat">
+    <span class="stat-label">Since last write</span>
+    <span class="stat-value figure" id="strip-age">—</span>
+  </div>
+  <div class="stat">
+    <span class="stat-label">Hours held</span>
+    <span class="stat-value figure" id="strip-hours">—</span>
+  </div>
+  <div class="stat">
+    <span class="stat-label">Days uncovered</span>
+    <span class="stat-value figure" id="strip-uncovered">—</span>
+  </div>
+  <span class="spacer"></span>
+  <span class="where" id="strip-when"></span>
 </div>
 
 <nav class="tabs" role="tablist" aria-label="Screens">
@@ -39,177 +73,286 @@
 
   <!-- ============================================================ SOURCES -->
   <section id="pane-sources" role="tabpanel" aria-labelledby="tab-sources">
-    <h2>Sources</h2>
-    <p class="lede">
-      Every machine that records. The three kinds carry three different qualities
-      of knowledge and this screen never levels them up into one green light: the
-      master is read from local disk and is current, a server node is read over
-      SSH and is only as fresh as the last check, and a standalone node has
-      <strong>no live status at all</strong>. A standalone node that has said
-      nothing for a week may be recording perfectly — silence is not evidence,
-      and reporting it as dead is the guess that gets a working recorder switched
-      off.
-    </p>
+    <div class="caption">
+      <h2>Sources</h2>
+      <p class="lede">
+        <strong>What this is for.</strong> Every machine that records market
+        data, and what is known about each one. Use it to see that recording is
+        happening, and to spot a machine that has gone quiet.
+      </p>
+      <p class="lede">
+        A <em>source</em> is any machine that records. The <em>master</em> is this
+        machine. A <em>node</em> is any other machine you set up to record.
+        A <em>server node</em> can be checked from here over SSH. A
+        <em>standalone node</em> cannot be checked at all; you collect its files by
+        hand.
+      </p>
+      <p class="lede">
+        <strong>How to read it.</strong> The Status column says one of four
+        things. They are four different levels of knowledge, not four shades of
+        good and bad.
+      </p>
+      <ul class="key">
+        <li><span class="liveness" data-state="live">recording</span> This machine, read from its own disk just now.</li>
+        <li><span class="liveness" data-state="as_of">reachable</span> A server node answered the last check. The row says when.</li>
+        <li><span class="liveness" data-state="unreachable">not reachable</span> The last check failed. That is about the connection, not the recorder.</li>
+        <li><span class="liveness" data-state="none">no live status</span> Nothing can check this machine. This is normal, and it never means dead.</li>
+      </ul>
+      <details class="more">
+        <summary>Why silence is never reported as dead</summary>
+        <p>
+          A standalone node has no connection to this machine in either
+          direction. If it has said nothing for a week, it may be recording
+          perfectly. Calling it dead would be a guess, and the guess is wrong in
+          the direction that gets a working recorder switched off. So the screen
+          says what it knows: when files were last brought over, and which days
+          they covered.
+        </p>
+        <p>
+          A server node is only as fresh as its last check. A check is not done
+          every time the page loads, because it takes seconds per node. The row
+          shows when the check was, so an old reading looks old.
+        </p>
+      </details>
+    </div>
     <div class="row">
       <button class="action" id="sources-refresh">Refresh</button>
       <button class="action" id="sources-check">Check server nodes now</button>
       <span class="where" id="sources-when"></span>
     </div>
     <div class="panel"><div id="sources-body" class="empty">Loading …</div></div>
+    <div class="next" id="sources-next"></div>
   </section>
 
   <!-- =========================================================== COVERAGE -->
   <section id="pane-coverage" role="tabpanel" aria-labelledby="tab-coverage" hidden>
-    <h2>Coverage</h2>
-    <p class="lede">
-      Hours of stream actually captured, per source, per UTC day. Measured from
-      the files: each one's first line to its last, minus the time inside its
-      <code>gap</code> markers, which the recorder wrote itself on reconnect and
-      which are therefore a measurement rather than an estimate. A day the
-      recorder started at 09:00 reads 15h, not 24h, because the other nine hours
-      are missing.
-    </p>
+    <div class="caption">
+      <h2>Coverage</h2>
+      <p class="lede">
+        <strong>What this is for.</strong> How many hours of market data each
+        machine actually captured, day by day. Use it to see how much history you
+        hold and where a day came up short.
+      </p>
+      <p class="lede">
+        <strong>How to read it.</strong> One row per source, one column per UTC
+        day. A cell is hours captured, so 24.0 is a whole day. A dot is a day that
+        source recorded nothing. Darker cells hold more. The last column is the
+        total for that source.
+      </p>
+      <details class="more">
+        <summary>Why the numbers are measured, not assumed</summary>
+        <p>
+          Hours are read from the files themselves: from each file's first line to
+          its last, minus any time inside the recorder's own <code>gap</code>
+          markers. The recorder writes a gap marker whenever it reconnects, so a
+          gap is a measurement rather than an estimate. A day the recorder started
+          at 09:00 reads 15 hours, not 24, because the other nine hours are
+          missing. The first read of a large archive takes a moment; later reads
+          are cached.
+        </p>
+      </details>
+    </div>
     <div class="row">
       <button class="action" id="coverage-refresh">Refresh</button>
       <span class="where" id="coverage-when"></span>
     </div>
     <div class="panel"><div id="coverage-body" class="empty">Loading …</div></div>
+    <div class="next" id="coverage-next"></div>
   </section>
 
   <!-- =============================================================== GAPS -->
   <section id="pane-gaps" role="tabpanel" aria-labelledby="tab-gaps" hidden>
-    <h2>Gaps</h2>
-    <p class="lede">
-      Two lists, and only the first is a problem. <strong>Uncovered</strong> days
-      are days no source recorded: order book and spread for those hours do not
-      exist anywhere and cannot be bought back. <strong>Single-source</strong>
-      days are days exactly one machine covered — not a failure, but days with no
-      second observation to compare against, so a dropped subscription or a bad
-      feed that day cannot be detected, then or ever.
-    </p>
+    <div class="caption">
+      <h2>Gaps</h2>
+      <p class="lede">
+        <strong>What this is for.</strong> The days that are missing or thin.
+        Use it to find out what has been lost and what is at risk.
+      </p>
+      <p class="lede">
+        <strong>How to read it.</strong> A <em>gap</em> is a day no machine
+        recorded. Those days are gone for good; the market data for them exists
+        nowhere and cannot be bought or downloaded later. A <em>single-source</em>
+        day was recorded by exactly one machine. It is not lost, but there is no
+        second copy to check it against.
+      </p>
+      <details class="more">
+        <summary>Why a second source matters</summary>
+        <p>
+          Two machines recording the same day give two independent views of one
+          market. The difference between them is the only way to detect a dropped
+          subscription or a bad feed on one of them. A day with one source can
+          never be checked in that way, then or ever. That is why the list of
+          single-source days is shown here even though nothing is missing from
+          them.
+        </p>
+      </details>
+    </div>
     <div class="row">
       <button class="action" id="gaps-refresh">Refresh</button>
       <span class="where" id="gaps-when"></span>
     </div>
     <div class="panel"><div id="gaps-body" class="empty">Loading …</div></div>
+    <div class="next" id="gaps-next"></div>
   </section>
 
   <!-- ============================================================= IMPORT -->
   <section id="pane-import" role="tabpanel" aria-labelledby="tab-import" hidden>
-    <h2>Import</h2>
-    <p class="lede">
-      Both actions stage first. Nothing enters the main archive until it has been
-      copied to a staging directory, parsed from end to end, and copied again with
-      its bytes read back off the destination. A truncated transfer dies in
-      staging: written straight into the archive it would have the right name, be
-      globbed by every tool, and be short — and nothing would report it, because a
-      short JSONL file is a valid JSONL file.
-    </p>
-    <p class="lede">
-      Where two sources cover the same hour, both copies are kept and the overlap
-      is reported with its exact span. That is an independent observation of one
-      market and the difference between the two is the only measurement there is
-      of what a single recorder misses. Quietly keeping one would destroy it.
-    </p>
-
-    <div class="panel">
-      <h2>Pull from a server node</h2>
+    <div class="caption">
+      <h2>Import</h2>
       <p class="lede">
-        The master opens the connection; the node never opens one to the master and
-        holds no credential for it. Today's file is never pulled — it is open on
-        the node and what would arrive is a prefix of a day.
+        <strong>What this is for.</strong> Bringing files recorded on other
+        machines into this machine's archive. The <em>archive</em> is the folder
+        of recorded files that Coverage and Gaps read. Use this after a node has
+        recorded days you do not yet hold here.
       </p>
-      <div class="field">
-        <label for="pull-source">Server node</label>
-        <select id="pull-source"><option value="">loading …</option></select>
-      </div>
-      <div class="row">
-        <button class="action" id="pull-dry">Check what would transfer</button>
-        <button class="action" id="pull-go">Pull and merge</button>
-      </div>
+      <p class="lede">
+        <strong>How it works.</strong> There are two ways in. <em>Pull</em>
+        fetches files from a server node over SSH. <em>Inbox</em> takes files you
+        copied by hand into the inbox folder, which is how a standalone node is
+        collected. Either way, every file is checked from end to end before it
+        enters the archive. A file that is cut short is refused and left in
+        staging for you to look at.
+      </p>
+      <details class="more">
+        <summary>Why every file is checked first, and why overlaps are kept</summary>
+        <p>
+          A file copied straight into the archive would have the right name and
+          be found by every tool, even if the copy was cut short. Nothing would
+          report it, because a short file is still a valid file. So each file is
+          copied to a staging folder, parsed from end to end, then copied again
+          and read back before it counts.
+        </p>
+        <p>
+          When two machines cover the same hours, both copies are kept and the
+          overlap is reported with its exact span. Two independent recordings of
+          one market are the only measure there is of what a single recorder
+          misses. Quietly keeping one would destroy that.
+        </p>
+        <p>
+          Today's file is never pulled from a node. It is still being written to,
+          so what arrived would be part of a day, not a day.
+        </p>
+      </details>
     </div>
 
-    <div class="panel">
-      <h2>Check inbox</h2>
-      <p class="lede">
-        Merges whatever has been dropped into the inbox folder by any means — a
-        USB stick, a share, a download. This is how a standalone node is
-        collected. Copy whole files, and not the node's file for today.
-      </p>
-      <div class="row">
-        <button class="action" id="inbox-dry">Check what is there</button>
-        <button class="action" id="inbox-go">Merge the inbox</button>
+    <div class="options">
+      <div class="panel option">
+        <h3>Pull from a server node</h3>
+        <p class="lede">
+          This machine opens the connection. The node never connects back here
+          and holds no key for this machine.
+        </p>
+        <div class="field">
+          <label for="pull-source">Server node</label>
+          <select id="pull-source"><option value="">loading …</option></select>
+        </div>
+        <div class="row">
+          <button class="action" id="pull-dry">Check what would transfer</button>
+          <button class="action primary" id="pull-go">Pull and merge</button>
+        </div>
+      </div>
+
+      <div class="panel option">
+        <h3>Check inbox</h3>
+        <p class="lede">
+          Merges whatever you have dropped into the inbox folder: from a USB
+          stick, a shared folder, a download. Copy whole files, and not the
+          node's file for today.
+        </p>
+        <div class="row">
+          <button class="action" id="inbox-dry">Check what is there</button>
+          <button class="action primary" id="inbox-go">Merge the inbox</button>
+        </div>
       </div>
     </div>
 
     <pre class="output" id="import-output">Nothing run yet.</pre>
+    <div class="next" id="import-next"></div>
   </section>
 
   <!-- ======================================================== CREATE NODE -->
   <section id="pane-create" role="tabpanel" aria-labelledby="tab-create" hidden>
-    <h2>Create node</h2>
-    <p class="lede">
-      Writes a folder ready to copy to another machine: the recorder, the
-      supervisor, a config carrying a fresh source id, and a startup script. Both
-      Python files import nothing from this project, so the folder works on a
-      machine with no checkout — Python plus
-      <code>pip install orjson websockets pyyaml</code> is the whole setup.
-    </p>
-    <p class="lede">
-      <strong>No package ever contains a credential for the master.</strong> Not a
-      key, not a host, not a URL. A node never initiates a connection here, so
-      there is nothing it needs and therefore nothing on it to steal — which
-      matters because a node is the machine most likely to be compromised.
-    </p>
+    <div class="caption">
+      <h2>Create node</h2>
+      <p class="lede">
+        <strong>What this is for.</strong> Setting up another machine to record.
+        It writes a folder you copy to that machine. The folder holds the
+        recorder, a supervisor that restarts it, a config with a fresh source id,
+        and a start script. The new machine needs only Python and three packages.
+      </p>
+      <p class="lede">
+        <strong>Which kind to pick.</strong> Pick <em>standalone</em> unless this
+        machine can already reach the new one over SSH. A standalone node records
+        on its own and you collect its files by hand. A server node can be
+        checked and pulled from here.
+      </p>
+      <details class="more">
+        <summary>Why a package never holds a way back to this machine</summary>
+        <p>
+          No package contains a key, a host name or an address for this machine.
+          A node never connects here, so it needs none, and there is nothing on it
+          to steal. That matters because a node, on someone else's hardware or in
+          someone else's bag, is the machine most likely to be compromised. A
+          server package carries this machine's <em>public</em> key only, for you
+          to authorise on the node. The private half never leaves here.
+        </p>
+      </details>
+    </div>
 
     <div class="field">
-      <label for="node-id">Source id — it goes into every filename this machine writes, and cannot be changed afterwards</label>
-      <input type="text" id="node-id" placeholder="vps-fra-1" autocomplete="off">
+      <label for="node-id">Source id. It goes into every filename the new machine writes and cannot be changed afterwards.</label>
+      <input type="text" id="node-id" placeholder="laptop-2" autocomplete="off">
     </div>
     <div class="field">
-      <label for="node-archive">Archive directory on the node</label>
+      <label for="node-archive">Folder on the new machine where its recordings go</label>
       <input type="text" id="node-archive" value="data/raw" autocomplete="off">
     </div>
 
-    <div class="panel">
-      <h2>Server node</h2>
-      <p class="lede">
-        A machine the master can reach over SSH. The package carries the master's
-        <em>public</em> key for you to authorise on the node; the private half
-        never leaves this machine and is never read by this process.
-      </p>
-      <div class="field">
-        <label for="node-host">SSH host — user@address</label>
-        <input type="text" id="node-host" placeholder="acsoe@203.0.113.10" autocomplete="off">
+    <div class="options">
+      <div class="panel option option-primary">
+        <h3>Standalone node</h3>
+        <p class="kicker">The usual choice</p>
+        <p class="lede">
+          Records on its own. You carry its files here on a disk and use Import.
+          Right for a laptop, a home connection, or any machine you do not want
+          to open up. This screen will show it as having no live status, which
+          is correct.
+        </p>
+        <button class="action primary" id="create-standalone">Create standalone node</button>
       </div>
-      <div class="field">
-        <label for="node-remote">Archive path on the node, as the master will see it over SSH</label>
-        <input type="text" id="node-remote" placeholder="/opt/acsoe/data/raw" autocomplete="off">
-      </div>
-      <div class="field">
-        <label for="node-shell">What does the node answer to a directory listing? There is no default — a wrong one returns an empty list, which looks exactly like an empty archive</label>
-        <select id="node-shell">
-          <option value="">Choose one …</option>
-          <option value="ls -1 {archive}">Linux or macOS — ls -1</option>
-          <option value="dir /b {archive}">Windows (OpenSSH, cmd.exe) — dir /b</option>
-          <option value="powershell -NoProfile -Command &quot;Get-ChildItem -Name {archive}&quot;">Windows (OpenSSH, PowerShell shell) — Get-ChildItem -Name</option>
-        </select>
-      </div>
-      <button class="action" id="create-server">Create server node</button>
-    </div>
 
-    <div class="panel">
-      <h2>Standalone node</h2>
-      <p class="lede">
-        The same package without SSH. It records; a person carries the archive
-        over on a disk. The right answer for a laptop on a home connection or a
-        machine behind a NAT nobody wants to open — and the master will correctly
-        report it as having no live status.
-      </p>
-      <button class="action" id="create-standalone">Create standalone node</button>
+      <details class="panel option option-alt" id="server-option">
+        <summary>
+          <span class="option-title">Server node</span>
+          <span class="kicker">Only if this machine can reach it over SSH</span>
+        </summary>
+        <p class="lede">
+          A machine with an address this machine can log in to. The package
+          carries this machine's public key for you to authorise there.
+        </p>
+        <div class="field">
+          <label for="node-host">SSH host, as user@address</label>
+          <input type="text" id="node-host" placeholder="acsoe@203.0.113.10" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="node-remote">Recording folder on the node, as seen over SSH</label>
+          <input type="text" id="node-remote" placeholder="/opt/acsoe/data/raw" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="node-shell">What operating system is the node? This sets how its folder is listed. There is no default: a wrong choice returns an empty list, which looks exactly like an empty archive.</label>
+          <select id="node-shell">
+            <option value="">Choose one …</option>
+            <option value="ls -1 {archive}">Linux or macOS</option>
+            <option value="dir /b {archive}">Windows, OpenSSH with cmd.exe</option>
+            <option value="powershell -NoProfile -Command &quot;Get-ChildItem -Name {archive}&quot;">Windows, OpenSSH with PowerShell</option>
+          </select>
+        </div>
+        <button class="action" id="create-server">Create server node</button>
+      </details>
     </div>
 
     <pre class="output" id="create-output">Nothing created yet.</pre>
+    <div class="next" id="create-next"></div>
   </section>
 
 </main>

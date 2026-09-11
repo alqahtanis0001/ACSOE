@@ -9,6 +9,10 @@
  * that has never been checked, an inbox with nothing in it — those are the
  * readings this screen shows most of the time, and each one says what the system
  * actually knows rather than "No results".
+ *
+ * Layout rule: prose is capped at 70 characters and sits in a compact caption
+ * block above the data. The grid and the tables are the content; the words are
+ * the caption. Every screen ends with a `.next` block that says what to do.
  */
 
 *,
@@ -51,9 +55,6 @@ pre {
 /* ---------------------------------------------------------------- band ---- */
 
 .band {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   display: flex;
   align-items: baseline;
   gap: var(--space-4);
@@ -69,13 +70,67 @@ pre {
   letter-spacing: 0;
 }
 
-.band .where {
+.band .where,
+.strip .where,
+.row .where {
   color: var(--text-2);
   font-size: var(--size-detail);
 }
 
-.band .spacer {
+.spacer {
   flex: 1;
+}
+
+/* --------------------------------------------------------------- strip ---- */
+
+/*
+ * The status strip is the manager's status band: fixed at the top, never
+ * scrolls, on every screen. Four readings, and the first of them keeps the same
+ * four-way liveness as the Sources table — it is a word with a rule beside it,
+ * never a light.
+ */
+.strip {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 10ch;
+}
+
+.stat-label {
+  color: var(--text-2);
+  font-size: var(--size-detail);
+}
+
+.stat-value {
+  line-height: 1.1;
+}
+
+.stat-value.figure {
+  font-size: var(--size-figure);
+  font-weight: var(--weight-medium);
+}
+
+.stat-value .liveness {
+  font-size: var(--size-body);
+  line-height: 1.6;
+}
+
+/* Number rule 5: a figure older than the reading's own refresh renders stale,
+   at half opacity with the age shown beside it. Stale must look stale. */
+.strip.stale .stat-value {
+  opacity: 0.5;
 }
 
 /* ---------------------------------------------------------------- tabs ---- */
@@ -121,17 +176,86 @@ section[hidden] {
   display: none;
 }
 
-h2 {
+h2,
+h3 {
   margin: 0 0 var(--space-2);
   font-size: var(--size-heading);
   font-weight: var(--weight-medium);
 }
 
+/*
+ * The caption: what the screen is for, how to read it, and a collapsed "why".
+ * Capped at 70 characters so a line can be read in one glance. It sits above
+ * the data as a compact block rather than filling the width of the page.
+ */
+.caption {
+  max-width: 70ch;
+  margin-bottom: var(--space-3);
+}
+
 p.lede {
-  margin: 0 0 var(--space-4);
-  max-width: 78ch;
+  margin: 0 0 var(--space-2);
+  max-width: 70ch;
   color: var(--text-2);
   font-size: var(--size-detail);
+}
+
+p.lede strong {
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+
+p.lede em {
+  color: var(--text);
+  font-style: normal;
+}
+
+/* The legend for the four readings. One line each, the word first. */
+ul.key {
+  list-style: none;
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  color: var(--text-2);
+  font-size: var(--size-detail);
+}
+
+ul.key li {
+  margin: 0 0 var(--space-1);
+}
+
+ul.key .liveness {
+  display: inline-block;
+  min-width: 14ch;
+  margin-right: var(--space-2);
+  color: var(--text);
+}
+
+details.more {
+  margin: 0 0 var(--space-2);
+  color: var(--text-2);
+  font-size: var(--size-detail);
+}
+
+details.more summary {
+  cursor: pointer;
+  color: var(--accent);
+  list-style: none;
+}
+
+details.more summary::before {
+  content: "Why: ";
+  color: var(--text-2);
+}
+
+details.more summary::-webkit-details-marker {
+  display: none;
+}
+
+details.more p {
+  margin: var(--space-2) 0 0;
+  max-width: 70ch;
+  padding-left: var(--space-2);
+  border-left: 3px solid var(--line);
 }
 
 .panel {
@@ -140,6 +264,36 @@ p.lede {
   border-radius: var(--radius-panel);
   padding: var(--space-3) var(--space-4);
   margin-bottom: var(--space-3);
+}
+
+/*
+ * What to do next. It closes every screen, it is an action rather than an
+ * explanation, and it holds at most one line of words beside its buttons.
+ */
+.next {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  max-width: 96ch;
+  padding: var(--space-2) 0 var(--space-3);
+  border-top: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: var(--size-detail);
+}
+
+.next:empty {
+  display: none;
+}
+
+.next strong {
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+
+.next code {
+  color: var(--text);
+  font-size: var(--size-number);
 }
 
 /* -------------------------------------------------------------- tables ---- */
@@ -210,7 +364,7 @@ tbody tr:last-child td {
 
 .detail {
   display: block;
-  max-width: 72ch;
+  max-width: 70ch;
   color: var(--text-2);
   font-size: var(--size-detail);
 }
@@ -301,6 +455,19 @@ button.action:disabled {
   cursor: default;
 }
 
+/* The one action a screen is really for. Filled with the interactive colour;
+   the ground colour on top of it reads at well over AA. */
+button.action.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--ground);
+  font-weight: var(--weight-medium);
+}
+
+button.action.primary:hover:not(:disabled) {
+  border-color: var(--text);
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -311,6 +478,7 @@ button.action:disabled {
 
 label {
   display: block;
+  max-width: 70ch;
   color: var(--text-2);
   font-size: var(--size-detail);
   margin-bottom: var(--space-1);
@@ -332,10 +500,82 @@ select {
   margin-bottom: var(--space-3);
 }
 
+/* ------------------------------------------------------------- options ---- */
+
+/*
+ * Two choices side by side, and not of equal weight. The primary option is the
+ * common case and carries the filled button; the alternative is collapsed
+ * behind its own heading and opens only when wanted.
+ */
+.options {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.panel.option {
+  flex: 1 1 36ch;
+  max-width: 60ch;
+  margin-bottom: 0;
+}
+
+.panel.option-primary {
+  border-color: var(--accent);
+}
+
+.panel.option-alt {
+  background: none;
+}
+
+.panel.option-alt > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.panel.option-alt > summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel.option-alt > summary .option-title {
+  margin-right: var(--space-2);
+  font-size: var(--size-heading);
+  font-weight: var(--weight-medium);
+}
+
+.panel.option-alt > summary .option-title::before {
+  content: "▸ ";
+  color: var(--text-2);
+}
+
+.panel.option-alt[open] > summary .option-title::before {
+  content: "▾ ";
+}
+
+.panel.option-alt > summary .kicker {
+  display: inline;
+  margin: 0;
+}
+
+.panel.option-alt[open] > summary {
+  margin-bottom: var(--space-2);
+}
+
+.kicker {
+  margin: 0 0 var(--space-2);
+  color: var(--text-2);
+  font-size: var(--size-detail);
+}
+
+.option-primary .kicker {
+  color: var(--accent);
+}
+
 /* -------------------------------------------------------------- output ---- */
 
 pre.output {
-  margin: 0;
+  margin: 0 0 var(--space-3);
   padding: var(--space-3);
   background: var(--ground);
   border: 1px solid var(--line);
@@ -350,7 +590,7 @@ pre.output {
 
 .empty {
   color: var(--text-2);
-  max-width: 78ch;
+  max-width: 70ch;
 }
 
 .empty strong {
@@ -364,22 +604,14 @@ pre.output {
   line-height: 1.1;
 }
 
-.stack {
-  display: flex;
-  gap: var(--space-5);
-  flex-wrap: wrap;
-}
-
-.stat label {
-  margin-bottom: 0;
-}
-
 .warn {
+  max-width: 70ch;
   border-left: 3px solid var(--neg);
   padding-left: var(--space-2);
 }
 
 .note {
+  max-width: 70ch;
   border-left: 3px solid var(--text-3);
   padding-left: var(--space-2);
   color: var(--text-2);

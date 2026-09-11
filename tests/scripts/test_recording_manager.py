@@ -632,6 +632,61 @@ def test_pull_refuses_a_standalone_node(client: Any) -> None:
     assert "standalone" in response.json()["error"]
 
 
+def test_registering_this_machine_uses_the_recorder_id_and_registers_nothing_else(
+    tmp_path: Path, archive_dir: Path
+) -> None:
+    """The Sources screen's empty state has one button: register this machine.
+
+    The id must be the one the recorder itself would write into filenames —
+    `recorder.source_id` from the config — or the registry names one source and
+    the archive names another. And it registers one entry, the master, never
+    anything it guessed at.
+    """
+    repo = tmp_path / "repo"
+    (repo / "config").mkdir(parents=True)
+    (repo / "config" / "recorder.yaml").write_text(
+        'recorder:\n  source_id: "Desk-One"\n', encoding="utf-8"
+    )
+    registry = tmp_path / "sources.yaml"
+    app = app_mod.create_app(
+        registry_path=registry,
+        archive_dir=archive_dir,
+        staging_dir=tmp_path / "staging",
+        inbox_dir=tmp_path / "inbox",
+        nodes_dir=tmp_path / "nodes",
+        repo_root=repo,
+        cache_path=tmp_path / "cache.json",
+    )
+    client = Caller(app)
+    assert client.get("/api/sources").json()["sources"] == []
+
+    response = client.post("/api/sources/master", json={})
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] == "desk-one"  # sanitised exactly as the recorder sanitises it
+    assert body["kind"] == "master"
+    assert "recorder.source_id" in body["source_id_from"]
+
+    sources = client.get("/api/sources").json()["sources"]
+    assert [item["id"] for item in sources] == ["desk-one"]
+    assert sources[0]["kind"] == "master"
+    assert sources[0]["liveness"] in {"live", "unreachable", "none"}
+    assert Registry.load(registry).get("desk-one") is not None
+
+
+def test_registering_this_machine_twice_is_refused(client: Any) -> None:
+    """There is one master and it is this one. A second entry would split the
+    archive's own files between two apparent sources."""
+    response = client.post("/api/sources/master", json={})
+    assert response.status_code == 409
+    assert "already registered" in response.json()["error"]
+    assert [item["id"] for item in client.get("/api/sources").json()["sources"]] == [
+        "msi",
+        "vps-fra-1",
+        "laptop-2",
+    ]
+
+
 def test_the_manager_declares_that_it_neither_records_nor_writes_to_the_store(
     client: Any,
 ) -> None:

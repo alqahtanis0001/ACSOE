@@ -30,10 +30,12 @@ There is no boolean anywhere that collapses them.
 from __future__ import annotations
 
 import shutil
+import socket
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
+import yaml
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -65,6 +67,15 @@ DEFAULT_CACHE: Final = RECORDING_DIR / archive_mod.CACHE_FILENAME
 
 HEARTBEAT_GLOB: Final = "heartbeat__*.ndjson"
 LOCK_FILENAME: Final = ".recorder.lock"
+
+#: Where this machine's own `recorder.source_id` is read from when the Sources
+#: screen registers it as the master. The same candidates, in the same order, as
+#: `supervise.py` — it is the same identity and the two must agree.
+RECORDER_CONFIG_CANDIDATES: Final = (
+    Path("config") / "recorder.yaml",
+    Path("recorder.yaml"),
+    Path("config") / "default.yaml",
+)
 
 #: Where the master's SSH public key is looked for when packaging a server node.
 KEY_CANDIDATES: Final = (
@@ -177,6 +188,29 @@ def local_status(directory: Path, *, now: datetime) -> dict[str, Any]:
         "lock_present": (directory / LOCK_FILENAME).exists(),
         "free_bytes": _free_bytes(directory),
     }
+
+
+def master_source_id(repo_root: Path) -> tuple[str, str]:
+    """``(source_id, where it came from)`` for this machine.
+
+    The recorder's own rule, so the registry entry and the filenames agree:
+    `recorder.source_id` from the config when it is set, otherwise the hostname,
+    lower-cased — exactly what `supervise.py` resolves. Letting the two drift
+    splits one source into two everywhere it is counted.
+    """
+    for candidate in RECORDER_CONFIG_CANDIDATES:
+        path = repo_root / candidate
+        if not path.is_file():
+            continue
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            continue
+        section = loaded.get("recorder") if isinstance(loaded, dict) else None
+        value = section.get("source_id") if isinstance(section, dict) else None
+        if isinstance(value, str) and value.strip():
+            return value.strip(), f"recorder.source_id in {path.as_posix()}"
+    return socket.gethostname().lower() or "unknown", "this machine's hostname"
 
 
 def _free_bytes(directory: Path) -> int | None:
@@ -294,6 +328,49 @@ def create_app(
                 "live_check_performed": check,
                 "sources": out,
             }
+        )
+
+    @app.post("/api/sources/master")
+    def register_master() -> JSONResponse:
+        """Register this machine as the master, from the Sources screen's empty state.
+
+        The one source a fresh checkout cannot show is itself: `sources.yaml` is
+        gitignored, so the first Sources screen is always empty. This writes the
+        entry the example file asks the operator to copy in by hand, with the id
+        the recorder itself would use, so the two cannot drift apart. It registers
+        nothing else and touches nothing else.
+        """
+        reg = registry()
+        existing = [source for source in reg.sources if source.kind == KIND_MASTER]
+        if existing:
+            return JSONResponse(
+                {
+                    "error": (
+                        f"this machine is already registered as {existing[0].id!r}. "
+                        f"There is one master, and it is this one."
+                    )
+                },
+                status_code=409,
+            )
+        source_id, origin = master_source_id(paths["repo"])
+        try:
+            source = reg.add(
+                id=source_id,
+                kind=KIND_MASTER,
+                archive_dir=paths["archive"].as_posix(),
+                last_seen=utc_now_iso(),
+            )
+            reg.save()
+        except RegistryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        return JSONResponse(
+            {
+                "id": source.id,
+                "kind": KIND_MASTER,
+                "source_id_from": origin,
+                "registry": paths["registry"].as_posix(),
+            },
+            status_code=201,
         )
 
     # -- COVERAGE and GAPS -------------------------------------------------- #
