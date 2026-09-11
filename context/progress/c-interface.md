@@ -850,3 +850,72 @@ Same shape as the three carried out of Phase 0: invisible from the code, and a l
 - **The console has two SQLite connections and the ASGI lifespan never runs in a criterion.**
   `close_console` must close `reader` **and** `command_writer`; `CONSOLE_CONNECTION_ATTRS` is
   the list, and a third connection added to `app.state` has to go in it.
+
+## `TOOLCHAIN` widened beyond `src/` — 2026-09-11, operator ruling
+
+Not a spec. The widening deferred since Phase 0 and declined once at the Phase 1 boundary,
+ruled by the operator after `tests/scripts/test_fixture_bytes.py` shipped a **SyntaxError on
+the declared Python 3.11** that nothing in the gate could see.
+
+**Done.** `ruff` now reads `src/`, `tests/` and `scripts/`; `mypy --strict` reads `src/` and
+`scripts/`; `pytest` already read `tests/`. `TOOLCHAIN_ROOTS` is derived from `TOOLCHAIN` and
+the criterion's existence guard reads it, so a path added to a command cannot fall out of the
+PENDING check. Full write-up, every mutation and every red message in
+`docs/build-log/phase-4/c-interface.md`.
+
+- **The acceptance test passes.** The exact `1811069` f-string form, reintroduced under
+  `tests/harness/`, makes `--phase 0` FAIL naming the file, the line, the column and
+  *"Cannot use an escape sequence (backslash) in f-strings on Python 3.11"* — while `pytest` on
+  that same file reports `1 passed`. Scratch file removed.
+- **Six mypy errors in `verify.py` fixed**, not suppressed. The one that mattered:
+  `_command_row` declared `sqlite3.Row` over a `fetchone()` that returns `None`, with three
+  callers indexing it on the next line.
+- **`--output-format=concise` added to ruff.** Without it the criterion's one line reads
+  `Found 4 errors` and names nothing — ruff's default format is eight lines of gutter art per
+  finding and `describe_exit` has room for three.
+- **Five mutations, five reds**, each restored by hash in the statement that applied it. One
+  was cross-lane on `pyproject.toml`; `git diff --quiet` clean afterwards.
+- **Re-verified:** `pytest tests/ -q` → 1678 passed, 1 skipped. Phases 0-4 → 7/7, 10/10, 9/9,
+  9/9, 9/9 with `replay_full_archive` skipped as `--live`. Identical counts to before the change.
+
+**Left alone, in A's lane.** `scripts/build_archive.py:277` (`no-any-return`) and two in
+`scripts/recording_report.py` (`I001`, `RUF100`) — reported to the lead, fixed by the lead in
+`8e32c32`.
+
+**The `RUF001` obstacle the tracker records no longer exists.** `ruff check tests/` is clean;
+`tests/console/test_format.py:25` already carries a rule-named `noqa` with its reason. The
+previous C session discharged it.
+
+### Open Questions — for the lead
+
+1. **`context/code-standards.md`, Verification section, is now wrong.** It lists the four
+   commands as `mypy --strict src/` and `ruff check src/`. An agent following it by hand will
+   pass checks the gate fails. `context/` is the lead's; I did not edit it. The gate is the
+   definition of done, so the list is the half that is wrong.
+2. **`context/progress-tracker.md:328`** still records this as *"Deferred from Phase 0, still
+   deferred"*, and its account of both obstacles is stale.
+3. **`mypy --strict tests/` was excluded deliberately and is not done.** It would need a return
+   annotation on ~1680 test functions and every fixture. The hole: a type error inside a test
+   file is caught by nothing but the test failing. Named in the `TOOLCHAIN` comment so it is a
+   decision on the record. Whether to take it is yours.
+4. **The `toolchain_green` intermittency did not reproduce here** — none across seven full gate
+   runs and three standalone suite runs. That is an observation, not a diagnosis, and it rules
+   nothing out.
+
+**Correction to point 4 above: the intermittency did appear**, on the second pass of the gate
+over phases 0-4. Phase 3 went red with `ERROR
+tests/engines/test_safety_guard_chain.py::test_on_the_seeded_database_safety_trips_and_blocks_the_tick`
+and `1677 passed, 1 skipped, 1 error`; phase 4 ran the same suite immediately after and was
+green. Not re-run, not attributed, full output captured. Write-up in the build log, including a
+finding for the lead's investigation: **for a failure inside `toolchain_green` the criterion's
+one line is the only record that exists** — `describe_exit` keeps three lines and drops the rest,
+so an `ERROR`'s traceback is gone. The fix is small and I have not made it; it is outside this
+session's one change and the lead is investigating the fault in parallel.
+
+**Two data points the lead asked for.** (1) The widening costs ~400 ms cold and nothing
+measurable warm for mypy, ~45 ms cold for ruff, against a gate whose pytest takes 95-100 s —
+under 1% of the criterion. The first cold measurement claimed the widened mypy was *four times
+faster*; it was first-touch cost after a cache wipe, caught by running the comparison in reverse
+order. (2) The phase-3 error did **not** reproduce on the immediately following identical suite
+run with the tree untouched: ten consecutive identical `pytest tests/ -q` runs across two
+five-phase passes, one error, and the run straight after it was green.

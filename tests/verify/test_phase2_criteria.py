@@ -1694,3 +1694,33 @@ def test_the_crippled_store_really_would_have_satisfied_spec_24(
     finally:
         conn.close()
     assert stored == ("activate", None)
+
+
+def test_a_commands_row_the_store_never_wrote_is_named_rather_than_unpacked(
+    verify_module: ModuleType, tmp_path: Path
+) -> None:
+    """`_command_row` refuses a missing row instead of handing `None` to its caller.
+
+    `sqlite3.Cursor.fetchone` is typed `Any` and returns `None` for a row that is not
+    there, so the helper's declared `sqlite3.Row` was a claim nothing checked - which
+    is how mypy found it once the toolchain widened to `scripts/`. All three callers
+    index the result on the next line, so the absence used to arrive as
+    `'NoneType' object is not subscriptable` three frames away, naming neither the
+    command nor the table. The branch is only reachable from a store that returns an
+    id for something it did not write, and a branch nobody has seen fire is a comment,
+    so it is asked here directly.
+    """
+    db_path = tmp_path / "acsoe.sqlite"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            "CREATE TABLE commands (id INTEGER PRIMARY KEY, command TEXT NOT NULL, "
+            "source TEXT NOT NULL, created_at INTEGER NOT NULL, claimed_at INTEGER, "
+            "consumed_at INTEGER, updated_at INTEGER NOT NULL);"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(LookupError, match="`commands` has no such row"):
+        verify_module._command_row(db_path, 4242)

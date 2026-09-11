@@ -315,10 +315,27 @@ Four commands. All four must be green before any task is reported complete. For 
 
 ```
 pytest tests/ -q
-mypy --strict src/
-ruff check src/
+mypy --strict src/ scripts/
+ruff check src/ tests/ scripts/
 python scripts/verify.py --phase N
 ```
+
+**`TOOLCHAIN` was widened beyond `src/` on 2026-09-11, by operator ruling.** It had been
+deferred since Phase 0 and declined once at the Phase 1 boundary, and it was widened because
+the deferral finally cost something: a file committed in Phase 4 carried a backslash escape
+inside an f-string expression — legal from 3.12, a **SyntaxError on 3.11**, which is this
+project's declared floor. The venv is 3.13, so pytest imported it and every test passed.
+`ruff check src/` was the gate and the file was under `tests/`.
+
+A second defect surfaced the same hour, in `scripts/build_archive.py`: a `no-any-return` that
+looked like a typing complaint and was a crash — `json.loads` is `Any`, and a recorded line
+parsing to a list while carrying the trade marker reached `.get` and raised. Two defects in two
+days, both in files the gate could not see.
+
+**`mypy --strict` is deliberately NOT widened to `tests/`.** Roughly 1,680 test functions would
+each need a return annotation. The hole that leaves is real and is stated rather than implied:
+a type error in a test file is caught by nothing except the test failing. A test asserts the
+exclusion, so anyone "fixing" it meets a red first and a decision rather than an omission.
 
 `scripts/verify.py` is the executable form of the phase exit criteria in `ai-workflow-rules.md`. Each criterion is one named check printing pass or fail. Adding a phase means adding its checks. A criterion that cannot be expressed as a check is badly written and should be rewritten, not skipped.
 

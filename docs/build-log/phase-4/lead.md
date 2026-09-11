@@ -196,3 +196,66 @@ to re-run until it is green and believe the green.
 **Not fixed, not worked around, and explicitly not re-run until green.** It is an open item for
 the operator, and it is the reason this phase is reported as *green on the criteria and
 intermittently red on the suite* rather than simply green.
+
+### The two bounded checks, and the answer is a third mechanism
+
+**Agent:** Lead · **Task:** operator-directed investigation · **Date:** 2026-09-11
+
+**Check 1 — does any phase's pytest subprocess share state with another?** Yes, and more than
+expected. Every subprocess runs with `cwd=root` and inherits the full environment plus
+`RECURSION_GUARD_ENV`, so all five consecutive runs share the repository's `.pytest_cache`,
+`.mypy_cache`, `.ruff_cache` and `.hypothesis` — the last being a **stateful example database
+that replays previously-failing examples across runs** — and one `%TEMP%` root. What is *not*
+shared is the thing that would matter most: `tests/conftest.py` builds every fixture database
+under `tmp_path`, so per-test database isolation is sound, and the stale
+`data/db/acsoe.sqlite` at the repo root is not touched by the suite.
+
+**Check 2 — do handles or connections accumulate across five consecutive runs?** Historically
+yes; currently no. `%TEMP%` held **48 orphaned `pytest-NNNN` roots** spanning `pytest-479` to
+`pytest-1605`, where pytest retains three — so across roughly 1,126 runs about 45 cleanups had
+failed. Every one of the 48 deleted cleanly on demand, so nothing holds them at rest: the locks
+were transient, held during a run. After clearing them and running a controlled five-phase
+sequence, **three roots remained, which is exactly pytest's retention.** Cleanup is working
+now. The accumulation is a scar, most plausibly from the workspace sweeper defect fixed in
+Phase 3, and it is not the live mechanism.
+
+**So neither check explains it, and per the operator's instruction it is recorded as a distinct
+third mechanism rather than folded into the native fault.** Three things have now been
+separated, and keeping them apart is the rule Phase 3 paid for:
+
+1. **The workspace sweeper** deleting live databases — diagnosed and fixed in Phase 3.
+2. **The native fault** — a process *death*, `0xC0000409 STACK_BUFFER_OVERRUN` or similar, open
+   and unexplained since Phase 2.
+3. **`toolchain_green` reporting a different single test failure or ERROR on a quiescent tree,
+   with no process death** — new, and none of the above. Observed by all four agents during
+   Phase 4. The failing test differs every time and the ones seen share nothing functionally: a
+   config refusal, an import-boundary scan, a store permission check, a labelling seam, a guard
+   chain test.
+
+**The controlled run itself produced an instance of mechanism 2, and the gate's streaming
+output is the only reason it is legible.** Phase 3 printed eight of its nine criteria and the
+process died before the ninth, exit 127, no summary and no traceback. `main` prints each line
+flushed as its criterion returns, with a comment saying it exists because "the run that crashed
+must not also be the run that printed nothing". That decision paid: without it this would have
+been a blank file instead of a known stopping point.
+
+**Why mechanism 3 has stayed unexplained, which is C's finding and is the most useful thing
+here.** For a failure inside `toolchain_green`, the criterion's one line **is** the only record.
+`_run_tool` captures all of pytest's output and `describe_exit` keeps the last three lines,
+dropping the rest on return. That is survivable for a `FAILED`, because pytest's summary names
+the tests. It is **not** survivable for an `ERROR`, where the traceback says which fixture
+raised and what it raised — precisely what an intermittent fault needs — and it is gone.
+
+So every observation of mechanism 3 by every agent has been a one-line summary with the
+diagnosis already discarded. **It is the "evidence destroyed at the pipe" rule arriving from
+inside the gate rather than from an agent's shell**, and it is why four people hit this and none
+could say anything about it.
+
+**Not fixed.** The change is small — write the failing tool's full captured output to a file
+and name that file in the message — it is C's file, and it needs its own mutation proof and its
+own five gate runs. It is the operator's to authorise.
+
+**Consequence, stated plainly because it bears on closing a phase.** Until mechanism 3 is
+understood, **every phase gate carries a probability rather than a verdict.** A green run is
+evidence that the suite passed *that time*. The honest reading of Phase 4 is green on its ten
+criteria, with a suite that intermittently reports a failure nobody can yet explain.

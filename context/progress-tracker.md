@@ -325,7 +325,29 @@ runs is the line nobody thinks to assert on.
   plus a sixth path for the non-`.sql` skip. The handoff's own warning that the counts came
   from a narrow subset and that some would die on contact was right in both directions — some
   die, and at least one was undercounted.
-- **Deferred from Phase 0, still deferred:** widening `TOOLCHAIN` beyond `src/`. `mypy --strict scripts/` reports 2 errors in `verify.py`, and `ruff check tests/` now reports **3** violations, not the 2 recorded at Phase 0 close. The new one is `RUF001` on `tests/console/test_format.py:25`, where `U2212 = "−"` **must** be the U+2212 glyph — that constant is the fixture proving the minus-sign rule, and it starts passing against a pasted hyphen the moment the character is "corrected". The `noqa` policy that widening would need is now written (see the bullet above and `code-standards.md`), so the remaining blocker is only the decision itself. The operator declined to widen at the Phase 1 boundary, deliberately: registering `toolchain_green` everywhere was taken on its own, and changing what the toolchain covers is a separate change with its own blast radius.
+- **~~Deferred from Phase 0, still deferred: widening `TOOLCHAIN` beyond `src/`~~ — DONE
+  2026-09-11, by operator ruling.** `TOOLCHAIN` is now `pytest tests/`, `mypy --strict src/
+  scripts/`, `ruff check src/ tests/ scripts/`. It was ruled because the deferral finally cost
+  something: a file committed this phase could not be imported on Python 3.11, the declared
+  floor, and a second defect in `scripts/build_archive.py` that presented as a typing
+  complaint turned out to be a crash. Both sat in files the gate could not see.
+
+  **Two things this entry said were wrong, and the staleness is the lesson.** It recorded
+  `mypy --strict scripts/` as 2 errors — it was 7 — and `ruff check tests/` as 3 violations,
+  when it is **clean**: the `RUF001` `noqa` had already landed with its reason. So a
+  deferred-decision note had been quietly overstating the cost of the decision for four
+  phases, which is part of why it kept being deferred. **A stale obstacle in a deferred item
+  is its own hazard**: nobody re-measures a cost they have already accepted, and the note
+  outlives the thing it describes. Re-measure before re-deferring.
+
+  One measurement note worth keeping, from C: `mypy --strict scripts/` alone reports the
+  `build_archive` error and `mypy --strict src/ scripts/` does not, because the argument list
+  changes how the `acsoe` imports resolve. **An error count is only true for the exact command
+  that produced it.**
+
+  `mypy --strict` is deliberately **not** widened to `tests/` — roughly 1,680 test functions
+  would each need a return annotation. The hole is stated rather than implied and a test
+  asserts the exclusion, so the next person to "fix" it meets a red and a decision.
 - **A's standing instruction, and it does not expire with the phase:** `scripts/record.py` should be left running from now on. Order-book and spread history cannot be recovered retroactively — Kraken's free archives carry OHLCV and no bid, ask, spread or depth — so every hour the recorder is not running is an hour of cost-model input that money cannot buy back later. Phase 2's criterion is satisfied, which is exactly when the temptation to switch it off appears; engine 9 `order_book` and the spread half of engine 10 `cost` still have nothing else to read. **Note the recorder has no working graceful shutdown on Windows** — `loop.add_signal_handler` raises on the Proactor loop and the exception is suppressed, so the `stop` marker never runs and a kill has to be forced. The archive is append-only and every line is flushed, so a kill costs at most a partial final line.
 
 ## Locked Decisions

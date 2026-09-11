@@ -1154,10 +1154,39 @@ def check_record_sample_valid(ctx: VerifyContext) -> Outcome:
 # documents 0-5 (`pytest.ExitCode`); mypy and ruff use 0 for clean, 1 for findings
 # and 2 for a usage or internal error. A returncode above that range was not chosen
 # by the tool at all - the process died before it could return one.
+#
+# **What each command covers, and why.** All three were scoped to `src/` until this
+# phase, and that was a hole rather than a simplification.
+# `tests/scripts/test_fixture_bytes.py` was committed carrying a backslash escape
+# inside an f-string expression - legal from Python 3.12 and a **SyntaxError on the
+# 3.11** that `requires-python`, `python_version` and `target-version` all declare.
+# The venv here is 3.13, so pytest imported the file happily and every test passed,
+# and `ruff check src/` cannot see a file under `tests/`. Nothing in the gate could
+# report it; it was found by an agent running ruff over its own test paths out of
+# habit, which is a person having a good day rather than a check. `ruff` now reads
+# every directory in the repository that holds Python, and reports that exact defect
+# as `invalid-syntax` naming the file, the line and the version it is illegal on.
+#
+# **`mypy --strict` is deliberately NOT widened to `tests/`.** Strict mode demands a
+# return annotation on every one of ~1700 test functions and on every fixture; that
+# is a separate piece of work with its own blast radius, and it is not what this
+# widening was ruled for. The hole it leaves has a shape the next reader needs: a
+# type error inside a test file is caught by nothing here except the test failing.
 TOOLCHAIN = (
     ("pytest", ["-m", "pytest", "tests/", "-q"], 5),
-    ("mypy", ["-m", "mypy", "--strict", "src/"], 2),
-    ("ruff", ["-m", "ruff", "check", "src/"], 2),
+    ("mypy", ["-m", "mypy", "--strict", "src/", "scripts/"], 2),
+    ("ruff", ["-m", "ruff", "check", "--output-format=concise", "src/", "tests/", "scripts/"], 2),
+)
+
+#: Every directory the toolchain reads, in the order it first appears above.
+#:
+#: Derived from `TOOLCHAIN` rather than written out a second time. A path added to a
+#: command but missing from a hand-maintained list would drop out of the existence
+#: check in `check_toolchain_green`, and the tool would then meet an absent directory
+#: and exit 2 with "file or directory not found" - a FAIL that reads as a broken
+#: environment standing exactly where a PENDING belongs.
+TOOLCHAIN_ROOTS: Final[tuple[str, ...]] = tuple(
+    dict.fromkeys(arg for _name, args, _max_exit in TOOLCHAIN for arg in args if arg.endswith("/"))
 )
 
 # Windows reports a fatal fault as an NTSTATUS in the returncode. Named here so the
@@ -1255,9 +1284,9 @@ def _interpreter_with_toolchain(root: Path) -> tuple[str | None, list[str]]:
     """
     candidates = [sys.executable]
     for relative in ("Scripts/python.exe", "bin/python"):
-        candidate = root / ".venv" / relative
-        if candidate.is_file():
-            candidates.append(str(candidate))
+        venv_python = root / ".venv" / relative
+        if venv_python.is_file():
+            candidates.append(str(venv_python))
 
     probe = (
         "import importlib.util as u, sys;"
@@ -1339,8 +1368,13 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
     """
     if os.environ.get(RECURSION_GUARD_ENV):
         return pending("skipped: this run is inside a toolchain_green subprocess")
-    if not (ctx.root / "src").is_dir():
-        return pending("src/ does not exist yet")
+    absent = [root for root in TOOLCHAIN_ROOTS if not (ctx.root / root).is_dir()]
+    if absent:
+        # PENDING, not FAIL. These are the *subjects*, and a subject that does not
+        # exist yet is the ordinary state of an early phase. Handing an absent
+        # directory to ruff or mypy is exit 2 and "file or directory not found",
+        # which reads as a broken environment rather than as work not yet done.
+        return pending("does not exist yet: " + ", ".join(absent))
 
     interpreter, missing = _interpreter_with_toolchain(ctx.root)
     if interpreter is None:
@@ -1904,6 +1938,7 @@ def console_app(
     factory, missing = module_attr(module, "create_app")
     if factory is None:
         return None, pending(missing + " (" + CONSOLE_CONTRACT + ")")
+    parameters: Mapping[str, inspect.Parameter]
     try:
         parameters = inspect.signature(factory).parameters
     except (TypeError, ValueError):
@@ -3056,12 +3091,26 @@ def _append_command(store: Any, contracts: ModuleType, name: str, stamp: int) ->
 
 
 def _command_row(db_path: Path, command_id: int) -> sqlite3.Row:
+    """The `commands` row the store has just written, read back through raw SQLite.
+
+    A missing row means the store handed back an id for something it did not write.
+    That is a defect in the store rather than in the command under test, so it is
+    named here: every caller indexes the result immediately, and without this the
+    absence arrives three frames away as `'NoneType' object is not subscriptable`,
+    naming neither the command nor the table.
+    """
     conn = sqlite3.connect(db_path)
+    row: sqlite3.Row | None
     try:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM commands WHERE id = ?", (command_id,)).fetchone()
     finally:
         conn.close()
+    if row is None:
+        raise LookupError(
+            "the store returned command id " + str(command_id) + " but `commands` has no "
+            "such row"
+        )
     return row
 
 
@@ -4785,7 +4834,7 @@ def _risk_tick(
         if not isinstance(exchange, Mapping):
             return None, "", {}, failed("engine 1 published no mapping into `state['exchange']`")
         pair, rule, why = _tradable_pair(exchange, risk_contracts)
-        if pair is None:
+        if pair is None or rule is None:
             return None, "", {}, failed(why)
         quote, problem = _quote_payload(
             pair, bid="99.95", ask="100.05", spread_pct=CANDIDATE_SPREAD_PCT
@@ -5762,7 +5811,7 @@ def check_safety_inputs_all_from_the_seed(ctx: VerifyContext) -> Outcome:
             seed_now_us = int(seed_now.timestamp() * 1_000_000)
             conn = sqlite3.connect(db_path)
             try:
-                seeded = {
+                seeded: dict[str, Decimal | int] = {
                     "drawdown_pct": _seeded_max_drawdown(conn),
                     "consecutive_losses": _seeded_losing_streak(conn),
                     "errors_in_window": _seeded_error_blocks(
@@ -7562,8 +7611,11 @@ register(0, Criterion("record_sample_valid", check_record_sample_valid))
 # step 4 makes each agent run all four commands by hand, which is a person following a
 # procedure rather than a gate.
 #
-# `TOOLCHAIN` stays scoped to `src/`. Widening it to `tests/` and `scripts/` is a
-# separate decision the operator deliberately did not take here.
+# `TOOLCHAIN` was scoped to `src/` until Phase 4, when the operator ruled the widening
+# that had been deferred since Phase 0 and declined once at the Phase 1 boundary. `ruff`
+# now reads `src/`, `tests/` and `scripts/`, and `mypy --strict` reads `src/` and
+# `scripts/`. What that catches, what it still does not, and why `mypy` stops short of
+# `tests/` are all at `TOOLCHAIN` itself.
 register_every_phase(Criterion("toolchain_green", check_toolchain_green))
 register(0, Criterion("is_gate_matches_registry", check_is_gate_matches_registry))
 

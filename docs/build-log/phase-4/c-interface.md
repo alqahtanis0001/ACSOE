@@ -892,3 +892,263 @@ their differing totals read as a contradiction rather than as two different ques
 The gate was red in their tree because I was mid-save on `verify.py`; the suite before it had
 failed on a different test entirely, which looked like flakiness and was the tree moving under
 two runs. Recorded because both of us nearly filed it as the machine's intermittent fault.
+
+### `TOOLCHAIN` widened beyond `src/`, and the 3.11 defect it was ruled for goes red
+
+**Agent:** C · **Task:** operator ruling, deferred since Phase 0 · **Date:** 2026-09-11
+
+**What changed.** `TOOLCHAIN` in `scripts/verify.py` no longer scopes all three commands to
+`src/`:
+
+```
+("pytest", ["-m", "pytest", "tests/", "-q"], 5),
+("mypy",   ["-m", "mypy", "--strict", "src/", "scripts/"], 2),
+("ruff",   ["-m", "ruff", "check", "--output-format=concise", "src/", "tests/", "scripts/"], 2),
+```
+
+`TOOLCHAIN_ROOTS` is derived from that tuple rather than written out a second time, and the
+criterion's existence guard reads it: a path added to a command cannot fall out of the check and
+leave a tool to meet an absent directory and exit 2 with "file or directory not found" — a FAIL
+that reads as a broken environment standing exactly where a PENDING belongs.
+
+**The mutation, and the red message.** The acceptance test was the defect that prompted the
+ruling: `tests/scripts/test_fixture_bytes.py` as committed at `1811069` carried a backslash
+escape inside an f-string expression, legal from 3.12 and a **SyntaxError on the 3.11** that
+`requires-python`, `python_version` and `target-version` all declare. The venv is 3.13, so
+pytest imported it and every test passed, and `ruff check src/` cannot see a file under `tests/`.
+
+Reintroduced verbatim in `tests/harness/test_py311_toolchain_scratch.py` — the f-string
+interpolated `raw.count(b'\x0d\x0a')`, with the two escape sequences inside the expression part,
+exactly as `1811069` had it.
+
+`pytest tests/harness/test_py311_toolchain_scratch.py -q` reported `1 passed in 0.26s`, which is
+the whole problem. `python scripts/verify.py --phase 0` with that file in the tree:
+
+```
+FAIL    toolchain_green   ruff exit 1: tests\harness\test_py311_toolchain_scratch.py:12:32:
+invalid-syntax: Cannot use an escape sequence (backslash) in f-strings on Python 3.11 (syntax
+was added in Python 3.12) | tests\harness\test_py311_toolchain_scratch.py:12:36: invalid-syntax:
+Cannot use an escape sequence (backslash) in f-strings on Python 3.11 (syntax was added in
+Python 3.12) | Found 2 errors.
+
+7 criteria: 6 PASS, 1 FAIL, 0 PENDING
+Phase 0 has FAILs. That is a stop, at any point in a phase.
+```
+
+The scratch file was then deleted; `git status` carries no trace of it.
+
+**`--output-format=concise` is load-bearing, not cosmetic, and the first gate run proved it.**
+Before adding it, the same mutated tree produced this criterion line:
+
+```
+FAIL    toolchain_green   ... ruff exit 1:  | Found 4 errors. | [*] 2 fixable with the `--fix` option.
+```
+
+ruff's default format prints eight or more lines of source context and gutter art per finding,
+so the last three lines — all `describe_exit` has room for in a one-line criterion — are always
+a fragment of the final diagram and can never name a file or a rule. A gate that goes red and
+cannot say what is red is the receipt for evidence nobody kept, which is the Phase 4 rule about
+the pipe arriving from a different direction. Concise puts path, line, column, rule and message
+on one self-contained line each.
+
+**`mypy --strict` stops short of `tests/`, deliberately.** Strict mode demands a return
+annotation on every one of ~1680 test functions and on every fixture; that is a separate piece of
+work with its own blast radius and it is not what this widening was ruled for. The hole it leaves
+has a shape worth stating: **a type error inside a test file is caught by nothing here except the
+test failing.** Written into the comment at `TOOLCHAIN` so the exclusion is a decision on the
+record rather than something the next reader has to infer.
+
+**The two obstacles the tracker recorded, as they actually stood.**
+
+| tracker says | measured 2026-09-11 |
+|---|---|
+| `ruff check tests/` — 3 violations, one of them the `RUF001` on the U+2212 fixture | **clean, rc=0.** `tests/console/test_format.py:25` already carries a rule-named `noqa` with its reason, per the `noqa` policy. Discharged by the previous C session |
+| `mypy --strict scripts/` — 2 errors in `verify.py` | **7 errors, in 2 files.** Six mine, one A's |
+
+**The six in `verify.py`, each a real defect rather than a mypy complaint.**
+
+| line | error | what it actually was |
+|---|---|---|
+| 1268 | `str` assigned to a `Path` | `candidate` named two types in one scope — the `.venv` probe and the interpreter string. Renamed the probe to `venv_python` |
+| 1284 | returned `tuple[Path, ...]` | the same collision, arriving at the return |
+| 1910 | `dict` assigned to a `MappingProxyType` | `inspect.signature(...).parameters` and its `{}` fallback, unified under the `Mapping` both satisfy |
+| 3065 | returning `Any` as `sqlite3.Row` | **the real one.** `fetchone()` returns `None` for a missing row, so the declared `sqlite3.Row` was a claim nothing checked, and all three callers index it on the next line — the absence arrived as `'NoneType' object is not subscriptable` three frames away, naming neither the command nor the table |
+| 4796 | `Mapping \| None` where `Mapping` expected | `_tradable_pair` reports absence in its first *two* slots and only `pair` was narrowed |
+| 5814 | `int()` on `object` | the six seeded readings are three `Decimal`s and three `int`s, so the unannotated dict joined to `dict[str, object]`. Annotating the union is also what makes the `isinstance(expected, Decimal)` below narrow |
+
+**Three findings were in A's lane and I did not touch them** — `scripts/build_archive.py:277`
+(`no-any-return`) and two in `scripts/recording_report.py` (`I001`, `RUF100`). Reported to the
+lead with the full output; fixed by the lead in `8e32c32`.
+
+**A measurement note worth keeping.** `mypy --strict scripts/` alone reports the
+`build_archive.py` error; `mypy --strict src/ scripts/` — what the gate actually runs — did not,
+even before the lead's fix, because the second path changes how the `acsoe` imports resolve. The
+number of errors a tool reports depends on the argument list it is given, so the count in a
+tracker entry is only true for the exact command that produced it.
+
+**Five mutations, five reds.** Every one restored by hash in the statement that applied it.
+
+| # | mutation | result |
+|---|---|---|
+| M1 | `TOOLCHAIN` narrowed back to `src/` for mypy and ruff | **RED** — `test_the_toolchain_reads_tests_and_scripts_and_not_src_alone`: `assert {'scripts/', 'src/'} <= {'--strict', ...'src/'}` / `Extra items in the left set: 'scripts/'` |
+| M2 | the existence guard reverted to `if not (ctx.root / "src").is_dir()` | **RED** — `test_toolchain_is_pending_when_any_one_covered_directory_is_absent`: `AssertionError: tests/`, naming the root that stopped being covered |
+| M3 | the generated offender file built without the backslash | **RED** — `AssertionError: All checks passed!` / `assert 0 == 1` |
+| M4 | **cross-lane**, `pyproject.toml` `target-version` raised to `py312` | **RED** — `assert 'target-version = "py311"' in pyproject`. Restored byte-identical (sha256 `9066312a…` before and after, `git diff --quiet` clean) |
+| M5 | the new `_command_row` refusal branch deleted | **RED** — `Failed: DID NOT RAISE LookupError` |
+
+**M1 killed only one of the two coverage tests, and that is the design.** `TOOLCHAIN_ROOTS` is
+derived, so narrowing `TOOLCHAIN` narrows the roots test *with* it and it stays green — a test
+that follows its subject cannot pin it. `test_the_toolchain_reads_tests_and_scripts_and_not_src_alone`
+names the three directories literally for exactly that reason. It also asserts `tests/` is **not**
+in mypy's arguments, because an exclusion nobody wrote down gets quietly "fixed" by the next
+person who notices it, and that person would be walking into ~1680 unannotated test functions.
+
+**The test that anchors on a version the project might raise.**
+`test_ruff_over_tests_catches_a_syntax_error_on_the_declared_python` asserts both halves: that
+`pyproject.toml` still declares 3.11, and that ruff under the project's own config refuses the
+form. Asserting only the second with an explicit `--target-version py311` would keep passing
+after somebody raised the floor — which is the single change that would make this whole
+criterion stop meaning anything. M4 is that change, and it goes red.
+
+The offending line in that test is **assembled** (`backslash = chr(92)`) rather than written
+out. A module that contains the defect cannot be parsed by the interpreter the defect is about,
+and — now that ruff reads `tests/` — it would flag this very module on every gate run.
+
+**One message change.** The PENDING message was `src/ does not exist yet`, which stops reading
+as English once three directories can be missing at once. A plural verb would drop the
+`does not exist` cue that `test_a_pending_message_names_the_missing_subject` requires of every
+PENDING in the file — it went red on the first attempt and that is how the constraint surfaced.
+Now `does not exist yet: src/, tests/, scripts/`: one phrasing for one subject and for three,
+with the cue intact.
+
+**Re-verified, full output retained to a file, nothing piped.** `pytest tests/ -q` →
+`1678 passed, 1 skipped in 95.05s`. Then every phase: **7/7, 10/10, 9/9, 9/9, 9/9** with
+`replay_full_archive` skipped as `--live` — the same counts each phase reported before this
+change, and `toolchain_green` PASS in all five.
+
+**The intermittency did not appear.** The lead reported `toolchain_green` intermittently red on
+a quiescent tree — three different single failures across five back-to-back runs plus one
+`0xC0000409 STACK_BUFFER_OVERRUN`. Across the seven full gate runs and three standalone suite
+runs in this session I saw none of it. Recorded as an observation and not as a diagnosis: a
+fault that does not reproduce in ten runs has not been ruled out by them, and "I could not
+reproduce it" is the diagnostic that cannot fail.
+
+**Two documents now contradict the gate and both are the lead's to fix.**
+
+- `context/code-standards.md`, **Verification**, lists the four commands as `mypy --strict src/`
+  and `ruff check src/`. An agent following that list by hand will now pass checks the gate
+  fails. The gate is the definition of done, so the list is the thing that is wrong.
+- `context/progress-tracker.md:328` records the widening as *"Deferred from Phase 0, still
+  deferred"*, and its account of both obstacles is stale in the ways tabled above.
+
+### The intermittency did appear, on the second pass, and the gate cannot say why
+
+**Agent:** C · **Date:** 2026-09-11
+
+The section above records that I did not see the lead's intermittent `toolchain_green` failure.
+**That held for the first five gate runs and not for the second five.** Correcting it here rather
+than editing the claim above, because the sequence is the evidence.
+
+The gate was run for phases 0 to 4 twice: once after the last code change, and once after
+appending to this log and to `context/progress/c-interface.md` — neither of which any criterion
+scans, `scanned_docs` being `AGENTS.md`, `README.md` and `context/*.md`. The first pass was
+7/7, 10/10, 9/9, 9/9, 9/9. On the second pass phase 3 went red:
+
+```
+FAIL    toolchain_green   pytest exit 1: SKIPPED [1] tests\scripts\test_fixture_bytes.py:83:
+tests/fixtures/soak_digest.json has not been deposited yet | ERROR
+tests/engines/test_safety_guard_chain.py::test_on_the_seeded_database_safety_trips_and_blocks_the_tick
+| 1677 passed, 1 skipped, 1 error in 99.63s (0:01:39)
+
+9 criteria: 8 PASS, 1 FAIL, 0 PENDING
+```
+
+Every other criterion in that phase passed, including all six that read the seeded database.
+**Phase 4 ran next, ran the same suite, and was green.** Standalone `pytest tests/ -q` earlier in
+the session was `1678 passed, 1 skipped`; this run was `1677 passed, 1 skipped, 1 error` — the
+same 1679 tests, with one that had passed twenty minutes earlier raising in setup or teardown.
+
+**Not re-run, and not attributed.** Both on the lead's instruction and because
+`code-standards.md` already says why: "re-run the named test in isolation, and if it passes it was
+the machine's intermittent fault" is a diagnostic that confirms itself every time. Of the three
+questions the standards put underneath the path heuristic — does it name my file, does it
+reproduce every time, does it reproduce in isolation — the first is *no* and the second is *no*,
+and the third is the one I am deliberately not asking. The full gate output is at
+`final_p3.txt` in this session's scratchpad and nothing was piped.
+
+**A finding that outlives this run: for a failure inside `toolchain_green`, the criterion's one
+line is the only record that exists.** `_run_tool` captures the whole of pytest's stdout and
+stderr and `describe_exit` keeps the last three lines of it; the rest is dropped when the
+function returns. For a normal `FAILED` that is survivable, because pytest's summary names the
+tests. **For an `ERROR` it is not** — the traceback says which fixture raised and what it raised,
+and that is exactly the information an intermittent failure needs, and it no longer exists
+anywhere. This is the Phase 4 "evidence is destroyed at the pipe" rule arriving from inside the
+gate rather than from an agent's shell: the gate is doing to its own diagnosis what `grep` did to
+the operator's.
+
+The fix is small — write the failing tool's full captured output to a file and name that file in
+the criterion's message — and I have **not** made it. It is outside the one change this session
+was scoped to, it needs its own mutation proof and its own five gate runs, and the lead is
+investigating this fault in parallel and may already have it in hand. Offered, not taken.
+
+### One of the three findings outside `src/` was a crash, not lint — and what the widening costs
+
+**Agent:** C · **Date:** 2026-09-11
+
+**The argument for this widening in miniature, and it is the lead's finding rather than mine.**
+`scripts/build_archive.py:277` reported as `no-any-return` — a typing complaint, in a file the
+gate could not see, in another agent's lane. It was a crash. `json.loads` is typed `Any`, so a
+recorded line that parsed to a list or a scalar while carrying the `"trade"` marker would reach
+`.get` and raise `AttributeError` out of a function whose entire contract is to **return `None`
+for anything it does not recognise**. The lead narrowed it with an `isinstance` check rather than
+silencing it with a cast, and proved the guard load-bearing in both directions: `None` on
+`["trade", {...}]`, and `AttributeError: 'list' object has no attribute 'get'` against the
+unnarrowed logic.
+
+That is the second defect in two days found only because somebody looked outside `src/`. The
+first was the f-string that could not be imported on 3.11. **Neither presented as what it was**:
+one was a passing test, the other a typing complaint, and both were crashes. The two together are
+the whole case for the widening, and they are worth more than the argument from principle was.
+
+The two `recording_report.py` findings had been deliberately left alone earlier the same day, on
+the reasonable grounds that churning a committed Phase 2 file mid-phase was the wrong trade.
+**Widening the toolchain reverses that judgement**: they stop being lint on an unwatched file and
+become a gate failure in every phase. A decision that was right under the old scope is not
+automatically right under the new one, and the reversal is recorded in `8e32c32` rather than
+quietly performed.
+
+**What the widening costs, measured — and the first measurement was wrong.**
+
+Steady state, three runs each, the widened command against the one it replaced:
+
+| command | cold cache | warm cache |
+|---|---|---|
+| `mypy --strict src/` (old) | 3,325 ms | 308 / 315 ms |
+| `mypy --strict src/ scripts/` (new) | 3,610 / 3,980 ms | 281 / 304 ms |
+| `ruff check src/` (old) | 107 ms | 96 / 104 ms |
+| `ruff check --output-format=concise src/ tests/ scripts/` (new) | 152 ms | 107 / 131 ms |
+
+So roughly **+400 ms cold and nothing measurable warm** for mypy, and **+45 ms cold, +20 ms warm**
+for ruff. `pytest tests/ -q` inside the same gate takes 95 to 100 seconds, so the widening is
+under 1% of the criterion's runtime and invisible next to the suite. `verify.py` being 344 KB
+turns out not to matter: mypy's cost is dominated by the 78 modules under `src/` that `scripts/`
+imports, and adding the six files in `scripts/` takes the count to 84.
+
+**The first cold measurement said `mypy --strict src/` took 17,704 ms and the widened command
+4,037 ms**, which would have read as the widening making mypy four times *faster*. It was the
+first `mypy` invocation after `rm -rf .mypy_cache`, paying first-touch cost — typeshed and the OS
+file cache — that the runs after it did not. Caught by running the same comparison in the reverse
+order, where the numbers stayed at 3.6 s and 3.3 s and did not swap. **A benchmark where the
+first run is the slow one is measuring the machine, not the change**, and the number was
+plausible, in range, and pointed the wrong way — the shape the Phase 4 rule about quietly wrong
+answers describes. The control cost thirty seconds.
+
+**Does a failure reproduce on the immediately following identical run, tree untouched?** For the
+one failure I saw: **no.** The five-phase sequence runs the same `pytest tests/ -q` subprocess
+five times with nothing touched between them. Phase 3 reported `1677 passed, 1 skipped, 1 error`
+with the error in `tests/engines/test_safety_guard_chain.py`; phase 4 ran next, ran the identical
+suite, and was clean. Across both five-phase passes that is **ten consecutive identical suite
+runs on an untouched tree with one error**, and the run immediately after the error was green.
+The tree was touched between the two passes — appends to this log and to
+`context/progress/c-interface.md`, neither of which any criterion scans — and not within either.
+Recorded as an observation. It is not a diagnosis and it rules nothing out.

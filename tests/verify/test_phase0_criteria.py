@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -623,12 +625,133 @@ def test_record_sample_fails_without_a_trailing_newline(
 # --------------------------------------------------------------------------- #
 
 
+def make_toolchain_roots(verify_module: ModuleType, tree: Path) -> None:
+    """Every directory the toolchain reads, so the existence guard lets a run through.
+
+    Read off `TOOLCHAIN_ROOTS` rather than written out, for the reason the constant
+    is itself derived: a hand-written list here would stop matching the moment the
+    toolchain covered one more directory, and every test below would quietly become
+    a test of the PENDING branch while still reading as a test of the retry logic.
+    """
+    for root in verify_module.TOOLCHAIN_ROOTS:
+        (tree / root).mkdir(parents=True, exist_ok=True)
+
+
 def test_toolchain_is_pending_before_src_exists(
     verify_module: ModuleType, bare_tree: Path
 ) -> None:
     outcome = run(verify_module, "toolchain_green", bare_tree)
     assert outcome.result is verify_module.Result.PENDING
     assert "src/" in outcome.message
+
+
+def test_toolchain_is_pending_when_any_one_covered_directory_is_absent(
+    verify_module: ModuleType, bare_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each covered directory on its own, because the guard reads a list.
+
+    An absent directory handed to ruff or mypy is exit 2 and "file or directory not
+    found". That is a FAIL, and it reads as a broken environment - the same verdict
+    the criterion gives when the toolchain is not installed - standing where "this
+    has not been built yet" belongs. `_run_tool` is stubbed to a crash so that a
+    guard which let the run through would be caught by the result rather than by
+    however the real tools happened to behave.
+    """
+    monkeypatch.setattr(
+        verify_module, "_interpreter_with_toolchain", lambda root: ("python.exe", [])
+    )
+    monkeypatch.setattr(
+        verify_module,
+        "_run_tool",
+        lambda interpreter, args, root, env: (3221225477, "should never be reached"),
+    )
+    for absent in verify_module.TOOLCHAIN_ROOTS:
+        tree = bare_tree / ("without-" + absent.strip("/"))
+        tree.mkdir()
+        for root in verify_module.TOOLCHAIN_ROOTS:
+            if root != absent:
+                (tree / root).mkdir(parents=True)
+        outcome = run(verify_module, "toolchain_green", tree)
+        assert outcome.result is verify_module.Result.PENDING, absent
+        assert outcome.message == "does not exist yet: " + absent
+
+
+def test_the_toolchain_reads_tests_and_scripts_and_not_src_alone(
+    verify_module: ModuleType,
+) -> None:
+    """The widening itself, pinned so that narrowing it back goes red.
+
+    All three commands were scoped to `src/` until Phase 4, and a file under `tests/`
+    carrying a syntax error on the declared Python went unseen by the gate for a whole
+    phase as a result. Nothing asserted the coverage, so nothing would have objected to
+    it being written back - and it would have read as a tidy-up. `mypy` is asserted
+    *not* to cover `tests/`, because that exclusion is a deliberate decision with a
+    stated reason rather than an oversight, and an exclusion nobody wrote down gets
+    quietly "fixed" by the next person who notices it.
+    """
+    covered = {name: set(args) for name, args, _max_exit in verify_module.TOOLCHAIN}
+
+    assert "tests/" in covered["pytest"]
+    assert {"src/", "scripts/"} <= covered["mypy"]
+    assert {"src/", "tests/", "scripts/"} <= covered["ruff"]
+    assert "tests/" not in covered["mypy"]
+    assert set(verify_module.TOOLCHAIN_ROOTS) == {"src/", "tests/", "scripts/"}
+
+
+def test_ruff_over_tests_catches_a_syntax_error_on_the_declared_python(
+    verify_module: ModuleType, repo_root: Path, tmp_path: Path
+) -> None:
+    """The defect the widening was ruled for, end to end.
+
+    `tests/scripts/test_fixture_bytes.py` was committed in Phase 4 carrying a
+    backslash escape inside an f-string expression. That is legal from Python 3.12
+    and a **SyntaxError on 3.11**, which is what `requires-python`, `python_version`
+    and `target-version` all declare. The venv is 3.13, so pytest imported it and
+    every test passed; `ruff check src/` cannot see a file under `tests/`. Nothing in
+    the gate could report it.
+
+    Two separate claims, and the defect needs both: that the project still declares
+    3.11, and that ruff run under the project's own configuration refuses the form.
+    Asserting only the second with an explicit `--target-version py311` would keep
+    passing after somebody raised the floor in `pyproject.toml`, which is the change
+    that would make this whole criterion stop meaning anything.
+    """
+    pyproject = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'target-version = "py311"' in pyproject
+    assert 'requires-python = ">=3.11"' in pyproject
+
+    offender = tmp_path / "carries_a_3_11_syntax_error.py"
+    # The offending line is assembled rather than written out. A module that
+    # *contains* the defect cannot be parsed by the interpreter the defect is about,
+    # so on 3.11 this file would fail to import rather than run - and ruff, now that
+    # it reads `tests/`, would flag this very module on every gate run.
+    backslash = chr(92)
+    offender.write_text(
+        'raw = b""\n'
+        'message = f"carries {raw.count(b\'' + backslash + 'x0d\')} CRLF"\n',
+        encoding="utf-8",
+    )
+    done = subprocess.run(  # fixed argv, never a shell
+        [
+            sys.executable,
+            "-m",
+            "ruff",
+            "check",
+            "--output-format=concise",
+            "--config",
+            str(repo_root / "pyproject.toml"),
+            str(offender),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+    )
+    output = done.stdout + done.stderr
+    assert done.returncode == 1, output
+    assert "escape sequence" in output, output
+    assert "Python 3.11" in output, output
 
 
 def test_toolchain_fails_rather_than_pends_when_the_environment_lacks_the_tools(
@@ -642,7 +765,7 @@ def test_toolchain_fails_rather_than_pends_when_the_environment_lacks_the_tools(
     The message has to carry the fix, because the operator reading it is the person
     who has to apply it.
     """
-    (bare_tree / "src").mkdir()
+    make_toolchain_roots(verify_module, bare_tree)
     monkeypatch.setattr(
         verify_module, "_interpreter_with_toolchain", lambda root: (None, ["mypy", "ruff"])
     )
@@ -742,7 +865,7 @@ def scripted_toolchain(
     Returns the list of tool names actually invoked, in order, so a test can assert
     on how many attempts each command got rather than only on the message.
     """
-    (bare_tree / "src").mkdir(exist_ok=True)
+    make_toolchain_roots(verify_module, bare_tree)
     monkeypatch.setattr(
         verify_module, "_interpreter_with_toolchain", lambda root: ("python.exe", [])
     )
