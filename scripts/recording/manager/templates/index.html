@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACSOE Recording Manager</title>
+<link rel="stylesheet" href="/static/tokens.css">
+<link rel="stylesheet" href="/static/manager.css">
+</head>
+<body>
+
+<!--
+  Five screens, one page, no build step and no framework — the same stack the
+  console uses, for the same reason: this has to be runnable from a checkout with
+  nothing installed beyond the project's own dependencies.
+
+  It is read-mostly. The three things it writes are all deliberate and all
+  verified first: a node package, an entry in sources.yaml, and files that have
+  been parsed end to end in staging. It never records, and it never touches the
+  SQLite store.
+-->
+
+<div class="band">
+  <h1>Recording manager</h1>
+  <span class="where" id="where">reading …</span>
+  <span class="spacer"></span>
+  <span class="where">it does not record, and it does not write to the store</span>
+</div>
+
+<nav class="tabs" role="tablist" aria-label="Screens">
+  <button role="tab" id="tab-sources"  aria-selected="true"  aria-controls="pane-sources">Sources</button>
+  <button role="tab" id="tab-coverage" aria-selected="false" aria-controls="pane-coverage">Coverage</button>
+  <button role="tab" id="tab-gaps"     aria-selected="false" aria-controls="pane-gaps">Gaps</button>
+  <button role="tab" id="tab-import"   aria-selected="false" aria-controls="pane-import">Import</button>
+  <button role="tab" id="tab-create"   aria-selected="false" aria-controls="pane-create">Create node</button>
+</nav>
+
+<main>
+
+  <!-- ============================================================ SOURCES -->
+  <section id="pane-sources" role="tabpanel" aria-labelledby="tab-sources">
+    <h2>Sources</h2>
+    <p class="lede">
+      Every machine that records. The three kinds carry three different qualities
+      of knowledge and this screen never levels them up into one green light: the
+      master is read from local disk and is current, a server node is read over
+      SSH and is only as fresh as the last check, and a standalone node has
+      <strong>no live status at all</strong>. A standalone node that has said
+      nothing for a week may be recording perfectly — silence is not evidence,
+      and reporting it as dead is the guess that gets a working recorder switched
+      off.
+    </p>
+    <div class="row">
+      <button class="action" id="sources-refresh">Refresh</button>
+      <button class="action" id="sources-check">Check server nodes now</button>
+      <span class="where" id="sources-when"></span>
+    </div>
+    <div class="panel"><div id="sources-body" class="empty">Loading …</div></div>
+  </section>
+
+  <!-- =========================================================== COVERAGE -->
+  <section id="pane-coverage" role="tabpanel" aria-labelledby="tab-coverage" hidden>
+    <h2>Coverage</h2>
+    <p class="lede">
+      Hours of stream actually captured, per source, per UTC day. Measured from
+      the files: each one's first line to its last, minus the time inside its
+      <code>gap</code> markers, which the recorder wrote itself on reconnect and
+      which are therefore a measurement rather than an estimate. A day the
+      recorder started at 09:00 reads 15h, not 24h, because the other nine hours
+      are missing.
+    </p>
+    <div class="row">
+      <button class="action" id="coverage-refresh">Refresh</button>
+      <span class="where" id="coverage-when"></span>
+    </div>
+    <div class="panel"><div id="coverage-body" class="empty">Loading …</div></div>
+  </section>
+
+  <!-- =============================================================== GAPS -->
+  <section id="pane-gaps" role="tabpanel" aria-labelledby="tab-gaps" hidden>
+    <h2>Gaps</h2>
+    <p class="lede">
+      Two lists, and only the first is a problem. <strong>Uncovered</strong> days
+      are days no source recorded: order book and spread for those hours do not
+      exist anywhere and cannot be bought back. <strong>Single-source</strong>
+      days are days exactly one machine covered — not a failure, but days with no
+      second observation to compare against, so a dropped subscription or a bad
+      feed that day cannot be detected, then or ever.
+    </p>
+    <div class="row">
+      <button class="action" id="gaps-refresh">Refresh</button>
+      <span class="where" id="gaps-when"></span>
+    </div>
+    <div class="panel"><div id="gaps-body" class="empty">Loading …</div></div>
+  </section>
+
+  <!-- ============================================================= IMPORT -->
+  <section id="pane-import" role="tabpanel" aria-labelledby="tab-import" hidden>
+    <h2>Import</h2>
+    <p class="lede">
+      Both actions stage first. Nothing enters the main archive until it has been
+      copied to a staging directory, parsed from end to end, and copied again with
+      its bytes read back off the destination. A truncated transfer dies in
+      staging: written straight into the archive it would have the right name, be
+      globbed by every tool, and be short — and nothing would report it, because a
+      short JSONL file is a valid JSONL file.
+    </p>
+    <p class="lede">
+      Where two sources cover the same hour, both copies are kept and the overlap
+      is reported with its exact span. That is an independent observation of one
+      market and the difference between the two is the only measurement there is
+      of what a single recorder misses. Quietly keeping one would destroy it.
+    </p>
+
+    <div class="panel">
+      <h2>Pull from a server node</h2>
+      <p class="lede">
+        The master opens the connection; the node never opens one to the master and
+        holds no credential for it. Today's file is never pulled — it is open on
+        the node and what would arrive is a prefix of a day.
+      </p>
+      <div class="field">
+        <label for="pull-source">Server node</label>
+        <select id="pull-source"><option value="">loading …</option></select>
+      </div>
+      <div class="row">
+        <button class="action" id="pull-dry">Check what would transfer</button>
+        <button class="action" id="pull-go">Pull and merge</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Check inbox</h2>
+      <p class="lede">
+        Merges whatever has been dropped into the inbox folder by any means — a
+        USB stick, a share, a download. This is how a standalone node is
+        collected. Copy whole files, and not the node's file for today.
+      </p>
+      <div class="row">
+        <button class="action" id="inbox-dry">Check what is there</button>
+        <button class="action" id="inbox-go">Merge the inbox</button>
+      </div>
+    </div>
+
+    <pre class="output" id="import-output">Nothing run yet.</pre>
+  </section>
+
+  <!-- ======================================================== CREATE NODE -->
+  <section id="pane-create" role="tabpanel" aria-labelledby="tab-create" hidden>
+    <h2>Create node</h2>
+    <p class="lede">
+      Writes a folder ready to copy to another machine: the recorder, the
+      supervisor, a config carrying a fresh source id, and a startup script. Both
+      Python files import nothing from this project, so the folder works on a
+      machine with no checkout — Python plus
+      <code>pip install orjson websockets pyyaml</code> is the whole setup.
+    </p>
+    <p class="lede">
+      <strong>No package ever contains a credential for the master.</strong> Not a
+      key, not a host, not a URL. A node never initiates a connection here, so
+      there is nothing it needs and therefore nothing on it to steal — which
+      matters because a node is the machine most likely to be compromised.
+    </p>
+
+    <div class="field">
+      <label for="node-id">Source id — it goes into every filename this machine writes, and cannot be changed afterwards</label>
+      <input type="text" id="node-id" placeholder="vps-fra-1" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="node-archive">Archive directory on the node</label>
+      <input type="text" id="node-archive" value="data/raw" autocomplete="off">
+    </div>
+
+    <div class="panel">
+      <h2>Server node</h2>
+      <p class="lede">
+        A machine the master can reach over SSH. The package carries the master's
+        <em>public</em> key for you to authorise on the node; the private half
+        never leaves this machine and is never read by this process.
+      </p>
+      <div class="field">
+        <label for="node-host">SSH host — user@address</label>
+        <input type="text" id="node-host" placeholder="acsoe@203.0.113.10" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="node-remote">Archive path on the node, as the master will see it over SSH</label>
+        <input type="text" id="node-remote" placeholder="/opt/acsoe/data/raw" autocomplete="off">
+      </div>
+      <button class="action" id="create-server">Create server node</button>
+    </div>
+
+    <div class="panel">
+      <h2>Standalone node</h2>
+      <p class="lede">
+        The same package without SSH. It records; a person carries the archive
+        over on a disk. The right answer for a laptop on a home connection or a
+        machine behind a NAT nobody wants to open — and the master will correctly
+        report it as having no live status.
+      </p>
+      <button class="action" id="create-standalone">Create standalone node</button>
+    </div>
+
+    <pre class="output" id="create-output">Nothing created yet.</pre>
+  </section>
+
+</main>
+
+<script src="/static/manager.js"></script>
+</body>
+</html>

@@ -1,0 +1,67 @@
+# Every recording source the manager knows about.
+#
+# Written by the manager, read by the manager, and safe to edit by hand — it is
+# plain YAML and there is nothing clever in it. The manager rewrites this file
+# when you register a node or import from one; it preserves anything it does not
+# recognise, so a comment or a key you add by hand survives.
+#
+# ## The three kinds, and why the difference matters
+#
+# **master** — this machine. Its archive is on local disk, so its status is read
+# directly and is always current.
+#
+# **server** — a machine the master can reach over SSH. The master opens the
+# connection; the node never opens one to the master. Its status is as fresh as
+# the last check, and the manager shows *when* that check was, never just a green
+# light.
+#
+# **standalone** — a machine with no route to it at all. Somebody carries its
+# archive over on a disk. **It has no live status and the manager never invents
+# one.** A standalone node that has said nothing for a week may be recording
+# perfectly; reporting it as dead on the strength of silence would be a guess
+# dressed as a fact, and the guess is wrong in the direction that gets a healthy
+# recorder switched off.
+#
+# ## The direction of the connection is a security property
+#
+# A node never initiates a connection to the master and never holds a credential
+# for it. The master holds a private key; the node holds only the matching public
+# key in its `authorized_keys`. So a node that is compromised — a VPS on somebody
+# else's hardware, a laptop in somebody else's bag — cannot reach back into the
+# master's archive or its store. Inverting that, so nodes push to the master,
+# would be easier to set up and would put a credential for the master on every
+# machine you no longer control.
+#
+# ## Fields
+#
+#   id            the source id, which is also in every filename it writes
+#   kind          master | server | standalone
+#   archive_dir   where its raw archive lives, on whichever machine that is
+#   summary_dir   where its tier 2 summaries live (master only, today)
+#   ssh_host      user@host for a server node
+#   ssh_port      defaults to 22
+#   ssh_key       path to the master's private key for this node
+#   list_command  how to list the remote archive; `{archive}` is substituted
+#   created       when the manager registered it
+#   last_seen     the last time it was known to be recording — for a server this
+#                 is the last successful check, for a standalone it is the last
+#                 import, and for the master it is now
+#   last_check    when the manager last tried to reach a server node
+#   last_check_ok whether that attempt succeeded
+#   last_check_error  what went wrong, verbatim, when it did not
+#   last_import   when files were last taken from this source
+#   last_import_dates  which UTC dates that import covered
+#   note          free text; the manager never writes this, only preserves it
+
+version: 1
+
+sources:
+  - id: msi
+    kind: master
+    archive_dir: data/raw
+    summary_dir: data/summaries
+    note: >
+      This machine. Registered by hand as the starting point; the manager will
+      update last_seen. Change `id` here if you change recorder.source_id in
+      config/recorder.yaml — they are the same identity and the filenames carry
+      it, so letting them drift splits one source into two in every report.

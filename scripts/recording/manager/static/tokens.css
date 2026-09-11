@@ -1,0 +1,74 @@
+/*
+ * Design tokens for the Recording Manager.
+ *
+ * The palette, type and spacing tables of context/ui-context.md, declared once.
+ * THIS :root BLOCK IS THE ONLY PLACE IN THIS APP WHERE A RAW HEX MAY APPEAR.
+ *
+ * A COPY, DELIBERATELY, of src/acsoe/console/static/tokens.css. The manager
+ * imports nothing from `acsoe` — that is the rule the whole of scripts/recording/
+ * is built on, so the recorder and the supervisor can be copied to a machine with
+ * no checkout — and a stylesheet reached across that line by a `../../../src/`
+ * path would be the first thread of the dependency this package exists without.
+ *
+ * The values are the context file's, not the console's, so the two follow the
+ * same source rather than one following the other. `console_tokens_no_raw_hex`
+ * scans src/acsoe/console/ and does not reach here; the rule is kept anyway,
+ * because a colour written into a component is a colour nobody can retune and it
+ * is how a reserved colour leaks out of its reservation.
+ *
+ * --live is ABSENT. Amber means real money is at risk right now, it belongs to
+ * the live-mode frame in the console, and this application cannot place an order,
+ * cannot reach the store and cannot trade. Borrowing the reserved colour for a
+ * recording warning would spend the one signal the console has.
+ */
+
+:root {
+  /* Surfaces. Separation comes from the hairline and the surface step; there are
+     no shadows anywhere in this interface. */
+  --ground: #12161A;
+  --surface: #1A2027;
+  --raised: #232B33;
+  --line: #2E3840;
+
+  /* Text. --text-3 measures 3.8:1 against --ground, below WCAG AA for normal
+     text, so it is used only on non-text elements and never for a label somebody
+     has to read. --text-2 is 7.4:1 and is the muted text colour. */
+  --text: #E4E9ED;
+  --text-2: #9AA7B2;
+  --text-3: #66757F;
+
+  /* Outcome. Deliberately muted. Used as a rule beside a figure rather than as
+     the figure's own colour — the word carries the meaning and colour reinforces
+     it, so a red-green colourblind operator loses nothing. */
+  --pos: #4E9A6B;
+  --neg: #C2604F;
+
+  /* Interactive: links, the focus ring, the pane switcher. 5.3:1 on --ground. */
+  --accent: #5B8FB9;
+
+  --font-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+
+  --size-figure: 32px;
+  --size-heading: 16px;
+  --size-body: 14px;
+  --size-number: 13px;
+  --size-detail: 13px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+
+  /* Radius encodes depth, not decoration. */
+  --radius-inline: 4px;
+  --radius-panel: 8px;
+  --radius-row: 0;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+
+  --flash-duration: 200ms;
+  --min-width: 1024px;
+}

@@ -11,6 +11,16 @@ data/raw/
 data/derived/
 data/historical/
 data/db/
+
+# Recording Manager runtime output. `*.jsonl` below covers the archive files it
+# moves around; these three do not contain only archive files. `data/nodes/`
+# holds built node packages - real .py, .bat and .sh copied out of the tree for
+# somebody to carry to another machine - and committing those would put a second,
+# silently diverging copy of the recorder in the repository.
+data/staging/
+data/inbox/
+data/nodes/
+scripts/recording/.coverage-cache.json
 *.sqlite
 *.sqlite-journal
 *.parquet

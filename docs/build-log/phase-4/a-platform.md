@@ -952,3 +952,187 @@ an engine, it is additive, and nothing asserts that dict's key set exhaustively.
 must not render the same. The third case, a replay that claims a spread and counted no tiers,
 is reported as UNKNOWN and treated as approximated, because an uncounted mixture is not an
 exact one.
+
+---
+
+### The gap scanner matched one serialiser's spacing, and failed silently upward
+
+**Agent:** A · **Task:** operator request, Recording Manager · **Date:** 2026-09-11
+
+**What happened.** The Coverage grid reports hours actually captured per source per
+UTC day: each file's span from first line to last, minus the time inside its `gap`
+markers. To stay fast enough for a page load over 21 GB, markers are found by searching
+raw bytes in 8 MB chunks and only the matching lines are parsed — a 1.9 GB file scans in
+1.4 seconds. The needle was the literal `b'"kind":"gap"'`. Against a fixture written with
+`json.dumps` it found **nothing**, and a day with an hour-long disconnection in it
+reported 23.0 hours instead of 22.0.
+
+**Why.** The recorder writes with `orjson`, which emits compact separators, so the real
+archive says `"kind":"gap"`. `json.dumps` writes `"kind": "gap"`, with a space. Matching
+one serialiser's whitespace is matching an implementation detail of the writer, and this
+archive is explicitly built to hold files merged from machines that are not this one.
+
+**The direction is what makes it serious.** The span is still computed correctly, so a
+missed marker makes the day report **more** hours than were recorded. A recorder that was
+disconnected for an hour renders as a clean, gap-free day. Nothing fails, nothing is red,
+and the number is wrong in the direction nobody investigates.
+
+**Fix.** The needle is now `b'"gap"'` and every candidate line is parsed and checked
+properly — `kind == "gap"` and a numeric `payload.gap_ms`. The needle only decides which
+lines are worth parsing; a false positive costs one `json.loads`. Measured on the real
+1.94 GB archive afterwards: 1.44 s, one marker found, no slowdown.
+
+**Consequence.** `test_a_gap_marker_is_subtracted_however_the_file_was_serialised` is
+parametrised over both spacings, and the old needle was reinstated to check it goes red:
+*"the gap marker was not found in json.dumps's spaced form, which a foreign archive may
+use"*. Both halves matter — the compact case would have passed on its own forever.
+
+---
+
+### The coverage cache was keyed on a whole-second mtime
+
+**Agent:** A · **Task:** operator request, Recording Manager · **Date:** 2026-09-11
+
+**What happened.** Measurements are cached against `(name, size, mtime)` so only the file
+being appended to is ever re-scanned. The key used `int(st_mtime)`. A test that wrote a
+6-hour day and then an 18-hour day to the same path got 6.0 back twice.
+
+**Why.** Both files were the same length — `T06:00:00` and `T18:00:00` are the same number
+of bytes — and both writes landed inside the same second. Same name, same size, same
+truncated mtime: same key, stale answer served as current.
+
+**Fix.** `st_mtime_ns`. Nanoseconds cost nothing and remove the whole class of collision.
+
+**Why it was not only a test artefact.** The growing file changes size, so today's
+coverage was never affected — but `archive_move.py` and the merge both produce
+same-length rewrites, and a stale measurement served after one of those is coverage
+reporting yesterday's hours for a file that has changed. The test found it, which is the
+argument for writing the test that way.
+
+---
+
+### Decision: the heartbeat interval, the lock exit code, and one seam between two files
+
+**Agent:** A · **Date:** 2026-09-11
+
+**Options.** The supervisor has to tell "the recorder crashed" from "the recorder refused
+to start because another live recorder holds the archive". It could parse the recorder's
+stderr, or it could use the exit code.
+
+**Chose.** The exit code. `record.py` returns 2 on `ArchiveLockedError`; the supervisor
+treats 2 as `waiting`, retries every thirty seconds, and **does not count it as a
+restart** or advance the backoff.
+
+**Because.** Parsing another program's prose is a seam that breaks silently when somebody
+improves the wording. The failure mode of getting this wrong is specific and bad: a
+supervisor that treats "locked" as a crash hammers a directory another process is
+correctly writing to, and its restart counter climbs while nothing is wrong.
+
+**Cost.** Two files now share a number. `test_the_locked_exit_code_matches_the_recorder`
+asserts both halves, so the seam is pinned rather than remembered.
+
+---
+
+### The manager's tests cannot use `TestClient`, and that is the second time
+
+**Agent:** A · **Task:** operator request, Recording Manager · **Date:** 2026-09-11
+
+**What happened.** Every manager test that touched a route failed with
+`NetworkAccessError: blocked httpx network access to http://testserver/api/sources`.
+
+**Why.** `tests/harness/network_guard.py` is autouse with no opt-out and patches
+`httpx.Client.send`; `fastapi.testclient.TestClient` subclasses `httpx.Client`, so the
+request is refused before it reaches the in-process transport.
+
+**Fix.** The app is driven through the ASGI interface directly, the way uvicorn calls it,
+behind a small synchronous `Caller` so the tests still read as request/response. Exactly
+the decision `tests/console/test_app.py` made in Phase 1, and recorded there for the same
+reason.
+
+**Consequence.** Worth writing down because it will come up a third time. Weakening the
+guard for one test is forbidden by spec 14 in as many words, and the ASGI-direct call is
+the better test regardless: real routing, real endpoint function, real encoder, and no
+socket anywhere in the path.
+
+---
+
+### Decision: the heartbeat lives beside the archive, and the manager reads both
+
+**Agent:** A · **Date:** 2026-09-11
+
+Recorded because the two halves were decided a day apart and the second only makes sense
+with the first.
+
+`scripts/record.py` writes its liveness line to `heartbeat__<source>__<date>.ndjson`
+rather than into the archive, because a per-minute line in `data/raw/` would stop
+`recording_span_continuous` being able to distinguish "recorder alive, subscription dead"
+from "recorded fine". The Recording Manager is what makes that pay: the SOURCES screen
+reads the newest archive file **and** the newest heartbeat, and the two together separate
+three states that look identical from outside — recent/recent is healthy, stale/stale is a
+dead process, and **a stale archive with a recent heartbeat is the one a process check
+cannot see at all**. That third row is the failure that produces a silent hole in a system
+that is, as far as any monitor can tell, running.
+
+---
+
+### Decision: four liveness values, never a boolean
+
+**Agent:** A · **Date:** 2026-09-11
+
+**Options.** A source is up or down, or a source carries the *quality of the knowledge*
+about it.
+
+**Chose.** Four values — `live`, `as_of`, `unreachable`, `none` — rendered four different
+ways, with no boolean anywhere that collapses them.
+
+**Because.** The three kinds of source are known in three different ways and levelling
+them into one green light is a lie with a cost. The master is read from local disk and is
+current. A server node is read over SSH and is only as fresh as the last check, so the row
+says *when* that check was. A **standalone node cannot be known about at all**: there is no
+route to it, and a week of silence from one is equally consistent with perfect recording.
+Reporting it as dead is a guess dressed as a fact, and it is wrong in the direction that
+gets a working recorder switched off.
+
+The same rule governs a *failed* check: `unreachable` says the connection failed and the
+detail says, in as many words, that it does not say the node stopped recording.
+
+**Proof.** `test_a_standalone_node_never_reports_a_live_status` asserts the value, that
+`checked_at` is null, and that the words "dead", "down", "offline" and "stopped" appear
+nowhere in the detail. Mutated to report `unreachable: offline: nothing heard from this
+node`, it goes red with `assert 'unreachable' == 'none'`.
+
+---
+
+### Where the Recording Manager's design rules came from, in one place
+
+**Agent:** A · **Date:** 2026-09-11
+
+Four rules, each of which is a constraint on the code rather than a preference.
+
+**A node never initiates a connection to the master.** The master reaches into a server
+node over SSH; a standalone node is collected by a person. So no node package contains a
+key, a host or a URL for the master — there is nothing it needs, and therefore nothing on
+it to steal. A node is the machine most likely to be compromised, and inverting this
+would put a credential for the master on every machine you no longer control.
+`test_a_node_package_contains_no_credential_for_the_master` walks every file in a built
+package.
+
+**`StrictHostKeyChecking` is left at the user's own setting.** Turning it off would make
+every "cannot connect" disappear and would make the tool a way to hand an archive to
+whoever answers on that address.
+
+**One writer per archive directory**, already enforced by the recorder's OS-level lock.
+The manager never records, so it never competes for one.
+
+**Staging before merge, always.** A file is copied to staging, parsed end to end, copied
+again with its bytes read back off the destination, and only then named as an archive
+file. A truncated transfer written straight into `data/raw/` would have the right name, be
+globbed by every tool, and be short — and nothing would report it, because a short JSONL
+file is a valid JSONL file.
+
+And the one that is a finding rather than a rule: **overlapping coverage is reported, not
+resolved.** Two sources covering one hour is an independent observation of one market, and
+the difference between them is the only measurement there is of what a single recorder
+misses. A merger that quietly kept one would destroy exactly the comparison that makes a
+second recorder worth running — and the surviving file would be perfectly valid, so
+nothing would report the loss.
