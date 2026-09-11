@@ -139,3 +139,60 @@ mutation that survives a subset has not survived, it has not been asked — but 
 time it has bitten on a *relational* assertion, where the obvious mutation moves both sides of
 the relation at once and looks conclusive. Worth remembering: **to kill a relational assertion
 you must change the relation, not either operand.**
+
+### `toolchain_green` is intermittently red and nobody can explain it
+
+**Agent:** Lead · **Task:** phase close · **Date:** 2026-09-11
+
+**What happened.** On a provably quiescent tree — no agent running, `git status` clean, HEAD
+committed — running the five phase gates back to back produced **three different single
+failures**, one per phase, none of them the same test:
+
+```
+phase 1  FAIL toolchain_green  FAILED tests/platform/test_config.py::test_a_missing_required_key_is_refused
+                               1 failed, 1673 passed
+phase 2  FAIL toolchain_green  FAILED tests/research/test_historical.py::
+                                 test_cli_research_is_the_only_module_outside_research_that_imports_it
+                               1 failed, 1673 passed
+                               (first attempt: pytest CRASHED, 3221226505 / 0xC0000409
+                                STACK_BUFFER_OVERRUN)
+phase 4  FAIL toolchain_green  ERROR tests/console/test_commands.py::
+                                 test_the_command_connection_cannot_write_any_other_table
+                               ERROR tests/research/test_backtest.py::
+                                 test_the_config_itself_is_handed_to_the_labeller_not_three_pre_read_numbers
+                               1672 passed, 2 errors
+```
+
+Phases 0 and 3 were green in the same sequence. An hour earlier the identical sequence was green
+throughout.
+
+**What is established, by observation rather than by reasoning.**
+
+- `pytest tests/ -q` run **directly** is green: `1674 passed, 1 skipped`, exit 0.
+- `verify.py --phase 1` run **alone, twice** is green both times, 10/10.
+- The failures appear only when pytest runs inside `toolchain_green`'s subprocess during a
+  back-to-back sequence of verify processes.
+- The failing test differs every time and the ones seen so far have nothing in common
+  functionally — a config refusal, an import-boundary scan, a store permission check, a
+  labelling seam.
+- One occurrence was not a test failure at all but a process crash with
+  `0xC0000409 STACK_BUFFER_OVERRUN`, which is the native fault this machine has carried
+  unexplained since Phase 2.
+
+**What is NOT established, and is deliberately not guessed at.** Whether this is one mechanism
+or several. Phase 3 paid for that lesson: a workspace sweeper deleting live databases, a
+wall-clock assertion measuring the wrong thing, and a genuine native fault were charged to one
+cause for two phases. Three of the four agents hit an unreproducible failure under
+`toolchain_green` during Phase 4 and all three recorded it as unexplained rather than
+attributing it. That is the right posture and this entry keeps it.
+
+**Why it matters more than an ordinary flake.** `toolchain_green` is registered in **every**
+phase, and it is the only criterion that can see a broken test suite. If it is intermittently
+red for reasons nobody understands, then *"the phase is green"* is a statement with a
+probability attached rather than a fact — and the failure mode is the one this whole phase was
+arranged around: it is at its most convincing when it is wrong, because the obvious response is
+to re-run until it is green and believe the green.
+
+**Not fixed, not worked around, and explicitly not re-run until green.** It is an open item for
+the operator, and it is the reason this phase is reported as *green on the criteria and
+intermittently red on the suite* rather than simply green.
