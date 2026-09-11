@@ -1,5 +1,79 @@
 # Phase 4 — shared task list
 
+## Handoff — 2026-09-11, between Phase 4 and Phase 5
+
+Phase 4 stays closed. Nothing below is phase work; it is data collection, which does not wait
+for a phase, and two rulings that do.
+
+### The three hardcoded pair lists
+
+The system was capped at BTC, ETH and SOL in three independent places. Two are now gone:
+
+| Where | Was | Now |
+|---|---|---|
+| `scripts/record.py` | `DEFAULT_PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD")` | **Fixed.** No pair list in the file. Both tiers are derived at startup from Kraken's own `instrument` + `ticker` snapshot and written into the archive as a session marker. |
+| `scripts/build_ohlcvt.py` | `DEFAULT_PAIRS = ("XBTUSD", "ETHUSD", "SOLUSD")` — 3 of 1,119 archive files ever read | **Fixed.** Enumerates the archive: every file ending in `USD` with at least `--min-years` (default 2) of history. **Not yet run** — see below. |
+| `scripts/ohlc_fixture.py` | `DEFAULT_PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD")` | **Still three.** Not touched. It generates the fake-Kraken OHLC fixture, and `candles_match_kraken_ohlc` is written against three pairs, so widening it is a verify-criterion change and C's call, not a default to flip. |
+
+**The build is planned and waiting for the operator's word**, not started: 413 USD-quoted files,
+**234 with two or more years**, 21.8 GB to read, ~750M trades. Measured on six sampled pairs
+(fill 7%–79%, median 38%): **~13.3M bars, ~13.3M labelled rows** after the 48-bar horizon comes
+off each series, **0.76 GB of CSV** (2.0 GB if every interval had traded), **~0.5 h** wall clock
+at 11.9 MB/s. Reproduce with `python scripts/build_ohlcvt.py --plan --measure`; build with
+`--write`. The 13.3M is a floor rather than a point estimate: the fill sample was capped at
+150 MB per file, so it under-weights the liquid pairs, whose measured fill is 84%–99.6%.
+
+### The recorder: uptime, and what happens when the disk fills
+
+**It had been stopped for about fifteen hours** (last line 01:12Z, restarted 15:44Z). That data
+is gone; order book and spread cannot be backfilled. It is running again, now two-tier:
+
+- **Tier 1** — full raw `book`+`ticker`+`trade`, the ten most liquid USD pairs by 24h quote
+  volume, into `data/raw/` as before. Measured **17.0 GB/day**.
+- **Tier 2** — one row per pair per minute (spread p25/p50/p75, depth at $10k both sides,
+  trades, volume, update counts) for the 137 other USD pairs above $100k/24h, into
+  `data/summaries/`. Measured **0.06 GB/day** written, 43.7 GB/day inbound and discarded.
+
+**Runway is the thing to watch: ~9.5 days** from 187.5 GB free to the 25 GB floor. At the floor
+the **disk guard** drops tier 1 to its top three pairs, logs it loudly, records a
+`tier1_degraded` session marker, and keeps tier 2 running — sticky, no un-degrade, because
+oscillating around the floor would cut the archive into interleaved subscription sets. Errno 28
+has already killed this recorder once; degrading loses the least valuable part instead of all
+of it. Lowering `--tier1-count` or raising `--disk-floor-gb` is one flag either way.
+
+The existing 7.1 GB raw archive is untouched and still the only raw sample there is.
+
+### Two rulings Phase 5 needs from the operator
+
+Both are yours, not an agent's, and Phase 5 should not start until they are made:
+
+1. **Is the training window past-only or two-sided?** Past-only (expanding or rolling window,
+   train strictly before validate) is the defensible choice for a system that will trade
+   forward; two-sided is standard in the cross-sectional literature and would make the numbers
+   look better and mean less. This decides the walk-forward splitter, so it cannot be changed
+   later without rerunning everything.
+2. **Is the thin pre-2016 history excluded?** `XBTUSD` starts 2013-10-06 and its early years
+   are sparse — its overall fill is 84% against ETH's 93%, and the missing 16% is concentrated
+   at the start. Including it trains on a market with different microstructure; excluding it
+   costs roughly two years of the longest series. The answer must be one rule applied to every
+   pair, recorded in the provenance, not a per-pair judgement.
+
+### One trap that cost an hour, so it is written down
+
+`@dataclass` **cannot be used in `scripts/*.py`**. The scripts are loaded by path in the tests
+(`spec_from_file_location`), a module loaded that way is absent from `sys.modules`, and
+`dataclasses` looks its own module up there while processing the class: the decorator raises
+`AttributeError: 'NoneType' object has no attribute '__dict__'` at import, and every test in
+the file then errors in its fixture rather than in a test. Both new types are plain classes
+with `__slots__` and a comment saying why.
+
+Also in this change: `toolchain_green` now writes each failing tool's **complete** captured
+output to `logs/verify/toolchain_green/` and names the file in its one-line message, instead of
+keeping the last three lines. That is the mechanism-3 evidence fix — every investigation of the
+intermittent red has started from a summary with the diagnosis already discarded.
+
+---
+
 Lead-owned. Teammates do not edit this file: **claim by recording the spec number in your own
 `context/progress/<agent>.md` before writing code**, per ownership rule 5.
 

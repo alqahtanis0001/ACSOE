@@ -509,7 +509,11 @@ def test_the_source_and_derived_names_differ_even_for_the_same_pair(
     """The second half of the guard, and the one that survives the directories ever
     being flattened: `XBTUSD.csv` is three-column time-and-sales, `XBTUSD_15.csv` is
     seven-column OHLCVT, and nothing loads one believing it is the other."""
-    for pair in build_ohlcvt.DEFAULT_PAIRS:
+    # Named here rather than read from the module: `DEFAULT_PAIRS` was removed on
+    # 2026-09-11, because three hardcoded pairs were capping the whole build at three
+    # of 1,119. The naming guard this test exists for is unaffected by that, so it
+    # carries its own examples rather than borrowing a list that should not exist.
+    for pair in ("XBTUSD", "ETHUSD", "SOLUSD", "1INCHUSD"):
         assert build_ohlcvt.archive_filename(pair, 900) != f"{pair}.csv"
 
 
@@ -547,10 +551,18 @@ def test_no_source_file_is_ever_read_whole_or_sorted() -> None:
                 called.append(node.func.id)
     assert "readlines" not in called
     assert "read" not in called
-    # `sorted` is called exactly once, over the handful of open bar buckets, never over
-    # anything that came out of the file.
-    assert called.count("sorted") == 1
-    assert "sorted(bucket for bucket in open_bars" in SCRIPT.read_text(encoding="utf-8")
+    # `sorted` is called four times and every one of them is named here, because the
+    # property being defended is "nothing that came out of a file is ever sorted" and a
+    # bare count cannot say that. One sorts the handful of open bar buckets. The other
+    # three belong to the archive enumeration added on 2026-09-11 and sort *file
+    # descriptions* — names, and sizes read from the filesystem — never rows: that pass
+    # walks 1,119 directory entries and opens no more than two lines of any of them.
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert called.count("sorted") == 4
+    assert "sorted(bucket for bucket in open_bars" in source
+    assert "sorted(directory.glob" in source
+    assert "sorted(found)" in source
+    assert "sorted(affordable, key=lambda pair: pair.size_bytes)" in source
 
 
 def test_memory_does_not_grow_with_the_length_of_the_history(

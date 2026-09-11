@@ -1178,6 +1178,22 @@ TOOLCHAIN = (
     ("ruff", ["-m", "ruff", "check", "--output-format=concise", "src/", "tests/", "scripts/"], 2),
 )
 
+#: Where a failing toolchain command's **complete** captured output is written.
+#:
+#: The criterion prints one line, and one line is not a diagnosis. Until this existed
+#: the message carried `describe_exit`'s last three lines and the rest was dropped on
+#: the floor: that survives a `FAILED`, where pytest names the failing tests on the
+#: summary line, and it does not survive an `ERROR`, where the traceback naming the
+#: fixture that raised is a hundred lines above the tail. `toolchain_green` has been
+#: intermittently red on a quiescent tree since Phase 2 and every investigation of it
+#: has started from a summary with the diagnosis already discarded - see the mechanism
+#: 3 section of `docs/PROJECT-STATE.md`. The file is the evidence; the message names it.
+#:
+#: Under `logs/`, which is gitignored, because this is a machine-local artefact of one
+#: run rather than a committed fixture. No criterion reads it: it is written for the
+#: person reading the failure, and the fresh-clone rule is unaffected.
+TOOLCHAIN_EVIDENCE_DIR: Final = Path("logs") / "verify" / "toolchain_green"
+
 #: Every directory the toolchain reads, in the order it first appears above.
 #:
 #: Derived from `TOOLCHAIN` rather than written out a second time. A path added to a
@@ -1275,6 +1291,53 @@ def describe_exit(name: str, returncode: int, output: str, tool_max_exit: int) -
     )
 
 
+def write_toolchain_evidence(
+    root: Path,
+    *,
+    name: str,
+    args: Sequence[str],
+    returncode: int | None,
+    output: str,
+    attempt: int,
+) -> str:
+    """Write one failing command's whole captured output. Returns what to say about it.
+
+    Never raises. A gate that cannot write its evidence still has to report the verdict
+    it already has, so a failure here degrades to a note in the message rather than to
+    an exception that replaces a real finding with an I/O error.
+
+    The header is not decoration: months later the useful questions about one of these
+    files are which command produced it, what it exited with, and whether it was the
+    first attempt or the retry - and none of those are recoverable from the body.
+    """
+    directory = root / TOOLCHAIN_EVIDENCE_DIR
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S_%f")
+    path = directory / (stamp + "-" + name + "-attempt" + str(attempt) + ".log")
+    header = (
+        "# toolchain_green evidence\n"
+        "# command:    " + " ".join(args) + "\n"
+        "# tool:       " + name + "\n"
+        "# attempt:    " + str(attempt) + "\n"
+        "# returncode: " + ("timed out" if returncode is None else exit_status(returncode)) + "\n"
+        "# written:    " + datetime.now(UTC).isoformat().replace("+00:00", "Z") + "\n"
+        "# root:       " + str(root) + "\n"
+        "#\n"
+        "# Everything below is the tool's captured stdout and stderr, complete and\n"
+        "# unedited. The criterion's own message quotes only the last three lines.\n"
+        "\n"
+    )
+    body = output if output else "(the command produced no output at all)\n"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        # `newline="\n"`, never a bare `write_text`: text mode on Windows would turn
+        # every newline into CRLF, and a traceback is read far more often than it is
+        # diffed. Lead's standing rule, 2026-09-11.
+        path.write_text(header + body, encoding="utf-8", newline="\n")
+    except OSError as exc:
+        return "full output could NOT be written (" + type(exc).__name__ + ": " + str(exc) + ")"
+    return "full output: " + path.as_posix()
+
+
 def _interpreter_with_toolchain(root: Path) -> tuple[str | None, list[str]]:
     """Pick an interpreter that can actually run the three commands.
 
@@ -1345,9 +1408,22 @@ def _run_tool(
             timeout=SUBPROCESS_TIMEOUT_S,
             env=env,
         )
-    except subprocess.TimeoutExpired:
-        return None, ""
+    except subprocess.TimeoutExpired as timeout:
+        # Whatever the command managed to print before the deadline is kept. A timeout
+        # used to return empty output, so the one failure mode where you most want to
+        # know how far the run got - which test was executing when it hung - reported
+        # nothing at all.
+        return None, _as_text(timeout.stdout) + _as_text(timeout.stderr)
     return done.returncode, (done.stdout or "") + (done.stderr or "")
+
+
+def _as_text(stream: object) -> str:
+    """A `TimeoutExpired`'s captured stream as text, whichever form it arrived in."""
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode("utf-8", errors="replace")
+    return str(stream)
 
 
 def check_toolchain_green(ctx: VerifyContext) -> Outcome:
@@ -1396,18 +1472,30 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
     for name, args, tool_max_exit in TOOLCHAIN:
         returncode, output = _run_tool(interpreter, args, ctx.root, env)
         if returncode is None:
-            failures.append(name + " timed out after " + str(SUBPROCESS_TIMEOUT_S) + "s")
+            evidence = write_toolchain_evidence(
+                ctx.root, name=name, args=args, returncode=None, output=output, attempt=1
+            )
+            failures.append(
+                name + " timed out after " + str(SUBPROCESS_TIMEOUT_S) + "s - " + evidence
+            )
             continue
         if returncode == 0:
             continue
+        # Everything from here on is a failure of some kind, and every one of them
+        # deposits the whole captured output before the message is reduced to a line.
+        evidence = write_toolchain_evidence(
+            ctx.root, name=name, args=args, returncode=returncode, output=output, attempt=1
+        )
         if 0 <= returncode <= tool_max_exit:
             # A verdict. Not retried, at any exit code, ever.
-            failures.append(describe_exit(name, returncode, output, tool_max_exit))
+            failures.append(
+                describe_exit(name, returncode, output, tool_max_exit) + " - " + evidence
+            )
             continue
 
         # A crash. One retry, and only one - this branch is straight-line and there is
         # no path back into it for the same command.
-        first = describe_exit(name, returncode, output, tool_max_exit)
+        first = describe_exit(name, returncode, output, tool_max_exit) + " - " + evidence
         returncode, output = _run_tool(interpreter, args, ctx.root, env)
         if returncode is None:
             crashed = True
@@ -1415,7 +1503,15 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
                 first
                 + "; the retry then timed out after "
                 + str(SUBPROCESS_TIMEOUT_S)
-                + "s"
+                + "s - "
+                + write_toolchain_evidence(
+                    ctx.root,
+                    name=name,
+                    args=args,
+                    returncode=None,
+                    output=output,
+                    attempt=2,
+                )
             )
             continue
         if returncode == 0:
@@ -1423,16 +1519,25 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
             # mitigated fault that stops being reported stops being a known risk.
             survived.append(first + "; the retry was clean")
             continue
+        retry_evidence = write_toolchain_evidence(
+            ctx.root, name=name, args=args, returncode=returncode, output=output, attempt=2
+        )
         if not (0 <= returncode <= tool_max_exit):
             crashed = True
-            failures.append(first + "; the retry crashed too - " + describe_exit(
-                name, returncode, output, tool_max_exit
-            ))
+            failures.append(
+                first
+                + "; the retry crashed too - "
+                + describe_exit(name, returncode, output, tool_max_exit)
+                + " - "
+                + retry_evidence
+            )
             continue
         # The retry produced a verdict, so there is something to report about the
         # code itself. That verdict stands on its own and the crash is context.
         failures.append(
             describe_exit(name, returncode, output, tool_max_exit)
+            + " - "
+            + retry_evidence
             + " (the first attempt crashed: "
             + first
             + ")"

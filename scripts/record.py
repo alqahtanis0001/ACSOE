@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Standalone Kraken WebSocket v2 to JSONL recorder.
+"""Standalone Kraken WebSocket v2 recorder. Two tiers, no hardcoded pair list.
 
 This script imports **nothing** from ``src/acsoe/``. That is deliberate and it is
 not laziness: order-book and spread history cannot be recovered retroactively, so
@@ -7,10 +7,84 @@ recording has to start on day one, before the engine framework exists. Engines 1
 and 2 supersede it in Phase 2 and this script keeps running regardless.
 
 It records **public** market data only and therefore holds no credentials. There
-is no API key anywhere in this file and none is needed: Kraken's ``book``,
-``ticker`` and ``trade`` channels on ``wss://ws.kraken.com/v2`` are unauthenticated.
+is no API key anywhere in this file and none is needed: Kraken's ``instrument``,
+``book``, ``ticker`` and ``trade`` channels on ``wss://ws.kraken.com/v2`` are
+unauthenticated.
 
-Line schema — one JSON object per line, exactly these seven keys::
+## Two tiers, because one tier cannot be both complete and affordable
+
+**Tier 1 — full raw.** Every ``book``, ``ticker`` and ``trade`` update for a small
+configurable list of pairs, written verbatim to ``data/raw/`` exactly as this
+script has always written it. This is the microstructure dataset. It is not
+summarised and it is not deleted.
+
+**Tier 2 — summaries.** Every *other* pair in the quote currency whose 24-hour
+volume clears a configurable floor, reduced to **one row per pair per minute** in
+``data/summaries/``: median spread with its 25th and 75th percentiles, median
+depth at a configurable notional on both sides, trade count, volume, and the
+number of raw updates the row was built from. A couple of hundred bytes a row, so
+the whole tradable universe costs tens of megabytes a day rather than terabytes.
+
+**Why per minute and not per decision bar.** A minute divides 1, 5 and 15 evenly,
+so one recording rolls up into any candle size the research later asks for.
+Bucketing at the decision bar would mean re-recording the market to change the
+bar, and the market does not come back.
+
+### Rolling up: re-aggregate, never average the medians
+
+A roll-up to 5 or 15 minutes MUST re-aggregate from the stored percentiles
+weighted by the stored counts — treat each minute as a small empirical
+distribution pinned at ``spread_bps`` with weight ``samples``, and take the
+weighted quantile across the minutes being combined. **Averaging the per-minute
+medians is wrong.** The median of a union is not the mean of the medians; the
+error moves with how unevenly updates are spread across the minutes, so a quiet
+minute carrying four quotes would weigh the same as a busy one carrying four
+thousand. The result is a spread estimate that is subtly too low in exactly the
+volatile windows the cost model cares about, and **nothing downstream would fail
+to say so** — the number simply comes out optimistic and every gate that reads it
+inherits the optimism. The stored ``samples`` and ``updates`` counts exist for no
+other reason.
+
+The weighted-quantile roll-up is itself an approximation — three quantiles is not
+the minute's full sample — and that is the price of a 200-byte row. The bound is
+honest and stated: it interpolates between stored order statistics. The
+mean-of-medians is not an approximation, it is a different and wrong quantity.
+
+## Both pair lists are derived, never written down
+
+There is no default pair list in this file. At startup the recorder subscribes to
+Kraken's own ``instrument`` channel for the pairs that exist and are online, then
+takes a ``ticker`` **snapshot** of every one of them in the target quote currency
+and ranks by 24-hour quote volume (``volume`` x ``vwap``). Tier 1 is the top N of
+that ranking; tier 2 is everything below it that clears the volume floor.
+
+Deriving from the ``instrument`` channel rather than from REST ``AssetPairs`` also
+removes a naming hazard: the WebSocket v2 API calls Bitcoin ``BTC/USD`` and
+Dogecoin ``DOGE/USD`` where REST calls them ``XBT/USD`` and ``XDG/USD``. Asking
+the socket we are about to subscribe on which symbols it has means there is no
+translation table to get wrong and no pair silently missing because a rename was
+not in it.
+
+Both derived lists are written into both archives as a ``session`` marker before
+any market data, so a replay always knows what was subscribed and what was not.
+
+## The disk guard
+
+A recorder that dies of ``Errno 28`` loses everything from that moment on. One
+that degrades loses only the least valuable part. This has already happened once.
+So free space is checked every ``--disk-check-s``, and below ``--disk-floor-gb``
+tier 1 drops to its top three pairs — loudly, in the log and as a ``session``
+marker in the archive — while tier 2, two orders of magnitude cheaper and covering
+the whole universe, keeps running untouched.
+
+The degrade is **sticky for the life of the process**: it never un-degrades on its
+own. A guard that re-expanded as soon as space was freed would oscillate around
+the floor and cut the archive into interleaved fragments of two different
+subscription sets, which is worse to replay than one clean recorded step down.
+
+## Line schemas
+
+``data/raw/`` — one JSON object per line, exactly these seven keys, unchanged::
 
     v            int    always 1
     kind         str    "tick" | "gap" | "session"
@@ -20,15 +94,47 @@ Line schema — one JSON object per line, exactly these seven keys::
     ts_recv      str    ISO-8601 UTC ending "Z", recorder wall clock at frame read
     payload      dict   the Kraken frame verbatim, or the marker's own object
 
+``data/summaries/`` — ``gap`` and ``session`` markers use those same seven keys,
+and a summary row uses these fourteen::
+
+    v                int    always 1
+    kind             str    always "summary"
+    pair             str    Kraken v2 symbol
+    minute           str    ISO-8601 UTC ending "Z", the minute's START, inclusive
+    spread_bps       list   [p25, p50, p75] of (ask-bid)/mid in basis points
+    depth_bid_bps    float|None  median distance from mid, in bps, at which resting
+                                 bid notional reaches --depth-notional-usd
+    depth_ask_bps    float|None  the same on the ask side
+    mid              float|None  median mid price, so bps convert back into money
+    updates          int    raw book updates consumed for this pair this minute
+    samples          int    of those, how many yielded a usable spread
+    depth_samples    int    of those, how many books were deep enough to fill the notional
+    trades           int    trades seen this minute
+    volume           float  base-currency volume traded this minute
+    quote_volume     float  quote-currency volume traded this minute
+
+``updates`` minus ``samples`` is not noise to be ignored: it is one-sided and
+crossed books, and a pair where those two diverge is a pair whose spread series is
+thinner than its update count suggests.
+
 Recordings are immutable (invariant 11). Nothing here edits, backfills,
 interpolates or reorders a line. A break in the stream is written down as a
-``gap`` marker rather than silently healed.
+``gap`` marker rather than silently healed. A summary row is a reduction computed
+once, at the time, from frames that were never stored; it is not a later cleaning
+pass over something already written, which is what invariant 11 forbids.
+
+**Floats in the summary rows, deliberately.** These are distribution statistics for
+research. No order size, order price or fee is ever computed from them; anything on
+the order path reads ``Decimal`` from ``AssetPairs`` through engine 1. Carrying
+``Decimal`` through several thousand book updates a second would cost more than the
+precision is worth to a median.
 
 Usage::
 
-    python scripts/record.py                              # default pairs, runs until Ctrl-C
-    python scripts/record.py --pairs BTC/USD ETH/USD
-    python scripts/record.py --duration-s 900 --out data/raw
+    python scripts/record.py                          # derive both tiers, record
+    python scripts/record.py --dry-run --measure-s 90 # derive, measure, report, exit
+    python scripts/record.py --tier1-pairs BTC/USD ETH/USD
+    python scripts/record.py --tier2-floor-usd 10000 --disk-floor-gb 40
 """
 
 from __future__ import annotations
@@ -36,10 +142,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import math
 import random
+import shutil
 import signal
 import sys
-from datetime import UTC, datetime
+from collections.abc import Callable, Iterable, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Final, Self
@@ -64,14 +173,62 @@ LINE_KEYS: Final = frozenset(
 )
 LINE_KINDS: Final = frozenset({"tick", "gap", "session"})
 
-DEFAULT_PAIRS: Final = ("BTC/USD", "ETH/USD", "SOL/USD")
-DEFAULT_CHANNELS: Final = ("book", "ticker", "trade")
+SUMMARY_KEYS: Final = frozenset(
+    {
+        "v",
+        "kind",
+        "pair",
+        "minute",
+        "spread_bps",
+        "depth_bid_bps",
+        "depth_ask_bps",
+        "mid",
+        "updates",
+        "samples",
+        "depth_samples",
+        "trades",
+        "volume",
+        "quote_volume",
+    }
+)
+
+#: Tier 1 keeps everything. Tier 2 needs `book` for spread and depth and `trade`
+#: for count and volume; `ticker` would add a 24-hour aggregate the summary does
+#: not use, so it is not subscribed and the bandwidth is not spent.
+TIER1_CHANNELS: Final = ("book", "ticker", "trade")
+TIER2_CHANNELS: Final = ("book", "trade")
+
 DEFAULT_DEPTH: Final = 10
+DEFAULT_QUOTE: Final = "USD"
+DEFAULT_TIER1_COUNT: Final = 10
+
+#: What tier 1 falls back to when the disk guard fires. Three, because three pairs
+#: of full book is what this machine has demonstrably sustained.
+DEGRADED_TIER1_COUNT: Final = 3
+
+DEFAULT_TIER2_FLOOR_USD: Final = 100_000.0
+DEFAULT_DEPTH_NOTIONAL_USD: Final = 10_000.0
+DEFAULT_SUMMARY_INTERVAL_S: Final = 60
+DEFAULT_DISK_FLOOR_GB: Final = 25.0
+DEFAULT_DISK_CHECK_S: Final = 30.0
+
 DEFAULT_OUT_DIR: Final = Path("data") / "raw"
+DEFAULT_SUMMARY_DIR: Final = Path("data") / "summaries"
+
+#: Symbols per subscribe message. Kraken accepts a list; several hundred symbols in
+#: one frame is a large message for no benefit, and a rejected oversized subscribe
+#: would take a whole tier down rather than one chunk of it.
+SUBSCRIBE_CHUNK: Final = 50
+
+#: How long the startup snapshot may take before the recorder stops waiting for
+#: stragglers and records which symbols never answered.
+DISCOVERY_TIMEOUT_S: Final = 60.0
 
 BACKOFF_INITIAL_S: Final = 1.0
 BACKOFF_MAX_S: Final = 60.0
 BACKOFF_FACTOR: Final = 2.0
+
+BYTES_PER_GB: Final = 1_000_000_000
 
 
 class SchemaError(ValueError):
@@ -203,20 +360,93 @@ def validate_line(line: dict[str, Any]) -> None:
         raise SchemaError(f"payload must be an object, got {type(line['payload']).__name__}")
 
 
+def validate_summary_line(line: dict[str, Any]) -> None:
+    """The summary archive's own validator.
+
+    ``gap`` and ``session`` markers are the same seven-key lines the raw archive
+    uses — a replay must be able to read this archive's subscription set and its
+    outages the same way it reads the other one's — so they go straight to
+    :func:`validate_line`. Only ``kind == "summary"`` is new.
+    """
+    if line.get("kind") != "summary":
+        validate_line(line)
+        return
+    keys = set(line)
+    if keys != SUMMARY_KEYS:
+        missing = sorted(SUMMARY_KEYS - keys)
+        extra = sorted(keys - SUMMARY_KEYS)
+        raise SchemaError(f"summary keys wrong: missing={missing} extra={extra}")
+    if line["v"] != SCHEMA_VERSION:
+        raise SchemaError(f"unknown schema version {line['v']!r}")
+    if not isinstance(line["pair"], str) or not line["pair"]:
+        raise SchemaError("a summary row must name one pair")
+    minute = line["minute"]
+    if not isinstance(minute, str) or not minute.endswith("Z"):
+        raise SchemaError(f"minute must be an ISO-8601 UTC string ending 'Z', got {minute!r}")
+    spread = line["spread_bps"]
+    if not isinstance(spread, list) or len(spread) != 3:
+        raise SchemaError("spread_bps must be [p25, p50, p75]")
+    if any(not isinstance(value, (int, float)) for value in spread):
+        raise SchemaError("spread_bps percentiles must be numbers")
+    if not spread[0] <= spread[1] <= spread[2]:
+        raise SchemaError(f"spread_bps percentiles are not ordered: {spread!r}")
+    for key in ("updates", "samples", "depth_samples", "trades"):
+        value = line[key]
+        if not isinstance(value, int) or value < 0:
+            raise SchemaError(f"{key} must be a count, got {value!r}")
+    if line["samples"] > line["updates"]:
+        raise SchemaError("samples cannot exceed the updates they were drawn from")
+    if line["depth_samples"] > line["samples"]:
+        raise SchemaError("depth_samples cannot exceed samples")
+
+
+def raw_date(line: dict[str, Any]) -> str:
+    """Which day's raw file a line belongs in."""
+    return utc_date_from_iso(str(line["ts_recv"]))
+
+
+def summary_date(line: dict[str, Any]) -> str:
+    """Which day's summary file a line belongs in.
+
+    A summary row is stamped with the minute it covers; a marker is stamped with
+    the wall clock. Rotation reads whichever the line carries, so a row for the
+    last minute of a day never lands in the next day's file because it was written
+    a fraction of a second late.
+    """
+    minute = line.get("minute")
+    if isinstance(minute, str):
+        return utc_date_from_iso(minute)
+    return utc_date_from_iso(str(line["ts_recv"]))
+
+
 class JsonlWriter:
     """Append-only JSONL writer with daily UTC rotation.
 
     Opens in binary append mode and never truncates, seeks or rewrites. If the
     process is killed mid-line the partial line stays; it is not repaired, because
     repairing a recording is exactly what invariant 11 forbids.
+
+    The validator and the date function are injected because there are now two
+    archives with two schemas, and a writer that knew only one of them would let
+    the other be written unvalidated.
     """
 
-    def __init__(self, out_dir: Path, *, prefix: str = "kraken_v2") -> None:
+    def __init__(
+        self,
+        out_dir: Path,
+        *,
+        prefix: str = "kraken_v2",
+        validator: Callable[[dict[str, Any]], None] = validate_line,
+        date_of: Callable[[dict[str, Any]], str] = raw_date,
+    ) -> None:
         self._out_dir = out_dir
         self._prefix = prefix
+        self._validator = validator
+        self._date_of = date_of
         self._date: str | None = None
         self._handle: Any = None
         self.lines_written = 0
+        self.bytes_written = 0
 
     def __enter__(self) -> Self:
         self._out_dir.mkdir(parents=True, exist_ok=True)
@@ -230,19 +460,25 @@ class JsonlWriter:
     ) -> None:
         self.close()
 
+    @property
+    def out_dir(self) -> Path:
+        return self._out_dir
+
     def path_for(self, date: str) -> Path:
         return self._out_dir / f"{self._prefix}_{date}.jsonl"
 
     def write(self, line: dict[str, Any]) -> None:
-        validate_line(line)
-        date = utc_date_from_iso(line["ts_recv"])
+        self._validator(line)
+        date = self._date_of(line)
         if date != self._date:
             self._rotate(date)
         assert self._handle is not None
-        self._handle.write(orjson.dumps(line))
+        encoded = orjson.dumps(line)
+        self._handle.write(encoded)
         self._handle.write(b"\n")
         self._handle.flush()
         self.lines_written += 1
+        self.bytes_written += len(encoded) + 1
 
     def _rotate(self, date: str) -> None:
         if self._handle is not None:
@@ -257,36 +493,571 @@ class JsonlWriter:
             self._handle = None
 
 
+# --------------------------------------------------------------------------- #
+# Pair discovery — the thing that used to be a three-element tuple
+# --------------------------------------------------------------------------- #
+
+
+class PairStat:
+    """One pair as Kraken described it in the startup snapshot.
+
+    Not a ``@dataclass``, and that is not a style choice. This script is loaded by
+    path in `tests/platform/test_record_format.py` — it is not a package and must
+    not become one — and a module executed that way is absent from ``sys.modules``,
+    where `dataclasses` looks its own module up. The decorator raises
+    ``AttributeError: 'NoneType' object has no attribute '__dict__'`` on import, and
+    the failure lands in the fixture rather than in a test, which is the shape of
+    error that is hardest to read.
+    """
+
+    __slots__ = ("quote_volume_24h", "symbol", "trades_24h")
+
+    def __init__(self, *, symbol: str, quote_volume_24h: float, trades_24h: int) -> None:
+        self.symbol = symbol
+        self.quote_volume_24h = quote_volume_24h
+        self.trades_24h = trades_24h
+
+
 def subscriptions(
-    channels: tuple[str, ...], pairs: tuple[str, ...], depth: int
+    channels: Sequence[str], pairs: Sequence[str], depth: int
 ) -> list[dict[str, Any]]:
-    """The subscribe payloads, in a stable order so a session marker is comparable."""
+    """The subscribe payloads, chunked, in a stable order — so a session marker is
+    comparable between runs and a replay can reconstruct exactly what was asked
+    for."""
     subs: list[dict[str, Any]] = []
     for channel in channels:
-        params: dict[str, Any] = {"channel": channel, "symbol": list(pairs)}
-        if channel == "book":
-            params["depth"] = depth
-        subs.append({"method": "subscribe", "params": params})
+        for start in range(0, len(pairs), SUBSCRIBE_CHUNK):
+            chunk = list(pairs[start : start + SUBSCRIBE_CHUNK])
+            params: dict[str, Any] = {"channel": channel, "symbol": chunk}
+            if channel == "book":
+                params["depth"] = depth
+            subs.append({"method": "subscribe", "params": params})
     return subs
 
 
-class Recorder:
+def quote_volume_24h(entry: dict[str, Any]) -> float | None:
+    """24-hour volume in the quote currency, from a ticker snapshot entry.
+
+    ``volume`` is in the base currency and ``vwap`` is the 24-hour volume-weighted
+    average price, so their product is the only figure that means the same thing
+    across pairs. Ranking on ``volume`` alone would put a cheap coin that trades in
+    millions of units above Bitcoin.
+    """
+    volume = entry.get("volume")
+    vwap = entry.get("vwap")
+    if not isinstance(volume, (int, float)) or not isinstance(vwap, (int, float)):
+        return None
+    if volume < 0 or vwap <= 0:
+        return None
+    return float(volume) * float(vwap)
+
+
+async def discover_pairs(
+    url: str,
+    *,
+    quote: str = DEFAULT_QUOTE,
+    timeout_s: float = DISCOVERY_TIMEOUT_S,
+) -> tuple[tuple[PairStat, ...], tuple[str, ...]]:
+    """Ask Kraken which pairs exist and how much each of them trades.
+
+    Returns the ranked statistics and the symbols that were online but produced no
+    ticker snapshot before the deadline. That second list is returned rather than
+    dropped: a pair missing from both tiers because its snapshot was late is a hole
+    in the universe, and a hole nobody is told about is the failure this whole
+    change exists to end.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    online: list[str] = []
+    stats: dict[str, PairStat] = {}
+
+    async with connect(url, max_size=None) as ws:
+        await ws.send(
+            orjson.dumps({"method": "subscribe", "params": {"channel": "instrument"}}).decode()
+        )
+        while loop.time() < deadline and not online:
+            frame = await asyncio.wait_for(
+                ws.recv(), timeout=max(1.0, deadline - loop.time())
+            )
+            payload = orjson.loads(frame)
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("channel") != "instrument" or payload.get("type") != "snapshot":
+                continue
+            data = payload.get("data")
+            pairs = data.get("pairs") if isinstance(data, dict) else None
+            if not isinstance(pairs, list):
+                raise RuntimeError("the instrument snapshot carried no pair list")
+            for item in pairs:
+                if not isinstance(item, dict):
+                    continue
+                symbol = _first_str(item.get("symbol"))
+                if symbol is None or item.get("quote") != quote:
+                    continue
+                if item.get("status") != "online":
+                    continue
+                online.append(symbol)
+
+        if not online:
+            raise RuntimeError(f"no online {quote}-quoted pair in the instrument snapshot")
+
+        await ws.send(
+            orjson.dumps({"method": "unsubscribe", "params": {"channel": "instrument"}}).decode()
+        )
+        for sub in subscriptions(("ticker",), sorted(online), DEFAULT_DEPTH):
+            await ws.send(orjson.dumps(sub).decode())
+
+        while len(stats) < len(online):
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            try:
+                frame = await asyncio.wait_for(ws.recv(), timeout=remaining)
+            except TimeoutError:
+                break
+            payload = orjson.loads(frame)
+            if not isinstance(payload, dict) or payload.get("channel") != "ticker":
+                continue
+            entries = payload.get("data")
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                symbol = _first_str(entry.get("symbol"))
+                if symbol is None or symbol in stats:
+                    continue
+                volume = quote_volume_24h(entry)
+                if volume is None:
+                    continue
+                trades = entry.get("trades")
+                stats[symbol] = PairStat(
+                    symbol=symbol,
+                    quote_volume_24h=volume,
+                    trades_24h=trades if isinstance(trades, int) else 0,
+                )
+
+    ranked = tuple(sorted(stats.values(), key=lambda stat: -stat.quote_volume_24h))
+    unranked = tuple(sorted(symbol for symbol in online if symbol not in stats))
+    return ranked, unranked
+
+
+async def discover_with_retry(
+    url: str, *, quote: str, timeout_s: float = DISCOVERY_TIMEOUT_S
+) -> tuple[tuple[PairStat, ...], tuple[str, ...]]:
+    """Keep asking until the exchange answers. Never fall back to a written list.
+
+    There is deliberately no "if the snapshot fails, record these three pairs"
+    branch here. A hardcoded fallback is how a recorder ends up quietly recording
+    three pairs for months, which is the defect this file was rewritten to remove.
+    Failing to reach Kraken is a reason to wait and retry, not a reason to invent a
+    universe.
+    """
+    backoff = BACKOFF_INITIAL_S
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return await discover_pairs(url, quote=quote, timeout_s=timeout_s)
+        except (
+            OSError,
+            TimeoutError,
+            RuntimeError,
+            websockets.exceptions.WebSocketException,
+        ) as exc:
+            delay = min(backoff, BACKOFF_MAX_S) * (0.5 + random.random())
+            print(
+                f"pair discovery failed ({type(exc).__name__}: {exc}); retrying in "
+                f"{delay:.1f}s (attempt {attempt}). Nothing is recorded until it succeeds.",
+                file=sys.stderr,
+                flush=True,
+            )
+            await asyncio.sleep(delay)
+            backoff = min(backoff * BACKOFF_FACTOR, BACKOFF_MAX_S)
+
+
+def derive_tiers(
+    ranked: Sequence[PairStat],
+    *,
+    tier1_count: int,
+    tier2_floor_usd: float,
+    tier1_override: Sequence[str] | None = None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Split the ranked universe into the full-raw tier and the summary tier.
+
+    An explicit ``tier1_override`` is honoured verbatim, including a symbol the
+    snapshot did not rank — the operator naming a pair is a stronger signal than
+    the ranking — and tier 2 is then everything else above the floor.
+    """
+    if tier1_count < 0:
+        raise ValueError("tier1_count cannot be negative")
+    if tier1_override is not None:
+        tier1 = tuple(dict.fromkeys(tier1_override))
+    else:
+        tier1 = tuple(stat.symbol for stat in ranked[:tier1_count])
+    chosen = set(tier1)
+    tier2 = tuple(
+        stat.symbol
+        for stat in ranked
+        if stat.symbol not in chosen and stat.quote_volume_24h >= tier2_floor_usd
+    )
+    return tier1, tier2
+
+
+# --------------------------------------------------------------------------- #
+# Tier 2 — the summariser
+# --------------------------------------------------------------------------- #
+
+
+def significant(value: float, digits: int = 8) -> float:
+    """Round to significant figures rather than to decimal places.
+
+    One summary file carries prices from 100,000 down to 0.000001. Rounding to a
+    fixed number of decimal places either wastes bytes on the large ones or
+    destroys the small ones outright.
+    """
+    if value == 0.0 or not math.isfinite(value):
+        return value
+    return round(value, -math.floor(math.log10(abs(value))) + (digits - 1))
+
+
+def quantile(sorted_values: Sequence[float], q: float) -> float:
+    """Linear-interpolated quantile of an already-sorted sequence."""
+    if not sorted_values:
+        raise ValueError("a quantile of nothing is not zero, it is undefined")
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    position = q * (len(sorted_values) - 1)
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return sorted_values[int(position)]
+    weight = position - lower
+    return sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
+
+
+class BookState:
+    """One pair's visible book, maintained from Kraken v2 ``book`` frames.
+
+    Kraken sends a snapshot and then deltas, with ``qty == 0`` meaning the level is
+    gone. Nothing here reaches disk: the book exists only long enough to produce a
+    spread and a depth sample, which is the whole bargain of tier 2.
+    """
+
+    __slots__ = ("asks", "bids", "depth")
+
+    def __init__(self, depth: int) -> None:
+        self.bids: dict[float, float] = {}
+        self.asks: dict[float, float] = {}
+        self.depth = depth
+
+    def reset(self) -> None:
+        self.bids.clear()
+        self.asks.clear()
+
+    def apply(self, entry: dict[str, Any]) -> None:
+        self._side(self.bids, entry.get("bids"))
+        self._side(self.asks, entry.get("asks"))
+        self._truncate()
+
+    @staticmethod
+    def _side(book: dict[float, float], levels: object) -> None:
+        if not isinstance(levels, list):
+            return
+        for level in levels:
+            if not isinstance(level, dict):
+                continue
+            price = level.get("price")
+            qty = level.get("qty")
+            if not isinstance(price, (int, float)) or not isinstance(qty, (int, float)):
+                continue
+            if qty <= 0:
+                book.pop(float(price), None)
+            else:
+                book[float(price)] = float(qty)
+
+    def _truncate(self) -> None:
+        """Keep the subscribed depth and no more.
+
+        Kraken removes levels as they fall out of the window, but one missed
+        removal would otherwise leave a stale price sitting at the top of the book
+        for the life of the process, poisoning every spread sample after it.
+        """
+        if len(self.bids) > self.depth:
+            for price in sorted(self.bids, reverse=True)[self.depth :]:
+                del self.bids[price]
+        if len(self.asks) > self.depth:
+            for price in sorted(self.asks)[self.depth :]:
+                del self.asks[price]
+
+    def sample(self, notional: float) -> tuple[float, float, float | None, float | None] | None:
+        """``(spread_bps, mid, bid_depth_bps, ask_depth_bps)``, or None.
+
+        None when the book is one-sided or crossed. A crossed book is a transient
+        Kraken publishes during fast markets; it is not a spread, so it is counted
+        (``updates`` minus ``samples``) rather than recorded as a negative one.
+
+        The depth figure is **how far from mid the book must be walked before the
+        resting notional reaches** ``notional``, in basis points, each side
+        independently. That is the number a cost model needs: not "is there depth"
+        but "what does this size cost to fill". ``None`` on a side means the visible
+        book never reached the notional at all, which is itself the finding.
+        """
+        if not self.bids or not self.asks:
+            return None
+        best_bid = max(self.bids)
+        best_ask = min(self.asks)
+        if best_ask <= best_bid:
+            return None
+        mid = (best_bid + best_ask) / 2.0
+        if mid <= 0.0:
+            return None
+        spread_bps = (best_ask - best_bid) / mid * 10_000.0
+        bid_depth = self._walk(sorted(self.bids.items(), reverse=True), mid, notional)
+        ask_depth = self._walk(sorted(self.asks.items()), mid, notional)
+        return spread_bps, mid, bid_depth, ask_depth
+
+    @staticmethod
+    def _walk(
+        levels: Iterable[tuple[float, float]], mid: float, notional: float
+    ) -> float | None:
+        filled = 0.0
+        for price, qty in levels:
+            filled += price * qty
+            if filled >= notional:
+                return abs(price - mid) / mid * 10_000.0
+        return None
+
+
+class PairMinute:
+    """One pair's accumulator for one minute. Reset at each flush, never carried."""
+
+    __slots__ = (
+        "depth_ask",
+        "depth_bid",
+        "mids",
+        "quote_volume",
+        "spreads",
+        "trades",
+        "updates",
+        "volume",
+    )
+
+    def __init__(self) -> None:
+        self.spreads: list[float] = []
+        self.mids: list[float] = []
+        self.depth_bid: list[float] = []
+        self.depth_ask: list[float] = []
+        self.updates = 0
+        self.trades = 0
+        self.volume = 0.0
+        self.quote_volume = 0.0
+
+    def empty(self) -> bool:
+        return self.updates == 0 and self.trades == 0
+
+
+class Summariser:
+    """Tier 2. Turns a firehose nobody can afford to store into one row a minute.
+
+    The rows are computed from frames that are never written down, and that trade
+    is worth stating plainly: tier 2 pairs have no raw history and never will. What
+    they have is a spread and depth distribution per minute, which is what the cost
+    model actually reads.
+    """
+
     def __init__(
         self,
         *,
         writer: JsonlWriter,
-        url: str,
-        pairs: tuple[str, ...],
-        channels: tuple[str, ...],
         depth: int,
+        depth_notional_usd: float,
+        interval_s: int = DEFAULT_SUMMARY_INTERVAL_S,
+    ) -> None:
+        if interval_s <= 0:
+            raise ValueError("interval_s must be positive")
+        self._writer = writer
+        self._depth = depth
+        self._notional = depth_notional_usd
+        self._interval_s = interval_s
+        self._books: dict[str, BookState] = {}
+        self._minutes: dict[str, PairMinute] = {}
+        self._bucket = self.bucket_of(datetime.now(UTC))
+        self.rows_written = 0
+
+    def bucket_of(self, moment: datetime) -> datetime:
+        """The start of the interval a moment falls in, on the UTC hour boundary."""
+        into_hour = moment.minute * 60 + moment.second
+        return moment.replace(microsecond=0) - timedelta(seconds=into_hour % self._interval_s)
+
+    def _minute(self, symbol: str) -> PairMinute:
+        minute = self._minutes.get(symbol)
+        if minute is None:
+            minute = PairMinute()
+            self._minutes[symbol] = minute
+        return minute
+
+    def handle(self, payload: dict[str, Any], ts_recv: str) -> None:
+        """Sink signature shared with the raw writer; the receive time is unused
+        here because a summary row is stamped with the minute it covers."""
+        del ts_recv
+        channel = payload.get("channel")
+        if channel == "book":
+            self._book(payload)
+        elif channel == "trade":
+            self._trade(payload)
+
+    def _book(self, payload: dict[str, Any]) -> None:
+        entries = payload.get("data")
+        if not isinstance(entries, list):
+            return
+        is_snapshot = payload.get("type") == "snapshot"
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            symbol = _first_str(entry.get("symbol"))
+            if symbol is None:
+                continue
+            state = self._books.get(symbol)
+            if state is None:
+                state = BookState(self._depth)
+                self._books[symbol] = state
+            if is_snapshot:
+                state.reset()
+            state.apply(entry)
+            minute = self._minute(symbol)
+            minute.updates += 1
+            sample = state.sample(self._notional)
+            if sample is None:
+                continue
+            spread_bps, mid, bid_depth, ask_depth = sample
+            minute.spreads.append(spread_bps)
+            minute.mids.append(mid)
+            if bid_depth is not None:
+                minute.depth_bid.append(bid_depth)
+            if ask_depth is not None:
+                minute.depth_ask.append(ask_depth)
+
+    def _trade(self, payload: dict[str, Any]) -> None:
+        entries = payload.get("data")
+        if not isinstance(entries, list):
+            return
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            symbol = _first_str(entry.get("symbol"))
+            price = entry.get("price")
+            qty = entry.get("qty")
+            if symbol is None:
+                continue
+            if not isinstance(price, (int, float)) or not isinstance(qty, (int, float)):
+                continue
+            minute = self._minute(symbol)
+            minute.trades += 1
+            minute.volume += float(qty)
+            minute.quote_volume += float(price) * float(qty)
+
+    def flush_due(self, now: datetime) -> int:
+        """Write out the interval that has just closed, if one has. Rows written."""
+        bucket = self.bucket_of(now)
+        if bucket <= self._bucket:
+            return 0
+        written = self._flush(self._bucket)
+        self._bucket = bucket
+        return written
+
+    def flush_all(self, now: datetime) -> int:
+        """Write the interval in progress. Called once, on shutdown.
+
+        The partial minute is written rather than dropped, and its ``updates`` count
+        is what says it is partial. Dropping it would put a hole in the series at
+        every restart, and a hole is indistinguishable from a market that stopped
+        quoting.
+        """
+        written = self._flush(self._bucket)
+        self._bucket = self.bucket_of(now)
+        return written
+
+    def _flush(self, bucket: datetime) -> int:
+        minute_iso = bucket.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        written = 0
+        for symbol in sorted(self._minutes):
+            minute = self._minutes[symbol]
+            if minute.empty():
+                continue
+            spreads = sorted(minute.spreads)
+            mids = sorted(minute.mids)
+            bids = sorted(minute.depth_bid)
+            asks = sorted(minute.depth_ask)
+            row: dict[str, Any] = {
+                "v": SCHEMA_VERSION,
+                "kind": "summary",
+                "pair": symbol,
+                "minute": minute_iso,
+                "spread_bps": [
+                    significant(quantile(spreads, 0.25), 6),
+                    significant(quantile(spreads, 0.50), 6),
+                    significant(quantile(spreads, 0.75), 6),
+                ]
+                if spreads
+                else [0.0, 0.0, 0.0],
+                "depth_bid_bps": significant(quantile(bids, 0.50), 6) if bids else None,
+                "depth_ask_bps": significant(quantile(asks, 0.50), 6) if asks else None,
+                "mid": significant(quantile(mids, 0.50)) if mids else None,
+                "updates": minute.updates,
+                "samples": len(spreads),
+                "depth_samples": min(len(bids), len(asks)),
+                "trades": minute.trades,
+                "volume": significant(minute.volume),
+                "quote_volume": significant(minute.quote_volume, 6),
+            }
+            self._writer.write(row)
+            written += 1
+        self._minutes.clear()
+        self.rows_written += written
+        return written
+
+
+# --------------------------------------------------------------------------- #
+# The connection
+# --------------------------------------------------------------------------- #
+
+
+class Stream:
+    """One WebSocket connection, one tier.
+
+    Two connections rather than one, so that a tier-2 problem — a subscribe
+    rejected for one of several hundred symbols, a slow consumer, a degrade —
+    cannot take tier 1 down with it. Tier 1 is the dataset that cannot be
+    reconstructed; it gets a socket of its own.
+    """
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        writer: JsonlWriter,
+        sink: Callable[[dict[str, Any], str], None],
+        url: str,
+        pairs: Sequence[str],
+        channels: Sequence[str],
+        depth: int,
+        session_extra: dict[str, Any] | None = None,
         ping_interval: float = 20.0,
         ping_timeout: float = 20.0,
     ) -> None:
+        self._label = label
         self._writer = writer
+        self._sink = sink
         self._url = url
         self._ping_interval = ping_interval
         self._ping_timeout = ping_timeout
-        self._subs = subscriptions(channels, pairs, depth)
+        self._pairs = tuple(pairs)
+        self._channels = tuple(channels)
+        self._depth = depth
+        self._session_extra = dict(session_extra or {})
+        self._subs = subscriptions(self._channels, self._pairs, depth)
+        self._ws: Any = None
         self._stopping = asyncio.Event()
         #: Set when a connection drops; consumed by the next successful connect,
         #: which is what turns a reconnect into a recorded gap rather than a
@@ -297,11 +1068,25 @@ class Recorder:
         #: Reconnect delay. Reset on a *successful connect*, not on a clean
         #: return from the session loop — see the comment in `_session`.
         self._backoff = BACKOFF_INITIAL_S
+        self.frames = 0
+
+    @property
+    def pairs(self) -> tuple[str, ...]:
+        return self._pairs
 
     def stop(self) -> None:
         self._stopping.set()
 
-    def _write_session(self, event: str) -> None:
+    def write_marker(self, event: str, extra: dict[str, Any] | None = None) -> None:
+        """A ``session`` marker for this tier, carrying what it subscribed to."""
+        payload: dict[str, Any] = {
+            "event": event,
+            "tier": self._label,
+            "url": self._url,
+            "subscriptions": [sub["params"] for sub in self._subs],
+            **self._session_extra,
+            **(extra or {}),
+        }
         self._writer.write(
             build_line(
                 kind="session",
@@ -309,13 +1094,37 @@ class Recorder:
                 channel=RECORDER_CHANNEL,
                 ts_exchange=None,
                 ts_recv=utc_now_iso(),
-                payload={
-                    "event": event,
-                    "url": self._url,
-                    "subscriptions": [sub["params"] for sub in self._subs],
-                },
+                payload=payload,
             )
         )
+
+    async def drop_to(self, pairs: Sequence[str]) -> None:
+        """Shrink this stream's subscription set, in place, on the live socket.
+
+        Used by the disk guard. Unsubscribes the dropped symbols if the socket is
+        up, and rewrites ``_subs`` either way, so a later reconnect asks for the
+        reduced set rather than quietly restoring the full one.
+        """
+        keep = tuple(pair for pair in self._pairs if pair in set(pairs))
+        dropped = tuple(pair for pair in self._pairs if pair not in set(keep))
+        if not dropped:
+            return
+        self._pairs = keep
+        self._subs = subscriptions(self._channels, self._pairs, self._depth)
+        ws = self._ws
+        if ws is None:
+            return
+        for channel in self._channels:
+            for start in range(0, len(dropped), SUBSCRIBE_CHUNK):
+                message = {
+                    "method": "unsubscribe",
+                    "params": {
+                        "channel": channel,
+                        "symbol": list(dropped[start : start + SUBSCRIBE_CHUNK]),
+                    },
+                }
+                with contextlib.suppress(OSError, websockets.exceptions.WebSocketException):
+                    await ws.send(orjson.dumps(message).decode())
 
     def _write_gap(self) -> None:
         """Record the break. Called on reconnect, never on disconnect.
@@ -342,6 +1151,7 @@ class Recorder:
                 ts_exchange=None,
                 ts_recv=reconnected_at,
                 payload={
+                    "tier": self._label,
                     "reason": self._disconnect_reason or "unknown",
                     "disconnected_at": self._disconnected_at,
                     "reconnected_at": reconnected_at,
@@ -353,34 +1163,15 @@ class Recorder:
         self._disconnected_at = None
         self._disconnect_reason = None
 
-    def _write_frame(self, raw: str | bytes) -> None:
+    def _handle(self, raw: str | bytes) -> None:
         ts_recv = utc_now_iso()
+        self.frames += 1
         payload = orjson.loads(raw)
         if not isinstance(payload, dict):
-            # Kraken v2 sends objects. Anything else is recorded rather than
+            # Kraken v2 sends objects. Anything else is handed on rather than
             # dropped, wrapped so the schema still holds and nothing is lost.
             payload = {"_nonobject": payload}
-            self._writer.write(
-                build_line(
-                    kind="tick",
-                    pair=None,
-                    channel="_unknown",
-                    ts_exchange=None,
-                    ts_recv=ts_recv,
-                    payload=payload,
-                )
-            )
-            return
-        self._writer.write(
-            build_line(
-                kind="tick",
-                pair=extract_pair(payload),
-                channel=extract_channel(payload),
-                ts_exchange=extract_ts_exchange(payload),
-                ts_recv=ts_recv,
-                payload=payload,
-            )
-        )
+        self._sink(payload, ts_recv)
 
     async def _session(self) -> None:
         async with connect(
@@ -389,34 +1180,43 @@ class Recorder:
             ping_interval=self._ping_interval,
             ping_timeout=self._ping_timeout,
         ) as ws:
-            self._write_gap()
-            # Reset here, on a successful connect. Resetting after `_session`
-            # returns is wrong: `_session` only ever returns normally when the
-            # recorder is stopping, so the backoff would compound across
-            # independent, individually successful reconnects. A process that
-            # drops once an hour would, half a day later, be waiting a full
-            # minute to reconnect after a fault it recovers from instantly, and
-            # that minute is order-book data nothing can recover.
-            self._attempt = 0
-            self._backoff = BACKOFF_INITIAL_S
-            for sub in self._subs:
-                await ws.send(orjson.dumps(sub).decode())
-            while not self._stopping.is_set():
-                receive = asyncio.ensure_future(ws.recv())
-                stop = asyncio.ensure_future(self._stopping.wait())
-                done, pending = await asyncio.wait(
-                    {receive, stop}, return_when=asyncio.FIRST_COMPLETED
-                )
-                for task in pending:
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
-                if receive in done:
-                    self._write_frame(receive.result())
+            self._ws = ws
+            try:
+                self._write_gap()
+                # Reset here, on a successful connect. Resetting after `_session`
+                # returns is wrong: `_session` only ever returns normally when the
+                # recorder is stopping, so the backoff would compound across
+                # independent, individually successful reconnects. A process that
+                # drops once an hour would, half a day later, be waiting a full
+                # minute to reconnect after a fault it recovers from instantly, and
+                # that minute is order-book data nothing can recover.
+                self._attempt = 0
+                self._backoff = BACKOFF_INITIAL_S
+                for sub in self._subs:
+                    await ws.send(orjson.dumps(sub).decode())
+                while not self._stopping.is_set():
+                    receive = asyncio.ensure_future(ws.recv())
+                    stop = asyncio.ensure_future(self._stopping.wait())
+                    done, pending = await asyncio.wait(
+                        {receive, stop}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for task in pending:
+                        task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+                    if receive in done:
+                        self._handle(receive.result())
+            finally:
+                self._ws = None
 
     async def run(self) -> None:
-        self._write_session("start")
+        self.write_marker("start")
         try:
+            if not self._pairs:
+                # An empty tier still writes its markers, so the archive says the
+                # tier existed and was empty rather than saying nothing at all.
+                await self._stopping.wait()
+                return
             while not self._stopping.is_set():
                 try:
                     await self._session()
@@ -429,65 +1229,464 @@ class Recorder:
                     # thundering herd of reconnects on the same second.
                     delay = min(self._backoff, BACKOFF_MAX_S) * (0.5 + random.random())
                     print(
-                        f"disconnected ({type(exc).__name__}), "
+                        f"[{self._label}] disconnected ({type(exc).__name__}), "
                         f"reconnecting in {delay:.1f}s (attempt {self._attempt})",
                         file=sys.stderr,
+                        flush=True,
                     )
                     with contextlib.suppress(TimeoutError):
                         await asyncio.wait_for(self._stopping.wait(), timeout=delay)
                     self._backoff = min(self._backoff * BACKOFF_FACTOR, BACKOFF_MAX_S)
         finally:
-            self._write_session("stop")
+            self.write_marker("stop")
+
+
+def make_raw_sink(writer: JsonlWriter) -> Callable[[dict[str, Any], str], None]:
+    """Tier 1's sink: the frame, verbatim, into the append-only archive."""
+
+    def sink(payload: dict[str, Any], ts_recv: str) -> None:
+        writer.write(
+            build_line(
+                kind="tick",
+                pair=extract_pair(payload),
+                channel=extract_channel(payload),
+                ts_exchange=extract_ts_exchange(payload),
+                ts_recv=ts_recv,
+                payload=payload,
+            )
+        )
+
+    return sink
+
+
+# --------------------------------------------------------------------------- #
+# The disk guard
+# --------------------------------------------------------------------------- #
+
+
+async def disk_guard(
+    *,
+    stream: Stream,
+    path: Path,
+    floor_bytes: int,
+    interval_s: float,
+    keep: int,
+    stopping: asyncio.Event,
+) -> None:
+    """Degrade tier 1 rather than let the process die of a full disk.
+
+    Sticky: once it has fired it does not fire again and does not reverse. The
+    module docstring says why re-expanding would be worse than staying small.
+    """
+    degraded = False
+    while not stopping.is_set():
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stopping.wait(), timeout=interval_s)
+        if stopping.is_set():
+            return
+        if degraded:
+            continue
+        try:
+            free = shutil.disk_usage(path).free
+        except OSError as exc:  # pragma: no cover - the path exists by construction
+            print(f"disk guard could not read free space: {exc}", file=sys.stderr, flush=True)
+            continue
+        if free >= floor_bytes:
+            continue
+        kept = stream.pairs[:keep]
+        dropped = stream.pairs[keep:]
+        degraded = True
+        if not dropped:
+            continue
+        banner = "!" * 72
+        print(
+            f"\n{banner}\n"
+            f"DISK GUARD: {free / BYTES_PER_GB:.1f} GB free is below the "
+            f"{floor_bytes / BYTES_PER_GB:.1f} GB floor.\n"
+            f"Tier 1 drops to {', '.join(kept)} and STOPS recording {', '.join(dropped)}.\n"
+            f"Tier 2 continues. This is in the archive as a session marker and it will "
+            f"NOT reverse on its own.\n{banner}\n",
+            file=sys.stderr,
+            flush=True,
+        )
+        await stream.drop_to(kept)
+        stream.write_marker(
+            "tier1_degraded",
+            {
+                "free_bytes": free,
+                "floor_bytes": floor_bytes,
+                "kept": list(kept),
+                "dropped": list(dropped),
+            },
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Measurement — what the two tiers will actually cost
+# --------------------------------------------------------------------------- #
+
+
+def envelope_bytes() -> int:
+    """The recorder's own per-line overhead, measured rather than assumed."""
+    payload = {"x": 1}
+    line = build_line(
+        kind="tick",
+        pair="BTC/USD",
+        channel="book",
+        ts_exchange=utc_now_iso(),
+        ts_recv=utc_now_iso(),
+        payload=payload,
+    )
+    return len(orjson.dumps(line)) - len(orjson.dumps(payload)) + 1
+
+
+def summary_row_bytes() -> int:
+    """One summary row's size on disk, measured from a representative row."""
+    row = {
+        "v": SCHEMA_VERSION,
+        "kind": "summary",
+        "pair": "MATIC/USD",
+        "minute": "2026-09-11T16:44:00Z",
+        "spread_bps": [1.23456, 2.34567, 4.56789],
+        "depth_bid_bps": 12.3456,
+        "depth_ask_bps": 13.4567,
+        "mid": 0.12345678,
+        "updates": 1234,
+        "samples": 1230,
+        "depth_samples": 1100,
+        "trades": 12,
+        "volume": 12345.678,
+        "quote_volume": 15234.5,
+    }
+    return len(orjson.dumps(row)) + 1
+
+
+async def measure_stream(
+    url: str,
+    pairs: Sequence[str],
+    channels: Sequence[str],
+    depth: int,
+    seconds: float,
+    *,
+    settle_s: float = 8.0,
+) -> tuple[int, int]:
+    """``(wire_bytes, frames)`` over ``seconds``, after the snapshots have flushed.
+
+    The settle is not optional: every subscription opens with a full book snapshot,
+    and counting those as steady-state traffic overstates the rate several-fold on
+    a short sample.
+    """
+    if not pairs or seconds <= 0:
+        return 0, 0
+    wire = 0
+    frames = 0
+    loop = asyncio.get_running_loop()
+    async with connect(url, max_size=None) as ws:
+        for sub in subscriptions(channels, pairs, depth):
+            await ws.send(orjson.dumps(sub).decode())
+        settle_end = loop.time() + settle_s
+        while loop.time() < settle_end:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(ws.recv(), timeout=max(0.1, settle_end - loop.time()))
+        end = loop.time() + seconds
+        while loop.time() < end:
+            try:
+                frame = await asyncio.wait_for(ws.recv(), timeout=max(0.1, end - loop.time()))
+            except TimeoutError:
+                continue
+            wire += len(frame if isinstance(frame, bytes) else frame.encode())
+            frames += 1
+    return wire, frames
+
+
+# --------------------------------------------------------------------------- #
+# Wiring
+# --------------------------------------------------------------------------- #
+
+
+def describe_tiers(
+    ranked: Sequence[PairStat],
+    tier1: Sequence[str],
+    tier2: Sequence[str],
+    unranked: Sequence[str],
+) -> str:
+    volumes = {stat.symbol: stat.quote_volume_24h for stat in ranked}
+    lines = [
+        f"ranked {len(ranked)} online pairs from the startup ticker snapshot",
+        f"tier 1 (full raw, {len(tier1)}): "
+        + ", ".join(f"{pair} ({volumes.get(pair, 0.0) / 1e6:.1f}M/24h)" for pair in tier1),
+        f"tier 2 (summaries, {len(tier2)}): "
+        + (
+            ", ".join(tier2[:8]) + (" ..." if len(tier2) > 8 else "")
+            if tier2
+            else "none above the floor"
+        ),
+    ]
+    if unranked:
+        lines.append(
+            f"{len(unranked)} online pairs produced no ticker snapshot and are in "
+            f"NEITHER tier: {', '.join(unranked[:12])}"
+            + (" ..." if len(unranked) > 12 else "")
+        )
+    return "\n".join(lines)
+
+
+async def report_cost(
+    args: argparse.Namespace, tier1: Sequence[str], tier2: Sequence[str]
+) -> None:
+    """What the two tiers cost per day, measured on the live socket.
+
+    Measured rather than modelled, because book update rates do not follow volume:
+    on 2026-09-11 XRP/USD published twice as many book updates a second as BTC/USD
+    on a quarter of the volume. Any per-pair estimate from the ticker is wrong by
+    multiples, in an unpredictable direction.
+    """
+    overhead = envelope_bytes()
+    seconds = float(args.measure_s)
+    print(
+        f"measuring each tier for {seconds:.0f}s on the live socket (plus settle) ...",
+        file=sys.stderr,
+        flush=True,
+    )
+    wire1, frames1 = await measure_stream(args.url, tier1, TIER1_CHANNELS, args.depth, seconds)
+    day = 86400.0 / seconds
+    tier1_gb = (wire1 + frames1 * overhead) * day / BYTES_PER_GB
+    print(
+        f"tier 1: {len(tier1)} pairs, {frames1 / seconds:.1f} frames/s, "
+        f"{wire1 * day / BYTES_PER_GB:.2f} GB/day on the wire, "
+        f"{tier1_gb:.2f} GB/day written (envelope {overhead} B/line)",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    sample = list(tier2[: args.measure_tier2_sample])
+    wire2, frames2 = await measure_stream(args.url, sample, TIER2_CHANNELS, args.depth, seconds)
+    if sample:
+        scale = len(tier2) / len(sample)
+        print(
+            f"tier 2: {len(tier2)} pairs, measured on a {len(sample)}-pair sample -> "
+            f"{frames2 / seconds * scale:.0f} frames/s and "
+            f"{wire2 * day * scale / BYTES_PER_GB:.1f} GB/day INBOUND, none of it written",
+            file=sys.stderr,
+            flush=True,
+        )
+    rows_per_day = len(tier2) * (86400 // args.summary_interval_s)
+    tier2_gb = rows_per_day * summary_row_bytes() / BYTES_PER_GB
+    print(
+        f"tier 2: {rows_per_day} rows/day x {summary_row_bytes()} B = "
+        f"{tier2_gb:.3f} GB/day written",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    total = tier1_gb + tier2_gb
+    free = shutil.disk_usage(Path(args.out)).free
+    runway = (free - args.disk_floor_gb * BYTES_PER_GB) / BYTES_PER_GB / total if total else 0.0
+    print(
+        f"total {total:.2f} GB/day written; {free / BYTES_PER_GB:.1f} GB free, so "
+        f"{runway:.1f} days before the {args.disk_floor_gb:.0f} GB floor degrades tier 1",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 async def _run(args: argparse.Namespace) -> int:
-    out_dir = Path(args.out)
-    with JsonlWriter(out_dir) as writer:
-        recorder = Recorder(
-            writer=writer,
-            url=args.url,
-            pairs=tuple(args.pairs),
-            channels=tuple(args.channels),
+    ranked, unranked = await discover_with_retry(args.url, quote=args.quote)
+    tier1, tier2 = derive_tiers(
+        ranked,
+        tier1_count=args.tier1_count,
+        tier2_floor_usd=args.tier2_floor_usd,
+        tier1_override=args.tier1_pairs,
+    )
+    print(describe_tiers(ranked, tier1, tier2, unranked), file=sys.stderr, flush=True)
+
+    if args.dry_run:
+        if args.measure_s > 0:
+            await report_cost(args, tier1, tier2)
+        return 0
+
+    session_extra: dict[str, Any] = {
+        "quote": args.quote,
+        "tier1": list(tier1),
+        "tier2": list(tier2),
+        "tier1_count": args.tier1_count,
+        "tier2_floor_usd": args.tier2_floor_usd,
+        "depth": args.depth,
+        "depth_notional_usd": args.depth_notional_usd,
+        "summary_interval_s": args.summary_interval_s,
+        "derived_from": "ws v2 instrument snapshot + ticker snapshot, 24h volume x vwap",
+        "unranked": list(unranked),
+        "snapshot_at": utc_now_iso(),
+    }
+
+    raw_dir = Path(args.out)
+    summary_dir = Path(args.summary_out)
+    stopping = asyncio.Event()
+    with (
+        JsonlWriter(raw_dir) as raw_writer,
+        JsonlWriter(
+            summary_dir,
+            prefix="summary",
+            validator=validate_summary_line,
+            date_of=summary_date,
+        ) as summary_writer,
+    ):
+        summariser = Summariser(
+            writer=summary_writer,
             depth=args.depth,
+            depth_notional_usd=args.depth_notional_usd,
+            interval_s=args.summary_interval_s,
+        )
+        tier1_stream = Stream(
+            label="tier1",
+            writer=raw_writer,
+            sink=make_raw_sink(raw_writer),
+            url=args.url,
+            pairs=tier1,
+            channels=TIER1_CHANNELS,
+            depth=args.depth,
+            session_extra=session_extra,
             ping_interval=args.ping_interval,
             ping_timeout=args.ping_timeout,
         )
+        tier2_stream = Stream(
+            label="tier2",
+            writer=summary_writer,
+            sink=summariser.handle,
+            url=args.url,
+            pairs=tier2,
+            channels=TIER2_CHANNELS,
+            depth=args.depth,
+            session_extra=session_extra,
+            ping_interval=args.ping_interval,
+            ping_timeout=args.ping_timeout,
+        )
+
+        def stop() -> None:
+            stopping.set()
+            tier1_stream.stop()
+            tier2_stream.stop()
 
         loop = asyncio.get_running_loop()
         with contextlib.suppress(NotImplementedError):
             for signame in ("SIGINT", "SIGTERM"):
                 sig = getattr(signal, signame, None)
                 if sig is not None:
-                    loop.add_signal_handler(sig, recorder.stop)
+                    loop.add_signal_handler(sig, stop)
 
-        task = asyncio.ensure_future(recorder.run())
+        async def flush_loop() -> None:
+            while not stopping.is_set():
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(stopping.wait(), timeout=1.0)
+                if stopping.is_set():
+                    break
+                summariser.flush_due(datetime.now(UTC))
+            summariser.flush_all(datetime.now(UTC))
+
+        tasks = [
+            asyncio.ensure_future(tier1_stream.run()),
+            asyncio.ensure_future(tier2_stream.run()),
+            asyncio.ensure_future(flush_loop()),
+            asyncio.ensure_future(
+                disk_guard(
+                    stream=tier1_stream,
+                    path=raw_dir,
+                    floor_bytes=int(args.disk_floor_gb * BYTES_PER_GB),
+                    interval_s=args.disk_check_s,
+                    keep=args.degraded_tier1_count,
+                    stopping=stopping,
+                )
+            ),
+        ]
+        gathered = asyncio.gather(*tasks)
         try:
             if args.duration_s > 0:
                 with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(asyncio.shield(task), timeout=args.duration_s)
-                recorder.stop()
-            await task
+                    await asyncio.wait_for(asyncio.shield(gathered), timeout=args.duration_s)
+                stop()
+            await gathered
         except KeyboardInterrupt:
-            recorder.stop()
-            await task
-        print(f"wrote {writer.lines_written} lines to {out_dir}", file=sys.stderr)
+            stop()
+            await gathered
+        print(
+            f"tier 1: {raw_writer.lines_written} lines "
+            f"({raw_writer.bytes_written / BYTES_PER_GB:.3f} GB) to {raw_dir}; "
+            f"tier 2: {summariser.rows_written} summary rows to {summary_dir}",
+            file=sys.stderr,
+            flush=True,
+        )
     return 0
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="record.py",
-        description="Standalone Kraken WebSocket v2 to JSONL recorder. Public data only.",
+        description=(
+            "Standalone two-tier Kraken WebSocket v2 recorder. Public data only. "
+            "Both pair lists are derived from a live snapshot; there is no default "
+            "pair list in this file."
+        ),
     )
     parser.add_argument("--url", default=KRAKEN_WS_V2_URL, help="Kraken WebSocket v2 endpoint")
     parser.add_argument(
-        "--pairs", nargs="+", default=list(DEFAULT_PAIRS), help="Kraken v2 symbols, e.g. BTC/USD"
+        "--quote", default=DEFAULT_QUOTE, help="quote currency both tiers are drawn from"
     )
     parser.add_argument(
-        "--channels", nargs="+", default=list(DEFAULT_CHANNELS), help="book, ticker, trade"
+        "--tier1-pairs",
+        nargs="+",
+        default=None,
+        help=(
+            "override tier 1 with these symbols instead of the top --tier1-count by "
+            "24h quote volume. Kraken v2 spelling, e.g. BTC/USD (not XBT/USD)."
+        ),
+    )
+    parser.add_argument(
+        "--tier1-count",
+        type=int,
+        default=DEFAULT_TIER1_COUNT,
+        help="how many of the most liquid pairs get full raw recording",
+    )
+    parser.add_argument(
+        "--tier2-floor-usd",
+        type=float,
+        default=DEFAULT_TIER2_FLOOR_USD,
+        help="24h quote volume a pair must clear to be summarised at all",
+    )
+    parser.add_argument(
+        "--depth-notional-usd",
+        type=float,
+        default=DEFAULT_DEPTH_NOTIONAL_USD,
+        help="the notional the summary's depth figure is measured at, each side",
+    )
+    parser.add_argument(
+        "--summary-interval-s",
+        type=int,
+        default=DEFAULT_SUMMARY_INTERVAL_S,
+        help="seconds per summary row. 60 divides 1, 5 and 15 minutes evenly.",
     )
     parser.add_argument("--depth", type=int, default=DEFAULT_DEPTH, help="order book depth")
-    parser.add_argument("--out", default=str(DEFAULT_OUT_DIR), help="output directory")
+    parser.add_argument("--out", default=str(DEFAULT_OUT_DIR), help="tier 1 output directory")
+    parser.add_argument(
+        "--summary-out", default=str(DEFAULT_SUMMARY_DIR), help="tier 2 output directory"
+    )
+    parser.add_argument(
+        "--disk-floor-gb",
+        type=float,
+        default=DEFAULT_DISK_FLOOR_GB,
+        help="free space below which tier 1 degrades to its top pairs",
+    )
+    parser.add_argument(
+        "--disk-check-s",
+        type=float,
+        default=DEFAULT_DISK_CHECK_S,
+        help="how often free space is checked, in seconds",
+    )
+    parser.add_argument(
+        "--degraded-tier1-count",
+        type=int,
+        default=DEGRADED_TIER1_COUNT,
+        help="how many tier 1 pairs survive a disk-guard degrade",
+    )
     parser.add_argument(
         "--ping-interval",
         type=float,
@@ -509,6 +1708,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=0.0,
         help="stop after this many seconds; 0 runs until interrupted",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="derive both tiers, report, and exit without recording anything",
+    )
+    parser.add_argument(
+        "--measure-s",
+        type=float,
+        default=0.0,
+        help=(
+            "with --dry-run, measure each tier live for this many seconds and report "
+            "GB/day"
+        ),
+    )
+    parser.add_argument(
+        "--measure-tier2-sample",
+        type=int,
+        default=120,
+        help="how many tier 2 pairs to measure before scaling to the whole tier",
     )
     return parser.parse_args(argv)
 

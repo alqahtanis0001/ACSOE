@@ -939,6 +939,38 @@ def test_a_verdict_is_never_retried(
     assert calls == ["pytest", "mypy", "ruff"]
 
 
+def test_a_failure_deposits_the_whole_captured_output_and_names_the_file(
+    verify_module: ModuleType, bare_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The evidence fix. The message is one line; the diagnosis is a file.
+
+    An `ERROR` puts the traceback naming the fixture that raised a hundred lines above
+    the summary, so the three-line tail that survives into the message is precisely the
+    part that says nothing. `toolchain_green` has been intermittently red on a quiescent
+    tree since Phase 2 and every observation of it was a summary with the cause already
+    discarded. Asserted on a line that could only have come from the middle of the
+    output, because a test that checked the tail would pass on the old behaviour too.
+    """
+    buried = "E   fixture 'seeded_store' raised: PermissionError"
+    output = "\n".join([buried, *[f"line {n}" for n in range(40)], "1 error in 9.0s"])
+    scripted_toolchain(verify_module, bare_tree, monkeypatch, [(1, output), (0, ""), (0, "")])
+    outcome = run(verify_module, "toolchain_green", bare_tree)
+
+    assert outcome.result is verify_module.Result.FAIL
+    assert "full output: " in outcome.message
+    assert buried not in outcome.message
+
+    deposited = sorted((bare_tree / verify_module.TOOLCHAIN_EVIDENCE_DIR).glob("*.log"))
+    assert len(deposited) == 1
+    written = deposited[0].read_text(encoding="utf-8")
+    assert buried in written
+    assert "1 error in 9.0s" in written
+    assert "# tool:       pytest" in written
+    assert deposited[0].as_posix() in outcome.message
+    # Written as bytes with `\n`, so a traceback read on Windows is not doubly spaced.
+    assert b"\r\n" not in deposited[0].read_bytes()
+
+
 def test_a_verdict_on_the_retry_stands_as_the_verdict(
     verify_module: ModuleType, bare_tree: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
