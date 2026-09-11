@@ -1370,3 +1370,114 @@ supervisor shows the same shape - four processes for one recorder, two of them s
 
 The check that actually answers the question is the archive: `ts_recv` monotonic across
 the file. After the restart, 111,553 lines and zero out of order.
+
+---
+
+### The manager's screens explained themselves to the wrong reader
+
+**Agent:** A · **Task:** operator request, Recording Manager interface · **Date:** 2026-09-11
+
+**What happened.** The five screens were correct and nobody new could use them. Each opened
+with a dense paragraph written for the person who built it, running the full width of a
+1440px window; the one reading that matters — is the master recording, and how much is
+held — took two clicks; and the empty registry told the operator to copy a YAML file by
+hand and set an id in it, which is the step most likely to be done wrong (a mistyped id
+splits the master's own archive into two apparent sources).
+
+**Fix.** Presentation, with one exception noted below. Every screen now opens with a
+70-character caption — what it is for, how to read it, the terms it uses defined on first
+use — and the longer reasoning sits behind a collapsed "Why" line so it is there without
+being in the way. Every screen ends with a `.next` block that is an action: buttons that go
+to the screen that does the thing, or do it. A sticky status strip on every screen shows
+the master's state, seconds since its last write, hours held and days uncovered, composed
+from the same three endpoints the screens read so it cannot disagree with them. Create node
+puts standalone first as the common case with the one filled button, and folds the server
+option behind a disclosure with a one-line rule for choosing. The four liveness readings
+survive intact everywhere, including in the strip; the master's non-live readings say "not
+recording" rather than "not reachable", because its disk is always reachable and the old
+word was the wrong claim.
+
+**The exception.** The brief said no new endpoints, and also said the empty Sources screen
+should offer a button that registers this machine. Those cannot both hold: nothing existed
+that could write a master entry (`/api/nodes` refuses `kind: master`). Added
+`POST /api/sources/master`, which writes one entry — this machine, as master — with the id
+resolved exactly as `supervise.py` resolves it (`recorder.source_id`, else the hostname),
+so the registry and the filenames cannot drift. It refuses a second master with 409. Two
+tests cover it. Flagged to the operator as the one deliberate departure.
+
+**Consequence.** The strip re-reads the master's status once a minute and ticks the age
+locally between reads; a strip that said "recording" an hour after the recorder died would
+be the one lie this page must not tell. A failed re-read renders the strip at half opacity
+with its age, per number rule 5.
+
+### Tier 2 carried no price, so nothing downstream could be labelled from it
+
+**Agent:** A · **Task:** recorder widening, post-Phase-4 · **Date:** 2026-09-12
+
+**What happened.** An external review of the tier 2 schema found that a summary
+row carried spread, depth, count and volume and no price at all. Volatility,
+momentum and the triple-barrier labels cannot be computed from a series with no
+price in it, so 139 of the 149 recorded pairs were being summarised into
+something the research could not train on.
+
+**Why.** Tier 2 was designed as the cost model's input — spread and depth — and
+the fact that it would also be the *only* history those pairs ever have was not
+carried through to the field list.
+
+**Fix.** Summary rows are now schema version 2 with sixteen more keys: OHLC of
+mid, last trade and VWAP; taker-side volumes and counts and market/limit counts,
+stored as sums so minutes re-aggregate; intra-minute realised variance of mid
+with its sample count; and `clean` plus `flags`. The validator accepts v1 rows so
+readers of the files written before the restart do not refuse them; the writer
+emits only v2. Measured on 2026-09-11's 18,212 real rows: 268 B/row before,
+~532 B/row after, 53 MB/day to ~105 MB/day for the tier. Tier 1 is unchanged.
+
+**Consequence.** Verifying the book checksum turned out to be a prerequisite for
+the health flag rather than an extra: the CRC32 needs `price_precision` and
+`qty_precision` from the `instrument` snapshot, which discovery already had in
+hand and was discarding. `PairStat` now carries them. The formatting rule was
+verified against 800 archived frames (BTC/USD at (1, 8), NEAR/USD at (4, 8))
+and the committed ETH/USD fixture at (2, 8) before a line of it was trusted.
+
+### Decision: a checksum that fails on a snapshot switches verification off
+
+**Agent:** A · **Date:** 2026-09-12
+
+**Options.** Treat every checksum mismatch the same — flag the minute, stop
+sampling, resubscribe — or distinguish a mismatch on a snapshot from one on an
+update.
+
+**Chose.** Distinguish them. A mismatch on an update means the local book has
+drifted and is handled as corruption. A mismatch on a snapshot cannot be drift,
+because the snapshot *is* Kraken's book; it means the recorder's formatting is
+wrong for that pair, so verification is switched off for it, said once in the
+log and reported in the heartbeat, and the pair keeps being sampled unflagged.
+
+**Because.** The failure mode of the alternative is silent and total: one pair
+whose precision Kraken reports differently would have every minute it ever
+records flagged dirty, be excluded from training wholesale, and never trigger a
+single error. A pair that is sampled but unverified is a known, listed
+limitation; a pair that is verified wrongly is a dataset hole with a green light
+on it.
+
+**Cost.** An unverified pair has no protection against real drift. The
+heartbeat's `checksum_unverifiable` list is what makes that visible.
+
+### Decision: the funding poller writes under the archive, not into it
+
+**Agent:** A · **Date:** 2026-09-12
+
+**Options.** Put `funding__<source>__<date>.jsonl` directly in `archive_dir`, as
+the brief read; or in `archive_dir/funding/`.
+
+**Chose.** The subdirectory, configurable as `recorder.funding_dir`.
+
+**Because.** `recording_report.py` measures continuity as the distance between
+consecutive lines across every `*.jsonl` in the raw directory. An hourly line
+there cuts a three-hour outage into three one-hour ones — the same argument that
+keeps the heartbeat out of the archive, and `recording_span_continuous` is the
+gate that would have been quietly flattered.
+
+**Cost.** `archive_move.py`, `archive_merge.py` and the manager's staging do not
+see the funding files, so they do not travel with a move. Small today: seven
+perpetuals hourly is about 150 KB a day.

@@ -70,3 +70,22 @@ recorder:
   # Default: 7. The current day's file is never eligible at any setting — it is
   # still being appended to.
   move_after_days: 7
+
+  # --- scripts/recording/funding.py -------------------------------------------
+  # The perpetual funding-rate and open-interest poller for the tier 1 pairs.
+  # Every key is optional; the defaults are what an unset key means.
+  #
+  # Where its files go. Default: <archive_dir>/funding — under the archive and
+  # tagged by source like everything else, but in a subdirectory of its own so
+  # that an hourly line is never mistaken for raw-archive continuity by anything
+  # that globs `*.jsonl` in archive_dir. `--out` overrides it.
+  funding_dir: ""
+
+  # 24-hour quote volume a perpetual must clear to count as liquid enough to
+  # record. Default: 1000000. A recording choice, not a trading threshold.
+  funding_floor_usd: 1000000
+
+  # Seconds between polls, aligned to midnight UTC so an hourly poller polls on
+  # the hour. Default: 3600. Open interest is not published as a series by the
+  # venue, so this is the only resolution that history will ever have.
+  funding_interval_s: 3600

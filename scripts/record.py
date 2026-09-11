@@ -20,10 +20,34 @@ summarised and it is not deleted.
 
 **Tier 2 — summaries.** Every *other* pair in the quote currency whose 24-hour
 volume clears a configurable floor, reduced to **one row per pair per minute** in
-``data/summaries/``: median spread with its 25th and 75th percentiles, median
-depth at a configurable notional on both sides, trade count, volume, and the
-number of raw updates the row was built from. A couple of hundred bytes a row, so
-the whole tradable universe costs tens of megabytes a day rather than terabytes.
+``data/summaries/``: open, high, low and close of mid, last trade and VWAP;
+median spread with its 25th and 75th percentiles; median depth at a configurable
+notional on both sides; trade count and volume split by taker side and by order
+type; the realised variance of mid within the minute; a health flag; and the
+number of raw updates the row was built from. Around half a kilobyte a row, so
+the whole tradable universe costs a tenth of a gigabyte a day rather than
+terabytes.
+
+**Price is in every row, and that is not optional.** The first cut of tier 2
+carried spread, depth, count and volume and no price at all, which meant
+volatility, momentum and the triple-barrier labels themselves could not be
+computed from it — a summary of the market that could not say where the market
+was. OHLC of mid is taken from the book, because it is there on every update and
+does not depend on a trade printing; the last trade and the VWAP are there so a
+reader can tell where the prints were relative to the quote.
+
+**Realised variance is live-only.** The sum of squared log changes of mid across
+the book updates in the minute cannot be recovered from anything stored: tier 2
+keeps no raw frames, and a 15-minute candle carries four prices. So it is
+computed here, at the time, and the return across the minute boundary is charged
+to the minute it arrived in, which is what makes the per-minute figures sum to
+the hour's exactly.
+
+**The health flag exists so a model never trains on a corrupted minute.** It has
+no predictive value. It says whether the recorder itself was compromised during
+the minute — a disconnect, a reconnect, a book resnapshot, or a checksum
+failure on the book — so that a reader can drop the row rather than learn from a
+spread measured on a book with a level missing.
 
 **Why per minute and not per decision bar.** A minute divides 1, 5 and 15 evenly,
 so one recording rolls up into any candle size the research later asks for.
@@ -49,6 +73,16 @@ The weighted-quantile roll-up is itself an approximation — three quantiles is 
 the minute's full sample — and that is the price of a 200-byte row. The bound is
 honest and stated: it interpolates between stored order statistics. The
 mean-of-medians is not an approximation, it is a different and wrong quantity.
+
+The other fields roll up exactly, and the rule for each is the reason it is
+stored the way it is. ``open`` is the first minute's open and ``close`` the last
+minute's close; ``high`` and ``low`` are the max and min. ``volume``,
+``quote_volume``, ``buy_volume``, ``sell_volume`` and every ``*_trades`` count
+are **sums** — which is why the taker split is stored as two volumes and two
+counts and never as a ratio, since a ratio of sums is not the mean of ratios.
+``vwap`` is re-derived as ``quote_volume / volume`` over the combined minutes,
+never averaged. ``rv`` and ``rv_samples`` are sums. ``flags`` is the union and
+``clean`` is the conjunction: a 15-minute bar with one dirty minute is dirty.
 
 ## Both pair lists are derived, never written down
 
@@ -147,9 +181,11 @@ arithmetic over whole files rather than over ranges inside them.
     payload      dict   the Kraken frame verbatim, or the marker's own object
 
 ``data/summaries/`` — ``gap`` and ``session`` markers use those same seven keys,
-and a summary row uses these fourteen::
+and a summary row uses these thirty::
 
-    v                int    always 1
+    v                int    always 2 (rows written before 2026-09-12 carry 1 and
+                            the first fourteen keys only; the validator accepts
+                            both, the writer emits only 2)
     kind             str    always "summary"
     pair             str    Kraken v2 symbol
     minute           str    ISO-8601 UTC ending "Z", the minute's START, inclusive
@@ -164,10 +200,43 @@ and a summary row uses these fourteen::
     trades           int    trades seen this minute
     volume           float  base-currency volume traded this minute
     quote_volume     float  quote-currency volume traded this minute
+    open             float|None  mid at the first usable book sample of the minute
+    high             float|None  highest mid sampled in the minute
+    low              float|None  lowest mid sampled in the minute
+    close            float|None  mid at the last usable book sample of the minute
+    last_trade       float|None  price of the last trade print in the minute
+    vwap             float|None  quote_volume / volume, None when nothing traded
+    buy_volume       float  base volume where the taker was the buyer
+    sell_volume      float  base volume where the taker was the seller
+    buy_trades       int    prints where the taker was the buyer
+    sell_trades      int    prints where the taker was the seller
+    market_trades    int    prints whose taker order was a market order
+    limit_trades     int    prints whose taker order was a limit order
+    rv               float|None  sum of squared log changes of mid across samples
+    rv_samples       int    how many squared changes went into ``rv``
+    clean            bool   true when ``flags`` is empty
+    flags            list   any of "disconnect", "reconnect", "resnapshot",
+                            "checksum" — what compromised the recorder this minute
 
 ``updates`` minus ``samples`` is not noise to be ignored: it is one-sided and
 crossed books, and a pair where those two diverge is a pair whose spread series is
-thinner than its update count suggests.
+thinner than its update count suggests. ``buy_trades + sell_trades`` and
+``market_trades + limit_trades`` may each fall short of ``trades``: a print whose
+``side`` or ``ord_type`` Kraken did not name is counted in ``trades`` and in
+neither split, rather than guessed into one.
+
+**The book checksum is verified.** Every v2 ``book`` frame carries a CRC32 over
+the top ten levels, and the recorder computes its own from the book it maintains,
+formatting price and quantity at the pair's ``price_precision`` and
+``qty_precision`` from the ``instrument`` snapshot. A mismatch means the local
+book has drifted from Kraken's — a missed delta, a level that should have gone —
+and every spread and depth sample from that book is wrong from then on. So the
+pair stops being sampled, the minute is flagged ``checksum``, and the recorder
+unsubscribes and resubscribes that one symbol on the live socket to get a fresh
+snapshot. A checksum that fails on a **snapshot** is a different thing: nothing
+has drifted yet, so the formatting itself must be wrong for that pair, and
+verification is switched off for it and said so in a ``session`` marker, rather
+than flagging every minute it ever records as corrupt.
 
 Recordings are immutable (invariant 11). Nothing here edits, backfills,
 interpolates or reorders a line. A break in the stream is written down as a
@@ -202,6 +271,7 @@ import shutil
 import signal
 import socket
 import sys
+import zlib
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -237,7 +307,17 @@ LINE_KEYS: Final = frozenset(
 )
 LINE_KINDS: Final = frozenset({"tick", "gap", "session"})
 
-SUMMARY_KEYS: Final = frozenset(
+#: The summary row's own schema version. Separate from :data:`SCHEMA_VERSION`,
+#: which the raw lines and the markers still carry, because the two archives
+#: change at different times: the raw line has not changed since Phase 0 and the
+#: summary row has. Bumped to 2 on 2026-09-12 when price, order flow, realised
+#: variance and the health flag were added.
+SUMMARY_SCHEMA_VERSION: Final = 2
+
+#: The fourteen keys a version-1 summary row carried. Still accepted by the
+#: validator so that a reader checking an archive written before the bump does
+#: not refuse it; never written again.
+SUMMARY_KEYS_V1: Final = frozenset(
     {
         "v",
         "kind",
@@ -255,6 +335,36 @@ SUMMARY_KEYS: Final = frozenset(
         "quote_volume",
     }
 )
+
+SUMMARY_KEYS: Final = SUMMARY_KEYS_V1 | frozenset(
+    {
+        "open",
+        "high",
+        "low",
+        "close",
+        "last_trade",
+        "vwap",
+        "buy_volume",
+        "sell_volume",
+        "buy_trades",
+        "sell_trades",
+        "market_trades",
+        "limit_trades",
+        "rv",
+        "rv_samples",
+        "clean",
+        "flags",
+    }
+)
+
+#: Everything a summary row's ``flags`` may carry. Closed, so that a reader can
+#: enumerate what "not clean" can mean rather than discovering a new reason in
+#: month three of a recording.
+SUMMARY_FLAGS: Final = frozenset({"disconnect", "reconnect", "resnapshot", "checksum"})
+
+#: How many levels a side the Kraken v2 book checksum covers, whatever depth was
+#: subscribed.
+CHECKSUM_LEVELS: Final = 10
 
 #: Tier 1 keeps everything. Tier 2 needs `book` for spread and depth and `trade`
 #: for count and volume; `ticker` would add a 24-hour aggregate the summary does
@@ -761,13 +871,18 @@ def validate_summary_line(line: dict[str, Any]) -> None:
     if line.get("kind") != "summary":
         validate_line(line)
         return
+    version = line.get("v")
+    if version == 1:
+        expected = SUMMARY_KEYS_V1
+    elif version == SUMMARY_SCHEMA_VERSION:
+        expected = SUMMARY_KEYS
+    else:
+        raise SchemaError(f"unknown summary schema version {version!r}")
     keys = set(line)
-    if keys != SUMMARY_KEYS:
-        missing = sorted(SUMMARY_KEYS - keys)
-        extra = sorted(keys - SUMMARY_KEYS)
-        raise SchemaError(f"summary keys wrong: missing={missing} extra={extra}")
-    if line["v"] != SCHEMA_VERSION:
-        raise SchemaError(f"unknown schema version {line['v']!r}")
+    if keys != expected:
+        missing = sorted(expected - keys)
+        extra = sorted(keys - expected)
+        raise SchemaError(f"summary v{version} keys wrong: missing={missing} extra={extra}")
     if not isinstance(line["pair"], str) or not line["pair"]:
         raise SchemaError("a summary row must name one pair")
     minute = line["minute"]
@@ -788,6 +903,74 @@ def validate_summary_line(line: dict[str, Any]) -> None:
         raise SchemaError("samples cannot exceed the updates they were drawn from")
     if line["depth_samples"] > line["samples"]:
         raise SchemaError("depth_samples cannot exceed samples")
+    if version == 1:
+        return
+    _validate_summary_v2(line)
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _validate_summary_v2(line: dict[str, Any]) -> None:
+    """The constraints the version-2 fields must satisfy among themselves.
+
+    Each one is a relation that the summariser maintains by construction, so a
+    violation here is a bug in the summariser and not a property of the market —
+    and a row that breaks one would be read as a market fact by everything
+    downstream.
+    """
+    for key in ("buy_trades", "sell_trades", "market_trades", "limit_trades", "rv_samples"):
+        value = line[key]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise SchemaError(f"{key} must be a count, got {value!r}")
+    if line["buy_trades"] + line["sell_trades"] > line["trades"]:
+        raise SchemaError("buy_trades + sell_trades cannot exceed trades")
+    if line["market_trades"] + line["limit_trades"] > line["trades"]:
+        raise SchemaError("market_trades + limit_trades cannot exceed trades")
+    if line["rv_samples"] > line["samples"]:
+        raise SchemaError("rv_samples cannot exceed samples")
+
+    for key in ("buy_volume", "sell_volume"):
+        if not _is_number(line[key]) or line[key] < 0:
+            raise SchemaError(f"{key} must be a non-negative number, got {line[key]!r}")
+    # Both sides are sums of the same prints that made `volume`, each rounded to
+    # significant figures on its own, so the tolerance is the rounding and no more.
+    if line["buy_volume"] + line["sell_volume"] > line["volume"] * (1.0 + 1e-6) + 1e-12:
+        raise SchemaError("buy_volume + sell_volume cannot exceed volume")
+
+    for key in ("open", "high", "low", "close", "last_trade", "vwap", "rv"):
+        value = line[key]
+        if value is not None and not _is_number(value):
+            raise SchemaError(f"{key} must be a number or null, got {value!r}")
+    ohlc = [line[key] for key in ("open", "high", "low", "close")]
+    present = [value for value in ohlc if value is not None]
+    if present and len(present) != 4:
+        raise SchemaError("open, high, low and close are all set or all null")
+    if present:
+        low, high = line["low"], line["high"]
+        if low > high or low > min(line["open"], line["close"]):
+            raise SchemaError("low must not exceed open, close or high")
+        if high < max(line["open"], line["close"]):
+            raise SchemaError("high must not be below open or close")
+    if (line["open"] is None) != (line["samples"] == 0):
+        raise SchemaError("OHLC of mid is null exactly when there was no usable book sample")
+    if (line["vwap"] is None) != (line["volume"] == 0):
+        raise SchemaError("vwap is null exactly when nothing traded")
+    if (line["last_trade"] is None) != (line["trades"] == 0):
+        raise SchemaError("last_trade is null exactly when nothing traded")
+    if (line["rv"] is None) != (line["rv_samples"] == 0):
+        raise SchemaError("rv is null exactly when rv_samples is zero")
+    if line["rv"] is not None and line["rv"] < 0:
+        raise SchemaError("rv is a sum of squares and cannot be negative")
+
+    flags = line["flags"]
+    if not isinstance(flags, list) or any(flag not in SUMMARY_FLAGS for flag in flags):
+        raise SchemaError(f"flags must be a list drawn from {sorted(SUMMARY_FLAGS)}, got {flags!r}")
+    if len(set(flags)) != len(flags):
+        raise SchemaError("flags must not repeat")
+    if not isinstance(line["clean"], bool) or line["clean"] != (not flags):
+        raise SchemaError("clean must be true exactly when flags is empty")
 
 
 def raw_date(line: dict[str, Any]) -> str:
@@ -936,12 +1119,35 @@ class PairStat:
     error that is hardest to read.
     """
 
-    __slots__ = ("quote_volume_24h", "symbol", "trades_24h")
+    __slots__ = ("price_precision", "qty_precision", "quote_volume_24h", "symbol", "trades_24h")
 
-    def __init__(self, *, symbol: str, quote_volume_24h: float, trades_24h: int) -> None:
+    def __init__(
+        self,
+        *,
+        symbol: str,
+        quote_volume_24h: float,
+        trades_24h: int,
+        price_precision: int | None = None,
+        qty_precision: int | None = None,
+    ) -> None:
         self.symbol = symbol
         self.quote_volume_24h = quote_volume_24h
         self.trades_24h = trades_24h
+        #: From the ``instrument`` snapshot. Both are needed to verify the book
+        #: checksum, and they come from the same socket the book does, so there
+        #: is no table in this file to fall out of date. None when the snapshot
+        #: did not carry them, in which case the pair is recorded unverified.
+        self.price_precision = price_precision
+        self.qty_precision = qty_precision
+
+
+def precisions_of(ranked: Iterable[PairStat]) -> dict[str, tuple[int, int]]:
+    """``symbol -> (price_precision, qty_precision)`` for every pair that has both."""
+    return {
+        stat.symbol: (stat.price_precision, stat.qty_precision)
+        for stat in ranked
+        if stat.price_precision is not None and stat.qty_precision is not None
+    }
 
 
 def subscriptions(
@@ -996,6 +1202,7 @@ async def discover_pairs(
     deadline = loop.time() + timeout_s
     online: list[str] = []
     stats: dict[str, PairStat] = {}
+    precisions: dict[str, tuple[int, int]] = {}
 
     async with connect(url, max_size=None) as ws:
         await ws.send(
@@ -1023,6 +1230,17 @@ async def discover_pairs(
                 if item.get("status") != "online":
                     continue
                 online.append(symbol)
+                price_precision = item.get("price_precision")
+                qty_precision = item.get("qty_precision")
+                if (
+                    isinstance(price_precision, int)
+                    and isinstance(qty_precision, int)
+                    and not isinstance(price_precision, bool)
+                    and not isinstance(qty_precision, bool)
+                    and price_precision >= 0
+                    and qty_precision >= 0
+                ):
+                    precisions[symbol] = (price_precision, qty_precision)
 
         if not online:
             raise RuntimeError(f"no online {quote}-quoted pair in the instrument snapshot")
@@ -1057,10 +1275,13 @@ async def discover_pairs(
                 if volume is None:
                     continue
                 trades = entry.get("trades")
+                precision = precisions.get(symbol)
                 stats[symbol] = PairStat(
                     symbol=symbol,
                     quote_volume_24h=volume,
                     trades_24h=trades if isinstance(trades, int) else 0,
+                    price_precision=precision[0] if precision else None,
+                    qty_precision=precision[1] if precision else None,
                 )
 
     ranked = tuple(sorted(stats.values(), key=lambda stat: -stat.quote_volume_24h))
@@ -1170,21 +1391,82 @@ class BookState:
     spread and a depth sample, which is the whole bargain of tier 2.
     """
 
-    __slots__ = ("asks", "bids", "depth")
+    __slots__ = (
+        "asks",
+        "bids",
+        "corrupt",
+        "depth",
+        "last_mid",
+        "price_precision",
+        "qty_precision",
+        "snapshots",
+        "verify",
+    )
 
-    def __init__(self, depth: int) -> None:
+    def __init__(
+        self,
+        depth: int,
+        *,
+        price_precision: int | None = None,
+        qty_precision: int | None = None,
+    ) -> None:
         self.bids: dict[float, float] = {}
         self.asks: dict[float, float] = {}
         self.depth = depth
+        self.price_precision = price_precision
+        self.qty_precision = qty_precision
+        #: Whether the checksum is verified for this pair. Starts true whenever
+        #: both precisions are known; switched off for good if a *snapshot*
+        #: fails, because nothing can have drifted yet and the formatting must
+        #: be what is wrong.
+        self.verify = price_precision is not None and qty_precision is not None
+        #: Set on a checksum mismatch; cleared by the next snapshot. A corrupt
+        #: book yields no samples.
+        self.corrupt = False
+        #: How many snapshots this book has been built from. The second and
+        #: every later one is a resubscribe, which is a discontinuity.
+        self.snapshots = 0
+        #: The mid at the previous usable sample, carried across minutes so the
+        #: return over the boundary is counted once, in the minute it arrived.
+        #: Cleared by a snapshot so a return never spans a gap.
+        self.last_mid: float | None = None
 
     def reset(self) -> None:
         self.bids.clear()
         self.asks.clear()
+        self.corrupt = False
+        self.last_mid = None
 
     def apply(self, entry: dict[str, Any]) -> None:
         self._side(self.bids, entry.get("bids"))
         self._side(self.asks, entry.get("asks"))
         self._truncate()
+
+    def checksum(self) -> int | None:
+        """The CRC32 Kraken v2 publishes on every book frame, from this book.
+
+        None when the precisions are unknown, because the formatting depends on
+        them: ``77267.0`` at price precision 1 is ``772670`` and at precision 5 is
+        ``7726700000``, and guessing gives a mismatch on every frame that reads
+        as a corrupt book. Verified on 2026-09-11 against 400 archived BTC/USD
+        frames at (1, 8) and 400 NEAR/USD frames at (4, 8): 800 of 800 matched.
+        """
+        if self.price_precision is None or self.qty_precision is None:
+            return None
+        asks = sorted(self.asks.items())[:CHECKSUM_LEVELS]
+        bids = sorted(self.bids.items(), reverse=True)[:CHECKSUM_LEVELS]
+        text = "".join(
+            self._checksum_field(price, self.price_precision)
+            + self._checksum_field(qty, self.qty_precision)
+            for price, qty in (*asks, *bids)
+        )
+        return zlib.crc32(text.encode("ascii")) & 0xFFFFFFFF
+
+    @staticmethod
+    def _checksum_field(value: float, precision: int) -> str:
+        """A number as Kraken concatenates it: fixed decimals, no point, no
+        leading zeros."""
+        return f"{value:.{precision}f}".replace(".", "").lstrip("0")
 
     @staticmethod
     def _side(book: dict[float, float], levels: object) -> None:
@@ -1259,10 +1541,20 @@ class PairMinute:
     """One pair's accumulator for one minute. Reset at each flush, never carried."""
 
     __slots__ = (
+        "buy_trades",
+        "buy_volume",
         "depth_ask",
         "depth_bid",
+        "flags",
+        "last_trade",
+        "limit_trades",
+        "market_trades",
         "mids",
         "quote_volume",
+        "rv",
+        "rv_samples",
+        "sell_trades",
+        "sell_volume",
         "spreads",
         "trades",
         "updates",
@@ -1271,6 +1563,8 @@ class PairMinute:
 
     def __init__(self) -> None:
         self.spreads: list[float] = []
+        #: In arrival order — open is the first, close is the last. Sorted only
+        #: in a copy, at flush, for the median.
         self.mids: list[float] = []
         self.depth_bid: list[float] = []
         self.depth_ask: list[float] = []
@@ -1278,6 +1572,16 @@ class PairMinute:
         self.trades = 0
         self.volume = 0.0
         self.quote_volume = 0.0
+        self.last_trade: float | None = None
+        self.buy_volume = 0.0
+        self.sell_volume = 0.0
+        self.buy_trades = 0
+        self.sell_trades = 0
+        self.market_trades = 0
+        self.limit_trades = 0
+        self.rv = 0.0
+        self.rv_samples = 0
+        self.flags: set[str] = set()
 
     def empty(self) -> bool:
         return self.updates == 0 and self.trades == 0
@@ -1299,6 +1603,9 @@ class Summariser:
         depth: int,
         depth_notional_usd: float,
         interval_s: int = DEFAULT_SUMMARY_INTERVAL_S,
+        precisions: dict[str, tuple[int, int]] | None = None,
+        resubscribe: Callable[[str], None] | None = None,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         if interval_s <= 0:
             raise ValueError("interval_s must be positive")
@@ -1306,15 +1613,37 @@ class Summariser:
         self._depth = depth
         self._notional = depth_notional_usd
         self._interval_s = interval_s
+        self._precisions = dict(precisions or {})
+        #: Asked to fetch a fresh book for one symbol after a checksum failure.
+        #: Called at most once per corruption episode — the flag is set on the
+        #: first mismatch and only a snapshot clears it — so a persistent fault
+        #: cannot turn into a resubscribe storm.
+        self._resubscribe = resubscribe
+        self._now = now or (lambda: datetime.now(UTC))
         self._books: dict[str, BookState] = {}
         self._minutes: dict[str, PairMinute] = {}
-        self._bucket = self.bucket_of(datetime.now(UTC))
+        #: Flags that apply to every pair in a bucket — a disconnect is not a
+        #: property of one pair. Keyed by bucket rather than held as "the current
+        #: set" so a mark that lands in the second between a boundary and the
+        #: flush that follows it is charged to the right minute.
+        self._bucket_flags: dict[datetime, set[str]] = {}
+        self._bucket = self.bucket_of(self._now())
         self.rows_written = 0
+        self.checksum_failures = 0
+        #: Pairs whose snapshot failed the checksum, so verification is off for
+        #: them. Reported in the heartbeat and in a session marker; never a flag
+        #: on the row, because an unverified minute is not a known-bad one.
+        self.unverifiable: set[str] = set()
 
     def bucket_of(self, moment: datetime) -> datetime:
         """The start of the interval a moment falls in, on the UTC hour boundary."""
         into_hour = moment.minute * 60 + moment.second
         return moment.replace(microsecond=0) - timedelta(seconds=into_hour % self._interval_s)
+
+    @property
+    def verified_pairs(self) -> int:
+        """How many pairs the checksum is currently being verified for."""
+        return sum(1 for state in self._books.values() if state.verify)
 
     def _minute(self, symbol: str) -> PairMinute:
         minute = self._minutes.get(symbol)
@@ -1322,6 +1651,13 @@ class Summariser:
             minute = PairMinute()
             self._minutes[symbol] = minute
         return minute
+
+    def mark(self, flag: str) -> None:
+        """Flag the minute in progress, for every pair. The stream calls this
+        when it disconnects and again when it reconnects."""
+        if flag not in SUMMARY_FLAGS:
+            raise ValueError(f"unknown summary flag {flag!r}")
+        self._bucket_flags.setdefault(self.bucket_of(self._now()), set()).add(flag)
 
     def handle(self, payload: dict[str, Any], ts_recv: str) -> None:
         """Sink signature shared with the raw writer; the receive time is unused
@@ -1346,13 +1682,29 @@ class Summariser:
                 continue
             state = self._books.get(symbol)
             if state is None:
-                state = BookState(self._depth)
+                precision = self._precisions.get(symbol)
+                state = BookState(
+                    self._depth,
+                    price_precision=precision[0] if precision else None,
+                    qty_precision=precision[1] if precision else None,
+                )
                 self._books[symbol] = state
+            minute = self._minute(symbol)
             if is_snapshot:
                 state.reset()
+                state.snapshots += 1
+                if state.snapshots > 1:
+                    # A second snapshot is a resubscribe — ours after a checksum
+                    # failure, or Kraken's after a reconnect — and either way the
+                    # book series has a seam in it this minute.
+                    minute.flags.add("resnapshot")
             state.apply(entry)
-            minute = self._minute(symbol)
             minute.updates += 1
+            self._verify(symbol, state, entry, minute, is_snapshot=is_snapshot)
+            if state.corrupt:
+                # A book known to disagree with Kraken's yields no spread, no
+                # depth and no price until a snapshot replaces it.
+                continue
             sample = state.sample(self._notional)
             if sample is None:
                 continue
@@ -1363,6 +1715,49 @@ class Summariser:
                 minute.depth_bid.append(bid_depth)
             if ask_depth is not None:
                 minute.depth_ask.append(ask_depth)
+            if state.last_mid is not None:
+                change = math.log(mid / state.last_mid)
+                minute.rv += change * change
+                minute.rv_samples += 1
+            state.last_mid = mid
+
+    def _verify(
+        self,
+        symbol: str,
+        state: BookState,
+        entry: dict[str, Any],
+        minute: PairMinute,
+        *,
+        is_snapshot: bool,
+    ) -> None:
+        """Compare Kraken's checksum with ours and act on a mismatch."""
+        expected = entry.get("checksum")
+        if not state.verify or not isinstance(expected, int) or isinstance(expected, bool):
+            return
+        actual = state.checksum()
+        if actual is None or actual == expected:
+            return
+        if is_snapshot:
+            # Nothing has drifted: this is the book exactly as Kraken sent it, so
+            # the mismatch is in how this pair's numbers are formatted. Say so
+            # once and stop verifying, rather than flag every minute for months.
+            state.verify = False
+            self.unverifiable.add(symbol)
+            print(
+                f"[tier2] {symbol}: checksum of a SNAPSHOT does not match at precision "
+                f"({state.price_precision}, {state.qty_precision}); verification is off "
+                f"for this pair for the life of the process",
+                file=sys.stderr,
+                flush=True,
+            )
+            return
+        self.checksum_failures += 1
+        minute.flags.add("checksum")
+        if state.corrupt:
+            return
+        state.corrupt = True
+        if self._resubscribe is not None:
+            self._resubscribe(symbol)
 
     def _trade(self, payload: dict[str, Any]) -> None:
         entries = payload.get("data")
@@ -1380,8 +1775,25 @@ class Summariser:
                 continue
             minute = self._minute(symbol)
             minute.trades += 1
-            minute.volume += float(qty)
-            minute.quote_volume += float(price) * float(qty)
+            volume = float(qty)
+            minute.volume += volume
+            minute.quote_volume += float(price) * volume
+            minute.last_trade = float(price)
+            # `side` is the taker's side, per Kraken's own wording. A print that
+            # names neither side is counted in `trades` and in no split — the
+            # validator allows the splits to fall short, never to be guessed.
+            side = entry.get("side")
+            if side == "buy":
+                minute.buy_volume += volume
+                minute.buy_trades += 1
+            elif side == "sell":
+                minute.sell_volume += volume
+                minute.sell_trades += 1
+            ord_type = entry.get("ord_type")
+            if ord_type == "market":
+                minute.market_trades += 1
+            elif ord_type == "limit":
+                minute.limit_trades += 1
 
     def flush_due(self, now: datetime) -> int:
         """Write out the interval that has just closed, if one has. Rows written."""
@@ -1406,6 +1818,11 @@ class Summariser:
 
     def _flush(self, bucket: datetime) -> int:
         minute_iso = bucket.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        bucket_flags = self._bucket_flags.pop(bucket, set())
+        # Anything marked for an older bucket than the one being flushed can
+        # never be written now; dropping it keeps the dict from growing.
+        for stale in [key for key in self._bucket_flags if key < bucket]:
+            del self._bucket_flags[stale]
         written = 0
         for symbol in sorted(self._minutes):
             minute = self._minutes[symbol]
@@ -1415,8 +1832,9 @@ class Summariser:
             mids = sorted(minute.mids)
             bids = sorted(minute.depth_bid)
             asks = sorted(minute.depth_ask)
+            flags = sorted(minute.flags | bucket_flags)
             row: dict[str, Any] = {
-                "v": SCHEMA_VERSION,
+                "v": SUMMARY_SCHEMA_VERSION,
                 "kind": "summary",
                 "pair": symbol,
                 "minute": minute_iso,
@@ -1436,6 +1854,26 @@ class Summariser:
                 "trades": minute.trades,
                 "volume": significant(minute.volume),
                 "quote_volume": significant(minute.quote_volume, 6),
+                "open": significant(minute.mids[0]) if mids else None,
+                "high": significant(mids[-1]) if mids else None,
+                "low": significant(mids[0]) if mids else None,
+                "close": significant(minute.mids[-1]) if mids else None,
+                "last_trade": (
+                    significant(minute.last_trade) if minute.last_trade is not None else None
+                ),
+                "vwap": (
+                    significant(minute.quote_volume / minute.volume) if minute.volume > 0 else None
+                ),
+                "buy_volume": significant(minute.buy_volume),
+                "sell_volume": significant(minute.sell_volume),
+                "buy_trades": minute.buy_trades,
+                "sell_trades": minute.sell_trades,
+                "market_trades": minute.market_trades,
+                "limit_trades": minute.limit_trades,
+                "rv": significant(minute.rv, 6) if minute.rv_samples else None,
+                "rv_samples": minute.rv_samples,
+                "clean": not flags,
+                "flags": flags,
             }
             self._writer.write(row)
             written += 1
@@ -1471,6 +1909,8 @@ class Stream:
         session_extra: dict[str, Any] | None = None,
         ping_interval: float = 20.0,
         ping_timeout: float = 20.0,
+        on_disconnect: Callable[[], None] | None = None,
+        on_reconnect: Callable[[], None] | None = None,
     ) -> None:
         self._label = label
         self._writer = writer
@@ -1483,8 +1923,14 @@ class Stream:
         self._depth = depth
         self._session_extra = dict(session_extra or {})
         self._subs = subscriptions(self._channels, self._pairs, depth)
+        #: How tier 2 learns its minute was compromised. The raw tier has no use
+        #: for them: its gap marker is the record, and there is no row to flag.
+        self._on_disconnect = on_disconnect
+        self._on_reconnect = on_reconnect
         self._ws: Any = None
         self._stopping = asyncio.Event()
+        self._pending: set[asyncio.Future[None]] = set()
+        self.resubscribes = 0
         #: Set when a connection drops; consumed by the next successful connect,
         #: which is what turns a reconnect into a recorded gap rather than a
         #: silent resume.
@@ -1561,6 +2007,37 @@ class Stream:
                 with contextlib.suppress(OSError, websockets.exceptions.WebSocketException):
                     await ws.send(orjson.dumps(message).decode())
 
+    def request_resubscribe(self, symbol: str) -> None:
+        """Fetch a fresh ``book`` snapshot for one symbol, on the live socket.
+
+        Synchronous entry point for the summariser, which is called from inside
+        the receive loop and cannot await. Nothing to do when the socket is down:
+        the reconnect that follows resubscribes everything and Kraken opens each
+        subscription with a snapshot anyway.
+        """
+        ws = self._ws
+        if ws is None or symbol not in self._pairs or "book" not in self._channels:
+            return
+        task = asyncio.ensure_future(self._resubscribe(ws, symbol))
+        # Held until done so the loop cannot garbage-collect a pending send.
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+    async def _resubscribe(self, ws: Any, symbol: str) -> None:
+        for method in ("unsubscribe", "subscribe"):
+            params: dict[str, Any] = {"channel": "book", "symbol": [symbol]}
+            if method == "subscribe":
+                params["depth"] = self._depth
+            with contextlib.suppress(OSError, websockets.exceptions.WebSocketException):
+                await ws.send(orjson.dumps({"method": method, "params": params}).decode())
+        self.resubscribes += 1
+        print(
+            f"[{self._label}] {symbol}: book checksum mismatch, resubscribed for a fresh "
+            f"snapshot (resubscribe {self.resubscribes} this process)",
+            file=sys.stderr,
+            flush=True,
+        )
+
     def _write_gap(self) -> None:
         """Record the break. Called on reconnect, never on disconnect.
 
@@ -1597,6 +2074,8 @@ class Stream:
         )
         self._disconnected_at = None
         self._disconnect_reason = None
+        if self._on_reconnect is not None:
+            self._on_reconnect()
 
     def _handle(self, raw: str | bytes) -> None:
         ts_recv = utc_now_iso()
@@ -1660,6 +2139,8 @@ class Stream:
                     if self._disconnected_at is None:
                         self._disconnected_at = utc_now_iso()
                         self._disconnect_reason = f"{type(exc).__name__}: {exc}"
+                        if self._on_disconnect is not None:
+                            self._on_disconnect()
                     # Jitter, so a Kraken-side outage does not produce a
                     # thundering herd of reconnects on the same second.
                     delay = min(self._backoff, BACKOFF_MAX_S) * (0.5 + random.random())
@@ -1919,7 +2400,7 @@ def envelope_bytes() -> int:
 def summary_row_bytes() -> int:
     """One summary row's size on disk, measured from a representative row."""
     row = {
-        "v": SCHEMA_VERSION,
+        "v": SUMMARY_SCHEMA_VERSION,
         "kind": "summary",
         "pair": "MATIC/USD",
         "minute": "2026-09-11T16:44:00Z",
@@ -1933,7 +2414,24 @@ def summary_row_bytes() -> int:
         "trades": 12,
         "volume": 12345.678,
         "quote_volume": 15234.5,
+        "open": 0.12345678,
+        "high": 0.12356789,
+        "low": 0.12334567,
+        "close": 0.12345678,
+        "last_trade": 0.12345678,
+        "vwap": 0.12345678,
+        "buy_volume": 6789.1234,
+        "sell_volume": 5556.5546,
+        "buy_trades": 7,
+        "sell_trades": 5,
+        "market_trades": 9,
+        "limit_trades": 3,
+        "rv": 1.23456e-07,
+        "rv_samples": 1229,
+        "clean": True,
+        "flags": [],
     }
+    validate_summary_line(row)
     return len(orjson.dumps(row)) + 1
 
 
@@ -2159,6 +2657,12 @@ async def _record(
         "derived_from": "ws v2 instrument snapshot + ticker snapshot, 24h volume x vwap",
         "unranked": list(unranked),
         "snapshot_at": utc_now_iso(),
+        "summary_schema_version": SUMMARY_SCHEMA_VERSION,
+        # Which tier 2 pairs the book checksum can be verified for. A pair not in
+        # this count is recorded unverified, and a reader should know that from
+        # the archive rather than from a log line.
+        "checksum_verifiable": sorted(set(precisions_of(ranked)) & set(tier2)),
+        "checksum_unverifiable": sorted(set(tier2) - set(precisions_of(ranked))),
         # In the marker as well as in the filename. A file can be renamed; a line
         # inside an append-only archive cannot, so this is the copy that survives.
         "source_id": source_id,
@@ -2180,11 +2684,22 @@ async def _record(
         HeartbeatWriter(raw_dir, source_id=source_id) as raw_heartbeat,
         HeartbeatWriter(summary_dir, source_id=source_id) as summary_heartbeat,
     ):
+        # The summariser and the tier 2 stream refer to each other — the stream
+        # tells the summariser about disconnects, the summariser asks the stream
+        # for a fresh snapshot — so the stream is looked up late, by closure.
+        tier2_ref: list[Stream] = []
+
+        def resubscribe(symbol: str) -> None:
+            if tier2_ref:
+                tier2_ref[0].request_resubscribe(symbol)
+
         summariser = Summariser(
             writer=summary_writer,
             depth=args.depth,
             depth_notional_usd=args.depth_notional_usd,
             interval_s=args.summary_interval_s,
+            precisions=precisions_of(ranked),
+            resubscribe=resubscribe,
         )
         tier1_stream = Stream(
             label="tier1",
@@ -2209,7 +2724,10 @@ async def _record(
             session_extra=session_extra,
             ping_interval=args.ping_interval,
             ping_timeout=args.ping_timeout,
+            on_disconnect=lambda: summariser.mark("disconnect"),
+            on_reconnect=lambda: summariser.mark("reconnect"),
         )
+        tier2_ref.append(tier2_stream)
 
         def stop() -> None:
             stopping.set()
@@ -2264,6 +2782,10 @@ async def _record(
                     "archive_dir": summary_dir.as_posix(),
                     "open_date": summary_writer.open_date,
                     "connected": tier2_stream.connected,
+                    "checksum_failures": summariser.checksum_failures,
+                    "resubscribes": tier2_stream.resubscribes,
+                    "checksum_verified_pairs": summariser.verified_pairs,
+                    "checksum_unverifiable": sorted(summariser.unverifiable),
                 },
             ]
 
