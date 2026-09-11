@@ -265,7 +265,14 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   what had failed, and one of the two failures never recurred and is now unattributable for
   good. **Redirect to a file and read the file.** A summary line is not evidence; it is the
   receipt for evidence you did not keep.
-- **A wrong answer that is in range survives; a zero or a crash is found on day one.** The two
+- **A wrong answer that is in range survives; a zero or a crash is found on day one.**
+  A third instance, from the `TOOLCHAIN` widening: C's first benchmark reported that widening
+  `mypy` made it **four times faster** — 17,704 ms before, 4,037 ms after. It was the first
+  invocation after a cache wipe, paying first-touch typeshed and OS-file-cache cost the later
+  runs did not. Plausible, in range, and pointing the wrong way, which is the whole shape.
+  **The control for a benchmark is to run the comparison in reverse order.** If the numbers
+  swap, you measured the machine; if they hold, you measured the change. It cost thirty
+  seconds and it inverted the conclusion. The two
   worst defects of Phase 4 share this property and nothing else: `SELECT MAX(peak_equity)` over
   a decimal string returns *a* peak, plausible and too small, and a hardcoded `900` where
   `timeframes.decision_bar_s` belonged returns *a* gap count, plausible and wrong. Both would
