@@ -102,6 +102,16 @@ All seven specs are finished except one numbered step, recorded under Open Quest
   interval stays a literal and is renamed `_CONSTRUCTED_INTERVAL_S`, because one name serving
   both uses is how the archive read borrowed it.
 
+- **Two Phase 0 assertions decoupled from prose, on the lead's push-back.** Adding the word
+  `runtime` to `orchestrator_empty_registry`'s message turned two tests red because they
+  substring-matched an English sentence. My reading was "a message an operator reads is a
+  contract"; the lead's was "a substring match on prose taxes exactly the improvements you most
+  want someone to make". Both are right about different claims, so they are now two tests: the
+  count is read out with a regex and asserted as an integer, and a separate test pins the
+  disambiguating word against the **real** repository, asserting first that the two criteria's
+  totals genuinely differ by one. Mutations separate cleanly — tidying the word away reddens
+  only the wording test; an off-by-one count reddens the count tests.
+
 - **Spec 51's swap is landed and B verified it independently.** `console/reader.py` calls
   `recent_blocked_ticks(self._feed_limit)`; the primary-preference loop and both
   `_TS_MIN`/`_TS_MAX` sentinels are gone.

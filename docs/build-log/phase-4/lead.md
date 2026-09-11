@@ -98,3 +98,44 @@ use the thing that already tracks the file.
 **Consequence.** The mutation is proven and recorded here rather than in A's log, because the
 write was mine. A's substitute stays: it covers the case where nobody is willing to touch
 `bootstrap.py`, which is most of the time.
+
+### Finishing C's proof after its session died, and one mutation that asked the wrong question
+
+**Agent:** Lead · **Task:** phase close · **Date:** 2026-09-11
+
+**What happened.** C's session hit its usage limit mid-sentence, on the words *"Now proving the
+new test can actually fail — both halves."* The test in question —
+`test_the_engine_count_says_which_engines_it_counted` — was written and committed; the
+falsifiability proof the phase requires of every assertion was not.
+
+**What the tree looked like afterwards, which is the habit working.** One modified file:
+`context/progress/c-interface.md`. No half-written test, no broken module. C wrote the progress
+entry before doing the work, exactly as `script-rules.md` requires, so the design survived the
+death of the session that held it. Phase 3 lost three build logs to an interruption for the
+opposite reason.
+
+**Proof of the wording half, obtained without writing in C's lane.** The assertion is
+`"runtime engines" in empty.message`. Rather than mutate `verify.py`, I ran both criteria
+read-only, took the real message, removed the word from a copy in memory, and showed the
+assertion flips to False while `reported_engine_count` still parses 9 out of the tidied string.
+That demonstrates both halves of C's claim at once: the wording assertion can fail, and it
+fails *independently* of the count assertions, which is what C said was the reason for
+splitting them in two.
+
+**The mutation that asked the wrong question.** For the count half I unregistered engine 19
+from `MANAGE_CHAIN` — my own file, committed, so `git checkout --` was a real safety net rather
+than the absent backup of the earlier entry. Five tests passed. **That is not a survivor and it
+must not be filed as one.** The assertion is relational — `empty + 1 == total` — and removing a
+*runtime* engine moves both counts together, 9→8 and 10→9, so the gap it measures is untouched.
+The mutation never asked the question the assertion answers. Killing that assertion needs the
+gap itself to change, which means adding a second engine to `OFFLINE_CHAIN` in `cli/research.py`
+— A's lane, and A is stood down.
+
+So the honest state: the wording assertion is proven falsifiable, the two claims are proven
+separable, and the relational premise is **unproven** and recorded as such.
+
+**Consequence.** The rule this reinforces is already in `code-standards.md` in B's words — a
+mutation that survives a subset has not survived, it has not been asked — but this is the first
+time it has bitten on a *relational* assertion, where the obvious mutation moves both sides of
+the relation at once and looks conclusive. Worth remembering: **to kill a relational assertion
+you must change the relation, not either operand.**
