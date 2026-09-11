@@ -67,3 +67,34 @@ same invisible-noise problem from the other direction.
 **Consequence.** Phase 3's open item is closed with a mechanism rather than a guess. The
 residual risk is narrowed from "somewhere in the tree" to "any text-mode write under a `-text`
 path", which is checkable.
+
+### The invariant 5 mutation, and a backup that was not one
+
+**Agent:** Lead · **Task:** spec 58 / spec 55 handover · **Date:** 2026-09-11
+
+**What happened.** Spec 55 names a mutation that only the lead may run: add
+`from acsoe.research.backtest import BacktestEngine` to `bootstrap.py` and confirm the
+architecture-invariant-5 guard goes red. A refused to run it and was right to — rule 2 is not
+suspended for a transient write, and a mutation reverted a second later is still a write to
+another agent's path in a shared checkout. A built a substitute and said in its own log
+exactly where the substitute is weaker: no single test both proves the detector can fail and
+proves it reads the real file.
+
+**Result.** The guard fires and names the offending line:
+`AssertionError: assert ['bootstrap.py: from acsoe.research.backtest import BacktestEngine'] == []`.
+Two tests went red, the guard and the meta-test that pins it. Reverted; `git status` reports
+`bootstrap.py` byte-identical to HEAD, and the guard is green again at 28 passed.
+
+**The near-miss, which is the part worth recording.** I took a backup first —
+`cp src/acsoe/bootstrap.py "$TMPDIR/bootstrap.py.bak"` — and `$TMPDIR` was empty in the
+subshell, so the file went somewhere neither branch of the fallback could find. The restore
+raised `FileNotFoundError` with the mutation still in place. It cost nothing because
+`bootstrap.py` had no uncommitted changes and `git checkout --` restored it exactly. **Had it
+carried uncommitted work, the restore would have destroyed it and the backup would not have
+been there.** A backup written to an unresolved shell variable is not a backup, and the moment
+you find that out is the moment you need it. Verify a backup exists before you rely on it, or
+use the thing that already tracks the file.
+
+**Consequence.** The mutation is proven and recorded here rather than in A's log, because the
+write was mine. A's substitute stays: it covers the case where nobody is willing to touch
+`bootstrap.py`, which is most of the time.

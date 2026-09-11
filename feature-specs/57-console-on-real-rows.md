@@ -18,7 +18,7 @@ the Phase 0 seed, and the cycle feed stops scanning the whole of `block_records`
    with a `reason_code` absent from `REASON_PROSE` renders *No reason was recorded.* —
    silently, with no error anywhere — so confirm every code engine 19 can write is in the map,
    and add the missing ones.
-3. **The empty state can now show the scan tally from engine 7 `scout`.** It could not before:
+3. **CORRECTED 2026-09-11 — the empty state CANNOT yet show the scan tally, and this step was wrong to say it could.** It could not before:
    the console is a separate process reading SQLite and never saw the in-memory state where
    the tally lived for one tick. A stale comment in `console/reader.py` naming the wrong
    engine is fixed by this same change. Both are carried from the Phase 3 handoff.

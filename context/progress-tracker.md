@@ -283,6 +283,33 @@ runs is the line nobody thinks to assert on.
 - **~~Phase 2 carries a debt from Phase 1~~ — PAID, 2026-09-10.** The status band gained its `Running` and `Frozen` readings in Phase 2 as required. B added the column (spec 31), the lead wrote the run record and the mode write in `core/`, and C's reader takes the mode as a fact rather than inferring it (spec 32). `console_reads_persisted_mode` PASSes against a real daemon driving a real store. Kept here struck through rather than deleted, because a debt that is quietly removed from a list is indistinguishable from one that was never recorded.
 - **Before Phase 4:** replace the cycle feed's full scan of `block_records` with a most-recent-N read on B's store surface. Harmless while the table holds a seed; engine 19 `memory` starts writing a row per guard per tick in Phase 4, which is when it stops being harmless.
 - **`RUF001` on `tests/console/test_format.py` is suppressed deliberately, not fixed.** `U2212 = "−"` must be the U+2212 glyph: it is the fixture for the minus-sign rule, and "correcting" it to an ASCII hyphen would make the test pass against the exact character it exists to reject. Carries a rule-named `noqa` with its reason, and the general policy now lives in `context/code-standards.md` under Python — name the rule, give the reason, and never suppress a lint to make a failing check pass.
+- **The console's scan tally is DEFERRED, and spec 57 step 3 was wrong to promise it.** Ruled
+  by the lead 2026-09-11. The Phase 3 handoff said the empty state's tally *needs engine 19,
+  which is Phase 4*, and I wrote that into spec 57 as though engine 19 arriving were
+  sufficient. It is not. Engine 7 `scout` publishes `scanned`, `entered` and a per-reason
+  `excluded` tally into `state["scout"]`, where they live for exactly one tick; **no column in
+  any table has room for any of the three**, and engine 19 can only write what the schema
+  holds. C stopped and asked rather than inventing, which is the correct move and the reason
+  this is a deferral rather than a defect.
+  The three options C set out, with what each costs:
+  1. `rejections.details` as JSON, one row per tick — no schema change, but it puts a
+     tick-level fact in a candidate-level table, and **anyone counting refused trades counts
+     it**. That is invariant 12's table meaning something different depending on who reads it.
+  2. One `rejections` row per excluded pair — defensible, since engine 7 is a gate and an
+     excluded pair is a refused candidate, and Phase 3 already mapped all six per-exclusion
+     codes into `REASON_PROSE`, which only makes sense if they reach that table. But it
+     reconstructs `scanned` and **not** `entered`, and writes tens of rows per tick.
+  3. A new column or a small table — lead approval, B's edit.
+  **Deferred because option 2 changes what `rejections` means**, and that is invariant 12
+  territory rather than a console nicety. Deferring is reversible; a table whose rows mean two
+  things is not. Revisit when there is a reason to decide about tick-level telemetry in
+  general — Phase 7's attribution is the natural forcing function, since it reads the equity
+  curve including cash periods and will want to know what the system was doing while flat.
+  What C **did** fix, because it was in scope and simply false: the empty state said the
+  universe filter was engine 4 and its counts arrived in Phase 2. It is engine 7 and it
+  shipped in Phase 3, so the console was telling an operator to wait for something already
+  built. The stage still shows no count and still refuses to show a zero, because a zero there
+  reads as *no pair qualified*, which is a result, when the truth is that nobody counted.
 - **The branch-coverage backlog lives in one place and that place is not this file.** Phase 3
   recorded it inside the handoff box at the top of `feature-specs/PHASE-3-TASKS.md` and
   nowhere else. B went looking for it in `docs/build-log/phase-3.md`, the per-agent logs and

@@ -161,6 +161,37 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   directory in marks every mutation "killed" regardless — manufacturing a clean sweep out of
   someone else's broken tree. The harness refusing to report unless the baseline is green is
   the right posture; naming the hole afterwards is the other half of it.
+- **A seam is tested by neither side by default, and Phase 4 found it twice in one day.**
+  Mutating a module's own logic does not test the fields it *exports*, because the module's
+  tests assert its behaviour and the consumer's tests build their own inputs. C set
+  `label_window_end_ts` to the decision bar — the single field `research/walkforward.py`
+  purges on — and **all 41 labelling tests stayed green**, while three separate tests proving
+  the splitter purges correctly could not see that its input had stopped telling the truth.
+  It is the splitter's own purge mutation reintroduced from the producer side, and it would
+  have shipped a leaky fold with every test in the phase green.
+  A found the same seam from the other end: every test of the labeller seam was green against
+  `label_bars(...)`, a signature agreed by message that **never existed** — C's module landed
+  as `label_frame(...)` and nothing went red, because everything drove a double.
+  So: **mutate the field the other module reads, not only the logic that computes it**, and
+  for any seam agreed between two agents keep at least one test with no double in it.
+- **A mock for a module that does not exist yet needs a test that fails once it does.** The
+  same rule as the import fallback above, arriving through an agreed-by-message signature
+  instead of an `ImportError`. Until the real module lands, every test of the seam is a test
+  of the mock.
+- **A cheap prefilter is a second, weaker parser, and it must be strictly broader than the
+  check it fronts.** A found two of these in one file: a JSON prefilter matching `orjson`'s
+  exact separators before parsing. The second would have classified **the entire recording as
+  unrecorded** — plausible enough to be believed and acted on, and acting on it would have
+  meant rebuilding an archive that was fine. A prefilter that is narrower than its parser does
+  not make the check faster, it makes it wrong on the inputs it silently excludes.
+- **Widening a forbidden-list is as much a defect as narrowing it, and it only shows up when
+  someone tries to do the right thing.** `test_the_live_loop_does_not_import_research` forbade
+  `cli/` from importing `research/` — which is the design `engine-contracts.md` mandates and
+  the exact thing `cli/research.py` exists to do. It cost nothing for four phases and then
+  blocked the correct change the first time it mattered. **An over-strict rule is invisible
+  until it is in someone's way, and at that moment it looks like the change is wrong rather
+  than the rule.** Replace it with narrower, stronger assertions; do not add an exception to
+  it, and do not assume the rule is right because it is old.
 - **A test whose purpose is "this goes red when X changes" must reach X through the code path
   X lives on.** A tripwire built to fire when the daemon was wired to real clients stayed green
   through exactly that change, because it constructed the empty client set *itself* rather than
