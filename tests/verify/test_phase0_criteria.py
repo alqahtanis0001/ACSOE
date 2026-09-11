@@ -77,13 +77,24 @@ def run(verify_module: ModuleType, check: str, root: Path) -> Any:
 #: separate hazard, and it has its own test — `test_the_engine_count_says_runtime_so_it_
 #: cannot_be_read_against_the_registry_total` — so that "the number is right" and "the
 #: sentence is unambiguous" fail independently and for their own reasons.
-_ENGINE_COUNT = re.compile(r"(\d+) registered(?: \w+)? engines")
+#: Two patterns because the two criteria word it in opposite orders —
+#: `orchestrator_empty_registry` says "N registered runtime engines" and
+#: `is_gate_matches_registry` says "N engines registered". That is not a defect worth
+#: fixing (each reads well in its own sentence) but it is worth noticing: two lines of
+#: one report describing the same kind of thing in two shapes is part of why their
+#: differing totals read as a contradiction rather than as two different questions.
+_ENGINE_COUNTS = (
+    re.compile(r"(\d+) registered(?: \w+)? engines"),
+    re.compile(r"(\d+) engines registered"),
+)
 
 
 def reported_engine_count(message: str) -> int:
-    match = _ENGINE_COUNT.search(message)
-    assert match is not None, f"no engine count in the message: {message!r}"
-    return int(match.group(1))
+    for pattern in _ENGINE_COUNTS:
+        match = pattern.search(message)
+        if match is not None:
+            return int(match.group(1))
+    raise AssertionError(f"no engine count in the message: {message!r}")
 
 
 def sql_tables(db_path: Path) -> set[str]:
