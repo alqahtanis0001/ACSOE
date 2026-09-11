@@ -11,32 +11,59 @@ ownership map.
 loader and yields the decision-bar series the labeller consumes, with an injected clock and
 no network. Plus the thing that has been missing since Phase 2: **an archive to replay.**
 
-## The archive problem, stated plainly rather than worked around
+## AMENDED 2026-09-11 — the operator has supplied the real archive
 
-`data/historical/` is empty. The Kraken downloadable OHLCVT archives have not been obtained,
-the operator has rotated the API key, and no live call can be made. What the repository does
-have is roughly three days of **real** Kraken WebSocket v2 trade frames in `data/raw/`,
-recorded by `scripts/record.py` since Phase 0.
+The original version of this spec worked around an empty `data/historical/` by reducing
+`data/raw/` into archive-shaped CSVs. **That workaround is retired.** The operator has
+supplied Kraken's own published history and the loader points at it instead. What A already
+built is not wasted — the reduction, the frame-level de-duplication reasoning and the coverage
+analysis in `PROVENANCE.json` all carry over, and one whole class of hazard in it disappears.
 
-So: build archive-shaped CSVs from those real trades, with the provenance recorded in the
-artefact and in the build log, and let `--live` be the criterion that proves the six-month
-path when the operator supplies a real archive.
+**Read these five facts before writing anything.**
 
-**What must not happen is a synthesised price series.** Every bar must come from real
-recorded trades. This is the same standard `scripts/ohlc_fixture.py` already meets and says
-out loud: the trades are real, the reduction is ours, and that is weaker than an independent
-source — so it is written down rather than implied.
+1. **It is time-and-sales, not OHLCVT.** Three columns, no header, `timestamp,price,volume`,
+   epoch **seconds** as integers. `research/historical.py` expects seven-column OHLCVT, so the
+   reduction to 15-minute bars is still ours — but it now runs on Kraken's own published trade
+   history rather than on our recording. The `trades` column of OHLCVT (the T) becomes a real
+   count of trades in the interval rather than something we cannot know.
+2. **The entire `missing_not_recorded` / `partial_rows` hazard is gone**, and this is the
+   important one. `PROVENANCE.json` currently has to separate a quiet interval from an interval
+   nobody was watching, because our recorder stopped and Kraken never does. Against the
+   published archive **a hole can only mean no trades occurred** — which is exactly what
+   `research/historical.py` assumes and what makes the triple barrier safe to walk. Keep the
+   `missing_quiet` accounting; drop the two categories that no longer exist, and say in the
+   provenance why they are gone rather than silently removing them.
+3. **It is split across two directories, alphabetically, and extraction was still running when
+   this was written.** `data/historical/KRAKEN_TimeAndSales_Combined/` holds `1INCH` to `HONEY`
+   and `data/historical/TimeAndSales_Combined/` holds `HPOS10I` onward. The second grew from
+   408 to 605 files in the minutes it took to write this paragraph, and **`XBTUSD.csv` had not
+   landed yet**. Do not start a reduction against a directory that is still being written:
+   check the pair file you need exists, and that its size is stable across a pause, before
+   reading it. A truncated final line is not a parse error, it is a silently short bar.
+4. **It is 27 GB and growing; `ETHUSD.csv` alone is 1.7 GB.** Stream every file. Never read
+   one into memory, and never sort one.
+5. **The span is real history**: `ETHUSD` runs 2015-08-07 to 2025-12-31. The Phase 4 row asks
+   `--live` to replay six months; six months is the floor, not the target.
+
+**Delete or move the three `*_15.csv` files already in `data/historical/` that were built from
+`data/raw/`.** Two archives in one directory under the same naming convention is a silent
+wrong-source defect: the loader cannot tell them apart, and a labelled slice built from the
+weaker source would look exactly like one built from the stronger. Keep the build script and
+its build-log entries; retire its output.
+
+**What must not happen is still a synthesised price series.** Every bar comes from real trades,
+and the reduction being ours rather than Kraken's published OHLCVT is written down rather than
+implied — the same standard `scripts/ohlc_fixture.py` already meets and says out loud.
 
 ## Implementation
 
-1. A script under `scripts/` that reduces `data/raw/` JSONL trade frames into Kraken-archive-
-   shaped 15-minute OHLCVT CSVs in `data/historical/`, one file per pair, no header, columns
-   in the order `research/historical.py` already defines. De-duplicate at the **frame** level
-   and by exact bytes, never at the trade level — two recorders produce byte-identical frames,
-   two genuinely identical trades arrive inside one frame. `scripts/ohlc_fixture.py` already
-   solved this; reuse the reasoning.
-2. **Never write into `data/raw/`.** Invariant 11: recorded data is immutable, corrections
-   live in a derived layer.
+1. A script under `scripts/` that reduces the operator's time-and-sales CSVs into Kraken-
+   archive-shaped 15-minute OHLCVT CSVs, one file per pair, no header, columns in the order
+   `research/historical.py` already defines. Write them somewhere the raw archive is not, so
+   the source and the derived form can never be confused for one another.
+2. **Never write into `data/raw/` or into the operator's archive directories.** Invariant 11:
+   recorded data is immutable, corrections live in a derived layer. The archive is 27 GB of
+   input the operator obtained once; treat it as read-only in the strongest sense.
 3. **A quiet 15-minute interval produces no row**, exactly as a Kraken archive contains only
    intervals in which trades occurred. Emitting a zero-volume bar at the previous close is
    interpolation wearing a different hat, and it fabricates the barrier touches Phase 4
