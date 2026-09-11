@@ -1136,3 +1136,184 @@ the difference between them is the only measurement there is of what a single re
 misses. A merger that quietly kept one would destroy exactly the comparison that makes a
 second recorder worth running — and the surviving file would be perfectly valid, so
 nothing would report the loss.
+
+---
+
+### `quotes` keyed by pair would have been eaten by the log redactor
+
+**Agent:** A · **Task:** operator request, the per-tick market snapshot · **Date:** 2026-09-11
+
+**What happened.** The obvious shape for the new per-tick log line was
+`{"quotes": {"BTC/USD": {...}, "ETH/USD": {...}}}` — a mapping keyed by pair, which is
+exactly how engine 3 publishes it into `state`. Checked against the real redactor before
+writing it:
+
+```
+keyed by pair : {'quotes': {'BTC/USD': {'bid': '1'},
+                            'KEY/USD': '<redacted>',
+                            'SIGNA/USD': '<redacted>'}}
+list of objects: {'quotes': [{'pair': 'BTC/USD', ...},
+                             {'pair': 'KEY/USD', 'bid': '2'}, ...]}
+```
+
+**Why.** `platform/logging.py` replaces the value of any field whose **name** contains one
+of `SECRET_KEY_TOKENS`, recursing through dicts. That list includes `key`, `sign`, `auth`,
+`nonce` and `otp`. Keyed by pair, the symbol *is* the field name, so any pair containing
+one of those substrings loses its entire quote.
+
+**The failure shape is the worst available.** Not an error, not a gap, not a malformed
+line: one pair, silently absent from every tick, from a comparison that cannot be redone
+later because the live quote is written nowhere else. And it would be a *different* pair
+on a different exchange listing, so it could not be found by testing the pairs we happen
+to trade today.
+
+**Fix.** `quotes` is a **list of objects**, each carrying its own `pair`. A symbol is then
+always a value and never a key name, and the redactor cannot reach it. The redaction is
+correct and is not weakened — the data is shaped to fit it.
+
+**Consequence.** `test_a_pair_whose_symbol_looks_like_a_credential_survives_redaction`
+runs `KEY/USD` and `SIGNA/USD` through the real `_redact_value`, and
+`test_the_same_quotes_keyed_by_pair_would_have_been_destroyed` is its control — without
+that second test the first passes against a redactor that does nothing and proves nothing
+about the shape. `reconcile_spread.py` reads both shapes, because a log written before
+this change still holds real history.
+
+---
+
+### The line is written every tick, including when there is nothing to say
+
+**Agent:** A · **Date:** 2026-09-11
+
+**Options.** Log the snapshot only when there is a subscription, or unconditionally.
+
+**Chose.** Unconditionally, at INFO.
+
+**Because.** "The daemon ran this tick and subscribed to nothing" and "the daemon was not
+running" are different facts with different responses — the first is an urgent bug in the
+scope derivation, the second is an outage — and a line that appeared only when there was
+something to say collapses them into one. `reconcile_universe.py` was carrying the same
+bug from the other side: `_subscription_of` required a *non-empty* list, so an empty
+subscription rendered as "NO PAIR LIST FOUND", which is the message for a daemon that has
+never logged. Both halves are fixed and pinned by
+`test_an_empty_subscription_is_an_answer_not_an_absence`.
+
+**INFO and not DEBUG**, which is not a detail: the shipped `logging.level` is INFO, so at
+DEBUG the line would not be written at all and both reconcilers would report nothing, with
+no error anywhere. It is a record, not a diagnostic.
+
+**Cost.** About 100 bytes per quoted pair per tick — roughly 55 MB a day at 400 pairs,
+against 17 GB a day of recording, kept for `logging.retention_days`. Both the absolute
+spread and the ratio are logged even though either can be derived from bid and ask,
+because this data cannot be regenerated and discovering later that the other unit was
+wanted is not a recoverable mistake.
+
+---
+
+### The reconcilers read only today's log, and said so about a week
+
+**Agent:** A · **Date:** 2026-09-11
+
+**What happened.** Both scripts opened `logs/acsoe.jsonl` and nothing else.
+
+**Why it matters.** `configure_logging` uses `TimedRotatingFileHandler(when="midnight")`,
+which renames yesterday's file to `acsoe.jsonl.2026-09-10`. So
+`reconcile_spread.py --from 2026-09-04 --to 2026-09-11` answered a question about a week
+from today's file alone — **silently**, with a distribution drawn from a fraction of the
+data asked for. A wrong answer that looks like an answer, which is the shape this project
+keeps finding.
+
+**Fix.** Both now read the named log and its rotated siblings, live file last so that
+"the last matching line" still means the most recent one.
+
+---
+
+### Decision: the daemon owns the event name, and a test holds the seam
+
+**Agent:** A · **Date:** 2026-09-11
+
+Three files now agree on one string: `cli/engine.py` writes `tick_market_snapshot`, and
+both reconcilers read it. Nobody edits those three together.
+
+The failure mode of a rename is silence. Both scripts keep running, keep printing, and
+report "nothing found" — which is also exactly what they print when the daemon has never
+run, so the operator's reasonable conclusion is "the daemon has not been up", and the real
+cause is a string that moved.
+
+`cli/engine.py` owns `MARKET_SNAPSHOT_EVENT` and the scripts assert against it rather than
+against a copy. Mutating the constant to `tick_market_view` takes
+`test_both_reconcilers_read_the_event_the_daemon_writes` red with
+`assert 'tick_market_snapshot' == 'tick_market_view'`.
+
+**Confirmed end to end** rather than asserted: the real `run_loop` was driven over a stub
+orchestrator with real `structlog` wiring, and the two scripts were pointed at the file it
+wrote. `reconcile_universe` named `FAKE/USD` as subscribed-but-not-recorded and `SOL/USD`
+as summarised-only; `reconcile_spread` returned the difference distribution, BTC at
+−0.500 bps and ETH at −0.200 bps, which is exactly the arithmetic the fixture was built
+to produce.
+
+---
+
+### `sources.yaml` is gitignored; `sources.example.yaml` is committed
+
+**Agent:** A · **Task:** operator ruling · **Date:** 2026-09-11
+
+The live registry accumulates hostnames and addresses of real machines, some of them not
+ours, and this repository is public. The schema belongs in the repository; the addresses
+do not. The committed file is the example, documented and with the master's id set to
+`CHANGE-ME` so a copy that was never edited is obvious rather than plausible.
+
+The manager treats a missing registry as a first run rather than an error, so a fresh
+checkout starts empty and the SOURCES screen's empty state names the example file and says
+what to do with it — which is the whole point of the empty-state rule.
+
+---
+
+### Create node asks which remote shell, and refuses to guess
+
+**Agent:** A · **Task:** operator ruling · **Date:** 2026-09-11
+
+`list_command` was a registry field with a Linux default. It is now a required choice on
+the Create node screen, with no pre-selected option, and the API refuses a server node
+without one.
+
+The reason is the defect shape rather than the inconvenience: `ls -1` against a Windows
+OpenSSH node returns **nothing**, and an empty listing is indistinguishable from an empty
+archive. The master would report a recording node as having nothing to give, Pull would
+transfer zero files, and every screen would agree with itself. A default that is wrong
+half the time and silent when wrong is worse than a question.
+
+Three options are offered — `ls -1` for Linux and macOS, `dir /b` for a Windows node whose
+OpenSSH shell is `cmd.exe`, and `Get-ChildItem -Name` for one configured with PowerShell —
+because the third case is real and is not obvious to somebody who has only met the first.
+
+---
+
+### The coverage cache key was still not enough, and the test was flaky before it was wrong
+
+**Agent:** A · **Date:** 2026-09-11
+
+**What happened.** The cache key had already been widened from `int(st_mtime)` to
+`st_mtime_ns` earlier today. The test for it then passed, failed, and passed again across
+runs.
+
+**Why.** Nanosecond precision in the *field* is not nanosecond precision in the *clock*.
+Windows updates the system time in roughly 15.6 ms steps, so two writes in quick
+succession genuinely share an `st_mtime_ns`. Pair that with a rewrite of the same length -
+and `T06:00:00` and `T18:00:00` are the same number of bytes - and the key collides
+exactly. A stale measurement is then served as current, and the Coverage grid shows hours
+for a file that has changed.
+
+**A flaky test was the symptom of a real hole**, not of a bad test.
+`scripts/archive_move.py` and the merge both produce same-length rewrites, so it was
+reachable in production; it simply needed two events inside one clock tick, which is
+ordinary on a fast disk.
+
+**Fix.** A file modified within `CACHE_SETTLE_S` (3 s) is measured fresh and never stored.
+Hashing every file to make the key exact would have closed it too and would have defeated
+the cache, which exists precisely to avoid reading 21 GB per page load. The file currently
+being appended to has to be re-measured on every request anyway, so the settle rule costs
+nothing worth having.
+
+**Consequence.** The test now covers both halves, because the first one alone is satisfied
+by a cache that never caches: a recent file must be re-measured, and a backdated one must
+come back from the cache. Three consecutive runs, no flake.

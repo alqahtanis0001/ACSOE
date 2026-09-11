@@ -101,6 +101,10 @@ class CreateNodeRequest(BaseModel):
     ssh_key: str | None = None
     archive_dir: str = node_package.DEFAULT_NODE_ARCHIVE
     remote_archive_dir: str | None = None
+    #: How the node answers a directory listing. Required for a server node and
+    #: deliberately not defaulted: `ls -1` on a Windows node returns nothing, and
+    #: an empty listing is indistinguishable from an empty archive.
+    list_command: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -506,6 +510,25 @@ def create_app(
                 {"error": f"a node is a server or a standalone, not {body.kind!r}"},
                 status_code=400,
             )
+        if body.kind == KIND_SERVER and not (body.list_command or "").strip():
+            # Refused rather than defaulted. `ls -1` against a Windows OpenSSH
+            # node returns nothing, and an empty listing is indistinguishable
+            # from an empty archive — so the wrong default makes the master
+            # report a recording node as having nothing to give, silently.
+            return JSONResponse(
+                {
+                    "error": (
+                        "a server node needs `list_command`: how this node answers a "
+                        "directory listing. There is no default on purpose. `ls -1` on a "
+                        "Windows node returns nothing, and an empty listing looks exactly "
+                        "like an empty archive, so the master would report a recording "
+                        "node as having nothing to give and nothing would say otherwise."
+                        "\n  Linux or macOS: ls -1 {archive}"
+                        "\n  Windows cmd:    dir /b {archive}"
+                    )
+                },
+                status_code=400,
+            )
 
         public_key: str | None = None
         key_path: Path | None = None
@@ -547,6 +570,7 @@ def create_app(
                 ssh_port=body.ssh_port,
                 ssh_key=(str(key_path)[:-4] if key_path else body.ssh_key),
                 archive_dir=body.remote_archive_dir or body.archive_dir,
+                list_command=body.list_command,
             )
         else:
             entry.update(archive_dir=body.archive_dir)

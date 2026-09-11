@@ -1,3 +1,10 @@
+# EXAMPLE registry. Copy this to `sources.yaml` beside it before running the
+# manager; `sources.yaml` is gitignored and never committed.
+#
+# The reason is not tidiness. A live registry holds the hostnames and addresses of
+# real machines, some of which are not ours, and this repository is public. The
+# schema belongs in the repository; the addresses do not.
+#
 # Every recording source the manager knows about.
 #
 # Written by the manager, read by the manager, and safe to edit by hand — it is
@@ -56,12 +63,32 @@
 version: 1
 
 sources:
-  - id: msi
+  # The master. Set `id` to the machine's own recorder.source_id — they are the
+  # same identity, the filenames carry it, and letting them drift splits one
+  # source into two in every report.
+  - id: CHANGE-ME
     kind: master
     archive_dir: data/raw
     summary_dir: data/summaries
-    note: >
-      This machine. Registered by hand as the starting point; the manager will
-      update last_seen. Change `id` here if you change recorder.source_id in
-      config/recorder.yaml — they are the same identity and the filenames carry
-      it, so letting them drift splits one source into two in every report.
+
+  # A server node, as `Create node` writes it. Shown here so the schema is
+  # readable without running anything; delete it if you have none.
+  #
+  # `list_command` is asked for rather than assumed, because `ls -1` against a
+  # Windows OpenSSH node returns nothing — and an empty listing is
+  # indistinguishable from an empty archive, so the master would report a
+  # recording node as having nothing to give.
+  #   Linux or macOS:   "ls -1 {archive}"
+  #   Windows:          "dir /b {archive}"
+  # - id: vps-fra-1
+  #   kind: server
+  #   ssh_host: acsoe@203.0.113.10
+  #   ssh_port: 22
+  #   ssh_key: ~/.ssh/acsoe_node
+  #   archive_dir: /opt/acsoe/data/raw
+  #   list_command: "ls -1 {archive}"
+
+  # A standalone node. No ssh_host, because there is no route to it: it has no
+  # live status and the manager will say so rather than guess.
+  # - id: laptop-2
+  #   kind: standalone

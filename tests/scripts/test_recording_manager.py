@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -305,15 +307,65 @@ def test_a_file_with_no_source_in_its_name_still_appears(tmp_path: Path) -> None
     assert grid["sources"] == ["unnamed"]
 
 
-def test_the_cache_is_invalidated_when_the_file_changes(tmp_path: Path) -> None:
-    """The cache is keyed on size and mtime, so the file being appended to is
-    always re-measured. A cache that outlived its file would freeze today's
-    coverage at whatever it was when the page first loaded."""
+def test_a_recently_written_file_is_never_served_from_the_cache(tmp_path: Path) -> None:
+    """**The collision the key alone cannot close.**
+
+    The key is `(name, size, mtime_ns)`. Windows updates the system clock in
+    ~15.6 ms steps, so two writes in quick succession share an `st_mtime_ns`
+    exactly — and a rewrite of the same day easily has the same length, because
+    `T06:00:00` and `T18:00:00` are the same number of bytes. Same key, stale
+    answer served as current. Reachable in production: `archive_move.py` and the
+    merge both produce same-length rewrites.
+
+    A file touched within `CACHE_SETTLE_S` is therefore measured fresh and not
+    stored. That costs nothing worth having — the file being appended to has to be
+    re-measured on every request anyway.
+    """
     path = write_day(tmp_path / "kraken_v2__msi__2026-09-08.jsonl", "2026-09-08", last_hour=6)
     cache = archive_mod.Cache(tmp_path / "cache.json")
     assert cache.measure(path).recorded_hours == pytest.approx(6.0)
+    # Same length, and quite possibly the same mtime tick.
     write_day(tmp_path / "kraken_v2__msi__2026-09-08.jsonl", "2026-09-08", last_hour=18)
     assert cache.measure(path).recorded_hours == pytest.approx(18.0)
+
+
+def test_a_settled_file_is_served_from_the_cache(tmp_path: Path) -> None:
+    """The other half: the cache has to actually cache, or 21 GB is rescanned on
+    every page load. Proven by backdating the file and then corrupting it — a
+    cached answer is the one that survives."""
+    path = write_day(tmp_path / "kraken_v2__msi__2026-09-08.jsonl", "2026-09-08", last_hour=6)
+    old_time = time.time() - 3600
+    os.utime(path, (old_time, old_time))
+
+    cache = archive_mod.Cache(tmp_path / "cache.json")
+    assert cache.measure(path).recorded_hours == pytest.approx(6.0)
+
+    path.write_text("{ not json at all\n", encoding="utf-8")
+    os.utime(path, (old_time, old_time))
+    # Same name, DIFFERENT size, so the key changes and it is re-measured.
+    assert cache.measure(path).recorded_hours == pytest.approx(0.0)
+
+
+def test_the_cache_survives_a_reload(tmp_path: Path) -> None:
+    path = write_day(tmp_path / "kraken_v2__msi__2026-09-08.jsonl", "2026-09-08", last_hour=6)
+    old_time = time.time() - 3600
+    os.utime(path, (old_time, old_time))
+    cache_path = tmp_path / "cache.json"
+
+    first = archive_mod.Cache(cache_path)
+    first.measure(path)
+    first.save()
+
+    assert cache_path.is_file()
+    assert archive_mod.Cache(cache_path).measure(path).recorded_hours == pytest.approx(6.0)
+
+
+def test_a_corrupt_cache_is_discarded_rather_than_trusted(tmp_path: Path) -> None:
+    """It is a convenience, never an authority: the file is the record."""
+    cache_path = tmp_path / "cache.json"
+    cache_path.write_text("{ not json", encoding="utf-8")
+    path = write_day(tmp_path / "kraken_v2__msi__2026-09-08.jsonl", "2026-09-08", last_hour=6)
+    assert archive_mod.Cache(cache_path).measure(path).recorded_hours == pytest.approx(6.0)
 
 
 # --------------------------------------------------------------------------- #

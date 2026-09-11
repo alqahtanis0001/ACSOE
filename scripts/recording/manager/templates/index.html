@@ -186,6 +186,15 @@
         <label for="node-remote">Archive path on the node, as the master will see it over SSH</label>
         <input type="text" id="node-remote" placeholder="/opt/acsoe/data/raw" autocomplete="off">
       </div>
+      <div class="field">
+        <label for="node-shell">What does the node answer to a directory listing? There is no default — a wrong one returns an empty list, which looks exactly like an empty archive</label>
+        <select id="node-shell">
+          <option value="">Choose one …</option>
+          <option value="ls -1 {archive}">Linux or macOS — ls -1</option>
+          <option value="dir /b {archive}">Windows (OpenSSH, cmd.exe) — dir /b</option>
+          <option value="powershell -NoProfile -Command &quot;Get-ChildItem -Name {archive}&quot;">Windows (OpenSSH, PowerShell shell) — Get-ChildItem -Name</option>
+        </select>
+      </div>
       <button class="action" id="create-server">Create server node</button>
     </div>
 

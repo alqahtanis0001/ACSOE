@@ -37,6 +37,7 @@ because the file is the record and the cache is a convenience.
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
@@ -68,6 +69,24 @@ GAP_NEEDLE: Final = b'"gap"'
 
 CACHE_FILENAME: Final = ".coverage-cache.json"
 CACHE_VERSION: Final = 1
+
+#: A file modified within this many seconds is measured fresh every time and is
+#: never cached.
+#:
+#: The cache key is `(name, size, mtime_ns)`, which is not quite enough on its
+#: own. Windows updates the system clock in ~15.6 ms steps, so two writes in quick
+#: succession can share an `st_mtime_ns` exactly — and if they also happen to
+#: produce the same length, which a rewrite of the same day easily does, the key
+#: collides and a stale measurement is served as current. A test caught it;
+#: `archive_move.py` and the merge both produce same-length rewrites, so it was
+#: reachable in production too.
+#:
+#: Rather than hashing every file to make the key exact, which would defeat the
+#: cache entirely, a file that has just been touched is simply not cached. That
+#: costs nothing worth having: the cache exists to avoid rescanning the settled
+#: archive, and the file currently being appended to has to be re-measured on
+#: every request anyway.
+CACHE_SETTLE_S: Final = 3.0
 
 
 class FileCoverage:
@@ -346,6 +365,10 @@ class Cache:
         return f"{path.name}|{stat.st_size}|{stat.st_mtime_ns}"
 
     def measure(self, path: Path) -> FileCoverage:
+        if self._too_recent(path):
+            # Just written, so its key cannot be trusted to change next time.
+            # Measured fresh and deliberately not stored.
+            return measure(path)
         key = self._key(path)
         entry = self._entries.get(key)
         if entry is not None:
@@ -373,6 +396,13 @@ class Cache:
         }
         self._dirty = True
         return measured
+
+    @staticmethod
+    def _too_recent(path: Path) -> bool:
+        try:
+            return (time.time() - path.stat().st_mtime) < CACHE_SETTLE_S
+        except OSError:  # pragma: no cover - the caller stat()s it immediately after
+            return True
 
     def save(self) -> None:
         if not self._dirty:

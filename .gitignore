@@ -21,6 +21,12 @@ data/staging/
 data/inbox/
 data/nodes/
 scripts/recording/.coverage-cache.json
+
+# The live source registry. It accumulates the hostnames and addresses of real
+# machines - some of them not ours - and this repository is public. The committed
+# file is sources.example.yaml; copy it to sources.yaml on a machine that runs the
+# manager, and that copy stays local.
+scripts/recording/sources.yaml
 *.sqlite
 *.sqlite-journal
 *.parquet

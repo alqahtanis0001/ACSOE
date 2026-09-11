@@ -28,29 +28,25 @@ the boundary reads both and writes neither. An engine doing this work would need
 read access to both and would have a `state` key to write its findings into, and
 the first time it wrote a row the single-writer rule would be gone.
 
-## What it reads, and the contract that is not yet met
+## What it reads
 
-The archive side works today: the session markers are there.
+The archive side reads the recorder's own `session` markers.
 
-The daemon side reads `logs/acsoe.jsonl` for a line carrying the subscription
-engine 2 computed. **Engine 2 does not currently log one.** It publishes
-`state["market_data_recorder"]["subscription"]` every tick and that value never
-reaches the log, so this script has nothing to compare against and will say so
-rather than report a false clean bill. The contract it wants is one line per
-change:
+The daemon side reads `logs/acsoe.jsonl` — and its rotated siblings — for the
+per-tick line `run_loop` in `src/acsoe/cli/engine.py` writes:
 
-    {"event": "market_data_recorder_subscription",
-     "subscription": ["BTC/USD", "ETH/USD", ...],
-     "scope_derived": true, "run_id": "...", "cycle_id": 41,
-     "ts": "2026-09-11T16:44:00.000000Z"}
+    {"event": "tick_market_snapshot",
+     "subscription": ["BTC/USD", "ETH/USD", ...], "subscription_count": 2,
+     "subscription_derived": true, "quotes": [...],
+     "run_id": "...", "cycle_id": 41, "ts": "2026-09-11T16:44:00.000000Z"}
 
-Logging it on *change* rather than per tick is the right shape: the scope is
-already computed as a tuple that "compares equal for the same scope", so a change
-is a cheap test, and one line a tick for a value that moves once a day is noise
-that would bury the line that matters.
+It is written **every tick and unconditionally**, including when the subscription
+is empty. That matters here: "the daemon ran and subscribed to nothing" and "the
+daemon was not running" are different facts, and a line that appeared only when
+there was something to say would collapse them into one.
 
-Until that line exists, run with `--daemon-pairs` to supply the list by hand and
-get the comparison anyway.
+`--daemon-pairs` still supplies the list by hand, for comparing against a machine
+whose log you do not have.
 
 Usage::
 
@@ -78,8 +74,10 @@ CONFIG_CANDIDATES: Final = (
 )
 CONFIG_SECTION: Final = "recorder"
 
-#: The log event this script wants, and the field it reads from it.
-SUBSCRIPTION_EVENT: Final = "market_data_recorder_subscription"
+#: The log event this script reads. Written by `run_loop` in
+#: `src/acsoe/cli/engine.py`, which owns the constant; a test asserts the two
+#: agree, so the seam is pinned rather than remembered.
+SUBSCRIPTION_EVENT: Final = "tick_market_snapshot"
 
 #: Field names accepted as "the daemon's pair list", in order of preference.
 #: Deliberately liberal: engine 2 does not log yet, and a reporting script that
@@ -196,6 +194,24 @@ def latest_recorded(snapshots: list[Snapshot]) -> tuple[set[str], set[str], Snap
 # --------------------------------------------------------------------------- #
 
 
+def log_files(log_path: Path) -> list[Path]:
+    """The named log and its rotated siblings, the live file last.
+
+    `TimedRotatingFileHandler` renames yesterday's file to
+    `acsoe.jsonl.2026-09-10` at midnight, so a script reading only the named path
+    sees today and nothing else. That is fine for "what is the subscription now"
+    and wrong for every question about a window — and the failure is silent: the
+    answer is simply drawn from less data than the operator asked for.
+    """
+    if not log_path.parent.is_dir():
+        return []
+    siblings = sorted(
+        path for path in log_path.parent.glob(log_path.name + "*") if path.is_file()
+    )
+    rotated = [path for path in siblings if path != log_path]
+    return rotated + ([log_path] if log_path.is_file() else [])
+
+
 def read_daemon_subscription(
     log_path: Path,
 ) -> tuple[set[str], dict[str, Any] | None, int]:
@@ -204,27 +220,23 @@ def read_daemon_subscription(
     Takes the **last** matching line, because the scope is re-derived every tick
     as the balance moves and the current one is the only one worth comparing.
     """
-    if not log_path.is_file():
-        return set(), None, 0
     best: dict[str, Any] | None = None
     scanned = 0
-    try:
-        with log_path.open("rb") as handle:
-            for raw in handle:
-                scanned += 1
-                if b'"' not in raw:
-                    continue
-                try:
-                    line = json.loads(raw)
-                except ValueError:
-                    continue
-                if not isinstance(line, dict):
-                    continue
-                pairs = _subscription_of(line)
-                if pairs is not None:
-                    best = line
-    except OSError:
-        return set(), None, scanned
+    for path in log_files(log_path):
+        try:
+            with path.open("rb") as handle:
+                for raw in handle:
+                    scanned += 1
+                    if b'"' not in raw:
+                        continue
+                    try:
+                        line = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if isinstance(line, dict) and _subscription_of(line) is not None:
+                        best = line
+        except OSError:
+            continue
     if best is None:
         return set(), None, scanned
     return set(_subscription_of(best) or ()), best, scanned
@@ -241,12 +253,18 @@ def _subscription_of(line: dict[str, Any]) -> tuple[str, ...] | None:
     named = line.get("event") == SUBSCRIPTION_EVENT
     for field in SUBSCRIPTION_FIELDS:
         value = line.get(field)
-        if not isinstance(value, list) or not value:
+        if not isinstance(value, list):
             continue
         items = tuple(item for item in value if isinstance(item, str) and item)
         if len(items) != len(value):
             continue
-        if named or all("/" in item for item in items):
+        if named:
+            # An EMPTY list from the canonical event is an answer, not an absence:
+            # it says the daemon ran this tick and subscribed to nothing. Requiring
+            # a non-empty list here would render that as "no pair list found",
+            # which is the message for a daemon that never logged at all.
+            return items
+        if items and all("/" in item for item in items):
             return items
     return None
 
@@ -289,11 +307,13 @@ def report(result: dict[str, Any], *, have_daemon_list: bool) -> tuple[list[str]
     if not have_daemon_list:
         lines.append(
             "daemon:   NO PAIR LIST FOUND.\n"
-            f"  Nothing in the log carries one. Engine 2 computes\n"
-            f"  state['market_data_recorder']['subscription'] every tick and never logs it,\n"
-            f"  so there is nothing here to compare against. This is NOT a clean result -\n"
-            f"  it is the absence of one. Add a '{SUBSCRIPTION_EVENT}' line to engine 2, or\n"
-            f"  pass --daemon-pairs to compare against a list you supply."
+            f"  Nothing in the log carries a '{SUBSCRIPTION_EVENT}' line, so there is\n"
+            f"  nothing here to compare against. This is NOT a clean result - it is the\n"
+            f"  absence of one.\n"
+            f"  The daemon writes that line every tick, from run_loop in\n"
+            f"  src/acsoe/cli/engine.py. If the log has none, either the daemon has not\n"
+            f"  run since that was added, or it is writing to a different log directory.\n"
+            f"  Pass --daemon-pairs to compare against a list you supply instead."
         )
         return lines, False
 

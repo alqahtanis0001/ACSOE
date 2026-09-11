@@ -159,8 +159,11 @@ function renderSources(data) {
       el("strong", { text: "No sources are registered yet." }),
       " The registry at ",
       el("code", { text: "scripts/recording/sources.yaml" }),
-      " is empty or missing. Add this machine to it by hand, or use Create node to " +
-      "build a package for another machine — registering it here is part of that.",
+      " is empty or missing. It is gitignored, so a fresh checkout has none: copy ",
+      el("code", { text: "sources.example.yaml" }),
+      " to it and set the master's id to this machine's recorder.source_id. Then add " +
+      "other machines here, or use Create node, which registers them as part of " +
+      "building the package.",
     ]));
     return;
   }
@@ -494,9 +497,23 @@ async function createNode(kind) {
   if (kind === "server") {
     payload.ssh_host = document.getElementById("node-host").value.trim();
     payload.remote_archive_dir = document.getElementById("node-remote").value.trim() || null;
+    payload.list_command = document.getElementById("node-shell").value;
     if (!payload.ssh_host) {
       output.textContent = "A server node needs an SSH host — that is the whole difference " +
         "between it and a standalone node. Without one, create a standalone node instead.";
+      return;
+    }
+    /*
+     * Asked, never assumed. `ls -1` against a Windows OpenSSH node returns
+     * nothing, and an empty listing is indistinguishable from an empty archive —
+     * so a silent default would make the master report a recording node as
+     * having nothing to give, with no error anywhere.
+     */
+    if (!payload.list_command) {
+      output.textContent = "Choose what the node answers to a directory listing. There is no " +
+        "default on purpose: `ls -1` on a Windows node returns nothing, and an empty " +
+        "listing looks exactly like an empty archive — so the master would report a " +
+        "recording node as having nothing to give, and nothing would say otherwise.";
       return;
     }
   }

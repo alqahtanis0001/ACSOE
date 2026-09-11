@@ -46,27 +46,30 @@ This is a **script and not an engine**. See `context/architecture-context.md`,
 "Two records, two writers": the archive has one writer and the store has one
 writer, and anything reading across that boundary reads both and writes neither.
 
-## What it reads, and the contract that is not yet met
+## What it reads
 
-The archive side works today, from `data/summaries/` (tier 2 rows carry
-`spread_bps` directly) and from `data/raw/` (tier 1 book frames, from which the
-spread is computed here the same way the summariser computes it).
+The archive side reads `data/summaries/` (tier 2 rows carry `spread_bps`
+directly) and `data/raw/` (tier 1 book frames, from which the spread is computed
+here the same way the summariser computes it).
 
-The daemon side reads `logs/acsoe.jsonl` for the quote engine 3 published.
-**Engine 3 does not currently log one.** It publishes
-`state["market_sensor"]["quotes"][pair]["spread_pct"]` every tick and that value
-never reaches the log, so there is nothing to compare against and this script says
-so rather than reporting a distribution of nothing. The contract it wants is one
-line per tick:
+The daemon side reads `logs/acsoe.jsonl` — and its rotated siblings — for the
+per-tick line `run_loop` in `src/acsoe/cli/engine.py` writes:
 
-    {"event": "market_sensor_quotes",
-     "quotes": {"BTC/USD": {"bid": "...", "ask": "...", "spread_pct": "0.00021"}},
-     "run_id": "...", "cycle_id": 41, "ts": "2026-09-11T16:44:00.000000Z"}
+    {"event": "tick_market_snapshot", "cycle_id": 41,
+     "quotes": [{"pair": "BTC/USD", "bid": "...", "ask": "...",
+                 "spread": "...", "spread_pct": "0.00021", "ts": "..."}],
+     "ts": "2026-09-11T16:44:00.000000Z"}
 
-One line a tick is 1,440 lines a day, which is nothing beside 17 GB of recording,
-and it is the only way this comparison can ever be made after the fact — the live
-quote is not written anywhere else, and like the order book it cannot be
-reconstructed later.
+**`quotes` is a list of objects and not a mapping keyed by pair**, and that is
+load-bearing rather than stylistic. `platform/logging.py` redacts the value of
+any field whose *name* contains a token like `key`, `sign`, `auth` or `nonce`,
+recursing through dicts — so keyed by pair, a symbol containing one of those
+substrings would have its whole quote replaced by `<redacted>`, silently, on
+every tick, for that pair alone. This reader accepts both shapes because a log
+written before the change may hold the other one, but the list is the right one.
+
+The line is the only record there will ever be: the live quote is written nowhere
+else, and like the order book it cannot be reconstructed later.
 
 Usage::
 
@@ -95,8 +98,10 @@ CONFIG_CANDIDATES: Final = (
 )
 CONFIG_SECTION: Final = "recorder"
 
-#: The log event this script wants.
-QUOTES_EVENT: Final = "market_sensor_quotes"
+#: The log event this script reads. Written by `run_loop` in
+#: `src/acsoe/cli/engine.py`, which owns the constant; a test asserts the two
+#: agree, so the seam is pinned rather than remembered.
+QUOTES_EVENT: Final = "tick_market_snapshot"
 
 #: How far from a daemon quote an archive observation may be and still be paired
 #: with it. 60s because tier 2 is a one-minute bucket, so a tighter window would
@@ -317,41 +322,85 @@ def _best(levels: object, *, highest: bool) -> float | None:
 # --------------------------------------------------------------------------- #
 
 
+def log_files(log_path: Path) -> list[Path]:
+    """The named log and its rotated siblings, the live file last.
+
+    `TimedRotatingFileHandler` renames yesterday's file to
+    `acsoe.jsonl.2026-09-10` at midnight. A script reading only the named path
+    would answer a `--from`/`--to` question about last week from today's file
+    alone — silently, with a distribution drawn from less data than was asked
+    for, which is a worse failure than an error.
+    """
+    if not log_path.parent.is_dir():
+        return []
+    siblings = sorted(
+        path for path in log_path.parent.glob(log_path.name + "*") if path.is_file()
+    )
+    rotated = [path for path in siblings if path != log_path]
+    return rotated + ([log_path] if log_path.is_file() else [])
+
+
+def quote_entries(quotes: object) -> list[tuple[str, Any]]:
+    """``[(pair, quote), ...]`` from either shape of `quotes`.
+
+    The daemon writes a **list of objects**, each carrying its own `pair`, so that
+    a pair symbol is never a dict key — `platform/logging.py` redacts by key name,
+    and a symbol containing `key`, `sign`, `auth` or `nonce` would otherwise be
+    silently replaced by `<redacted>` for that pair alone.
+
+    A mapping is still read, because a log written before that change may hold
+    one, and refusing it would throw away real history to make a point.
+    """
+    if isinstance(quotes, list):
+        entries: list[tuple[str, Any]] = []
+        for item in quotes:
+            if not isinstance(item, dict):
+                continue
+            pair = item.get("pair")
+            if isinstance(pair, str) and pair:
+                entries.append((pair, item))
+        return entries
+    if isinstance(quotes, dict):
+        return [(pair, quote) for pair, quote in quotes.items() if isinstance(pair, str)]
+    return []
+
+
 def read_daemon_spreads(
     log_path: Path, *, start: float, end: float, pairs: set[str] | None
 ) -> tuple[list[Observation], int]:
     """``(observations, lines scanned)`` from the daemon's structured log."""
     found: list[Observation] = []
     scanned = 0
-    if not log_path.is_file():
-        return found, 0
-    try:
-        with log_path.open("rb") as handle:
-            for raw in handle:
-                scanned += 1
-                try:
-                    line = json.loads(raw)
-                except ValueError:
-                    continue
-                if not isinstance(line, dict):
-                    continue
-                quotes = line.get("quotes")
-                if not isinstance(quotes, dict):
-                    continue
-                ts = parse_iso(str(line.get("ts", "")))
-                if ts is None or not start <= ts <= end:
-                    continue
-                for pair, quote in quotes.items():
-                    if not isinstance(pair, str) or (pairs and pair not in pairs):
+    for path in log_files(log_path):
+        try:
+            with path.open("rb") as handle:
+                for raw in handle:
+                    scanned += 1
+                    if b'"quotes"' not in raw:
                         continue
-                    spread = _spread_bps_of(quote)
-                    if spread is None:
+                    try:
+                        line = json.loads(raw)
+                    except ValueError:
                         continue
-                    found.append(
-                        Observation(pair=pair, ts=ts, spread_bps=spread, source="daemon")
-                    )
-    except OSError:
-        return found, scanned
+                    if not isinstance(line, dict):
+                        continue
+                    entries = quote_entries(line.get("quotes"))
+                    if not entries:
+                        continue
+                    ts = parse_iso(str(line.get("ts", "")))
+                    if ts is None or not start <= ts <= end:
+                        continue
+                    for pair, quote in entries:
+                        if pairs and pair not in pairs:
+                            continue
+                        spread = _spread_bps_of(quote)
+                        if spread is None:
+                            continue
+                        found.append(
+                            Observation(pair=pair, ts=ts, spread_bps=spread, source="daemon")
+                        )
+        except OSError:
+            continue
     return found, scanned
 
 
@@ -593,19 +642,19 @@ def run(args: argparse.Namespace) -> int:
     if not daemon:
         print(
             "\nNO LIVE SPREAD FOUND IN THE DAEMON'S LOG.\n"
-            f"  Nothing in {log_path} carries a `quotes` mapping. Engine 3 computes\n"
-            "  state['market_sensor']['quotes'][pair]['spread_pct'] every tick and never\n"
-            "  logs it, so there is nothing to compare the archive against.\n"
+            f"  Nothing in {log_path} (or its rotated siblings) carries a\n"
+            f"  '{QUOTES_EVENT}' line with quotes in it, so there is nothing to compare\n"
+            "  the archive against.\n"
             "\n"
             "  This is NOT a clean result. It is the absence of one, and it is the more\n"
-            "  urgent finding of the two: the live quote is written nowhere else, so\n"
-            "  every tick that passes without it is a comparison that can never be made\n"
-            "  afterwards - the same property that makes the order book unbackfillable.\n"
+            "  urgent kind: the live quote is written nowhere else, so every tick that\n"
+            "  passes without it is a comparison that can never be made afterwards - the\n"
+            "  same property that makes the order book unbackfillable.\n"
             "\n"
-            f"  The contract this script reads is one line per tick:\n"
-            f'    {{"event": "{QUOTES_EVENT}", "quotes": {{"BTC/USD": {{"spread_pct": "0.00021"}}}},\n'
-            f'     "run_id": "...", "cycle_id": 41, "ts": "..."}}\n'
-            "  1,440 lines a day, against 17 GB of recording."
+            "  The daemon writes that line every tick, from run_loop in\n"
+            "  src/acsoe/cli/engine.py. If the log has none, either the daemon has not\n"
+            "  run since that was added, it is writing to a different log directory, or\n"
+            "  the window asked for predates it."
         )
         return 1
 

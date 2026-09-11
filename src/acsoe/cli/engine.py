@@ -21,10 +21,11 @@ import signal
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import Any
+from typing import Any, Final
 
 from acsoe.bootstrap import build_chains
 from acsoe.clients.kraken.client import KrakenClient
@@ -151,6 +152,89 @@ def _sleep_until_next_tick(stop: threading.Event, seconds: float) -> None:
         time.sleep(min(_SHUTDOWN_POLL_S, remaining))
 
 
+#: The one line per tick that says what the daemon was looking at.
+#:
+#: Read by `scripts/reconcile_universe.py` and `scripts/reconcile_spread.py`.
+#: Changing this name or the shape below breaks both, so they assert against the
+#: constants in this module rather than against a string they carry themselves.
+MARKET_SNAPSHOT_EVENT: Final = "tick_market_snapshot"
+
+#: Fields copied out of each quote. `spread_pct` is the derived spread as a
+#: decimal ratio — `(ask - bid) / mid` — which is the shape invariant 5 needs and
+#: the quantity `reconcile_spread.py` converts to basis points.
+QUOTE_FIELDS: Final = ("bid", "ask", "spread", "spread_pct", "ts")
+
+
+def market_snapshot(state: Mapping[str, Any]) -> dict[str, Any]:
+    """What engine 2 subscribed to and what engine 3 quoted, on this tick.
+
+    **This exists because those two values are otherwise unrecoverable.** Both
+    live only in `state`, which is a fresh dict every tick and is discarded at the
+    end of it. The recorder's archive can be read a year later; the daemon's own
+    view of the market cannot be reconstructed from anything at all, so a tick that
+    passes without this line is a comparison that can never be made afterwards —
+    the same property that makes the order book unbackfillable.
+
+    Two comparisons depend on it. `reconcile_universe.py` checks that every pair
+    the daemon subscribes to is one the recorder is recording, because the two
+    lists are derived by different rules and nothing else compares them. And
+    `reconcile_spread.py` checks the spread the cost gate *runs* on against the
+    spread it was *calibrated* on — a systematic difference between them would
+    move every cost-gate verdict in the same direction while every gate kept
+    blocking and passing correctly, and the break-even win rate the whole project
+    is measured against would quietly be wrong.
+
+    ## `quotes` is a list of objects, not a mapping keyed by pair
+
+    That is not a style choice and it is not negotiable.
+    `platform/logging.py` redacts the value of any field whose **name** contains a
+    token like `key`, `sign`, `auth` or `nonce`, recursing through dicts. Keyed by
+    pair, a symbol containing one of those substrings would have its whole quote
+    replaced by `<redacted>` — silently, on every tick, for that pair only, and
+    the reconciler would simply never see it. As a list, a pair symbol is always a
+    *value* and never a key name, so the redactor cannot reach it.
+
+    ## Size
+
+    Roughly 100 bytes per quoted pair per tick. At 400 pairs and a 60-second tick
+    that is about 55 MB a day, against 17 GB a day of recording, kept for
+    `logging.retention_days`. The generosity is deliberate: both the absolute
+    spread and the ratio are logged, because this data cannot be regenerated and
+    working out later that the other unit was the one needed is not a recoverable
+    mistake.
+    """
+    recorder = state.get("market_data_recorder")
+    sensor = state.get("market_sensor")
+    recorder_map: Mapping[str, Any] = recorder if isinstance(recorder, Mapping) else {}
+    sensor_map: Mapping[str, Any] = sensor if isinstance(sensor, Mapping) else {}
+
+    subscription = recorder_map.get("subscription")
+    pairs = [item for item in (subscription or ()) if isinstance(item, str)]
+
+    raw_quotes = sensor_map.get("quotes")
+    quotes: list[dict[str, Any]] = []
+    if isinstance(raw_quotes, Mapping):
+        for pair in sorted(raw_quotes):
+            quote = raw_quotes[pair]
+            if not isinstance(quote, Mapping):
+                continue
+            entry: dict[str, Any] = {"pair": pair}
+            for field in QUOTE_FIELDS:
+                if field in quote:
+                    entry[field] = quote[field]
+            quotes.append(entry)
+
+    return {
+        # Sorted already by engine 2, and sorted again here so two ticks with the
+        # same scope produce byte-identical lists and a diff means a real change.
+        "subscription": sorted(pairs),
+        "subscription_count": len(pairs),
+        "subscription_derived": bool(recorder_map.get("subscription_derived", False)),
+        "quotes": quotes,
+        "quote_count": len(quotes),
+    }
+
+
 def run_loop(
     orchestrator: Orchestrator,
     *,
@@ -184,6 +268,17 @@ def run_loop(
             clear_cycle()
         completed += 1
         log.debug("tick_completed", cycle_id=state["cycle_id"], mode=state["system"]["mode"])
+        # At INFO, not DEBUG, and unconditionally. This is a record rather than a
+        # diagnostic: the two values in it exist nowhere else and are gone at the
+        # end of the tick. It is emitted even when both are empty, because "the
+        # daemon ran and subscribed to nothing" and "the daemon was not running"
+        # are different facts and the reconcilers must be able to tell them apart.
+        log.info(
+            MARKET_SNAPSHOT_EVENT,
+            cycle_id=state["cycle_id"],
+            mode=state["system"]["mode"],
+            **market_snapshot(state),
+        )
         if max_ticks and completed >= max_ticks:
             break
         _sleep_until_next_tick(stop, tick_seconds)
