@@ -270,6 +270,12 @@ def decode_trade_frame(raw: bytes) -> dict[str, Any] | None:
         line = json.loads(stripped, parse_float=Decimal)
     except ValueError:
         return None
+    # Narrowed rather than cast. `json.loads` is typed `Any`, and a recorded line that
+    # parsed to a list or a scalar would reach `.get` below and raise AttributeError
+    # out of a function whose whole contract is to return None for anything it does
+    # not recognise. mypy pointed at the annotation; the hole was real.
+    if not isinstance(line, dict):
+        return None
     if line.get("kind") != "tick" or line.get("channel") != "trade":
         return None
     if not isinstance(line.get("payload"), dict):

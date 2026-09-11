@@ -25,10 +25,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from acsoe.clients.recorder.report import (  # noqa: E402
+from acsoe.clients.recorder.report import (
     DEFAULT_SILENCE_THRESHOLD_S,
-    parse_iso,
     build_report,
+    parse_iso,
 )
 
 DEFAULT_RAW_DIR = Path("data") / "raw"
