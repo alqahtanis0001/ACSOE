@@ -143,6 +143,24 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   nobody thinks to assert on. Run mutations as a matter of course rather than where you suspect
   a problem: that survivor was found after two earlier mutation runs had already made the author
   confident the area was covered.
+- **An incidental kill is worse than a survivor, because a survivor is at least on a list.**
+  A mutation sweep reports a branch as killed without saying *what* killed it. B closed the
+  `discover_migrations` backlog in Phase 4 and found two of its six branches killed only by
+  tests in other agents' files that have nothing to do with migrations — an engine test that
+  happens to build a store over a missing path, and an import-boundary test that happens to
+  walk the directory. Both branches read as covered in every sweep and are covered by nobody:
+  either test could be rewritten tomorrow for an unrelated reason and take the only coverage
+  of a refusal branch with it, silently, with the sweep still reporting a clean kill.
+  So when a sweep says killed, ask **which test killed it**, and if the answer is a file that
+  has no business knowing about the code under test, write the real one. This is the same
+  shape as "a line everybody runs is the line nobody thinks to assert on", arriving in a form
+  no survivor count will ever show you.
+- **Say which directories a sweep excluded, and why.** An excluded directory is a hole in the
+  sweep's coverage with a shape the next reader needs. B excluded `tests/scripts/` from the
+  same sweep because it was red in another agent's lane at the time, and leaving a red
+  directory in marks every mutation "killed" regardless — manufacturing a clean sweep out of
+  someone else's broken tree. The harness refusing to report unless the baseline is green is
+  the right posture; naming the hole afterwards is the other half of it.
 - **A test whose purpose is "this goes red when X changes" must reach X through the code path
   X lives on.** A tripwire built to fire when the daemon was wired to real clients stayed green
   through exactly that change, because it constructed the empty client set *itself* rather than
