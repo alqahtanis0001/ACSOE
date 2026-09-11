@@ -87,6 +87,13 @@ Three distinct concepts. Do not conflate them.
 
 - **Decision bar: 15 minutes.** Features and labels are computed on closed 15-minute candles. New candidates are only born when a bar closes.
 - **Holding horizon: 2 to 12 hours.** Target +3%, stop −1.5%, timeout after 48 bars.
+  **The timeout barrier is a time, not a count of rows**, and the two are only the same thing
+  on a series with no holes. 48 bars means `decision_bar_ts + 48 x decision_bar_s`; a walk
+  visits whatever candles exist inside that window and stops at its end. Counting rows instead
+  stretches a 12-hour horizon into a multi-day one across precisely the quiet periods the
+  archives refuse to interpolate away, and the label built from it is a fabricated outcome.
+  Ruled by the lead 2026-09-11, spec 52. This file is the authority for it; other files point
+  here rather than restating it.
 - **Loop tick: 1 minute.** Manages open positions and entry orders. Never generates new signals.
 
 ## Data sources
@@ -99,6 +106,14 @@ Two properties that must be handled explicitly:
 
 - **Gaps are real.** The archives only contain intervals where trades occurred. A missing candle means no trades, not a data error. Never interpolate a missing candle into existence — mark it and let the feature layer decide.
 - **No book, no spread.** The archives are OHLCVT only. Bid, ask, depth, and spread do not exist in them.
+- **No intra-bar ordering.** A candle whose high reaches the target and whose low reaches the
+  stop does not say which came first, and nothing in the archive can recover it. **The label
+  is `stop`.** Ruled by the lead 2026-09-11, spec 52, and flagged to the operator as
+  overturnable. The favourable reading would invent the ordering on exactly the bars where the
+  market was most violent, and a model trained on that learns an edge that does not exist; the
+  pessimistic reading is the only one that cannot flatter the strategy. The labeller reports
+  how many labels were decided this way, because a slice where that count is large is a slice
+  whose labels are mostly an assumption.
 
 ### Live (recording)
 

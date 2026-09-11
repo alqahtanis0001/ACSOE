@@ -40,7 +40,7 @@ These terms have precise meanings in this codebase. Do not substitute your own.
 
 **Loop tick** — the 1-minute cycle that manages open positions. Never generates new candidates.
 
-**Triple barrier** — the labelling method. From a given bar, ask which of three lines price touches first: the profit target (+3%), the stop (−1.5%), or the timeout (48 bars). Three-class label.
+**Triple barrier** — the labelling method. From a given bar, ask which of three lines price touches first: the profit target (+3%), the stop (−1.5%), or the timeout (48 bars). Three-class label. **What a bar means in that third line, and what happens when one candle touches two barriers, are both settled in `architecture-context.md` under Timeframes and Historical — do not answer either from this entry.**
 
 **Meta-labeling** — training a second model to grade the first model's calls. It sees only the rows where the predictor said BUY, and learns when that call was wrong. This is the Skeptic.
 
