@@ -9,7 +9,7 @@ Confirm you own a file before editing it. If you do not, escalate.
 | Agent | Owns | Heaviest in phases |
 |---|---|---|
 | **Lead** | `src/acsoe/core/`, `bootstrap.py`, `config/`, `context/*` except `progress/`, `feature-specs/`, all merges, all schema approvals | All |
-| **A — Platform** | `pyproject.toml`, `src/acsoe/platform/`, `src/acsoe/cli/`, `scripts/` **except `scripts/verify.py`**, `clients/kraken/`, `clients/recorder/`, `logs/`, `data/`, `engines/exchange`, `market_data_recorder`, `market_sensor`, `data_guard`, `research/replay.py`, `research/historical.py` | 0, 2, 4 |
+| **A — Platform** | `pyproject.toml`, `src/acsoe/platform/`, `src/acsoe/cli/`, `scripts/` **except `scripts/verify.py`**, `clients/kraken/`, `clients/recorder/`, `logs/`, `data/`, `engines/exchange`, `market_data_recorder`, `market_sensor`, `data_guard`, `research/replay.py`, `research/historical.py`, `research/backtest.py` | 0, 2, 4 |
 | **B — Store and trading** | `clients/store/`, `db/migrations/`, `engines/scout`, `cost`, `risk`, `safety`, `decision`, `execution`, `position_manager`, `exit` | 0, 3, 5, 6, 8 |
 | **C — Interface and models** | `console/`, `scripts/verify.py`, `tests/harness/`, `engines/feature`, `macro_context`, `prediction`, `regime`, `anomaly`, `order_book`, `adaptive_router`, `skeptic`, `memory`, `tournament`, `research/labelling.py`, `research/training.py`, `research/walkforward.py` | 0, 1, 4, 5, 6, 7, 8 |
 
@@ -29,6 +29,14 @@ Not every phase needs all three. Phase 1 is almost entirely C; Phase 3 is almost
 ## Paths nobody was assigned
 
 **`scripts/`.** A owns the directory and `scripts/record.py`; **C owns `scripts/verify.py`**. The permanent roster used to hand A all of `scripts/` while the Phase 0 split handed C `verify.py`, which is two agents owning one file. Verification is C's surface — C owns the test harness and the fixtures the criteria read — so `verify.py` sits with C, permanently, not just in Phase 0.
+
+**`research/backtest.py`.** Engine 23 `backtest` lives in `research/` and appeared in no row
+of the roster: A owns `replay.py` and `historical.py` there, C owns `labelling.py`,
+`training.py` and `walkforward.py`, and the engine class itself was assigned to nobody.
+**Assigned to A**, Phase 4, spec 55. A owns the replay it drives and `cli/research.py`, where
+the offline chain is assembled and where engine 23 is registered — never in `bootstrap.py`.
+The labelling and walk-forward modules it calls stay C's, and that is an ordinary agent seam,
+recorded in the table below.
 
 **Tests.** C owns the `tests/` root scaffolding, `tests/conftest.py`, the *structure* of `tests/fixtures/`, the shared fixtures, and `tests/harness/`. Beyond that, each agent owns `tests/` mirroring the source paths it owns.
 
@@ -86,7 +94,9 @@ Agree the contract first, mock it, build against the mock.
 | Last-known-good exchange values, retained for emergency liquidation only | A (`clients/kraken/`) | B (21 `position_manager`, 22 `exit`) | `clients/kraken/contracts.py` |
 | Run record, written at startup, read for restart detection. **The console's test is whether a previous `runs` row exists, not whether two `run_id`s differ — `run_id` is UNIQUE, so they always differ.** | Lead (orchestrator) | C (console) | `clients/store/contracts.py` |
 | Persisted system mode, so the console can render Running and Frozen rather than only the idle readings. **Consumed by the console, produced in Phase 2 — Phase 1 renders the idle readings only, because no daemon runs in Phase 1 and neither other state can occur.** Written by the command reader that already owns `state["system"]["mode"]`, never inferred from the `commands` trail. | Lead (`core/` command reader) writes the value, B migrates the column it lands in | C (console) | `db/migrations/`, `clients/store/contracts.py`, `context/ui-context.md` |
-| Offline chain invocation | A owns `acsoe research`; C owns engines 20 and 23 | — | `cli/research.py` |
+| Offline chain invocation | A owns `acsoe research` and engine 23 `backtest`; C owns engine 20 `tournament` | — | `cli/research.py` |
+| Labelled decision bars, and the label window end the splitter purges on. **Produced and consumed in Phase 4.** | C (`research/labelling.py`) | A (23 `backtest`), C (`research/walkforward.py`) | `src/acsoe/research/labelling.py` |
+| The archive under `data/historical/` and the replayed decision-bar series | A (`research/replay.py`, `scripts/`) | C (`research/labelling.py`) | `src/acsoe/research/historical.py` |
 | 15-minute candles | A | C | `engines/market_sensor/contracts.py` |
 | Store read and write | B | A, C | `clients/store/contracts.py` |
 | Database schema | B | C | `db/migrations/` |
