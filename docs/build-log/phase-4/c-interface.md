@@ -845,3 +845,50 @@ the ambiguity comes back silently.
 
 Those two tests going red is the system working, incidentally. A message an operator reads is a
 contract, and it should not be possible to change one by accident.
+
+### Decoupling the count assertions from the prose, after the wording change broke two tests
+
+**Agent:** C · **Task:** spec 48 · **Date:** 2026-09-11
+
+**What happened.** Adding the word `runtime` to `orchestrator_empty_registry`'s message turned
+two Phase 0 tests red. They asserted `"0 registered engines" in outcome.message` and
+`"1 registered engines" in outcome.message` — substring matches on an English sentence.
+
+My first instinct was that this was the system working: a message an operator reads is a
+contract and should not be changeable by accident. The lead's push-back is better, and it is
+worth writing down because it is not the obvious reading: **a substring match on prose taxes
+exactly the improvements you most want someone to make**, and the tax is paid in red tests that
+look like regressions. Nothing about the report got worse when the sentence got clearer.
+
+**Both instincts are right about different things, and that is the resolution.** Those two tests
+care about a **count**. Whether the sentence is unambiguous is a *different claim* with a
+different failure mode, and it had been riding along inside a substring match that was never
+written to carry it.
+
+**Fix — two claims, two tests, each failing for its own reason.**
+
+- `reported_engine_count(message)` reads the number out with a regex tolerant of the wording,
+  and the two existing tests assert on the integer. They no longer care how the sentence reads.
+- `test_the_engine_count_says_which_engines_it_counted` runs both criteria against the **real**
+  repository, asserts the two totals genuinely differ by one — the premise, so the
+  disambiguation is load-bearing rather than a precaution — and then asserts the smaller one
+  says which engines it counted. Against a fabricated tree it would be asserting about a
+  sentence nobody will ever read.
+
+**Proved by mutation, and the two mutations separate cleanly**, which is the whole point:
+
+| mutation | result |
+|---|---|
+| the word `runtime` tidied back out of the message | **only** the wording test red; 64 passed |
+| the count itself off by one | both count tests red, and the wording test too — it asserts the +1 relationship as its premise |
+
+The helper needed two patterns, and that turned out to be a small finding of its own:
+`orchestrator_empty_registry` says *"N registered runtime engines"* while
+`is_gate_matches_registry` says *"N engines registered"*. Neither is wrong in its own sentence,
+but two lines of one report describing the same kind of thing in opposite shapes is part of why
+their differing totals read as a contradiction rather than as two different questions.
+
+**The lead's cause analysis was right and my fix had already landed before the message arrived.**
+The gate was red in their tree because I was mid-save on `verify.py`; the suite before it had
+failed on a different test entirely, which looked like flakiness and was the tree moving under
+two runs. Recorded because both of us nearly filed it as the machine's intermittent fault.
