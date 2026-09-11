@@ -280,6 +280,17 @@ class BacktestEngine(BaseEngine):
             "has_spread": False,
             "book_note": NO_BOOK_NOTE,
             "spread_note": NO_SPREAD_NOTE,
+            # How much of this result was priced on an exact spread and how much on
+            # an approximation, per tier, from the replay that produced it.
+            #
+            # `has_spread: False` above is a yes-or-no about a source that has none;
+            # this is the arithmetic for a source that has some. They are not the
+            # same statement and the second cannot be derived from the first: a
+            # replay reading the recorder's own archive will have tier 1 exact
+            # spreads for its ten most liquid pairs and tier 2 minute medians for
+            # the other 137, and `has_spread: True` would then be true and useless.
+            # A reader asked to weigh a backtest needs the fraction, not the flag.
+            "spread_provenance": report.spread_provenance(),
             "phase_note": PHASE_NOTE,
             # And the one that decides whether a barrier may be walked across a hole.
             # `None` means unknown and a consumer must treat it as `False` would be

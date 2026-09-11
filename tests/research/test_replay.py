@@ -27,8 +27,13 @@ from acsoe.research.historical import ArchiveError
 from acsoe.research.replay import (
     COVERAGE_UNKNOWN_NOTE,
     PROVENANCE_FILENAME,
+    SPREAD_NONE_NOTE,
+    SPREAD_TIER_EXACT,
+    SPREAD_TIER_MINUTE,
+    SPREAD_TIER_NONE,
     ArchiveReplay,
     DecisionBar,
+    ReplayReport,
     SettableClock,
     load_provenance,
     pair_from_filename,
@@ -675,3 +680,103 @@ def test_from_archives_reports_coverage_unknown_because_it_reads_no_sidecar(
         directory, interval_s=INTERVAL_S, clock=clock
     )
     assert by_directory.report.holes_mean_no_trades is True
+
+
+# --------------------------------------------------------------------------- #
+# Spread provenance: how much of a result is exact and how much is approximated
+# --------------------------------------------------------------------------- #
+#
+# A backtest's spread is not one thing. Tier 1 gives the spread at the instant of a
+# book update — the same quantity engine 3 publishes live. Tier 2 gives the median
+# over the minute the bar falls in, which is right on average, wrong at the instant,
+# and wrong by more precisely when the market is moving, which is when the cost
+# gate's verdict matters most. An OHLCVT archive gives nothing at all.
+#
+# Reporting a single spread number over a mixture of those hides the one fact that
+# decides how much the number is worth, and hides it without failing anything: the
+# result still prints, still looks like a backtest, and is quietly part fiction.
+
+
+def _report(**overrides: object) -> ReplayReport:
+    base: dict[str, object] = {
+        "interval_s": INTERVAL_S,
+        "pairs": ("BTCUSD",),
+        "archives": {},
+        "bar_count": 0,
+        "first_ts": None,
+        "last_ts": None,
+        "coverage_known": False,
+    }
+    base.update(overrides)
+    return ReplayReport(**base)  # type: ignore[arg-type]
+
+
+def test_an_uncounted_replay_reports_none_and_not_zero() -> None:
+    """Invariant 3 in miniature. `None` is "nobody counted"; 0.0 is "counted, and
+    none of it was exact". Rounding the first down to the second would turn an
+    absent measurement into a reassuring one."""
+    report = _report()
+    assert report.spread_exact_fraction is None
+    assert report.spread_provenance()["exact_fraction"] is None
+    assert report.spread_provenance()["counted_bars"] == 0
+
+
+def test_an_ohlcvt_replay_says_there_is_no_spread_rather_than_a_bad_one() -> None:
+    """Today's case, and it must not read as "approximated". There is nothing to
+    approximate: the archive carries no bid and no ask."""
+    note = _report(has_spread=False).spread_provenance()["note"]
+    assert note == SPREAD_NONE_NOTE
+    assert "approximation of a spread" in note
+
+
+def test_a_replay_claiming_a_spread_without_counting_is_called_unknown() -> None:
+    """The dangerous middle case: a source that HAS a spread, and a replay that did
+    not record which tier it came from. Treated as approximated, loudly, rather
+    than defaulting to exact."""
+    provenance = _report(has_spread=True).spread_provenance()
+    assert provenance["exact_fraction"] is None
+    assert "UNKNOWN" in provenance["note"]
+    assert "not an exact one" in provenance["note"]
+
+
+def test_a_mixed_replay_reports_the_fraction_that_was_exact() -> None:
+    report = _report(
+        has_spread=True,
+        spread_tiers={SPREAD_TIER_EXACT: 820, SPREAD_TIER_MINUTE: 180},
+    )
+    assert report.spread_exact_fraction == pytest.approx(0.82)
+    provenance = report.spread_provenance()
+    assert provenance["counted_bars"] == 1000
+    assert provenance["approximated_bars"] == 180
+    assert provenance["by_tier"] == {SPREAD_TIER_EXACT: 820, SPREAD_TIER_MINUTE: 180}
+    assert "82.0%" in provenance["note"]
+
+
+def test_bars_priced_on_nothing_count_against_the_exact_fraction() -> None:
+    """A bar with no spread at all is not neutral. It is a bar the cost model was
+    not applied to, and folding it out of the denominator would report a run as
+    more exact than it was."""
+    report = _report(
+        has_spread=True,
+        spread_tiers={SPREAD_TIER_EXACT: 50, SPREAD_TIER_NONE: 50},
+    )
+    assert report.spread_exact_fraction == pytest.approx(0.5)
+    assert report.spread_provenance()["approximated_bars"] == 50
+
+
+def test_a_fully_exact_replay_says_so() -> None:
+    report = _report(has_spread=True, spread_tiers={SPREAD_TIER_EXACT: 400})
+    assert report.spread_exact_fraction == 1.0
+    assert report.spread_provenance()["approximated_bars"] == 0
+
+
+def test_todays_replay_of_a_real_archive_reports_no_spread(
+    holed_archive: tuple[Path, list[int]], clock: FixedClock
+) -> None:
+    """End to end against the OHLCVT archive the replay actually reads."""
+    directory, _ = holed_archive
+    replay = ArchiveReplay.from_directory(directory, interval_s=INTERVAL_S, clock=clock)
+    provenance = replay.report.spread_provenance()
+    assert replay.report.has_spread is False
+    assert provenance["counted_bars"] == 0
+    assert provenance["exact_fraction"] is None

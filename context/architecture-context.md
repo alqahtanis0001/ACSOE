@@ -141,6 +141,23 @@ Engine 9 (order book) and the spread component of Engine 10 cannot be backtested
 
 Never put large arrays in SQLite. Never put relational records in Parquet.
 
+### Two records, two writers, and neither is derived from the other
+
+**The archive and the store are separate.** Neither is built from the other and neither can be rebuilt from the other.
+
+| | What it records | Its one writer |
+|---|---|---|
+| **The archive** — JSONL in `data/raw/` and `data/summaries/` | What the **market** did | `scripts/record.py` |
+| **The store** — SQLite | What the **system decided** | Engine 19 `memory` |
+
+The archive is an observation: it would contain exactly the same bytes if this system had never placed an order, and it keeps being written in `idle` and `frozen` because an hour not recorded is an hour of cost-model input that money cannot buy back. The store is a judgement: every row in it is something this system chose, including — especially — every candidate it refused.
+
+**The offline chain is the one place they meet, and it meets them in one direction.** Engine 23 `backtest` *reads* the archive, replays it through the engines, and its decisions are written by engine 19 `memory` like any other run's, distinguished by `run_id`. That is the whole of the relationship: archive in, store rows out, through the ordinary writer. A replay never writes to the archive — invariant 11, a recording is immutable — and nothing in the store is ever the source of an archive line. Engine 20 `tournament` reads the store only and never touches the archive at all.
+
+**Nothing else writes to either.** Any comparison *between* them is therefore an offline script that reads both and writes neither. That is why `scripts/reconcile_universe.py` and `scripts/reconcile_spread.py` are scripts and not engines: an engine that reconciled the two would need read access to both and would sit in a chain whose every other member has exactly one of them, and the first time it wrote a row to record what it found, the single-writer rule would be gone. A script cannot make that mistake, because it has no `state` to write into and no place in a registry.
+
+*Where this stands today:* engine 23 is built and replays `data/historical/`, producing a labelled slice in `data/derived/`; engines 5 to 16 do not exist, so a replay does not yet run decisions through the chain and therefore does not yet produce store rows. The rule above is the design the Phase 6 and Phase 7 work is held to, and it is written here now because the two reconciliation scripts are the first things to read across the boundary.
+
 ### Why `block_records` is its own table
 
 A rejection is one *candidate* refused, with its reason and its SHAP row. A block record is one *tick* on which trading was blocked, and most blocked ticks never had a candidate at all — `data_guard` blocks before the opportunity chain has run. Folding blocks into `rejections` would mean writing candidate-less rejection rows, inflating the counterfactual dataset that is the point of the whole exercise: anyone counting refused trades would be counting feed outages too.

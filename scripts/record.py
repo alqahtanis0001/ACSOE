@@ -82,6 +82,58 @@ own. A guard that re-expanded as soon as space was freed would oscillate around
 the floor and cut the archive into interleaved fragments of two different
 subscription sets, which is worse to replay than one clean recorded step down.
 
+## One writer per archive, enforced by the operating system
+
+Two recorders appending to one archive directory is silent corruption: the lines
+interleave, `ts_recv` stops being monotonic within a file, and the duplicate
+`session` markers make a replay believe the subscription set changed when it did
+not. Nothing downstream would report it, because every individual line is valid.
+
+So the recorder takes an **exclusive OS-level lock** on a ``.recorder.lock`` file
+in each output directory and refuses to start if it cannot get it. The lock is an
+`fcntl.flock` on POSIX and an `msvcrt.locking` byte-range lock on Windows —
+**never a PID file**. A PID file survives its process: a machine that loses power
+mid-recording comes back with a stale PID file and an archive that no recorder
+will write to until somebody notices and deletes it by hand, which is the outage
+this lock exists to prevent rather than to cause. A kernel lock is released when
+the file handle is closed, and every path out of a process closes its handles,
+including a `SIGKILL` and a power cut.
+
+## Where the files go, and what they are called
+
+The output directories come from ``config/recorder.yaml`` (``recorder.archive_dir``
+and ``recorder.summary_dir``), overridable with ``--out`` and ``--summary-out``,
+defaulting to ``data/raw`` and ``data/summaries``. A missing config file, a
+missing key, or an absent PyYAML all fall through to those defaults — the script
+has to keep running when it is the only file on the machine.
+
+Each file is **one UTC calendar day of one source**::
+
+    kraken_v2__<source_id>__2026-09-11.jsonl
+    summary__<source_id>__2026-09-11.jsonl
+
+``source_id`` comes from ``recorder.source_id`` or ``--source-id`` and defaults to
+the hostname. It is in the name because a file named only by its date collides
+with the same date recorded on another machine, and the two ways out of a
+collision — overwrite, or concatenate — either lose a day or produce a file whose
+lines are out of order across the seam with nothing saying where the seam is.
+With the source in the name, two machines' archives merge by copying files into
+one directory, and ``scripts/archive_merge.py`` can say which periods two sources
+both cover instead of picking one.
+
+The day boundary is enforced two ways. Every line is routed to the file for the
+date the line itself carries, and a background task additionally rolls the open
+files over when the UTC date changes, so a **stream that goes quiet across
+midnight still closes yesterday's file** rather than holding it open until the
+next frame. Rotation happens mid-run: the recorder is meant to run for months
+without a restart, and a restart is the only other way to get a new file.
+
+A run that starts at midday **appends to that date's existing file** rather than
+opening a second one. The writer opens in binary append mode and never truncates,
+so one file covers exactly one day no matter how many times the process was
+restarted inside it — which is what makes merging, moving and gap-accounting
+arithmetic over whole files rather than over ranges inside them.
+
 ## Line schemas
 
 ``data/raw/`` — one JSON object per line, exactly these seven keys, unchanged::
@@ -135,6 +187,7 @@ Usage::
     python scripts/record.py --dry-run --measure-s 90 # derive, measure, report, exit
     python scripts/record.py --tier1-pairs BTC/USD ETH/USD
     python scripts/record.py --tier2-floor-usd 10000 --disk-floor-gb 40
+    python scripts/record.py --out E:/acsoe/raw --source-id vps-fra-1
 """
 
 from __future__ import annotations
@@ -143,9 +196,11 @@ import argparse
 import asyncio
 import contextlib
 import math
+import os
 import random
 import shutil
 import signal
+import socket
 import sys
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime, timedelta
@@ -156,6 +211,15 @@ from typing import Any, Final, Self
 import orjson
 import websockets
 from websockets.asyncio.client import connect
+
+# The single-instance lock is an OS lock, and the two operating systems spell it
+# differently. Imported at module scope rather than inside the lock so that a
+# platform with neither fails loudly at import, where it is obvious, instead of
+# silently recording without a lock.
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 SCHEMA_VERSION: Final = 1
 KRAKEN_WS_V2_URL: Final = "wss://ws.kraken.com/v2"
@@ -215,6 +279,72 @@ DEFAULT_DISK_CHECK_S: Final = 30.0
 DEFAULT_OUT_DIR: Final = Path("data") / "raw"
 DEFAULT_SUMMARY_DIR: Final = Path("data") / "summaries"
 
+#: Where the `recorder:` mapping is looked for, in order, relative to both the
+#: working directory and the repository this file sits in. `recorder.yaml` is
+#: first because `default.yaml` is `extra="forbid"` in the package's own loader —
+#: a `recorder:` key there needs a matching pydantic section or nothing starts.
+#: Both are read so that moving the keys into the main config later costs nothing
+#: here.
+CONFIG_CANDIDATES: Final = (
+    Path("config") / "recorder.yaml",
+    Path("config") / "default.yaml",
+)
+
+#: The config section this script reads. Everything outside it is ignored, so the
+#: same reader works against either file.
+CONFIG_SECTION: Final = "recorder"
+
+#: Characters allowed in a ``source_id``. Deliberately excludes ``_``: the
+#: filename separator is ``__``, and an underscore inside the source id would make
+#: ``kraken_v2__a__b__2026-09-11.jsonl`` ambiguous to split. Excludes the path
+#: separators for the obvious reason — a source id reaches a filename directly.
+SOURCE_ID_ALLOWED: Final = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-"
+)
+SOURCE_ID_MAX: Final = 48
+
+#: The filename separator. Two characters, not one, because ``kraken_v2`` already
+#: contains a single underscore and the name has to split unambiguously into
+#: prefix, source and date.
+NAME_SEPARATOR: Final = "__"
+
+#: The single-instance lock file, one per output directory. Dot-prefixed and not
+#: ``.jsonl``, so every ``*.jsonl`` glob in the project steps over it.
+LOCK_FILENAME: Final = ".recorder.lock"
+
+#: How often the midnight roller checks whether the UTC date has moved on. The
+#: line-level rotation already handles a busy stream; this bounds how long a
+#: *quiet* one can hold yesterday's file open after midnight.
+MIDNIGHT_CHECK_S: Final = 10.0
+
+#: How often each tier writes a heartbeat. One a minute per tier is ~0.6 MB a day
+#: against 17 GB of recording.
+DEFAULT_HEARTBEAT_S: Final = 60.0
+
+#: The heartbeat file's prefix, and its extension.
+#:
+#: **Not ``.jsonl``, and that is the whole design.** Every consumer in this
+#: project finds recordings with ``glob("*.jsonl")``, and a heartbeat is not a
+#: recording — it is a statement about the *recorder*. Two things would go wrong
+#: if it carried that extension.
+#:
+#: `scripts/recording_report.py` measures continuity by the distance between
+#: consecutive lines: a stretch longer than the silence threshold with no line is
+#: reported as time the recorder was not running. A heartbeat every minute makes
+#: that distance never exceed a minute, so a recorder that is alive but whose
+#: *subscription* has silently died — connected, pinging, receiving nothing —
+#: would report as fully recorded. That is precisely a defect that looks like
+#: success, and `recording_span_continuous` is the only thing that currently
+#: catches it.
+#:
+#: The second is smaller and still real: `build_archive.py` and `ohlc_fixture.py`
+#: would both read heartbeats as frames and have to learn to skip them.
+#:
+#: So the heartbeat sits beside the archive, in the same directory, under a name
+#: nothing else globs. `scripts/recorder_status.py` reads it.
+HEARTBEAT_PREFIX: Final = "heartbeat"
+HEARTBEAT_SUFFIX: Final = ".ndjson"
+
 #: Symbols per subscribe message. Kraken accepts a list; several hundred symbols in
 #: one frame is a large message for no benefit, and a rejected oversized subscribe
 #: would take a whole tier down rather than one chunk of it.
@@ -236,6 +366,251 @@ class SchemaError(ValueError):
     append-only recording is unfixable later, so the recorder refuses to write it."""
 
 
+class ArchiveLockedError(RuntimeError):
+    """Another recorder already holds this archive directory.
+
+    Not a warning and not a retry: two writers on one archive is the corruption
+    this lock exists to prevent, and a second recorder that waited would just be
+    a second recorder starting late.
+    """
+
+
+# --------------------------------------------------------------------------- #
+# Configuration — read without importing anything from the package
+# --------------------------------------------------------------------------- #
+
+
+def _config_search_paths(explicit: Path | None) -> list[Path]:
+    """Where to look for the ``recorder:`` mapping.
+
+    The working directory first, then the repository this file sits in, so that
+    ``python scripts/record.py`` from anywhere finds the committed config while a
+    copy of this file dropped into a server's home directory beside its own
+    ``config/recorder.yaml`` finds that one.
+    """
+    if explicit is not None:
+        return [explicit]
+    here = Path(__file__).resolve().parent.parent
+    paths: list[Path] = []
+    for base in (Path.cwd(), here):
+        for candidate in CONFIG_CANDIDATES:
+            resolved = base / candidate
+            if resolved not in paths:
+                paths.append(resolved)
+    return paths
+
+
+def load_recorder_config(explicit: Path | None = None) -> dict[str, Any]:
+    """The ``recorder:`` mapping, or ``{}``.
+
+    Returns an empty mapping rather than raising when there is no config, no
+    ``recorder:`` key, or no PyYAML installed. That is the standalone property
+    doing its job: every key here has a safe default, none of them is a trading
+    threshold, and a recorder that refused to start because a file about *where to
+    put files* was missing would be an outage in the one process whose data cannot
+    be backfilled.
+
+    An explicitly named ``--config`` that does not exist **is** an error, because
+    the operator naming a file is a statement that it should be there.
+    """
+    if explicit is not None and not explicit.is_file():
+        # Checked before PyYAML, and separately from "the file had no recorder
+        # section": a named file that is absent and a named file that is present
+        # but silent are different mistakes and must not share a message.
+        raise FileNotFoundError(f"--config {explicit} does not exist")
+    try:
+        import yaml  # optional; absent on a bare server
+    except ImportError:
+        if explicit is not None:
+            raise
+        print(
+            "PyYAML is not installed, so config/recorder.yaml was not read; "
+            "using built-in defaults for the output directories and source id.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return {}
+
+    for path in _config_search_paths(explicit):
+        if not path.is_file():
+            continue
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            continue
+        section = loaded.get(CONFIG_SECTION)
+        if isinstance(section, dict):
+            return section
+    return {}
+
+
+def _config_str(config: dict[str, Any], key: str) -> str | None:
+    """A non-empty string from the config, or None.
+
+    Empty string and None both mean "not set". They are not distinguished because
+    the alternative — an empty ``archive_dir`` meaning the current directory —
+    would turn a blank line in a config file into an archive written to the
+    repository root.
+    """
+    value = config.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def default_source_id() -> str:
+    """This machine's hostname, sanitised into something that can be a filename."""
+    return sanitise_source_id(socket.gethostname() or "unknown")
+
+
+def sanitise_source_id(raw: str) -> str:
+    """A source id that is safe in a filename and unambiguous to split back out.
+
+    Anything outside :data:`SOURCE_ID_ALLOWED` becomes a hyphen, which folds the
+    separators, the spaces and the underscores a hostname might carry. Lowercased,
+    because a source id that is ``VPS-1`` on one file and ``vps-1`` on another is
+    two sources on a case-insensitive filesystem and one on a case-sensitive one,
+    and the archive has to mean the same thing wherever it is read.
+    """
+    folded = "".join(char if char in SOURCE_ID_ALLOWED else "-" for char in raw.strip())
+    # Collapse runs and trim, so "my_host!!" and "my-host" are not two sources.
+    while "--" in folded:
+        folded = folded.replace("--", "-")
+    folded = folded.strip("-.").lower()[:SOURCE_ID_MAX]
+    if not folded:
+        raise ValueError(
+            f"source id {raw!r} contains nothing usable in a filename. Set "
+            f"recorder.source_id in config/recorder.yaml or pass --source-id."
+        )
+    return folded
+
+
+# --------------------------------------------------------------------------- #
+# The single-instance lock
+# --------------------------------------------------------------------------- #
+
+
+def _lock_exclusive(handle: Any) -> None:
+    """Take a non-blocking exclusive OS lock on the first byte. Raises OSError."""
+    if sys.platform == "win32":
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock(handle: Any) -> None:
+    if sys.platform == "win32":
+        handle.seek(0)
+        with contextlib.suppress(OSError):
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        with contextlib.suppress(OSError):
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+class ArchiveLock:
+    """One writer per archive directory, enforced by the kernel.
+
+    Not a ``@dataclass`` — see :class:`PairStat` for why that decorator cannot be
+    used in this file.
+
+    **Not a PID file, and the difference is the whole point.** A PID file is a
+    claim a process writes down and is responsible for removing, so it outlives
+    every death that does not run cleanup: a power cut, an ``Errno 28``, a
+    ``SIGKILL`` — and this recorder has already been killed by two of those three.
+    The archive would then be locked against every future recorder until a human
+    noticed, which converts a recoverable crash into an indefinite outage in the
+    one dataset that cannot be backfilled. It is also unsound in the other
+    direction: PIDs are reused, so a stale file can name a live and entirely
+    unrelated process.
+
+    A kernel lock has neither failure. It is attached to an open file handle, and
+    the kernel closes every handle a dying process holds, however it dies. The
+    contents of the file are written for a human reading it and are never consulted
+    to decide whether the lock is held.
+    """
+
+    __slots__ = ("_directory", "_handle", "_path")
+
+    def __init__(self, directory: Path) -> None:
+        self._directory = directory
+        self._path = directory / LOCK_FILENAME
+        self._handle: Any = None
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def acquire(self) -> Self:
+        self._directory.mkdir(parents=True, exist_ok=True)
+        handle = self._path.open("a+b")
+        try:
+            _lock_exclusive(handle)
+        except OSError as exc:
+            handle.close()
+            raise ArchiveLockedError(
+                f"another recorder is already writing to {self._directory}.\n"
+                f"  The lock is {self._path} and it is held by a live process.\n"
+                f"  {self._holder_note()}\n"
+                f"  Two recorders appending to one archive interleave their lines and\n"
+                f"  duplicate their session markers, and nothing downstream reports it.\n"
+                f"  Stop the other recorder, or start this one with a different --out."
+            ) from exc
+        self._handle = handle
+        self._stamp()
+        return self
+
+    def _stamp(self) -> None:
+        """Write who holds it. Diagnostic only — nothing reads this to decide."""
+        handle = self._handle
+        if handle is None:  # pragma: no cover - acquire sets it before calling
+            return
+        note = orjson.dumps(
+            {
+                "pid": os.getpid(),
+                "host": socket.gethostname(),
+                "acquired_at": utc_now_iso(),
+                "note": "diagnostic only; the lock is the OS lock on this file, not this text",
+            }
+        )
+        with contextlib.suppress(OSError):
+            handle.seek(0)
+            handle.truncate()
+            handle.write(note + b"\n")
+            handle.flush()
+
+    def _holder_note(self) -> str:
+        """What the lock file says about its holder, if it can be read at all.
+
+        On Windows the locked byte range cannot be read by another process, so
+        this frequently cannot answer and says so rather than guessing.
+        """
+        try:
+            text = self._path.read_bytes().decode("utf-8", "replace").strip()
+        except OSError:
+            return "The lock file could not be read, which is itself normal on Windows."
+        return f"It reports: {text}" if text else "It carries no holder note."
+
+    def release(self) -> None:
+        handle = self._handle
+        if handle is None:
+            return
+        self._handle = None
+        _unlock(handle)
+        handle.close()
+
+    def __enter__(self) -> Self:
+        return self.acquire()
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.release()
+
+
 def utc_now_iso() -> str:
     """Current UTC time as ``YYYY-MM-DDTHH:MM:SS.ffffffZ``.
 
@@ -249,6 +624,21 @@ def utc_now_iso() -> str:
 def utc_date_from_iso(ts: str) -> str:
     """The UTC calendar date of an ISO timestamp, for daily file rotation."""
     return ts[:10]
+
+
+def current_utc_date() -> str:
+    """Today's UTC calendar date. What the midnight roller compares against."""
+    return datetime.now(UTC).strftime("%Y-%m-%d")
+
+
+def archive_filename(prefix: str, source_id: str, date: str) -> str:
+    """``<prefix>__<source_id>__<date>.jsonl``.
+
+    One function so that the writer, the mover and the merger cannot disagree
+    about the name; the other two scripts carry their own copy of the parser
+    rather than importing this one, because this file must stay copyable alone.
+    """
+    return f"{prefix}{NAME_SEPARATOR}{source_id}{NAME_SEPARATOR}{date}.jsonl"
 
 
 def _first_str(value: object) -> str | None:
@@ -420,11 +810,20 @@ def summary_date(line: dict[str, Any]) -> str:
 
 
 class JsonlWriter:
-    """Append-only JSONL writer with daily UTC rotation.
+    """Append-only JSONL writer. One file per UTC day per source.
 
     Opens in binary append mode and never truncates, seeks or rewrites. If the
     process is killed mid-line the partial line stays; it is not repaired, because
-    repairing a recording is exactly what invariant 11 forbids.
+    repairing a recording is exactly what invariant 11 forbids. **Append is what
+    makes a mid-day start land in that day's existing file** rather than in a
+    second file for the same date: the day, not the run, is the unit.
+
+    Rotation happens on two triggers and both are needed. Every write routes to
+    the file for the date the *line* carries, which keeps a summary row for
+    23:59 out of the next day's file when it is flushed a second late. And
+    :meth:`roll_to` closes the open file when the wall-clock UTC date moves on,
+    which is what closes yesterday's file when the stream has gone quiet and no
+    line is arriving to trigger the first rule.
 
     The validator and the date function are injected because there are now two
     archives with two schemas, and a writer that knew only one of them would let
@@ -436,17 +835,20 @@ class JsonlWriter:
         out_dir: Path,
         *,
         prefix: str = "kraken_v2",
+        source_id: str | None = None,
         validator: Callable[[dict[str, Any]], None] = validate_line,
         date_of: Callable[[dict[str, Any]], str] = raw_date,
     ) -> None:
         self._out_dir = out_dir
         self._prefix = prefix
+        self._source_id = sanitise_source_id(source_id) if source_id else default_source_id()
         self._validator = validator
         self._date_of = date_of
         self._date: str | None = None
         self._handle: Any = None
         self.lines_written = 0
         self.bytes_written = 0
+        self.rotations = 0
 
     def __enter__(self) -> Self:
         self._out_dir.mkdir(parents=True, exist_ok=True)
@@ -464,8 +866,30 @@ class JsonlWriter:
     def out_dir(self) -> Path:
         return self._out_dir
 
+    @property
+    def source_id(self) -> str:
+        return self._source_id
+
+    @property
+    def open_date(self) -> str | None:
+        """The UTC date of the file currently open, or None when none is."""
+        return self._date if self._handle is not None else None
+
     def path_for(self, date: str) -> Path:
-        return self._out_dir / f"{self._prefix}_{date}.jsonl"
+        return self._out_dir / archive_filename(self._prefix, self._source_id, date)
+
+    def roll_to(self, date: str) -> bool:
+        """Close the open file and open ``date``'s. True when it actually rolled.
+
+        Called by the midnight roller with today's UTC date. A writer with nothing
+        open is left alone — opening a file here would create an empty one for a
+        tier that has not written a line, and an empty file in the archive is a
+        claim about coverage that nothing made.
+        """
+        if self._handle is None or date == self._date:
+            return False
+        self._rotate(date)
+        return True
 
     def write(self, line: dict[str, Any]) -> None:
         self._validator(line)
@@ -483,7 +907,9 @@ class JsonlWriter:
     def _rotate(self, date: str) -> None:
         if self._handle is not None:
             self._handle.close()
+            self.rotations += 1
         self._out_dir.mkdir(parents=True, exist_ok=True)
+        # "ab", never "wb": a run starting mid-day appends to that day's file.
         self._handle = self.path_for(date).open("ab")
         self._date = date
 
@@ -1074,6 +1500,15 @@ class Stream:
     def pairs(self) -> tuple[str, ...]:
         return self._pairs
 
+    @property
+    def connected(self) -> bool:
+        """Whether a socket is open right now. Read by the heartbeat.
+
+        A recorder that is alive but disconnected is a third state, distinct from
+        both "running" and "dead", and it is the one a process check cannot see.
+        """
+        return self._ws is not None
+
     def stop(self) -> None:
         self._stopping.set()
 
@@ -1322,6 +1757,147 @@ async def disk_guard(
 
 
 # --------------------------------------------------------------------------- #
+# The heartbeat — is this thing still on?
+# --------------------------------------------------------------------------- #
+
+
+def heartbeat_filename(source_id: str, date: str) -> str:
+    return f"{HEARTBEAT_PREFIX}{NAME_SEPARATOR}{source_id}{NAME_SEPARATOR}{date}{HEARTBEAT_SUFFIX}"
+
+
+class HeartbeatWriter:
+    """One line a minute per tier, saying the recorder is alive and what it holds.
+
+    Not a ``@dataclass`` — see :class:`PairStat`.
+
+    **This exists because the recorder has died unnoticed twice.** Both times the
+    symptom was a gap discovered days later in data that cannot be backfilled. The
+    archive itself is a poor liveness signal: a dead recorder and a quiet market
+    both produce no lines, and the difference only becomes visible once enough
+    time has passed that it is already too late to act on.
+
+    Append-only like everything else here, and rotated daily so it never grows
+    without bound. It is a separate file rather than a marker in the archive for
+    the reason spelled out on :data:`HEARTBEAT_PREFIX`.
+    """
+
+    __slots__ = ("_date", "_handle", "_out_dir", "_source_id", "beats")
+
+    def __init__(self, out_dir: Path, *, source_id: str) -> None:
+        self._out_dir = out_dir
+        self._source_id = source_id
+        self._date: str | None = None
+        self._handle: Any = None
+        self.beats = 0
+
+    def path_for(self, date: str) -> Path:
+        return self._out_dir / heartbeat_filename(self._source_id, date)
+
+    def beat(self, payload: dict[str, Any]) -> None:
+        stamp = utc_now_iso()
+        date = utc_date_from_iso(stamp)
+        if date != self._date or self._handle is None:
+            self.close()
+            self._out_dir.mkdir(parents=True, exist_ok=True)
+            self._handle = self.path_for(date).open("ab")
+            self._date = date
+        self._handle.write(
+            orjson.dumps({"v": SCHEMA_VERSION, "source_id": self._source_id, "ts": stamp, **payload})
+        )
+        self._handle.write(b"\n")
+        self._handle.flush()
+        self.beats += 1
+
+    def close(self) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
+
+async def heartbeat_loop(
+    *,
+    writers: Sequence[HeartbeatWriter],
+    sample: Callable[[], Sequence[dict[str, Any]]],
+    stopping: asyncio.Event,
+    interval_s: float = DEFAULT_HEARTBEAT_S,
+) -> int:
+    """Write one heartbeat per tier per interval. Returns beats written.
+
+    Beats immediately on entry rather than after the first interval, so a recorder
+    that dies thirty seconds in still leaves a record of having started — and so
+    `recorder_status.py` has something to read the moment the process is up.
+    """
+    written = 0
+    while True:
+        for writer, payload in zip(writers, sample(), strict=False):
+            writer.beat(payload)
+            written += 1
+        if stopping.is_set():
+            return written
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stopping.wait(), timeout=interval_s)
+        if stopping.is_set():
+            # One final beat on the way out, carrying `stopping: True`, so a clean
+            # shutdown is distinguishable from a kill in the heartbeat file alone.
+            for writer, payload in zip(writers, sample(), strict=False):
+                writer.beat({**payload, "stopping": True})
+                written += 1
+            return written
+
+
+# --------------------------------------------------------------------------- #
+# Midnight
+# --------------------------------------------------------------------------- #
+
+
+async def midnight_roller(
+    *,
+    writers: Sequence[JsonlWriter],
+    stopping: asyncio.Event,
+    interval_s: float = MIDNIGHT_CHECK_S,
+    now: Callable[[], str] = current_utc_date,
+) -> int:
+    """Close yesterday's files when the UTC date changes. Returns rotations made.
+
+    The per-line rule in :meth:`JsonlWriter.write` already rotates a busy stream
+    at the boundary, so on a normal day this task does nothing. It exists for the
+    days that are not normal: a tier with no traffic across midnight, a tier 1
+    degraded to three pairs during a quiet hour, a reconnect loop spanning the
+    boundary. In all of those the previous day's file would otherwise stay open
+    until the next frame arrived — possibly hours — and a file held open is a file
+    that cannot be moved, merged or counted, which is the whole reason the day is
+    the unit.
+    """
+    rotated = 0
+    while not stopping.is_set():
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stopping.wait(), timeout=interval_s)
+        if stopping.is_set():
+            break
+        date = now()
+        for writer in writers:
+            if writer.roll_to(date):
+                rotated += 1
+                print(
+                    f"rolled {writer.out_dir} over to {date} (UTC date changed)",
+                    file=sys.stderr,
+                    flush=True,
+                )
+    return rotated
+
+
+# --------------------------------------------------------------------------- #
 # Measurement — what the two tiers will actually cost
 # --------------------------------------------------------------------------- #
 
@@ -1431,8 +2007,24 @@ def describe_tiers(
     return "\n".join(lines)
 
 
+def existing_ancestor(path: Path) -> Path:
+    """The nearest existing directory at or above ``path``.
+
+    ``shutil.disk_usage`` needs a path that exists, and a configurable archive
+    directory may legitimately not exist yet on a first run. Reporting free space
+    on the parent is the right answer: it is the same filesystem.
+    """
+    current = path.resolve()
+    while not current.exists() and current.parent != current:
+        current = current.parent
+    return current
+
+
 async def report_cost(
-    args: argparse.Namespace, tier1: Sequence[str], tier2: Sequence[str]
+    args: argparse.Namespace,
+    tier1: Sequence[str],
+    tier2: Sequence[str],
+    out_dir: Path,
 ) -> None:
     """What the two tiers cost per day, measured on the live socket.
 
@@ -1480,7 +2072,7 @@ async def report_cost(
     )
 
     total = tier1_gb + tier2_gb
-    free = shutil.disk_usage(Path(args.out)).free
+    free = shutil.disk_usage(existing_ancestor(out_dir)).free
     runway = (free - args.disk_floor_gb * BYTES_PER_GB) / BYTES_PER_GB / total if total else 0.0
     print(
         f"total {total:.2f} GB/day written; {free / BYTES_PER_GB:.1f} GB free, so "
@@ -1490,7 +2082,28 @@ async def report_cost(
     )
 
 
+def resolve_storage(args: argparse.Namespace) -> tuple[Path, Path, str]:
+    """``(raw_dir, summary_dir, source_id)``, from the flag, then the config, then
+    the built-in default — in that order, per value."""
+    config = load_recorder_config(Path(args.config) if args.config else None)
+    raw_dir = Path(args.out or _config_str(config, "archive_dir") or DEFAULT_OUT_DIR)
+    summary_dir = Path(
+        args.summary_out or _config_str(config, "summary_dir") or DEFAULT_SUMMARY_DIR
+    )
+    named = args.source_id or _config_str(config, "source_id")
+    source_id = sanitise_source_id(named) if named else default_source_id()
+    return raw_dir, summary_dir, source_id
+
+
 async def _run(args: argparse.Namespace) -> int:
+    raw_dir, summary_dir, source_id = resolve_storage(args)
+    print(
+        f"archive {raw_dir} / summaries {summary_dir}, source id {source_id!r} "
+        f"(files are {archive_filename('kraken_v2', source_id, current_utc_date())})",
+        file=sys.stderr,
+        flush=True,
+    )
+
     ranked, unranked = await discover_with_retry(args.url, quote=args.quote)
     tier1, tier2 = derive_tiers(
         ranked,
@@ -1502,7 +2115,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         if args.measure_s > 0:
-            await report_cost(args, tier1, tier2)
+            await report_cost(args, tier1, tier2, raw_dir)
         return 0
 
     session_extra: dict[str, Any] = {
@@ -1517,20 +2130,32 @@ async def _run(args: argparse.Namespace) -> int:
         "derived_from": "ws v2 instrument snapshot + ticker snapshot, 24h volume x vwap",
         "unranked": list(unranked),
         "snapshot_at": utc_now_iso(),
+        # In the marker as well as in the filename. A file can be renamed; a line
+        # inside an append-only archive cannot, so this is the copy that survives.
+        "source_id": source_id,
     }
 
-    raw_dir = Path(args.out)
-    summary_dir = Path(args.summary_out)
     stopping = asyncio.Event()
+    # One lock per distinct output directory, taken before a single byte is
+    # written and held for the life of the process. `dict.fromkeys` rather than a
+    # set so that a configuration pointing both tiers at one directory takes one
+    # lock rather than deadlocking against itself.
+    lock_dirs = list(dict.fromkeys((raw_dir.resolve(), summary_dir.resolve())))
     with (
-        JsonlWriter(raw_dir) as raw_writer,
+        contextlib.ExitStack() as locks,
+        JsonlWriter(raw_dir, source_id=source_id) as raw_writer,
         JsonlWriter(
             summary_dir,
             prefix="summary",
+            source_id=source_id,
             validator=validate_summary_line,
             date_of=summary_date,
         ) as summary_writer,
+        HeartbeatWriter(raw_dir, source_id=source_id) as raw_heartbeat,
+        HeartbeatWriter(summary_dir, source_id=source_id) as summary_heartbeat,
     ):
+        for directory in lock_dirs:
+            locks.enter_context(ArchiveLock(directory))
         summariser = Summariser(
             writer=summary_writer,
             depth=args.depth,
@@ -1583,10 +2208,60 @@ async def _run(args: argparse.Namespace) -> int:
                 summariser.flush_due(datetime.now(UTC))
             summariser.flush_all(datetime.now(UTC))
 
+        def heartbeat_sample() -> list[dict[str, Any]]:
+            """One payload per tier, in the writers' order.
+
+            Sampled at beat time rather than held, so a degraded tier 1 reports its
+            reduced pair list from the next beat onward. The pair list is in every
+            beat and not only in the session marker because the question
+            `recorder_status.py` answers is "what is it recording *now*", and a
+            marker written at startup cannot answer that after a disk-guard
+            degrade.
+            """
+            return [
+                {
+                    "tier": "tier1",
+                    "pairs": list(tier1_stream.pairs),
+                    "pair_count": len(tier1_stream.pairs),
+                    "frames": tier1_stream.frames,
+                    "lines_written": raw_writer.lines_written,
+                    "bytes_written": raw_writer.bytes_written,
+                    "archive_dir": raw_dir.as_posix(),
+                    "open_date": raw_writer.open_date,
+                    "connected": tier1_stream.connected,
+                },
+                {
+                    "tier": "tier2",
+                    "pairs": list(tier2_stream.pairs),
+                    "pair_count": len(tier2_stream.pairs),
+                    "frames": tier2_stream.frames,
+                    "lines_written": summariser.rows_written,
+                    "bytes_written": summary_writer.bytes_written,
+                    "archive_dir": summary_dir.as_posix(),
+                    "open_date": summary_writer.open_date,
+                    "connected": tier2_stream.connected,
+                },
+            ]
+
         tasks = [
             asyncio.ensure_future(tier1_stream.run()),
             asyncio.ensure_future(tier2_stream.run()),
             asyncio.ensure_future(flush_loop()),
+            asyncio.ensure_future(
+                heartbeat_loop(
+                    writers=(raw_heartbeat, summary_heartbeat),
+                    sample=heartbeat_sample,
+                    stopping=stopping,
+                    interval_s=args.heartbeat_s,
+                )
+            ),
+            asyncio.ensure_future(
+                midnight_roller(
+                    writers=(raw_writer, summary_writer),
+                    stopping=stopping,
+                    interval_s=args.midnight_check_s,
+                )
+            ),
             asyncio.ensure_future(
                 disk_guard(
                     stream=tier1_stream,
@@ -1611,7 +2286,9 @@ async def _run(args: argparse.Namespace) -> int:
         print(
             f"tier 1: {raw_writer.lines_written} lines "
             f"({raw_writer.bytes_written / BYTES_PER_GB:.3f} GB) to {raw_dir}; "
-            f"tier 2: {summariser.rows_written} summary rows to {summary_dir}",
+            f"tier 2: {summariser.rows_written} summary rows to {summary_dir}; "
+            f"source id {source_id}, {raw_writer.rotations + summary_writer.rotations} "
+            f"daily rotations",
             file=sys.stderr,
             flush=True,
         )
@@ -1665,9 +2342,59 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="seconds per summary row. 60 divides 1, 5 and 15 minutes evenly.",
     )
     parser.add_argument("--depth", type=int, default=DEFAULT_DEPTH, help="order book depth")
-    parser.add_argument("--out", default=str(DEFAULT_OUT_DIR), help="tier 1 output directory")
     parser.add_argument(
-        "--summary-out", default=str(DEFAULT_SUMMARY_DIR), help="tier 2 output directory"
+        "--config",
+        default=None,
+        help=(
+            "config file carrying a `recorder:` mapping. Default: config/recorder.yaml "
+            "then config/default.yaml, looked for in the working directory and beside "
+            "this script. A named file that does not exist is an error; the defaults "
+            "being absent is not."
+        ),
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help=(
+            f"tier 1 output directory. Overrides recorder.archive_dir; "
+            f"default {DEFAULT_OUT_DIR}"
+        ),
+    )
+    parser.add_argument(
+        "--summary-out",
+        default=None,
+        help=(
+            f"tier 2 output directory. Overrides recorder.summary_dir; "
+            f"default {DEFAULT_SUMMARY_DIR}"
+        ),
+    )
+    parser.add_argument(
+        "--source-id",
+        default=None,
+        help=(
+            "which machine this recording came from; it goes into every filename. "
+            "Overrides recorder.source_id; defaults to the hostname."
+        ),
+    )
+    parser.add_argument(
+        "--heartbeat-s",
+        type=float,
+        default=DEFAULT_HEARTBEAT_S,
+        help=(
+            "how often each tier writes a liveness line to "
+            "heartbeat__<source>__<date>.ndjson beside its archive. Read by "
+            "scripts/recorder_status.py. Deliberately not written into the archive "
+            "itself: it would mask a dead subscription in recording_report.py."
+        ),
+    )
+    parser.add_argument(
+        "--midnight-check-s",
+        type=float,
+        default=MIDNIGHT_CHECK_S,
+        help=(
+            "how often the UTC date is checked so a quiet stream still closes "
+            "yesterday's file at midnight"
+        ),
     )
     parser.add_argument(
         "--disk-floor-gb",
@@ -1738,6 +2465,11 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run(args))
     except KeyboardInterrupt:
         return 0
+    except ArchiveLockedError as exc:
+        # A refusal, printed as a refusal. A traceback here would read as a crash,
+        # and the operator's next move — find the other recorder — is in the text.
+        print(f"\nREFUSING TO START: {exc}\n", file=sys.stderr, flush=True)
+        return 2
 
 
 if __name__ == "__main__":

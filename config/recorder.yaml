@@ -1,0 +1,72 @@
+# ACSOE recorder configuration — read by `scripts/`, never by the engine.
+#
+# ## Why this is a separate file and not a section of `config/default.yaml`
+#
+# Two independent reasons, and either one alone would be enough.
+#
+# **`Config` is `extra="forbid"`.** A `recorder:` key added to `default.yaml`
+# without a matching pydantic section in `src/acsoe/platform/config.py` makes the
+# loader refuse to start, which takes every gate red. The recorder's own storage
+# paths are not trading behaviour and have no business forcing a change to the
+# model that validates the risk thresholds.
+#
+# **`scripts/record.py` has to be copyable on its own.** The whole point of the
+# script is that it can be dropped onto a bare server with no project checkout —
+# see its module docstring. Copying it together with a nine-key file about where
+# to put files is reasonable; copying it with the file that carries
+# `trading.risk_fraction_per_trade` and the paper balances is not.
+#
+# The scripts look here first and fall back to a `recorder:` key in
+# `config/default.yaml` if one ever appears, so moving these keys into the main
+# config later is a change to that file plus one pydantic section, and nothing
+# in `scripts/` has to move with them.
+#
+# Every key here is optional. A missing file, a missing key, or a PyYAML that is
+# not installed all fall back to the defaults named in the comments — the
+# recorder must still run when it is the only file on the machine. Nothing here
+# is a trading threshold, so unlike `default.yaml` there is no OPERATOR REQUIRED
+# refusal: a default output directory is not a guessed answer to how much money
+# is at risk.
+
+recorder:
+  # Tier 1, the full raw archive. Default: data/raw
+  # Relative paths resolve against the working directory the recorder is started
+  # from, so this can be moved to another drive — "E:/acsoe/raw", "/mnt/archive" —
+  # without touching a line of code.
+  archive_dir: "data/raw"
+
+  # Tier 2, the per-minute summaries. Default: data/summaries
+  summary_dir: "data/summaries"
+
+  # What machine this recording came from. It goes into every filename:
+  #
+  #     kraken_v2__<source_id>__2026-09-11.jsonl
+  #
+  # Default: this machine's hostname, lowercased, with anything outside
+  # [A-Za-z0-9.-] replaced by a hyphen.
+  #
+  # Empty means "use the hostname", which is why it is "" and not `null` — a null
+  # in `default.yaml` means OPERATOR REQUIRED and refuses to start, and that
+  # convention must not be diluted by borrowing it for a key that has a safe
+  # default.
+  #
+  # It is in the filename because without it two machines recording the same day
+  # produce two files with the same name. Merging them then means one silently
+  # overwriting the other, or a concatenation whose lines are out of order across
+  # the seam and which no longer says which machine saw what. Set it explicitly
+  # on a machine whose hostname is not stable — a container, a VM that gets a new
+  # name on rebuild — because the name is part of the archive's provenance and
+  # changing it mid-life splits one source into two.
+  source_id: ""
+
+  # --- scripts/archive_move.py ------------------------------------------------
+  # Where finished archive files are moved to, and how old they must be first.
+  # `move_dest` has no default on purpose: a mover with a default destination is
+  # a mover that will one day run against a path nobody chose. `--dest` on the
+  # command line overrides it.
+  move_dest: ""
+
+  # A file is eligible once its UTC date is this many days behind today's.
+  # Default: 7. The current day's file is never eligible at any setting — it is
+  # still being appended to.
+  move_after_days: 7

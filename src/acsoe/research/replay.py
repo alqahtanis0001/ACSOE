@@ -74,9 +74,26 @@ from acsoe.research.historical import (
     to_frame,
 )
 
+#: The three sources a replayed spread can come from. Names, not booleans, because
+#: "exact or not" is two of the three states and the third — nothing was modelled —
+#: is the one a reader most needs told.
+SPREAD_TIER_EXACT: Final = "tier1_instant"
+SPREAD_TIER_MINUTE: Final = "tier2_minute_median"
+SPREAD_TIER_NONE: Final = "none"
+
+SPREAD_NONE_NOTE: Final = (
+    "No spread was modelled at all: this replay reads an OHLCVT archive, which "
+    "carries open, high, low, close, volume and trade count and no bid, ask or "
+    "spread. Nothing here is an approximation of a spread — there is no spread."
+)
+
 __all__ = [
     "COVERAGE_UNKNOWN_NOTE",
     "PROVENANCE_FILENAME",
+    "SPREAD_NONE_NOTE",
+    "SPREAD_TIER_EXACT",
+    "SPREAD_TIER_MINUTE",
+    "SPREAD_TIER_NONE",
     "ArchiveReplay",
     "DecisionBar",
     "ReplayReport",
@@ -247,6 +264,38 @@ class ReplayReport(BaseModel):
 
     has_order_book: bool = False
     has_spread: bool = False
+
+    spread_tiers: dict[str, int] = {}
+    """How many replayed bars got their spread from each source, by tier name.
+
+    **A spread is not one thing, and a backtest that reports a single number has
+    already thrown away the distinction that decides how much the number is worth.**
+    Three sources exist and they are not interchangeable:
+
+    * ``tier1_instant`` — the recorder's full raw archive. The spread at the moment
+      of a book update, which is the same quantity engine 3 `market_sensor`
+      publishes live. **Exact.**
+    * ``tier2_minute_median`` — the recorder's summary archive. The median spread
+      over the minute the bar falls in. A decision taken at 12:03:07 is priced with
+      a statistic describing 12:03:00 to 12:03:59, so it is right on average and
+      wrong at the instant, and it is wrong by more precisely when the market is
+      moving — which is when the cost gate's verdict matters most. **Approximated,
+      and the approximation correlates with volatility rather than being noise.**
+    * ``none`` — an OHLCVT archive, which carries no bid, ask or spread at all.
+      Nothing was modelled.
+
+    Counted per bar rather than reported as a flag, because the honest summary of a
+    mixed run is a fraction: "82% of these decisions were priced on an exact spread"
+    is a statement a reader can weigh, and "this backtest used spread data" is not.
+    See :attr:`spread_exact_fraction`.
+
+    Empty today: `ArchiveReplay` reads `data/historical/`, which is OHLCVT, so every
+    bar is ``none`` and that is what :meth:`spread_provenance` reports. The counter
+    is here now because the moment a replay reads the recorder's own archive — the
+    only source that has a spread at all — the mixture becomes real and a backtest
+    that had not been counting could not say afterwards what it had been given.
+    """
+
     book_note: str = NO_BOOK_NOTE
     interpolation_note: str = NO_INTERPOLATION_NOTE
 
@@ -255,6 +304,63 @@ class ReplayReport(BaseModel):
         if self.first_ts is None or self.last_ts is None:
             return 0
         return self.last_ts - self.first_ts
+
+    @property
+    def spread_exact_fraction(self) -> float | None:
+        """The share of replayed bars priced on an exact spread, or None.
+
+        ``None`` when nothing was counted, and **that is not zero.** Zero means
+        "every bar was checked and none had an exact spread"; None means "nobody
+        counted", and a consumer must not round it down to a reassuring number.
+        Invariant 3: the absence of a "no" is never a "yes", and here the absence of
+        a count is not a count of nothing.
+        """
+        total = sum(self.spread_tiers.values())
+        if total <= 0:
+            return None
+        return self.spread_tiers.get(SPREAD_TIER_EXACT, 0) / total
+
+    def spread_provenance(self) -> dict[str, Any]:
+        """What priced the spread in this replay, in a shape a report can print.
+
+        Carried in the output rather than left to be inferred, because "how much of
+        this result is exact and how much is approximated" is a limit on what a
+        reader may conclude, and a limit nobody is told is a limit nobody applies.
+        """
+        counted = sum(self.spread_tiers.values())
+        if counted <= 0:
+            # Nothing was counted. Either the replay has no spread at all — today's
+            # case, an OHLCVT archive — or it has one and forgot to say so, and the
+            # two must not render the same.
+            return {
+                "counted_bars": 0,
+                "by_tier": {},
+                "exact_fraction": None,
+                "note": (
+                    SPREAD_NONE_NOTE
+                    if not self.has_spread
+                    else (
+                        "This replay reports a spread but counted no bars by tier, so "
+                        "how much of it is exact is UNKNOWN. Treat it as approximated: "
+                        "an uncounted mixture is not an exact one."
+                    )
+                ),
+            }
+        exact = self.spread_tiers.get(SPREAD_TIER_EXACT, 0)
+        approximate = counted - exact
+        return {
+            "counted_bars": counted,
+            "by_tier": dict(sorted(self.spread_tiers.items())),
+            "exact_fraction": exact / counted,
+            "approximated_bars": approximate,
+            "note": (
+                f"{exact} of {counted} bars ({exact / counted:.1%}) were priced on an "
+                f"exact spread from the raw archive; {approximate} were priced on a "
+                f"minute median or on nothing. A minute median is right on average and "
+                f"wrong at the instant, and it is wrong by more in exactly the volatile "
+                f"windows where the cost gate's verdict matters most."
+            ),
+        }
 
     def summary(self) -> str:
         """One line for `acsoe research` and for a criterion's PASS message."""

@@ -795,3 +795,160 @@ Confusion between source and derived is prevented by two things rather than by t
 source files are one level down and never at the top, and the derived files carry an `_15`
 suffix the source files do not — `XBTUSD.csv` is three-column time-and-sales, `XBTUSD_15.csv` is
 seven-column OHLCVT. `tests/scripts/test_build_ohlcvt.py` asserts both, in both directions.
+
+---
+
+### The "no acsoe import" test could not fail, and had not been able to for a while
+
+**Agent:** A · **Task:** operator request, recorder storage · **Date:** 2026-09-11
+
+**What happened.** `test_record_script_imports_nothing_from_the_package` reads the source of
+`scripts/record.py` and asserts that no line beginning `import` or `from` mentions `acsoe`.
+Adding a config reader to the recorder meant adding the first genuinely conditional import it
+has ever had, so the assertion was worth checking. Mutating `record.py` to call
+`__import__("importlib").import_module("acsoe.platform.config")` inside `resolve_storage` left
+that test **green**, against a recorder that now pulls in pydantic, structlog and the whole
+package on startup.
+
+**Why.** A source scan cannot see a runtime import. Four shapes defeat it — an import inside a
+function body, `importlib`, a `sys.path` entry a helper appends, and a transitive import
+through a module that itself imports the package — and the last is the one that would actually
+happen by accident.
+
+**Fix.** `tests/platform/test_record_standalone.py`. It executes the script in a separate
+interpreter under `-I` (isolated: no `PYTHONPATH`, no user site-packages, cwd off `sys.path`),
+drives `parse_args` and `resolve_storage` so lazy imports are in scope, and then asserts on
+`sys.modules`. Against the same mutation it goes red with
+`pulled in ['acsoe', 'acsoe.platform', 'acsoe.platform.config', 'acsoe.platform.logging']`. A
+second assertion bounds the third-party set to `orjson` and `websockets` — the list somebody
+has to `pip install` on the recording server — and it went red in the same run with
+`now needs ['annotated_types', 'colorama', 'pydantic', 'pydantic_core', 'structlog', ...]`.
+
+**Consequence.** The old test is kept: it is cheap, it catches the ordinary case at the top of
+the file, and it fails with a clearer message when it does fire. It is simply no longer the
+only thing standing behind the claim. Defining "third party" as "outside the stdlib directory"
+was also wrong on Windows and reported `_socket`, `_ssl`, `_asyncio` and five others as
+recorder dependencies — the standard library's own C extensions live in `DLLs/`. It is now
+"installed into site-packages", which is what the sentence always meant.
+
+---
+
+### Decision: the single-instance lock is an OS lock, never a PID file
+
+**Agent:** A · **Date:** 2026-09-11
+
+**Options.** A PID file in the archive directory, or a kernel byte-range lock on a file handle
+(`fcntl.flock` on POSIX, `msvcrt.locking` on Windows).
+
+**Chose.** The kernel lock.
+
+**Because.** A PID file outlives its process. It is removed by cleanup code, and cleanup code
+does not run on a `SIGKILL`, an `Errno 28` or a power cut — and this recorder has already been
+killed by two of those three. The archive would then be locked against every future recorder
+until a human noticed and deleted a file by hand, which converts a recoverable crash into an
+indefinite outage in the one dataset that cannot be backfilled. It is unsound in the other
+direction too: PIDs are reused, so a stale file can name a live and entirely unrelated process.
+A kernel lock is attached to an open handle, and the kernel closes every handle a dying process
+holds, however it dies.
+
+**Cost.** On Windows the locked byte range cannot be read by another process, so the "who holds
+it" diagnostic is frequently unavailable there and the error message says so rather than
+guessing.
+
+**Proof.** `test_the_lock_is_released_when_the_holder_is_killed_without_cleanup` kills a holder
+outright, asserts the stale lock file **is still on disk** — so the test cannot pass for the
+trivial reason that cleanup removed it — and then acquires successfully. Both lock tests run
+across two real processes, because the question is what the kernel does and a same-process
+second acquire can succeed on some platforms while a second process correctly fails.
+
+---
+
+### The heartbeat is beside the archive, not in it, and that was not the obvious choice
+
+**Agent:** A · **Task:** operator request, recorder liveness · **Date:** 2026-09-11
+
+**What happened.** The request was for the recorder to write a heartbeat line "into its own
+archive on every flush". Writing it as a `session` marker in `data/raw/` is the literal reading
+and it was nearly done that way.
+
+**Why not.** `src/acsoe/clients/recorder/report.py` measures continuity by the distance between
+consecutive lines, of any kind: a stretch longer than `silence_threshold_s` (60s) with no line
+is reported as time the recorder was not running, and that is what `recording_span_continuous`
+reads. A heartbeat every 60s makes that distance never exceed 60s. So a recorder that is
+**alive but whose subscription has silently died** — connected, ponging, receiving nothing —
+would report as fully recorded. That is the exact shape of defect Phase 4's governing rule is
+about, and `recording_span_continuous` is currently the only thing that catches it. The
+collision is also non-deterministic: a 60s heartbeat against a 60s threshold sits on a strict
+`>`, so jitter decides.
+
+**Fix.** `heartbeat__<source>__<date>.ndjson`, in the same directory, under an extension
+nothing globs — every consumer in this project finds recordings with `glob("*.jsonl")`.
+`scripts/recorder_status.py` reads both the newest archive file and the newest heartbeat, which
+is what separates the three states that look identical from outside: recent/recent is healthy,
+stale/stale is a dead process, and **a stale archive with a recent heartbeat is the one a
+process check cannot see at all**.
+
+**Consequence.** No gate's meaning changed. If the operator would rather have the heartbeat in
+the archive after all, the change is the extension plus teaching `scan_events` to skip
+`event == "heartbeat"` before it updates `previous` — one line in C's file, and it needs that
+line, not just the move.
+
+---
+
+### Two reconciliation scripts that cannot yet answer their question, and why they shipped anyway
+
+**Agent:** A · **Task:** operator request, reconciliation · **Date:** 2026-09-11
+
+**What happened.** `reconcile_universe.py` compares the recorder's pair list against the
+daemon's; `reconcile_spread.py` compares recorded spread against the spread engine 3 publishes
+live. Both read the archive and the daemon's structured log. The archive side works. **The
+daemon side has nothing to read.**
+
+**Why.** The daemon logs almost nothing per tick. A search for `get_logger` across `src/`
+returns five modules and not one of them is an engine: `cli/engine.py` logs `engine_starting`,
+`tick_completed` at debug, and exceptions. Engine 2 computes
+`state["market_data_recorder"]["subscription"]` every tick and engine 3 computes
+`state["market_sensor"]["quotes"][pair]["spread_pct"]` every tick, and neither value ever
+leaves `state`, which is discarded at the end of the tick.
+
+**Fix.** Both scripts name the log line they need — in their docstring and again in their
+output — and **report the absence as a finding rather than as a clean result**. A reconciler
+that printed "no differences found" against an empty comparison would be worse than not having
+one at all. `reconcile_universe.py` takes `--daemon-pairs` so the comparison can be made by
+hand today; run that way against the live archive it correctly reported a fabricated `FAKE/USD`
+as a pair with no order-book history in either tier.
+
+**Consequence.** The spread one is the more urgent of the two, for the same reason that governs
+the recorder itself: **the live quote is written nowhere else**, so every tick that passes
+without that log line is a comparison that can never be made afterwards. One line a tick is
+1,440 lines a day against 17 GB of recording. Engines 2 and 3 are A's own, so this is A's work
+to finish; it is deferred only because this session's instruction was scripts and config.
+
+---
+
+### `spread_provenance`: why `has_spread` was not enough
+
+**Agent:** A · **Date:** 2026-09-11
+
+**Options.** Leave `state["backtest"]["has_spread"]` as the answer to "did this backtest model
+a spread", or count per bar by source tier.
+
+**Chose.** Count. `ReplayReport.spread_tiers` counts bars by tier, `spread_provenance()`
+reports the fraction, and engine 23 carries it into `state["backtest"]`.
+
+**Because.** A boolean is the right shape for today's OHLCVT archive, where the answer is "none
+at all". It is the wrong shape for the recorder's own archive, which is the source a Phase 6
+backtest will read: ten pairs have tier 1 exact spreads and 137 have tier 2 minute medians, so
+`has_spread: True` would be both true and useless. A minute median is right on average, wrong
+at the instant, and **wrong by more precisely when the market is moving** — which is when the
+cost gate's verdict matters most. The mixture is not a detail; it is the number that says how
+much of a result to believe.
+
+**Cost.** One key added to engine 23's `data` dict. That is the only place this session touched
+an engine, it is additive, and nothing asserts that dict's key set exhaustively.
+
+**The part worth keeping.** `spread_tiers` is empty today, so `spread_exact_fraction` returns
+`None` — **not 0.0**. Invariant 3: "nobody counted" and "counted, and none of it was exact"
+must not render the same. The third case, a replay that claims a spread and counted no tiers,
+is reported as UNKNOWN and treated as approximated, because an uncounted mixture is not an
+exact one.
