@@ -196,6 +196,15 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   criterion stop checking what it could check — eighteen tests turned PENDING, then five — while
   the actual fault was a *producer* conflating two cases. Tightening the consumer is the right fix
   only when the consumer is the one making the unjustified assumption.
+- **"It is in another agent's path" is evidence, not a verdict.** Judging a FAIL by path is
+  the right first question in a shared checkout and it is not the last one. Four times in
+  Phase 4 the tree was red under B while B was working in it. Three were settled by path and
+  lane with no re-running and no touching, correctly. The fourth sat squarely in another
+  agent's `tests/verify/` **and was still B's**: it named B's file, it reproduced every time,
+  and it was caused by a string B had just written. A path heuristic that is right three times
+  out of four is exactly the kind that gets promoted to a rule and then hides the fourth case.
+  Ask the three questions underneath it — does it name my file, does it reproduce every time,
+  does it reproduce in isolation — and let the path narrow the search rather than end it.
 - **A diagnostic procedure that cannot fail is the same defect as a test that cannot fail.**
   "Re-run the named test in isolation, and if it passes it was the machine's intermittent fault"
   ran for two phases and confirmed itself every time — because in isolation nothing else was
