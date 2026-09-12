@@ -210,6 +210,80 @@ backtest:
                                  # None explicitly. A zero or absent embargo is exactly the
                                  # Phase 4 defect that looks like success.
 
+# --- Phase 5: models. Lead-authored 2026-09-13 after A's spec 61 fields landed. ---------
+#
+# FIVE KEYS ARE DELIBERATELY ABSENT, NOT NULL: prediction.di_percentile,
+# anomaly.threshold_percentile, skeptic.veto_threshold, models.*_run_id and
+# scout.rank_feature. Each is an optional leaf on the config model, so an absent key
+# reads as None and the engine that needs it fails closed (blocks with a reason naming
+# the key) while the Phase 5 criterion that judges it reports PENDING. Writing any of
+# them as `null` is a different thing: a null in this file means OPERATOR REQUIRED and
+# stops every process at load. Absent and null are one character apart in a diff and
+# behave in opposite directions. The three thresholds are the operator's, to be supplied
+# AFTER the walk-forward reports (operator ruling 2026-09-12: a value chosen before
+# there is a distribution to place it on is a guess); the run ids point at artefacts
+# under models/, which is gitignored, so a fresh clone has none; the ranking feature
+# waits on spec 75's study.
+
+models:
+  dir: models                    # The artefact root. One directory per training run,
+                                 # never overwritten; see architecture-context.md.
+
+features:                        # modelling/features.py, spec 63.
+  version: "f1"                  # Written into every manifest; a model trained on f1
+                                 # features refuses to load against f2 names.
+  max_lookback_bars: 192         # 48 hours of 15m bars. Bounded by
+                                 # market_sensor.published_bars (200) and validated
+                                 # against it at load, because a lookback engine 3 does
+                                 # not publish can never be filled live.
+  min_lookback_fill: 0.8         # A window with less than 80% of its expected bars
+                                 # present yields NaN for every feature over it. The
+                                 # feature layer marks a gap; it never interpolates one.
+
+macro:                           # Engine 6, spec 65, and spec 67's offline join. Two
+                                 # spellings of one pair: what the live stream keys
+                                 # candles by, and what the archive file is called.
+                                 # PROVISIONAL on the live side: the committed fixtures
+                                 # spell it BTC/USD and the real stream must agree; if
+                                 # it does not, this line changes, not the code.
+  btc: {live: "BTC/USD", archive: "XBTUSD"}
+  eth: {live: "ETH/USD", archive: "ETHUSD"}
+
+prediction:                      # Engine 8 and the DI, specs 67, 68, 71. Plumbing.
+  di_window_days: 30             # Locked decision: 30-day per-pair window for the DI
+                                 # reference set, taken from the end of each fold's
+                                 # training window.
+  di_neighbours: 10              # k for the mean k-nearest distance.
+  di_reference_rows: 200000      # Subsample cap on the reference set, seeded from
+                                 # seeds.train, so the DI fit stays tractable per fold.
+  calibration_days: 14           # The held-out tail of the training window the
+                                 # calibrator is fitted on. Never the test window.
+  threads: 4                     # Fixed, because LightGBM determinism needs a fixed
+                                 # thread count as well as a seed.
+  # di_percentile: OPERATOR, absent until the walk-forward reports. Engine 8 blocks
+  # with di_refused-unavailable and di_fitted_on_predictor_training_set is PENDING.
+
+anomaly: {}                      # Engine 13, specs 70, 72. Its one key,
+                                 # threshold_percentile, is the operator's and absent;
+                                 # engine 13 blocks with anomaly_unavailable meanwhile.
+
+skeptic: {}                      # Engine 15, specs 69, 73. Its one key, veto_threshold,
+                                 # is the operator's and absent; engine 15 blocks with
+                                 # skeptic_unavailable meanwhile.
+
+regime:                          # Engine 12, spec 66. Percentile-relative rules, chosen
+                                 # by the lead as plumbing: no gate reads the label and
+                                 # no order is sized from it. PROVISIONAL.
+  high_vol_percentile: 0.9       # Short-window realised volatility above the 90th
+                                 # percentile of its own long-window distribution.
+  trend_efficiency: 0.3          # Net move over path length above 0.3 reads as
+                                 # trending; below, choppy.
+
+scout:                           # Engine 7's ranking, spec 76.
+  rank_descending: true          # Direction for rank_feature when it is set.
+  # rank_feature: OPERATOR, absent until spec 75's study reports. Alphabetical until
+  # then, and the engine publishes rank_feature: null so nobody reads a choice into it.
+
 seeds:
   global: 20260908               # Every random seed comes from config, so a training run
   train: 20260908                # is reproducible from its config plus its data.

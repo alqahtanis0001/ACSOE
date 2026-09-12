@@ -5,10 +5,38 @@ Never edit the tracker directly.
 
 ## Current Task
 
-**Phase 4. Claimed: specs 54 and 55**, in that order, per `feature-specs/PHASE-4-TASKS.md`
-and ownership rule 5. Claimed 2026-09-11, before any code was written. Plus the spec 38
-two-halves handoff for `backtest.embargo_bars`, which the lead is blocked on and which
-ships first.
+**Phase 5. Claimed: spec 61**, all four parts, per `feature-specs/PHASE-5-TASKS.md` and
+ownership rule 5. Claimed 2026-09-13, before any code was written. It is A's only spec this
+phase and every part of it blocks C.
+
+The four parts, in the order they land, because the order is what unblocks other people:
+
+1. **Config fields, before any YAML.** Sections `models`, `features`, `macro`, `prediction`,
+   `anomaly`, `skeptic`, `regime` and `scout` on the config model, every one
+   `extra="forbid"`, plus the validator refusing `features.max_lookback_bars` above
+   `market_sensor.published_bars`. The lead pastes the YAML afterwards; nothing in this spec
+   writes `config/default.yaml`.
+2. **Dependencies.** `lightgbm`, `scikit-learn` and `shap` out of the `research` extra and
+   into the base install; `hmmlearn` and `statsmodels` stay in the extra.
+3. **The models root.** `platform/paths.py` creates `models/` beside `data/` and `logs/`;
+   `cli/engine.py` and `cli/research.py` pass it into B's `StoreClient` (spec 62).
+4. **`acsoe research` runs the chain** against a real replay-mode `EngineContext` instead of
+   listing engine names, one line per engine with its status and reason, non-zero exit on any
+   `ERROR`.
+
+**Landing rule, and it is the reason part 1 ships alone and first.** Every section is
+`extra="forbid"`, so a YAML key without its model field is refused at load and a *required*
+model field without its YAML key makes the committed `config/default.yaml` fail to parse —
+taking `scripts/verify.py` and every test in every lane that reads the shipped config with
+it. The new sections therefore land **optional** (`Section | None = None`), exactly as
+`kraken.cache_ttl_s` did in Phase 3, and are tightened to required once the lead's YAML is
+in. While a section is `None`, `Config.get("prediction.di_window_days")` *raises* — the walk
+has to descend into the `None` — so a reader fails closed during the window. The three
+operator leaves inside those sections do **not**: `Config.get` returns `None` for an absent
+leaf, which is the spec 58 finding, and each of them says so in its own docstring.
+
+**Open until the lead pastes:** the sections are optional and the tightening to required is
+outstanding. Tracked under Known gaps I own.
 
 ### HANDOFF TO THE LEAD — `backtest.embargo_bars`, done, the YAML is now safe to paste
 

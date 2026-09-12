@@ -24,6 +24,7 @@ Three properties have to survive together, and each has its own test below:
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Iterator, Sequence
 from decimal import Decimal
 from pathlib import Path
@@ -836,3 +837,403 @@ def test_the_embargo_key_is_accepted_once_supplied(tmp_path: Path) -> None:
     raw = complete_config_dict()
     raw["backtest"]["embargo_bars"] = 48
     assert Config.load(write_config(tmp_path, raw)).backtest.embargo_bars == 48
+
+
+# --------------------------------------------------------------------------
+# Spec 61 step 1 — the eight Phase 5 sections
+# --------------------------------------------------------------------------
+#
+# Same two-halves landing as `backtest.embargo_bars` above, eight times over: the
+# model fields land first, the lead pastes the YAML, and the sections are then
+# tightened from `Section | None = None` to required. Until the paste the shipped
+# `config/default.yaml` carries none of them, so every test below builds its own
+# config and only `test_the_phase_5_sections_are_landing_in_two_halves` looks at
+# the shipped file.
+#
+# **These values are not the operator's and are not recommendations.** They exist
+# so the loader can be exercised on numbers that cannot move. The three operator
+# keys — `prediction.di_percentile`, `anomaly.threshold_percentile`,
+# `skeptic.veto_threshold` — are deliberately ABSENT from this overlay, because
+# absent is the state the engines have to fail closed in and the state the phase
+# ships in.
+
+#: The sections as the lead will paste them, minus the three operator keys.
+PHASE_5_SECTIONS: dict[str, Any] = {
+    "models": {"dir": "models"},
+    "features": {
+        "version": "test-v0",
+        "max_lookback_bars": 96,
+        "min_lookback_fill": "0.80",
+    },
+    "macro": {
+        "btc": {"live": "XBT/USD", "archive": "XBTUSD"},
+        "eth": {"live": "ETH/USD", "archive": "ETHUSD"},
+    },
+    "prediction": {
+        "di_window_days": 30,
+        "di_neighbours": 10,
+        "di_reference_rows": 20000,
+        "calibration_days": 14,
+        "threads": 4,
+    },
+    "anomaly": {},
+    "skeptic": {},
+    "regime": {"high_vol_percentile": "0.80", "trend_efficiency": "0.40"},
+    "scout": {"rank_descending": True},
+}
+
+#: The three keys the operator supplies after the walk-forward reports, and the
+#: engine that blocks while each is absent. Spec 59 decision 9.
+OPERATOR_MODEL_KEYS: tuple[str, ...] = (
+    "prediction.di_percentile",
+    "anomaly.threshold_percentile",
+    "skeptic.veto_threshold",
+)
+
+
+def with_phase_5(raw: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A complete config carrying the eight Phase 5 sections."""
+    base = raw if raw is not None else complete_config_dict()
+    for section, values in PHASE_5_SECTIONS.items():
+        base[section] = copy.deepcopy(values)
+    return base
+
+
+def load_phase_5(tmp_path: Path, mutate: Any = None) -> Config:
+    raw = with_phase_5()
+    if mutate is not None:
+        mutate(raw)
+    return Config.load(write_config(tmp_path, raw))
+
+
+def test_the_phase_5_landing_is_closed_and_every_section_is_required() -> None:
+    """Both halves are in, so this asserts the closed state and not two worlds.
+
+    It branched on whether each section was in the shipped file for the two hours
+    the landing was in flight — the fields first, the lead's YAML after. The paste
+    happened on 2026-09-13 and the sections were tightened the same hour, so the
+    branch is gone: **a dead branch in a test is a claim nobody is checking**, the
+    same lesson `test_the_embargo_handoff_is_closed_and_the_key_is_required`
+    records one spec earlier.
+    """
+    shipped = yaml.safe_load(DEFAULT_YAML.read_text(encoding="utf-8"))
+    for section in PHASE_5_SECTIONS:
+        assert section in shipped, (
+            f"{section} has been removed from config/default.yaml while the model "
+            "field is required, so the shipped config no longer parses. This names "
+            "which half went missing."
+        )
+        assert Config.model_fields[section].is_required(), (
+            f"{section} is optional again. Optional is only for the window between "
+            "the two halves; at rest the section must be required, so that deleting "
+            "it refuses at startup instead of raising from inside a gate three "
+            "chains into a tick."
+        )
+
+
+@pytest.mark.parametrize("section", tuple(PHASE_5_SECTIONS))
+def test_removing_a_phase_5_section_is_refused_at_startup(
+    tmp_path: Path, section: str
+) -> None:
+    """What the tightening bought, stated as a test rather than as a comment.
+
+    While the sections were optional this config loaded and every key under the
+    missing one raised from wherever it was read. Now the process does not start at
+    all, and the message names the section — which is the difference between an
+    operator reading one refusal and an agent reading a `ConfigKeyError` traceback
+    out of a blocked gate.
+    """
+    raw = with_phase_5()
+    del raw[section]
+    with pytest.raises(ConfigError, match="Field required"):
+        Config.load(write_config(tmp_path, raw))
+
+
+def test_the_shipped_config_loads_with_the_model_sections_in_it() -> None:
+    """The property both halves of the landing exist to protect: the committed file
+    parses. Every test in every lane reads it."""
+    config = Config.load(DEFAULT_YAML)
+    assert config.mode == "paper"
+    assert config.models.dir == Path("models")
+    assert config.features.max_lookback_bars <= config.market_sensor.published_bars
+
+
+def test_a_complete_phase_5_config_parses_to_the_types_it_claims(tmp_path: Path) -> None:
+    """One assertion per section that the values arrive as the declared type.
+
+    A `Ratio` that silently stayed a float would be the money-shaped defect this
+    project refuses; a `Path` that stayed a string would build `models/` by string
+    concatenation on a Windows target.
+    """
+    config = load_phase_5(tmp_path)
+    assert config.models is not None
+    assert config.features is not None
+    assert config.macro is not None
+    assert config.prediction is not None
+    assert config.regime is not None
+    assert config.scout is not None
+
+    assert config.models.dir == Path("models")
+    assert config.features.version == "test-v0"
+    assert config.features.min_lookback_fill == Decimal("0.80")
+    assert config.macro["btc"].live == "XBT/USD"
+    assert config.macro["btc"].archive == "XBTUSD"
+    assert config.prediction.di_neighbours == 10
+    assert config.regime.high_vol_percentile == Decimal("0.80")
+    assert config.scout.rank_descending is True
+    # Dotted access, which is how every engine actually reads a key.
+    assert config.get("macro.eth.archive") == "ETHUSD"
+    assert config.get("features.max_lookback_bars") == 96
+
+
+# --- The optional leaves, and the difference between a leaf and a section ---
+
+
+@pytest.mark.parametrize("key", OPERATOR_MODEL_KEYS)
+def test_an_absent_operator_leaf_returns_none_rather_than_raising(
+    tmp_path: Path, key: str
+) -> None:
+    """A's spec 58 finding, restated where the three keys that depend on it live.
+
+    This is not the loader being lax. `Config.get` raises on a key the model does
+    not declare and returns the value of one it does — and an unset optional leaf
+    *is* declared. The consequence is the whole point: absence does NOT fail closed
+    at the point of use, so each of engines 8, 13 and 15 has to refuse the `None`
+    by name. A gate that reads it as zero is a gate that has been turned off.
+    """
+    config = load_phase_5(tmp_path)
+    assert config.get(key) is None
+
+
+@pytest.mark.parametrize(
+    "key",
+    ("models.prediction_run_id", "models.anomaly_run_id", "models.skeptic_run_id"),
+)
+def test_an_absent_run_id_returns_none_so_a_fresh_clone_still_starts(
+    tmp_path: Path, key: str
+) -> None:
+    """Invariant 3 on a clone with no `models/`: the engine blocks, the process starts.
+
+    A required run id would be a config that refuses to start until somebody has
+    trained something, which would stop the recorder — and order-book history cannot
+    be recovered later.
+    """
+    config = load_phase_5(tmp_path)
+    assert config.get(key) is None
+
+
+def test_an_absent_rank_feature_returns_none(tmp_path: Path) -> None:
+    """Spec 59 decision 7: alphabetical while the operator has not ruled."""
+    config = load_phase_5(tmp_path)
+    assert config.get("scout.rank_feature") is None
+
+
+def test_the_rank_direction_defaults_to_descending_when_the_key_is_absent(
+    tmp_path: Path,
+) -> None:
+    """Asserted against a config that does NOT carry the key, which is the whole point.
+
+    This test used to read `rank_descending` out of a config whose `scout` block set
+    it to `true`, so it pinned a value the fixture had just written and stayed green
+    with the field default flipped to `False`. Found by mutation, not by reading it;
+    the entry is in the build log. The default is what applies the day the lead omits
+    the key, so the only config that can check it is one without it.
+    """
+
+    def mutate(raw: dict[str, Any]) -> None:
+        raw["scout"] = {}
+
+    assert load_phase_5(tmp_path, mutate).get("scout.rank_descending") is True
+
+
+def test_an_explicit_false_rank_direction_is_honoured(tmp_path: Path) -> None:
+    """The other half: with the key present the file wins, so the test above is
+    distinguishing "the default is True" from "the file said True"."""
+
+    def mutate(raw: dict[str, Any]) -> None:
+        raw["scout"] = {"rank_descending": False}
+
+    assert load_phase_5(tmp_path, mutate).get("scout.rank_descending") is False
+
+
+def test_get_answers_three_different_ways_on_the_shipped_model_sections() -> None:
+    """A present key, an absent-by-ruling leaf, and a key that does not exist.
+
+    Three outcomes that are easy to conflate and that a reader has to act on
+    differently, asserted together against the committed file because that is the
+    config every engine actually runs on:
+
+    * a declared key with a value returns it;
+    * an optional **leaf** that the operator has not supplied returns `None`, and
+      the reader has to refuse that `None` by name;
+    * a key the model does not declare at all **raises**, which the orchestrator
+      turns into `ERROR`, and `ERROR` blocks.
+
+    The fourth case — descending into a `None` *section* — was the state during the
+    landing window and cannot happen any more: every section is required, so a
+    missing one refuses at startup instead. That is a strictly stronger guarantee
+    and `test_removing_a_phase_5_section_is_refused_at_startup` is where it lives
+    now.
+    """
+    config = Config.load(DEFAULT_YAML)
+
+    assert isinstance(config.get("prediction.di_window_days"), int)
+    assert config.get("prediction.di_percentile") is None
+    with pytest.raises(ConfigKeyError, match="no such configuration key"):
+        config.get("prediction.di_percentil")
+
+
+@pytest.mark.parametrize("key", OPERATOR_MODEL_KEYS)
+def test_an_operator_leaf_written_as_null_is_refused_rather_than_read_as_absent(
+    tmp_path: Path, key: str
+) -> None:
+    """`di_percentile: null` in the YAML is NOT how "the operator has not chosen" is spelled.
+
+    A null key anywhere in this file is OPERATOR REQUIRED and stops the process by
+    name, and that machinery predates these three keys and still applies to them.
+    The two states look identical in a diff and are not: the key must be **absent**
+    from `config/default.yaml`, and writing it as null refuses at startup. Recorded
+    here because it is the mistake the paste of spec 59's YAML block can make, and
+    the failure is loud in the right direction.
+    """
+    section, _, leaf = key.partition(".")
+
+    def mutate(raw: dict[str, Any]) -> None:
+        raw[section][leaf] = None
+
+    with pytest.raises(ConfigError, match="OPERATOR REQUIRED"):
+        load_phase_5(tmp_path, mutate)
+
+
+# --- Every new field refuses a bad value --------------------------------------
+#
+# Matched on the CONSTRAINT message, never on the key name. In a model with
+# `extra="forbid"` the refusal for an unknown key always contains the key name, so
+# `match="di_percentile"` passes just as happily against a model with no such field
+# at all — A found one of its own assertions surviving exactly that mutation in
+# Phase 4.
+
+BAD_VALUES: tuple[tuple[str, str, Any, str], ...] = (
+    ("models", "dir", "", "models.dir must name a directory"),
+    ("models", "dir", ".", "models.dir must name a directory"),
+    ("models", "prediction_run_id", "../etc", "must be a bare run id and not a path"),
+    ("models", "anomaly_run_id", "runs/2026", "must be a bare run id and not a path"),
+    ("models", "skeptic_run_id", "  ", "must be a bare run id"),
+    ("features", "version", "", "String should have at least 1 character"),
+    ("features", "max_lookback_bars", 0, "Input should be greater than 0"),
+    ("features", "max_lookback_bars", -1, "Input should be greater than 0"),
+    ("features", "min_lookback_fill", "0", "Input should be greater than 0"),
+    ("features", "min_lookback_fill", "1.5", "Input should be less than or equal to 1"),
+    ("prediction", "di_window_days", 0, "Input should be greater than 0"),
+    ("prediction", "di_neighbours", 0, "Input should be greater than 0"),
+    ("prediction", "di_reference_rows", 0, "Input should be greater than 0"),
+    ("prediction", "calibration_days", 0, "Input should be greater than 0"),
+    ("prediction", "threads", 0, "Input should be greater than 0"),
+    ("prediction", "di_percentile", "0", "Input should be greater than 0"),
+    ("prediction", "di_percentile", "1", "Input should be less than 1"),
+    ("prediction", "di_percentile", "1.2", "Input should be less than 1"),
+    ("anomaly", "threshold_percentile", "0", "Input should be greater than 0"),
+    ("anomaly", "threshold_percentile", "1", "Input should be less than 1"),
+    ("skeptic", "veto_threshold", "0", "Input should be greater than 0"),
+    ("skeptic", "veto_threshold", "1", "Input should be less than 1"),
+    ("regime", "high_vol_percentile", "1", "Input should be less than 1"),
+    ("regime", "high_vol_percentile", "0", "Input should be greater than 0"),
+    ("regime", "trend_efficiency", "1", "Input should be less than 1"),
+    ("regime", "trend_efficiency", "0", "Input should be greater than 0"),
+    ("scout", "rank_feature", "", "must be a feature name"),
+    ("scout", "rank_feature", " realised_vol_24 ", "must be a feature name"),
+)
+
+
+@pytest.mark.parametrize(("section", "leaf", "value", "constraint"), BAD_VALUES)
+def test_a_bad_value_is_refused_by_its_constraint(
+    tmp_path: Path, section: str, leaf: str, value: Any, constraint: str
+) -> None:
+    def mutate(raw: dict[str, Any]) -> None:
+        raw[section][leaf] = value
+
+    with pytest.raises(ConfigError, match=constraint):
+        load_phase_5(tmp_path, mutate)
+
+
+@pytest.mark.parametrize("section", tuple(PHASE_5_SECTIONS))
+def test_every_new_section_refuses_an_unknown_key(tmp_path: Path, section: str) -> None:
+    """`extra="forbid"` on all eight, `macro`'s asset entries included.
+
+    A typo'd threshold that is silently dropped leaves the system running on a
+    default nobody chose, and in this phase that default is inside a gate.
+    """
+
+    def mutate(raw: dict[str, Any]) -> None:
+        if section == "macro":
+            raw[section]["btc"]["achive"] = "XBTUSD"
+        else:
+            raw[section]["di_percentil"] = "0.95"
+
+    with pytest.raises(ConfigError, match="Extra inputs are not permitted"):
+        load_phase_5(tmp_path, mutate)
+
+
+# --- The cross-section validator ----------------------------------------------
+
+
+def test_a_lookback_longer_than_engine_3_publishes_is_refused(tmp_path: Path) -> None:
+    """The defect this validator exists for is silent in both directions.
+
+    A feature wanting more history than `market_sensor.published_bars` fills
+    perfectly in replay, where the archive is on disk, and is NaN live, where engine
+    3 publishes a bounded window. Nothing crashes and no test goes red; the model
+    simply has a column in training that the live system cannot produce.
+    """
+
+    def mutate(raw: dict[str, Any]) -> None:
+        raw["features"]["max_lookback_bars"] = raw["market_sensor"]["published_bars"] + 1
+
+    with pytest.raises(ConfigError, match=re.escape("exceeds market_sensor.published_bars")):
+        load_phase_5(tmp_path, mutate)
+
+
+def test_a_lookback_exactly_equal_to_published_bars_is_accepted(tmp_path: Path) -> None:
+    """The other side of the boundary, because a validator that is off by one in the
+    accepting direction is just as wrong and nothing else would show it."""
+
+    def mutate(raw: dict[str, Any]) -> None:
+        raw["features"]["max_lookback_bars"] = raw["market_sensor"]["published_bars"]
+
+    config = load_phase_5(tmp_path, mutate)
+    assert config.features is not None
+    assert config.features.max_lookback_bars == config.market_sensor.published_bars
+
+
+# --- The macro mapping --------------------------------------------------------
+
+
+def test_macro_must_be_a_mapping_of_asset_to_two_spellings(tmp_path: Path) -> None:
+    def mutate(raw: dict[str, Any]) -> None:
+        raw["macro"] = ["XBT/USD", "ETH/USD"]
+
+    with pytest.raises(ConfigError, match="macro must be a map of asset to pair names"):
+        load_phase_5(tmp_path, mutate)
+
+
+def test_an_empty_macro_map_is_refused(tmp_path: Path) -> None:
+    """Empty is not "no macro context": engine 6 would publish nothing while
+    reporting `available: true`, and engine 8's feature vector would be short a
+    block of columns its manifest names."""
+
+    def mutate(raw: dict[str, Any]) -> None:
+        raw["macro"] = {}
+
+    with pytest.raises(ConfigError, match="macro must name at least one asset"):
+        load_phase_5(tmp_path, mutate)
+
+
+def test_a_macro_asset_missing_its_archive_spelling_is_refused(tmp_path: Path) -> None:
+    """Both spellings or neither. One of them missing is the case where the live
+    engine works and the offline dataset builder silently joins nothing."""
+
+    def mutate(raw: dict[str, Any]) -> None:
+        del raw["macro"]["eth"]["archive"]
+
+    with pytest.raises(ConfigError, match="Field required"):
+        load_phase_5(tmp_path, mutate)

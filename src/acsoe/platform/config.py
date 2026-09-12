@@ -438,6 +438,292 @@ class BacktestConfig(_Section):
     embargo_bars: int = Field(gt=0)
 
 
+# ---------------------------------------------------------------------------
+# Phase 5 — the model sections
+# ---------------------------------------------------------------------------
+#
+# Eight sections landed by spec 61 step 1. Every one of them is declared on
+# :class:`Config` as ``Section | None = None`` **for exactly as long as the
+# lead's YAML block is not in `config/default.yaml`**, and is tightened to
+# required the moment it is. That dance is `code-standards.md` Configuration and
+# it is not optional: `extra="forbid"` means a YAML key without its model field
+# is refused at load, and a required model field without its YAML key makes the
+# committed config fail to parse — which takes `scripts/verify.py` and every test
+# in every lane that reads the shipped config with it. Optional is the only state
+# in which both halves load, and required is the right resting state, because a
+# withdrawn section then refuses at startup by name instead of surfacing as a
+# `ConfigKeyError` from inside an engine three chains later.
+#
+# **An absent *section* fails closed; an absent *leaf* does not.** ``Config.get``
+# walks the dotted path, and descending *into* a ``None`` raises
+# ``ConfigKeyError`` — so while a section is ``None`` every key under it raises,
+# which is what a reader wants. A leaf that is present-and-``None`` is the end of
+# the walk, so ``get`` **returns ``None``**. That is A's spec 58 finding, it is
+# why each optional leaf below says so in its own docstring, and it is why every
+# reader of one has to refuse the ``None`` explicitly rather than treat it as
+# zero. A zero DI percentile, a zero anomaly threshold or a zero veto threshold
+# is not a conservative default — it is a gate that has been turned off.
+
+
+class ModelsConfig(_Section):
+    """Where trained artefacts live, and which run each model engine loads.
+
+    ``dir`` is the root of ``models/<run_id>/`` described under Storage in
+    ``context/architecture-context.md``. ``platform/paths.py`` creates it at startup
+    beside ``data/`` and ``logs/``; the artefacts inside it are C's and are written
+    once and never overwritten. An engine reaches a run through
+    ``context.clients.store.model_run_dir(run_id)`` and never by building a path,
+    which is contract rule 4.
+
+    **The three run ids are optional leaves and a fresh clone has none.** That is the
+    whole reason they are ``None`` rather than required: a clone with no ``models/``
+    must still start, run its loop, record market data and build candles. Engines 8,
+    13 and 15 block when the key is absent — invariant 3, fail closed — and the
+    process does not refuse to start. ``Config.get("models.prediction_run_id")``
+    therefore **returns ``None`` rather than raising**, so every reader must test for
+    it by name and must never treat the absence as "load the latest": there is no
+    "latest" anywhere in this system, by design, because a run that cannot be named
+    is a result nobody can reproduce.
+    """
+
+    dir: Path
+    """Root of the artefact tree. Created by ``platform/paths.py``, never by an engine."""
+
+    prediction_run_id: str | None = None
+    """Run id engine 8 ``prediction`` loads. Absent means the engine blocks.
+
+    Optional **leaf**: ``Config.get`` returns ``None`` for it rather than raising.
+    """
+
+    anomaly_run_id: str | None = None
+    """Run id engine 13 ``anomaly`` loads. Absent means the gate blocks.
+
+    Optional **leaf**: ``Config.get`` returns ``None`` for it rather than raising.
+    """
+
+    skeptic_run_id: str | None = None
+    """Run id engine 15 ``skeptic`` loads. Absent means the gate blocks.
+
+    Optional **leaf**: ``Config.get`` returns ``None`` for it rather than raising.
+    """
+
+    @model_validator(mode="after")
+    def _dir_is_a_real_path(self) -> Self:
+        text = str(self.dir).strip()
+        if not text or text == ".":
+            raise ValueError(
+                "models.dir must name a directory, and an empty value resolves to the "
+                "working directory, which would scatter run directories across the "
+                "repository root"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _run_ids_are_bare_names(self) -> Self:
+        """A run id becomes a directory name under ``models.dir``.
+
+        Refused here rather than at the point of use because B's ``model_run_dir``
+        raises on a traversal-shaped id (spec 62) and the operator should learn about
+        a malformed one at startup rather than from a blocked gate three chains into a
+        tick. Both refusals stay: this one is a convenience, that one is the boundary.
+        """
+        for name, value in (
+            ("prediction_run_id", self.prediction_run_id),
+            ("anomaly_run_id", self.anomaly_run_id),
+            ("skeptic_run_id", self.skeptic_run_id),
+        ):
+            if value is None:
+                continue
+            if not value.strip() or value != value.strip():
+                raise ValueError(f"models.{name} must be a bare run id, got {value!r}")
+            if "/" in value or "\\" in value or value in (".", ".."):
+                raise ValueError(
+                    f"models.{name} must be a bare run id and not a path, got {value!r}"
+                )
+        return self
+
+
+class FeaturesConfig(_Section):
+    """The feature layer's version and its lookback bounds.
+
+    ``version`` is written into every artefact manifest and compared on load, so an
+    engine can never score a model with features computed by different arithmetic.
+
+    ``max_lookback_bars`` is bounded by ``market_sensor.published_bars`` — the
+    cross-section validator on :class:`Config` refuses it above that. Engine 3
+    publishes only that many closed bars into ``state`` each tick, so a feature
+    wanting more could never be filled live while filling perfectly in replay over
+    the archive. That is a *silent* divergence between live and replay, which is the
+    one class of defect Phase 5 exists to be careful about.
+
+    ``min_lookback_fill`` is the fraction of a time window that must actually carry
+    bars before a feature over it is a number rather than NaN. The archives only
+    contain intervals where trades occurred, so a 200-bar window can hold twelve
+    bars; nothing is interpolated. **Zero is refused** rather than meaning "no
+    floor": a window with no bars in it yields a feature computed from nothing, and
+    a model trained on those has learned the shape of the gaps.
+    """
+
+    version: str = Field(min_length=1)
+    max_lookback_bars: int = Field(gt=0)
+    min_lookback_fill: Ratio = Field(gt=0, le=1)
+
+
+class MacroAssetConfig(_Section):
+    """The two spellings of one macro pair: live and archive.
+
+    Kraken's WebSocket names a pair ``XBT/USD``; its downloadable archive names the
+    same pair ``XBTUSD``. Engine 6 ``macro_context`` reads the live spelling out of
+    ``state["feature"]["pairs"]`` and spec 67's dataset builder joins the archive
+    spelling, and a hardcoded translation between the two in either place is a
+    mapping that can disagree with itself. Both come from here.
+    """
+
+    live: str = Field(min_length=1)
+    archive: str = Field(min_length=1)
+
+
+def _require_macro_map(value: Any) -> Any:
+    if not isinstance(value, dict):
+        raise ValueError(
+            "macro must be a map of asset to pair names, "
+            'e.g. {btc: {live: "XBT/USD", archive: "XBTUSD"}}, '
+            f"got {type(value).__name__}"
+        )
+    if not value:
+        raise ValueError("macro must name at least one asset")
+    for asset in value:
+        if not isinstance(asset, str) or not asset.strip() or asset != asset.strip():
+            raise ValueError(f"macro keys must be bare asset names, got {asset!r}")
+    return value
+
+
+#: ``macro`` is a mapping and not a section: the asset names are the operator's
+#: choice, so ``extra="forbid"`` cannot apply at that level and would forbid the
+#: only thing that varies. The *value* of every entry is a forbidding section, so a
+#: typo inside one is still refused.
+MacroAssets = Annotated[dict[str, MacroAssetConfig], BeforeValidator(_require_macro_map)]
+
+
+class PredictionConfig(_Section):
+    """Engine 8 and its Dissimilarity Index.
+
+    The first five keys are plumbing the lead chooses: they size the DI's reference
+    set, the calibration slice and the trainer's thread count, and no gate reads them
+    and no order is sized from them.
+
+    ``di_percentile`` is different and is the operator's. It is the quantile of the
+    leave-one-out distance distribution at which engine 8 stops predicting, so it
+    decides how strange a market has to look before the system refuses to have an
+    opinion about it. **Absent until the walk-forward reports** (spec 59 decision 9),
+    and the engine blocks meanwhile.
+    """
+
+    di_window_days: int = Field(gt=0)
+    """How many days of the training window, per pair, form the DI reference set."""
+
+    di_neighbours: int = Field(gt=0)
+    """``k`` in the mean k-nearest distance that is the DI of a vector."""
+
+    di_reference_rows: int = Field(gt=0)
+    """Cap on reference rows after subsampling with ``seeds.train``."""
+
+    calibration_days: int = Field(gt=0)
+    """Trailing days of the *training* window used to calibrate, never the test window."""
+
+    threads: int = Field(gt=0)
+    """Trainer thread count. Reproducibility is from the seeds, not from a thread count."""
+
+    di_percentile: Ratio | None = Field(default=None, gt=0, lt=1)
+    """OPERATOR REQUIRED, absent until supplied. Engine 8 blocks while it is.
+
+    Optional **leaf**: ``Config.get("prediction.di_percentile")`` returns ``None``
+    rather than raising, so the reader must refuse the ``None`` explicitly. Treating
+    it as zero would set the threshold at the minimum observed distance and refuse
+    every candidate; treating it as one would refuse none. The first is merely
+    useless and the second is the one that flatters.
+
+    Bounded below 1 rather than at it for that reason: a percentile of exactly 1
+    puts the threshold at the largest distance in the reference set, so nothing can
+    exceed it and the check is off while still looking configured.
+    """
+
+
+class AnomalyConfig(_Section):
+    """Engine 13's veto threshold, as a percentile of the fitted score distribution."""
+
+    threshold_percentile: Ratio | None = Field(default=None, gt=0, lt=1)
+    """OPERATOR REQUIRED, absent until supplied. The gate blocks while it is.
+
+    Optional **leaf**: ``Config.get`` returns ``None`` rather than raising. Same
+    bounds and the same reasoning as ``prediction.di_percentile``: at 1 the gate
+    passes everything while reading as configured, which is a gate that has been
+    turned off rather than tuned.
+    """
+
+
+class SkepticConfig(_Section):
+    """Engine 15's veto threshold on ``p_wrong``."""
+
+    veto_threshold: Ratio | None = Field(default=None, gt=0, lt=1)
+    """OPERATOR REQUIRED, absent until supplied. The gate blocks while it is.
+
+    Optional **leaf**: ``Config.get`` returns ``None`` rather than raising. It is a
+    probability, not a percentile, but the failure shape is identical — at 1 nothing
+    is ever vetoed. Invariant 4: this engine can only make the system less willing to
+    trade, so an accidentally disabled veto is a gate silently removed from the
+    chain.
+    """
+
+
+class RegimeConfig(_Section):
+    """Engine 12's two cutoffs. Plumbing, lead-chosen, flagged provisional.
+
+    Both are **relative to the pair's own trailing window** rather than absolute
+    numbers, which is what lets one pair of cutoffs classify a market that trades at
+    four dollars and one that trades at ninety thousand. ``high_vol_percentile`` is a
+    quantile of the pair's own long-window volatility distribution;
+    ``trend_efficiency`` is a cutoff on the efficiency ratio, net move over path
+    length, which lives in ``[0, 1]`` by construction.
+
+    Both are bounded strictly inside ``(0, 1)``: at 1 neither can ever be exceeded,
+    so every candidate would be labelled ``choppy`` and the engine would look like it
+    was working.
+    """
+
+    high_vol_percentile: Ratio = Field(gt=0, lt=1)
+    trend_efficiency: Ratio = Field(gt=0, lt=1)
+
+
+class ScoutConfig(_Section):
+    """Engine 7's candidate ranking.
+
+    Spec 59 decision 7: the ranking is a **config-named feature, not a formula**. The
+    feature is chosen by the operator from spec 75's study and is absent until then,
+    and engine 7 orders alphabetically while it is — which is a stated, boring
+    fallback rather than a guess at what predicts a move.
+
+    ``rank_feature`` is an optional **leaf**, so ``Config.get("scout.rank_feature")``
+    returns ``None`` rather than raising. The engine publishes ``rank_feature: null``
+    in that state so the console and the research record say which ordering was used.
+    """
+
+    rank_feature: str | None = None
+    rank_descending: bool = True
+
+    @model_validator(mode="after")
+    def _rank_feature_is_a_name(self) -> Self:
+        value = self.rank_feature
+        if value is None:
+            return self
+        if not value.strip() or value != value.strip():
+            raise ValueError(
+                f"scout.rank_feature must be a feature name from modelling/features.py, "
+                f"got {value!r}"
+            )
+        return self
+
+
 class SeedsConfig(_Section):
     # `global` is a Python keyword, so the field is aliased. `populate_by_name`
     # lets code refer to it as `global_` while the YAML keeps the readable name.
@@ -474,6 +760,53 @@ class Config(BaseModel):
     backtest: BacktestConfig
     seeds: SeedsConfig
 
+    # ---- Phase 5, spec 61 step 1. -----------------------------------------
+    # Declared `Section | None = None` for the two hours the lead's YAML block was
+    # in flight, and **required since it landed on 2026-09-13**. Required is the
+    # resting state for the same reason it is for `kraken.cache_ttl_s`: a section
+    # deleted from the file now refuses at startup, by name, instead of surfacing
+    # as a `ConfigKeyError` from inside a gate three chains into a tick.
+    #
+    # The leaves inside them are a separate question with a per-reader answer —
+    # the five that are absent by ruling stay optional, and `Config.get` returns
+    # `None` for each. See the block comment above ModelsConfig.
+    models: ModelsConfig
+    features: FeaturesConfig
+    macro: MacroAssets
+    prediction: PredictionConfig
+    anomaly: AnomalyConfig
+    skeptic: SkepticConfig
+    regime: RegimeConfig
+    scout: ScoutConfig
+
+    @model_validator(mode="after")
+    def _lookback_fits_in_what_engine_3_publishes(self) -> Self:
+        """A feature may not want more history than engine 3 puts in ``state``.
+
+        ``market_sensor.published_bars`` bounds how many recent closed candles reach
+        ``state`` each tick. A feature whose lookback exceeds it can never be filled
+        **live** — and would fill perfectly in **replay**, where the whole archive is
+        on disk. That is not a crash, it is a feature that is a number offline and
+        NaN online, in a model whose training set therefore contains a column the
+        live system cannot produce. Nothing goes red; the model simply stops working
+        the day it is deployed, in a direction nobody can see from either side.
+
+        Refused at startup because that is the only place both numbers are visible at
+        once: ``features.max_lookback_bars`` is read by C's ``modelling/features.py``
+        and ``market_sensor.published_bars`` by A's engine 3, and neither of them can
+        see the other's key without becoming a second reader of it.
+        """
+        allowed = self.market_sensor.published_bars
+        wanted = self.features.max_lookback_bars
+        if wanted > allowed:
+            raise ValueError(
+                f"features.max_lookback_bars ({wanted}) exceeds "
+                f"market_sensor.published_bars ({allowed}): engine 3 publishes only "
+                f"{allowed} closed bars per tick, so a feature with a longer lookback "
+                "would be NaN live and a number in replay"
+            )
+        return self
+
     @model_validator(mode="after")
     def _phase_0_forces_paper(self) -> Self:
         """Invariant 1. ``platform/live_guard.py`` is a Phase 8 deliverable.
@@ -506,11 +839,26 @@ class Config(BaseModel):
         names live in ``config/default.yaml`` and this model only, and cannot
         drift into a third copy inside ``core/``.
 
-        **Raises on a miss. Never returns a default, and never returns None to
-        mean "absent".** An engine silently receiving ``None`` for a threshold is
-        the exact failure this project exists to prevent: a null hurdle multiple
-        does not stop a trade, it prices one at zero. The raise becomes ``ERROR``
-        at the orchestrator, and ``ERROR`` blocks.
+        **Raises on a miss, and never returns a default.** An engine silently
+        receiving ``None`` for a threshold is the exact failure this project
+        exists to prevent: a null hurdle multiple does not stop a trade, it
+        prices one at zero. The raise becomes ``ERROR`` at the orchestrator, and
+        ``ERROR`` blocks.
+
+        **A miss is a key this model does not declare. An optional field that is
+        declared and unset is not a miss, and this returns its ``None``.** The two
+        are different facts and reporting them differently is deliberate — but the
+        consequence catches everybody once, so it is stated here rather than left
+        in a field docstring. The walk ends on a leaf, so
+        ``get("prediction.di_percentile")`` returns ``None`` while the operator has
+        not supplied it; the walk has to descend *into* a ``None`` section, so
+        ``get("prediction.di_window_days")`` **raises** while the whole
+        ``prediction`` section is absent. Same shape, opposite behaviour, and the
+        difference is the depth of the ``None``: an absent section fails closed on
+        its own, an absent leaf does not and its reader must refuse the ``None``
+        by name. Found by A in spec 58, on ``backtest.embargo_bars``, where a leaf
+        read as zero is a walk-forward with no embargo — no crash, no red test,
+        just a model that flatters.
 
         Descends through sections and through mapping values alike, so both
         ``"paper.starting_balances"`` and ``"paper.starting_balances.USD"``
