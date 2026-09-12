@@ -44,6 +44,19 @@ inside the bar the decision was made on; reading them is look-ahead within one b
 rather than a rule handed down: a ``timeout`` label needs a terminal price to compute a
 return from, and across a multi-day hole there is none. Excluding is the reading that
 invents nothing. The count is reported so the decision is visible rather than silent.
+
+## One dataset rule, which is about tradability and not about data
+
+**A decision bar before ``dataset.decision_start_date`` is not labelled.** Operator
+ruling, 2026-09-12. The archive begins in October 2013 and its earliest bars are single
+trades of 0.1 BTC in fifteen minutes. Those bars are real and nothing is wrong with
+them as data; they describe a market in which no position could have been taken at any
+size, and a model trained on them learns patterns that do not transfer. The cutoff is a
+config key rather than a constant, :func:`label_series` applies it to the whole-series
+walk, and :class:`LabelledSeries` reports how many bars it removed so the cost of the
+exclusion is visible per pair. :func:`label_candles`, the single-bar entry point the
+hand-verified fixture drives, does not apply it: a caller naming one bar has already
+chosen it.
 """
 
 from __future__ import annotations
@@ -51,6 +64,7 @@ from __future__ import annotations
 import bisect
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Final, Protocol
 
@@ -58,6 +72,7 @@ import polars as pl
 
 __all__ = [
     "BARRIER_LABELS",
+    "KEY_DECISION_START_DATE",
     "LABEL_COLUMNS",
     "LABEL_STOP",
     "LABEL_TARGET",
@@ -69,6 +84,7 @@ __all__ = [
     "label_frame",
     "label_series",
     "read_barriers",
+    "read_decision_start",
 ]
 
 LABEL_TARGET: Final = "target"
@@ -81,6 +97,7 @@ BARRIER_LABELS: Final[tuple[str, ...]] = (LABEL_TARGET, LABEL_STOP, LABEL_TIMEOU
 KEY_TARGET_PCT: Final = "barriers.target_pct"
 KEY_STOP_PCT: Final = "barriers.stop_pct"
 KEY_TIMEOUT_BARS: Final = "barriers.timeout_bars"
+KEY_DECISION_START_DATE: Final = "dataset.decision_start_date"
 
 #: Columns of the frame :func:`label_frame` returns, in order.
 LABEL_COLUMNS: Final[tuple[str, ...]] = (
@@ -148,6 +165,36 @@ def read_barriers(config: _Config) -> Barriers:
     )
 
 
+def read_decision_start(config: _Config) -> int:
+    """The first permitted ``decision_ts``: ``dataset.decision_start_date`` at 00:00 UTC.
+
+    Accepts the ISO string the committed YAML quotes and the ``date`` the platform loader
+    parses it into. **No default.** A null or missing key raises, because a cutoff that
+    silently became "the beginning of the archive" would put the 2013 single-trade bars
+    back into the dataset with nothing anywhere saying so.
+    """
+    raw = config.get(KEY_DECISION_START_DATE)
+    if raw is None:
+        raise ValueError(
+            f"config key `{KEY_DECISION_START_DATE}` is null. There is no default: the "
+            "cutoff decides which years the dataset covers, and an unset one would "
+            "silently admit every bar in the archive."
+        )
+    if isinstance(raw, datetime):
+        day = raw.date()
+    elif isinstance(raw, date):
+        day = raw
+    else:
+        try:
+            day = date.fromisoformat(str(raw))
+        except ValueError as exc:
+            raise ValueError(
+                f"config key `{KEY_DECISION_START_DATE}` is {raw!r}, not an ISO calendar "
+                "date such as 2017-01-01"
+            ) from exc
+    return int(datetime(day.year, day.month, day.day, tzinfo=UTC).timestamp())
+
+
 @dataclass(frozen=True, slots=True)
 class Label:
     """One labelled decision bar.
@@ -205,6 +252,10 @@ class LabelledSeries:
 
     excluded_empty_window: int
     """Bars whose window contained no candle at all."""
+
+    excluded_before_start: int = 0
+    """Bars before ``dataset.decision_start_date``. Excluded for tradability, not for
+    anything wrong with the data, and counted so the cost of the ruling is visible."""
 
     @property
     def ambiguous_count(self) -> int:
@@ -353,16 +404,24 @@ def label_series(
     The bound is on which bars are *labelled*, never on which are *looked at*: a
     decision bar at the end of the requested range still walks forward into candles
     after it, which is what makes the horizon real rather than an artefact of the slice.
+
+    ``dataset.decision_start_date`` is applied here, on top of ``start_ts``: a decision
+    bar before it is counted in ``excluded_before_start`` and never labelled. It is a
+    bound on decision bars only. Candles before the cutoff are never *needed* by a bar
+    after it, because a label is built from the bars that follow its decision bar.
     """
     settings = read_barriers(config)
+    cutoff_ts = read_decision_start(config)
     rows = [_candle(row) for row in candles]
     stamps = [int(row["ts"]) for row in rows]
     if not stamps:
-        return LabelledSeries(pair, (), 0, 0, 0)
+        return LabelledSeries(pair, (), 0, 0, 0, 0)
     last_ts = stamps[-1]
 
-    first = 0 if start_ts is None else bisect.bisect_left(stamps, start_ts)
+    requested = 0 if start_ts is None else bisect.bisect_left(stamps, start_ts)
     final = len(stamps) if end_ts is None else bisect.bisect_right(stamps, end_ts)
+    first = min(max(requested, bisect.bisect_left(stamps, cutoff_ts)), final)
+    before_start = max(0, first - requested)
 
     labels: list[Label] = []
     past_end = 0
@@ -388,9 +447,10 @@ def label_series(
     return LabelledSeries(
         pair=pair,
         labels=tuple(labels),
-        considered=max(0, final - first),
+        considered=max(0, final - requested),
         excluded_past_end=past_end,
         excluded_empty_window=empty,
+        excluded_before_start=before_start,
     )
 
 

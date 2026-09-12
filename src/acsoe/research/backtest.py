@@ -91,6 +91,10 @@ DEFAULT_DERIVED_DIR: Final = Path("data") / "derived"
 LABELLER_MODULE: Final = "acsoe.research.labelling"
 LABELLER_ATTR: Final = "label_frame"
 
+#: Operator rulings 2 and 3 of 2026-09-12, both under `dataset:` in config/default.yaml.
+KEY_DECISION_START_DATE: Final = "dataset.decision_start_date"
+KEY_MIN_LABELLED_ROWS: Final = "dataset.min_labelled_rows"
+
 NO_SPREAD_NOTE: Final = (
     "This backtest models no spread, because the archive contains none. Engine 9 "
     "`order_book` and the spread component of engine 10 `cost` cannot be backtested "
@@ -155,6 +159,27 @@ def _rows_of(labels: Any) -> list[dict[str, Any]]:
         "read are not labels, and an unreadable result must stop the run rather than "
         "become a slice of nulls."
     )
+
+
+def _labelled_rows_floor(context: EngineContext) -> int:
+    """``dataset.min_labelled_rows``, the per-pair floor. ``0`` is no floor.
+
+    Read once per run and refused when null or negative rather than defaulted: a floor
+    that silently became zero would be the same as no floor, and the knob exists so
+    that the decision is visible.
+    """
+    value = context.config.get(KEY_MIN_LABELLED_ROWS)
+    if value is None:
+        raise RuntimeError(
+            f"config key `{KEY_MIN_LABELLED_ROWS}` is null. It has no default here: write "
+            "0 for no floor, so the absence of one is a stated value rather than a hole."
+        )
+    floor = int(value)
+    if floor < 0:
+        raise RuntimeError(
+            f"config key `{KEY_MIN_LABELLED_ROWS}` is {floor}; it cannot be negative"
+        )
+    return floor
 
 
 class BacktestEngine(BaseEngine):
@@ -226,10 +251,15 @@ class BacktestEngine(BaseEngine):
         report = replay.report
         labeller = self._resolve_labeller()
 
+        floor = _labelled_rows_floor(context)
+
         per_pair: dict[str, int] = {}
         outcomes: dict[str, int] = {}
         ambiguous = 0
         considered = 0
+        before_start = 0
+        before_start_by_pair: dict[str, int] = {}
+        below_floor: dict[str, int] = {}
         rows: list[dict[str, Any]] = []
         for pair in report.pairs:
             # One call per pair, never one call over the merged stream. A barrier
@@ -243,6 +273,18 @@ class BacktestEngine(BaseEngine):
                 interval_s=interval_s,
             )
             pair_rows = _rows_of(labels)
+            # The cutoff's cost, per pair, whether or not the pair makes the dataset:
+            # operator ruling 2 asks for the number, and a pair dropped by the floor
+            # would otherwise take its number with it.
+            removed = int(getattr(series, "excluded_before_start", 0))
+            before_start_by_pair[pair] = removed
+            before_start += removed
+            if floor and len(pair_rows) < floor:
+                # Below `dataset.min_labelled_rows`. Reported by name with its count,
+                # never silently absent from `pairs`: a dataset that quietly lost a
+                # pair looks exactly like one that never had it.
+                below_floor[pair] = len(pair_rows)
+                continue
             per_pair[pair] = len(pair_rows)
             rows.extend(pair_rows)
             considered += int(getattr(series, "considered", 0))
@@ -268,6 +310,16 @@ class BacktestEngine(BaseEngine):
             # where most labels were decided by a ruling rather than by the data is a
             # slice a reader is entitled to distrust.
             "ambiguous_labels": ambiguous,
+            # Ruling 2, 2026-09-12: decision bars before `dataset.decision_start_date`
+            # are excluded for tradability, not data quality, and the cost is reported
+            # per pair rather than absorbed into a smaller row count.
+            "decision_start_date": str(context.config.get(KEY_DECISION_START_DATE)),
+            "excluded_before_start": before_start,
+            "excluded_before_start_by_pair": before_start_by_pair,
+            # Ruling 3, 2026-09-12: a per-pair floor that is 0 today, so nothing is
+            # excluded, and a named knob rather than an overlooked question.
+            "min_labelled_rows": floor,
+            "pairs_below_floor": below_floor,
             "first_ts": report.first_ts,
             "last_ts": report.last_ts,
             "span_seconds": report.span_seconds,

@@ -109,7 +109,9 @@ agent. Reproduced verbatim from `context/progress-tracker.md`.
 - Alpha attribution uses the full equity curve including cash periods, not trade windows.
 - Execution offset bandit pooled by spread tier, not per pair.
 - Promotion metric haircut for the number of models tried.
-- Backtest training window capped at a rolling 90 days; retrains weekly during walk-forward.
+- Backtest training window is the 90 days **before** each test window and nothing after it — past-only, never two-sided; retrains weekly during walk-forward. Operator ruling 2026-09-12; the earlier wording *capped at a rolling 90 days* was read as two-sided and is retired.
+- Decision bars before `dataset.decision_start_date` (2017-01-01) are excluded from the labelled dataset. A tradability exclusion, not a data-quality one: the 2013–2016 bars are real but describe a market no position could have been taken in. Operator ruling 2026-09-12.
+- Every pair that clears the archive's two-year rule is in the dataset, thin ones included. `dataset.min_labelled_rows` is the per-pair floor, 0 today (no floor); a cross-sectional model may want one, and the decision is deferred behind that named knob. Operator ruling 2026-09-12.
 - An LLM is not the predictor. Any alternative method must first clear the fee hurdle.
 - Build order is structure, then interface, then backend.
 - Console is built against the real schema with seeded fake data, so no rework when real data arrives.
@@ -460,6 +462,8 @@ than assumed.
 | `backtest.training_window_days` | `90` | Locked decision |
 | `backtest.retrain_interval_days` | `7` | Locked decision |
 | `backtest.embargo_bars` | `48` | Lead 2026-09-11 — **provisional**, flagged to the operator |
+| `dataset.decision_start_date` | `"2017-01-01"` | **Operator** 2026-09-12 — a tradability cutoff, not a data-quality one |
+| `dataset.min_labelled_rows` | `0` | **Operator** 2026-09-12 — no floor today; 0 rather than null because a null key stops the process at load |
 | `seeds.global` / `seeds.train` / `seeds.seed_generator` | `20260908` | Lead |
 
 Three notes that matter more than their line count suggests.
@@ -500,7 +504,7 @@ phase-specific.
 | 1 — Interface | 10 | **10 PASS, 0 FAIL, 0 PENDING** |
 | 2 — Data spine | 9 | **9 PASS, 0 FAIL, 0 PENDING** |
 | 3 — Economics | 9 | **9 PASS, 0 FAIL, 0 PENDING** |
-| 4 — Memory and replay | 9 (+1 `--live`) | **9 PASS, 0 FAIL, 0 PENDING**; `replay_full_archive` skipped as `--live` |
+| 4 — Memory and replay | 10 (+1 `--live`) | **9 PASS, 0 FAIL, 0 PENDING** as last run on 2026-09-11, before `walkforward_trains_on_the_past_only` was added; the full gate has not been re-run since. On 2026-09-12 every Phase 4 criterion was run directly against the repository and passed, and `tests/verify/test_phase4_criteria.py` (91 tests, including the new criterion's mutation proofs) passed |
 | 5 — Models | — | Not started |
 | 6 — Decision and execution | — | Blocked on 5 |
 | 7 — Evaluation | — | Blocked on 6 |
@@ -615,6 +619,7 @@ under test.**
 | `labelled_sample_replayed_from_archive` | `tests/fixtures/labelled_sample.parquet` is a real replay, not a hand-written file |
 | `labeller_matches_hand_verified_labels` | The labeller reproduces every row of the hand-verified fixture, exactly |
 | `walkforward_folds_purged_and_embargoed` | A straddling label window is purged, and an embargoed row is dropped — by identity |
+| `walkforward_trains_on_the_past_only` | On every rolling fold, every training row's decision bar and label window end precede the test window, and the rows after it are counted and refused. Operator ruling 1, 2026-09-12 |
 | `console_history_reads_real_rows` | The history screen renders rows a live engine 19 wrote, not the seed's |
 | `replay_full_archive` | `--live` only: replay the operator's real archive and report what it held. Never required for green; reports PENDING when no archive is present |
 
@@ -642,6 +647,12 @@ attribution is the natural forcing function.
 a return annotation. The hole is stated rather than implied, and a test asserts the
 exclusion, so the next person to "fix" it meets a red and a decision rather than a silent
 scope change.
+
+**A per-pair floor on labelled rows.** Eleven of the 234 pairs carry fewer than 20,000
+labelled rows, two of them under 5,000 (section 10). The operator ruled on 2026-09-12 to keep
+them: `dataset.min_labelled_rows` exists, reads `0`, and engine 23 reports by name any pair it
+leaves out. A cross-sectional model may want a floor, and if it does the decision is one edit
+to a named knob rather than a question nobody wrote down.
 
 **The `toolchain_green` evidence fix.** Writing the failing tool's full captured output to a
 file, rather than keeping its last three lines, is what would make mechanism 3 diagnosable.
@@ -788,73 +799,135 @@ separate kill mechanism to build.
 
 ## 10. The labelled dataset
 
-This is what Phase 5 will train on. The figures below were **measured for this document**
-by running `research/labelling.py` and `research/walkforward.py` over the full archive in
-`data/historical/` at the committed config — they are not copied from a build log.
+This is what Phase 5 will train on. The figures below were **measured on 2026-09-12** by
+running `research/labelling.py` over every built pair in `data/historical/` at the committed
+config, after the full-archive rebuild of the same day — they are not copied from a build log.
+The per-pair reports they were computed from are committed under `docs/dataset/`, because
+`data/` is gitignored and a number that cannot be re-derived is a number that cannot be
+checked.
 
-### Totals
+### Totals, after the 2017-01-01 cutoff
 
 | | Rows | Share |
 |---|---|---|
-| **Total labelled decision bars** | **858,875** | |
-| `target` — +3% touched first | 154,392 | 17.98% |
-| `stop` — −1.5% touched first | 381,477 | 44.42% |
-| `timeout` — 48 bars elapsed | 323,006 | 37.61% |
-| of which **decided by the both-barriers-touched rule** | **724** | **0.084%** |
+| **Total labelled decision bars** | **20,331,237** | |
+| `target` — +3% touched first | 4,857,764 | 23.89% |
+| `stop` — −1.5% touched first | 10,424,046 | 51.27% |
+| `timeout` — 48 bars elapsed | 5,049,427 | 24.84% |
+| of which **decided by the both-barriers-touched rule** | **76,522** | **0.376%** |
 
-**Distinct pairs: 3.** **Date range: 2013-10-07 to 2025-12-31** (decision bars, UTC), a span
-of just over twelve years.
+**Distinct pairs: 234.** **Date range: 2017-01-01 to 2025-12-31** (decision bars,
+UTC), nine years. Bars replayed: 20,443,861, from 413 USD-suffixed archive files of which
+234 cleared the two-year rule.
 
-### By pair
+Exclusions, each accounted for: **93,475 bars** before the cutoff (below),
+**6,658 bars** whose label window ran past the end of the series, and
+**12,491 bars** whose window contained no candle at all. Labelled plus the
+three exclusions equals the bars replayed. Neither of the last two is labelled `timeout`; both
+are excluded, because labelling a window that has not finished records an outcome that has not
+happened, and a `timeout` label across a multi-day hole has no terminal price to compute a
+return from.
 
-| Pair | Bars | Labelled | `target` | `stop` | `timeout` | Ambiguous | First decision bar |
-|---|---|---|---|---|---|---|---|
-| XBTUSD | 361,584 | 361,388 | 49,869 (13.8%) | 130,273 (36.0%) | 181,246 (50.2%) | 262 | 2013-10-07 |
-| ETHUSD | 339,125 | 338,997 | 66,614 (19.7%) | 162,373 (47.9%) | 110,010 (32.5%) | 348 | 2015-08-07 |
-| SOLUSD | 158,539 | 158,490 | 37,909 (23.9%) | 88,831 (56.1%) | 31,750 (20.0%) | 114 | 2021-06-17 |
+### What the cutoff cost — stated so the exclusion is visible
 
-Exclusions are small and accounted for: **144 bars** whose label window ran past the end of
-the series (exactly 48 per pair — one full timeout horizon, as expected) and **229 bars**
-whose window contained no candle at all. Neither is labelled `timeout`; both are excluded,
-because labelling a window that has not finished records an outcome that has not happened,
-and a `timeout` label across a multi-day hole has no terminal price to compute a return from.
+Operator ruling 2 of 2026-09-12: decision bars before `dataset.decision_start_date`
+(2017-01-01) are excluded. **The exclusion is about tradability, not data quality.** The
+archive begins 2013-10-07 and its earliest bars are single trades of 0.1 BTC in fifteen
+minutes; they are real, but they describe a market no position could have been taken in at
+any size, and a model trained on them learns patterns that do not transfer.
 
-### Walk-forward folds at the current embargo
+| | Before the cutoff | After |
+|---|---|---|
+| Labelled rows | 20,424,028 | 20,331,237 |
+| Removed | | **92,791 (0.45%)** |
+| `target` share | 23.87% | 23.89% |
+| `stop` share | 51.22% | 51.27% |
+| `timeout` share | 24.91% | 24.84% |
+| Ambiguous | 76,980 | 76,522 |
 
-At `backtest.embargo_bars: 48`, `training_window_days: 90` and `retrain_interval_days: 7`,
-splitting **per pair** (pooling across pairs would interleave three unrelated series):
+The cutoff touches **6 of 234 pairs** — the only ones whose history reaches back before
+2017. Per pair, the bars it removed:
+
+| Pair | Labelled before | Removed | Labelled after | Previous first decision bar |
+|---|---|---|---|---|
+| XBTUSD | 361,388 | 46,671 | 314,863 | 2013-10-07 |
+| ETHUSD | 338,997 | 25,973 | 313,103 | 2015-08-07 |
+| LTCUSD | 313,471 | 10,411 | 303,471 | 2013-11-07 |
+| ETCUSD | 244,549 | 7,221 | 237,328 | 2016-07-27 |
+| ZECUSD | 238,538 | 2,724 | 235,814 | 2016-10-29 |
+| REPUSD | 107,735 | 475 | 107,308 | 2016-10-04 |
+
+(93,475 bars were removed; 92,791 of them had been labelled and the remaining
+684 had already been excluded for an empty window, which is why the two figures differ.)
+
+### The largest pairs
+
+| Pair | Bars | Labelled | `target` | `stop` | `timeout` | Ambiguous | Removed by cutoff | First decision bar |
+|---|---|---|---|---|---|---|---|---|
+| XBTUSD | 361,584 | 314,863 | 43,832 (13.9%) | 116,536 (37.0%) | 154,495 (49.1%) | 149 | 46,671 | 2017-01-01 |
+| ETHUSD | 339,125 | 313,103 | 60,325 (19.3%) | 148,643 (47.5%) | 104,135 (33.3%) | 225 | 25,973 | 2017-01-01 |
+| LTCUSD | 313,936 | 303,471 | 62,398 (20.6%) | 156,922 (51.7%) | 84,151 (27.7%) | 237 | 10,411 | 2017-01-01 |
+| XRPUSD | 300,002 | 299,952 | 58,761 (19.6%) | 147,863 (49.3%) | 93,328 (31.1%) | 478 | 0 | 2017-05-18 |
+| USDTUSD | 289,194 | 289,145 | 1,187 (0.4%) | 5,269 (1.8%) | 282,689 (97.8%) | 10 | 0 | 2017-03-29 |
+| XMRUSD | 283,003 | 282,951 | 58,572 (20.7%) | 137,921 (48.7%) | 86,458 (30.6%) | 302 | 0 | 2017-01-02 |
+
+The full per-pair table for all 234 pairs is `docs/dataset/labelled-dataset-2026-09-12.json`.
+
+### The eleven thin pairs — kept, by ruling
+
+Eleven pairs carry fewer than 20,000 labelled rows. Operator ruling 3 of 2026-09-12 keeps
+them: `dataset.min_labelled_rows` is the per-pair floor, it reads `0` (no floor), and engine 23
+names any pair it leaves out in `pairs_below_floor`. A cross-sectional model may want a floor;
+that decision is **deferred behind a named knob, not overlooked.**
+
+| Pair | Labelled | First decision bar |
+|---|---|---|
+| TUSDUSD | 4,659 | 2023-06-29 |
+| ETHPYUSD | 4,812 | 2023-12-11 |
+| ROOKUSD | 12,013 | 2022-05-06 |
+| C98USD | 13,555 | 2022-09-29 |
+| REQUSD | 14,609 | 2022-05-31 |
+| CSMUSD | 14,958 | 2022-07-27 |
+| AGLDUSD | 15,223 | 2022-05-05 |
+| XBTPYUSD | 15,491 | 2023-12-11 |
+| ALICEUSD | 17,787 | 2022-02-25 |
+| PSTAKEUSD | 18,081 | 2022-02-24 |
+| TBTCUSD | 18,439 | 2020-11-25 |
+
+### Walk-forward folds — past-only, at the current embargo
+
+Operator ruling 1 of 2026-09-12: **a fold trains on the 90 days before its test window and on
+nothing after it.** The splitter built in Phase 4 trained on a window of equal length on both
+sides of the test window, which is purged cross-validation — legitimate for hyperparameter
+selection, but it lets a model see data from after the period it is scored on, so it reports a
+number better than the same model would achieve live, and nothing said so. The validation
+must answer *would this have worked if I had been trading it*. The splitter was corrected, and
+`walkforward_trains_on_the_past_only` now proves on every rolling fold that no training row's
+decision bar or label window end post-dates its test window.
+
+Measured for the same three pairs the retired two-sided table used, at
+`backtest.embargo_bars: 48`, `training_window_days: 90` and `retrain_interval_days: 7`,
+splitting **per pair**, after the cutoff:
 
 | Pair | Folds | Empty | Purged rows | Embargoed rows | Median train rows | Median test rows |
 |---|---|---|---|---|---|---|
-| XBTUSD | 626 | 0 | 18,737 | 25,430 | 17,168 | 672 |
-| ETHUSD | 530 | 0 | 13,005 | 24,209 | 17,175 | 672 |
-| SOLUSD | 224 | 0 | 3,856 | 10,700 | 17,193 | 672 |
-| **Total** | **1,380** | **0** | **35,598** | **60,339** | | |
+| XBTUSD | 457 | 0 | 14,922 | 6,944 | 8,586 | 672 |
+| ETHUSD | 457 | 0 | 12,780 | 9,077 | 8,582 | 672 |
+| SOLUSD | 224 | 0 | 3,856 | 6,890 | 8,582 | 672 |
+| **Total** | **1,138** | **0** | **31,558** | **22,911** | | |
 
-672 test rows is exactly seven days of 15-minute bars, so the test windows are full. **No
-fold is empty**, and none is silently dropped — an empty fold is reported rather than
-discarded, because a run that quietly produced four folds where the caller expected twelve
-would report metrics over a third of the data with nothing saying so.
+672 test rows is exactly seven days of 15-minute bars, so the test windows are full. The
+median training set is now roughly ninety days of bars, half what the two-sided splitter
+reported (~17,175), which is the ruling doing what it says rather than a defect. **No fold is
+empty**, and none is silently dropped. The past-only property held on every fold of all three
+pairs when checked directly against the labels (confirmed).
 
-**One thing about the splitter that Phase 5 must not assume away.** The training window is
-**two-sided**: `train_start = test_start − 90 days` and `train_end = test_end + 90 days`, so
-a fold trains on roughly 90 days either side of its test window, with rows purged on the
-label-window end before it and embargoed for 48 bars after it. That is the purged
-cross-validation convention and it is what makes the purge and the embargo meaningful in both
-directions — but it is **not** a strictly causal past-only walk-forward, and the locked
-decision's phrasing, *"training window capped at a rolling 90 days"*, reads as though it were.
-The observed median of ~17,175 training rows is ~179 days, which is the two-sided window, not
-a defect. Flagged here because it is the kind of thing a reader assumes rather than checks,
-and Phase 5's results depend on which one it is.
+The embargo now sits on the training side of the boundary: the last 48 bars before each test
+window are dropped from training even when their labels resolved in time. That is where an
+embargo belongs in a past-only design, and it is why the embargoed count above is smaller than the purged one — with
+a 48-bar horizon, most rows in that span are already purged.
 
 ### Where the archive is thin — stated plainly
-
-**Three pairs, against a system whose premise is scanning every Kraken pair.** The tradable
-universe is computed per tick from live pair rules and balance, and the whole cost-adaptive
-selectivity argument is about choosing among many candidates. With XBTUSD, ETHUSD and SOLUSD
-there is very little for the universe filter to filter, and any cross-sectional model — the
-ranking score engine 7 still lacks, most obviously — has three columns to learn from. This is
-the single most important limitation of the dataset.
 
 **No order book, no spread, no depth. At all.** The archive is OHLCVT: open, high, low,
 close, volume, trade count. Engine 9 `order_book` and the spread half of engine 10 `cost`
@@ -866,32 +939,28 @@ use.
 
 **The bars are ours, not Kraken's published OHLCVT.** They are reduced to 15-minute intervals
 by `scripts/build_ohlcvt.py` from Kraken's published time-and-sales archive supplied by the
-operator — three columns, one row per trade, 179.7 million trades in total. Every price and
-every quantity in them is a real trade Kraken published, and `trades` is a real count, but the
-reduction is this project's. Confirming these bars against Kraken's own published OHLCVT is a
-`--live` task and **has not been done**.
+operator — three columns, one row per trade, 736,910,669 trades across the 234 pairs.
+Every price and every quantity in them is a real trade Kraken published, and `trades` is a
+real count, but the reduction is this project's. Confirming these bars against Kraken's own
+published OHLCVT is a `--live` task and **has not been done**.
 
-**Holes mean no trades, and the quiet fraction is large for the older pairs.** An interval in
-which nothing traded has no row, exactly as a Kraken archive contains only intervals in which
-trades occurred — nothing is forward-filled, resampled or interpolated. That is a *stronger*
-statement than the recorder's own archive could make, where a hole is usually an outage. But
-the quiet fraction is real: XBTUSD is missing 67,450 of 429,034 expected intervals (15.7%),
-ETHUSD 25,619 of 364,744 (7.0%), SOLUSD 663 of 159,202 (0.4%).
+**Holes mean no trades, and the quiet fraction is large for many pairs.** An interval in which
+nothing traded has no row, exactly as a Kraken archive contains only intervals in which trades
+occurred — nothing is forward-filled, resampled or interpolated. Kraken never stops watching,
+so that is a *stronger* statement than the recorder's own archive could make. But the quiet
+fraction is real and for the smaller pairs it is most of the calendar: the provenance records
+`missing_quiet` per pair, and for a pair like WBTCUSD it exceeds the bars that exist.
 
-**The early history is thin in the way that matters.** XBTUSD begins in October 2013, and its
-first bars are single-trade intervals — the first row is one trade of 0.1 BTC. Bars like that
-are real, but a market that trades once in fifteen minutes is not one this system could have
-transacted in at any size, and 2013–2015 Bitcoin data will flatter any model that is allowed
-to trade it. Nothing currently filters those rows out.
-
-**The label distribution is heavily skewed, and by construction.** `stop` is 44% of all rows
-against `target`'s 18% — which is what an asymmetric barrier does, since −1.5% is half the
-distance of +3% and is reached roughly twice as often. This is correct behaviour and not a
-bug, but a classifier trained naively on it will learn to predict `stop` and score well doing
-so. Phase 5 needs a metric that is not accuracy.
+**The label distribution is heavily skewed, and by construction.** `stop` is 51% of all rows
+against `target`'s 24% — which is what an asymmetric barrier does, since −1.5% is half the
+distance of +3% and is reached roughly twice as often. Across 234 pairs the skew is stronger
+than it was on three, because the smaller altcoins are more volatile and hit a barrier before
+the 12-hour horizon more often, which is also why `timeout` fell from 38% to 25%. This is
+correct behaviour and not a bug, but a classifier trained naively on it will learn to predict
+`stop` and score well doing so. Phase 5 needs a metric that is not accuracy.
 
 **What is reassuring.** The both-barriers-touched rule — the pessimistic ruling that resolves
-an ambiguous bar to `stop` — decides only **724 rows in 858,875, under one in a thousand**. It
+an ambiguous bar to `stop` — decides **76,522 rows in 20,331,237, under four in a thousand**. It
 was adopted because OHLC carries no intra-bar ordering and the favourable reading would
 flatter the strategy exactly on the most violent bars; the measurement says the assumption
 carries almost no weight in practice. Had that number been large, the labels would have been
@@ -905,7 +974,7 @@ labeller reproduces a real replay, committed because `data/` is gitignored and a
 reading the archive would pass only on the machine that downloaded it. It is paired with
 `tests/fixtures/labels_hand_verified.json`, whose expectations were produced by a **second
 implementation written from spec 52's prose** rather than from the labeller. Neither file is
-training data, and neither should be confused with the 858,875-row dataset above.
+training data, and neither should be confused with the 20,331,237-row dataset above.
 
 ---
 
@@ -980,7 +1049,7 @@ breaker two agents implement two ways:
 |---|---|---|---|
 | The archive and the replayed decision-bar series | A (`research/replay.py`, `scripts/`) | C (`research/labelling.py`) | `DecisionBar` with `close_ts` and `state_dict()`; `PairCoverage`, `ReplayReport` with `span_seconds` |
 | Labelled decision bars | C (`research/labelling.py`) | 23 `backtest` (A), C (`research/walkforward.py`) | `Label`: `pair: str`, `decision_ts: int`, `close/target_price/stop_price/touch_price: Decimal`, `label: str`, `touch_ts: int`, `bars_elapsed: int`, **`label_window_end_ts: int`**, `return_pct: float`, `ambiguous: bool`, `candles_in_window: int`. Money is a string in the frame |
-| Fold indices | C (`research/walkforward.py`) | Phase 5 training | `Fold`: `fold_index`, `train_start_ts`, `train_end_ts`, `test_start_ts`, `test_end_ts`, `train_index: tuple[int, ...]`, `test_index: tuple[int, ...]`, `purged_count`, `embargoed_count`, `out_of_window_count`, `is_empty` |
+| Fold indices | C (`research/walkforward.py`) | Phase 5 training | `Fold`: `fold_index`, `train_start_ts`, `train_end_ts`, `test_start_ts`, `test_end_ts`, `train_index: tuple[int, ...]`, `test_index: tuple[int, ...]`, `purged_count`, `embargoed_count`, `out_of_window_count`, `after_test_count`, `is_empty`. `train_end_ts == test_start_ts`: a fold trains on the past only |
 | The labeller, called by name | 23 `backtest` (A) | C's module | Imported late and by name, and the engine **refuses rather than inventing a label** when it is absent. The barriers never cross this seam — `label_frame` takes the `Config` and reads them itself |
 
 **`label_window_end_ts` is the seam that matters most.** It is the instant at which a row's

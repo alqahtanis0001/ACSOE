@@ -45,6 +45,7 @@ PHASE4_CRITERIA = (
     "labelled_sample_replayed_from_archive",
     "labeller_matches_hand_verified_labels",
     "walkforward_folds_purged_and_embargoed",
+    "walkforward_trains_on_the_past_only",
     "console_history_reads_real_rows",
 )
 
@@ -86,7 +87,7 @@ def drop_fixture(root: Path, name: str) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_all_seven_criteria_are_registered_for_phase_4(verify_module: ModuleType) -> None:
+def test_all_eight_criteria_are_registered_for_phase_4(verify_module: ModuleType) -> None:
     to_run, skipped = verify_module.criteria_for(4, False)
     names = [c.name for c in to_run]
     assert names == ["docs_vocabulary", "toolchain_green", *PHASE4_CRITERIA]
@@ -540,8 +541,8 @@ def test_a_purge_that_is_a_no_op_is_a_fail(
     patch_module(
         phase4_tree,
         WALKFORWARD,
-        "            if window_end >= test_start_ts:\n                purged += 1\n                continue",
-        "            if False:\n                purged += 1\n                continue",
+        "        if window_end >= test_start_ts:\n            purged += 1\n            continue",
+        "        if False:\n            purged += 1\n            continue",
     )
     outcome = run(verify_module, "walkforward_folds_purged_and_embargoed", phase4_tree)
     assert_fail(outcome, verify_module)
@@ -561,32 +562,32 @@ def test_a_purge_on_the_decision_bar_timestamp_is_a_fail(
     patch_module(
         phase4_tree,
         WALKFORWARD,
-        "            if window_end >= test_start_ts:",
-        "            if decision_ts >= test_start_ts:",
+        "        if window_end >= test_start_ts:",
+        "        if decision_ts >= test_start_ts:",
     )
     outcome = run(verify_module, "walkforward_folds_purged_and_embargoed", phase4_tree)
     assert_fail(outcome, verify_module)
     assert "straddler" in outcome.message
 
 
-def test_a_splitter_that_truncates_everything_after_the_test_window_is_a_fail(
+def test_an_embargo_wider_than_configured_is_a_fail(
     verify_module: ModuleType, phase4_tree: Path
 ) -> None:
-    """The embargo is a bounded span, not a truncation.
+    """The embargo is a bounded span of exactly the configured length, not a truncation.
 
     Without this the criterion would pass against a splitter that dropped every training
-    row after the test window — which satisfies the embargo assertion and throws away
-    data the walk-forward is meant to reuse.
+    row anywhere near the boundary — which satisfies the embargo assertion and throws
+    away data the walk-forward is meant to train on.
     """
     patch_module(
         phase4_tree,
         WALKFORWARD,
-        "        if decision_ts < embargo_end:",
-        "        if True:",
+        "    embargo_start = test_start_ts - settings.embargo_s(interval_s)",
+        "    embargo_start = test_start_ts - 2 * settings.embargo_s(interval_s)",
     )
     outcome = run(verify_module, "walkforward_folds_purged_and_embargoed", phase4_tree)
     assert_fail(outcome, verify_module)
-    assert "after_embargo" in outcome.message
+    assert "before_embargo" in outcome.message
 
 
 def test_a_splitter_reporting_one_count_for_both_mechanisms_is_a_fail(
@@ -610,6 +611,75 @@ def test_the_walkforward_criterion_is_pending_without_the_module(
 ) -> None:
     (phase4_tree / "src" / "acsoe" / "research" / "walkforward.py").unlink()
     outcome = run(verify_module, "walkforward_folds_purged_and_embargoed", phase4_tree)
+    assert_pending(outcome, verify_module)
+    assert "spec 53" in outcome.message
+
+
+# --------------------------------------------------------------------------- #
+# walkforward_trains_on_the_past_only
+#
+# Operator ruling 1, 2026-09-12. The splitter that passed every test above trained on
+# both sides of the test window, and nothing in the gate could see it: the criterion
+# above places each row by hand and never builds a fold with a future. These are the
+# mutations that put the future back.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_splitter_that_trains_on_rows_after_the_test_window_is_a_fail(
+    verify_module: ModuleType, phase4_tree: Path
+) -> None:
+    """The two-sided design, restored by one line. Every fold index still looks right
+    and every purge assertion still passes; the model has simply seen the future."""
+    patch_module(
+        phase4_tree,
+        WALKFORWARD,
+        "            after_test += 1\n            continue",
+        "            train.append(index)\n            continue",
+    )
+    outcome = run(verify_module, "walkforward_trains_on_the_past_only", phase4_tree)
+    assert_fail(outcome, verify_module)
+    assert "after its test window opens" in outcome.message
+
+
+def test_a_past_only_splitter_that_forgot_the_purge_is_a_fail(
+    verify_module: ModuleType, phase4_tree: Path
+) -> None:
+    """A row whose decision bar precedes the window and whose outcome was known inside
+    it. The past-only rule does not replace the purge, and this criterion checks both
+    timestamps so a splitter that kept one rule and lost the other is still red."""
+    patch_module(
+        phase4_tree,
+        WALKFORWARD,
+        "        if window_end >= test_start_ts:\n            purged += 1\n            continue",
+        "        if False:\n            purged += 1\n            continue",
+    )
+    outcome = run(verify_module, "walkforward_trains_on_the_past_only", phase4_tree)
+    assert_fail(outcome, verify_module)
+    assert "outcome became known inside it" in outcome.message
+
+
+def test_a_fold_that_hides_the_rows_it_refused_is_a_fail(
+    verify_module: ModuleType, phase4_tree: Path
+) -> None:
+    """The count is the only evidence the rule did anything. A fold reporting zero
+    refused rows over a series with eight weeks after its test window is lying, and
+    the criterion must not take the training index's word for it."""
+    patch_module(
+        phase4_tree,
+        WALKFORWARD,
+        "        after_test_count=after_test,",
+        "        after_test_count=0,",
+    )
+    outcome = run(verify_module, "walkforward_trains_on_the_past_only", phase4_tree)
+    assert_fail(outcome, verify_module)
+    assert "disagrees with the data" in outcome.message
+
+
+def test_the_past_only_criterion_is_pending_without_the_module(
+    verify_module: ModuleType, phase4_tree: Path
+) -> None:
+    (phase4_tree / "src" / "acsoe" / "research" / "walkforward.py").unlink()
+    outcome = run(verify_module, "walkforward_trains_on_the_past_only", phase4_tree)
     assert_pending(outcome, verify_module)
     assert "spec 53" in outcome.message
 

@@ -12,14 +12,20 @@ Four rows recur throughout, and each exists to be distinguishable from the other
   or the file is passing a splitter that returns an empty training set.
 * ``straddler`` — decision bar two days inside training, label window ending **inside**
   the test window. Must be purged. A splitter purging on ``decision_ts`` keeps it.
-* ``embargoed`` — decision bar just after the test window, inside the embargo span.
-  Nothing about its window straddles anything, so only the embargo can remove it.
-* ``after_embargo`` — past the embargo. Must survive, or the embargo has become a
-  truncation of everything after the test window.
+* ``embargoed`` — decision bar two bars before the test window, inside the embargo span,
+  with a label window that closed before the test window opened. Nothing about its
+  window straddles anything, so only the embargo can remove it.
+* ``before_embargo`` — one bar older than the embargo span. Must survive, or the embargo
+  has become a truncation of everything near the boundary.
+* ``after_test`` — a day after the test window. **Must never train**, by operator ruling
+  1 of 2026-09-12: a fold trains on the past only. Before that ruling this row was named
+  ``after_embargo`` and was required to *survive*, which is the two-sided design the
+  ruling retired.
 
-The last two are what make the embargo assertion independent of the purge assertion.
+The middle two are what make the embargo assertion independent of the purge assertion.
 Every assertion was proved capable of failing by mutation; the mutations and their red
-messages are in `docs/build-log/phase-4/c-interface.md`.
+messages are in `docs/build-log/phase-4/c-interface.md` and, for the past-only rule,
+`docs/build-log/phase-4/lead.md`.
 """
 
 from __future__ import annotations
@@ -57,7 +63,7 @@ def boundary(settings: Any) -> dict[str, int]:
     return {
         "test_start": test_start,
         "test_end": test_end,
-        "embargo_end": test_end + settings.embargo_s(INTERVAL_S),
+        "embargo_start": test_start - settings.embargo_s(INTERVAL_S),
     }
 
 
@@ -79,8 +85,19 @@ def rows(boundary: dict[str, int]) -> list[dict[str, Any]]:
         # about it.
         label("straddler", boundary["test_start"] - 2 * DAY, boundary["test_start"] + DAY),
         label("in_test", boundary["test_start"] + 2 * DAY, boundary["test_start"] + 3 * DAY),
-        label("embargoed", boundary["test_end"] + INTERVAL_S, boundary["test_end"] + 2 * INTERVAL_S),
-        label("after_embargo", boundary["embargo_end"] + DAY, boundary["embargo_end"] + 2 * DAY),
+        # Inside the embargo span before the test window, label closed in time.
+        label(
+            "embargoed",
+            boundary["test_start"] - 2 * INTERVAL_S,
+            boundary["test_start"] - INTERVAL_S,
+        ),
+        # One bar older than the embargo span, label closed before the span opens.
+        label(
+            "before_embargo",
+            boundary["embargo_start"] - INTERVAL_S,
+            boundary["embargo_start"] - 1,
+        ),
+        label("after_test", boundary["test_end"] + DAY, boundary["test_end"] + 2 * DAY),
     ]
 
 
@@ -123,18 +140,68 @@ def test_a_training_row_whose_label_window_straddles_the_boundary_is_purged(
 def test_a_training_row_inside_the_embargo_span_is_dropped(
     rows: list[dict[str, Any]], paper_config: Any, boundary: dict[str, int]
 ) -> None:
-    """And the row past the span is not.
+    """And the row one bar older than the span is not.
 
     Both halves are necessary. Without the second, a splitter that dropped everything
-    after the test window would pass — and that is not an embargo, it is a truncation,
-    and it throws away training data the walk-forward is supposed to reuse.
+    near the boundary would pass — and that is not an embargo, it is a truncation.
     """
     fold = one_fold(rows, paper_config, boundary)
     train = names(rows, fold.train_index)
 
     assert "embargoed" not in train
-    assert "after_embargo" in train
+    assert "before_embargo" in train
     assert fold.embargoed_count == 1
+
+
+# --------------------------------------------------------------------------- #
+# Operator ruling 1, 2026-09-12: the training set is the past only
+# --------------------------------------------------------------------------- #
+
+
+def test_a_row_after_the_test_window_never_trains(
+    rows: list[dict[str, Any]], paper_config: Any, boundary: dict[str, int]
+) -> None:
+    """By identity, and counted in its own column.
+
+    The two-sided splitter this replaced kept this row deliberately, and a test in this
+    file required it to. A model that trains on rows from after the period it is scored
+    on reports a number the live system will never see.
+    """
+    fold = one_fold(rows, paper_config, boundary)
+
+    assert "after_test" not in names(rows, fold.train_index)
+    assert fold.after_test_count == 1
+    assert fold.summary()["after_test"] == 1
+    assert fold.out_of_window_count == 0
+    assert fold.train_end_ts == boundary["test_start"]
+
+
+def test_no_training_row_post_dates_its_test_window_on_rolling_folds(
+    paper_config: Any, settings: Any
+) -> None:
+    """Every fold, every training row, both timestamps.
+
+    The label window end is checked as well as the decision bar: a row whose decision
+    bar precedes the test window and whose outcome was known only inside it is the
+    purge's job, and a past-only rule that forgot the purge would still fail here.
+    """
+    span = settings.training_window_s + 60 * DAY
+    rolling = [
+        label(f"row-{i}", ORIGIN + i * 6 * 3600, ORIGIN + i * 6 * 3600 + 12 * 3600)
+        for i in range(span // (6 * 3600))
+    ]
+
+    folds = purged_walk_forward(rolling, config=paper_config, interval_s=INTERVAL_S)
+
+    assert len(folds) >= 4
+    for fold in folds:
+        assert fold.train_index, f"fold {fold.fold_index} trained on nothing"
+        for i in fold.train_index:
+            assert rolling[i][DECISION_TS_FIELD] < fold.test_start_ts
+            assert rolling[i][LABEL_WINDOW_END_FIELD] < fold.test_start_ts
+    # The assertion above is vacuous unless rows after the test window exist and were
+    # seen. The first fold has sixty days of them.
+    assert folds[0].after_test_count > 0
 
 
 def test_the_purge_and_the_embargo_are_counted_separately(

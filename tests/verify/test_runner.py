@@ -173,6 +173,7 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
         "labelled_sample_replayed_from_archive",
         "labeller_matches_hand_verified_labels",
         "walkforward_folds_purged_and_embargoed",
+        "walkforward_trains_on_the_past_only",
         "console_history_reads_real_rows",
         "replay_full_archive",
     }

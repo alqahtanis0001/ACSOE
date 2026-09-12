@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +110,9 @@ CONSIDERED_SURPLUS = 3
 #: count is hard-coded to zero" are different observable outcomes.
 AMBIGUOUS_PER_PAIR = 2
 
+#: And again, for the rows the decision-start cutoff removed (operator ruling 2).
+BEFORE_START_PER_PAIR = 4
+
 
 class FakeSeries:
     """Stands in for C's `LabelledSeries`. Carries the three things the engine reads,
@@ -118,6 +122,7 @@ class FakeSeries:
     def __init__(self, labelled: int) -> None:
         self.considered = labelled + CONSIDERED_SURPLUS
         self.ambiguous_count = AMBIGUOUS_PER_PAIR
+        self.excluded_before_start = BEFORE_START_PER_PAIR
         self._labelled = labelled
 
     def counts(self) -> dict[str, int]:
@@ -288,6 +293,91 @@ def test_it_replays_every_pair_and_labels_each_series(
     # Ruling 1 decided this many labels rather than the data. Asserted, because a
     # reported field nothing asserts is documentation and will silently become zero.
     assert result.data["ambiguous_labels"] == 2 * AMBIGUOUS_PER_PAIR
+
+
+class _Override:
+    """`paper_config` with one key overridden, so a test never depends on the committed
+    value of the knob it is exercising."""
+
+    def __init__(self, base: Any, key: str, value: Any) -> None:
+        self._base = base
+        self._key = key
+        self._value = value
+
+    def get(self, dotted: str, /) -> Any:
+        return self._value if dotted == self._key else self._base.get(dotted)
+
+
+def _with_config(engine_context: Any, config: Any) -> Any:
+    return replace(engine_context, config=config)
+
+
+# --------------------------------------------------------------------------- #
+# Operator rulings 2 and 3, 2026-09-12: the cutoff's cost, and the per-pair floor
+# --------------------------------------------------------------------------- #
+
+
+def test_the_cutoff_cost_is_reported_per_pair_and_in_total(
+    archive: Path, tmp_path: Path, labeller: RecordingLabeller, engine_context: Any
+) -> None:
+    """Ruling 2 asks for the number. The double reports a non-zero count so an engine
+    that hard-coded zero, or read the wrong field, is visible."""
+    result = build(archive, tmp_path, labeller).process(engine_context, {})
+
+    assert result.data["excluded_before_start"] == 2 * BEFORE_START_PER_PAIR
+    assert result.data["excluded_before_start_by_pair"] == {
+        "XBTUSD": BEFORE_START_PER_PAIR,
+        "ETHUSD": BEFORE_START_PER_PAIR,
+    }
+    assert result.data["decision_start_date"] == str(
+        engine_context.config.get("dataset.decision_start_date")
+    )
+
+
+def test_no_floor_is_the_committed_value_and_keeps_every_pair(
+    archive: Path, tmp_path: Path, labeller: RecordingLabeller, engine_context: Any
+) -> None:
+    """Ruling 3: the eleven thin pairs are kept today. The knob exists, reads 0, and
+    the report says so in as many words rather than by omission."""
+    result = build(archive, tmp_path, labeller).process(engine_context, {})
+
+    assert result.data["min_labelled_rows"] == 0
+    assert result.data["pairs_below_floor"] == {}
+    assert sorted(result.data["pairs"]) == ["ETHUSD", "XBTUSD"]
+
+
+def test_a_pair_below_the_floor_is_left_out_and_named_with_its_count(
+    archive: Path, tmp_path: Path, labeller: RecordingLabeller, engine_context: Any
+) -> None:
+    """ETHUSD has two rows and XBTUSD five. A floor of three drops exactly one, and the
+    dropped pair still reports the cutoff's cost: the number must not leave with it."""
+    context = _with_config(
+        engine_context, _Override(engine_context.config, "dataset.min_labelled_rows", 3)
+    )
+
+    result = build(archive, tmp_path, labeller).process(context, {})
+
+    assert result.data["pairs_below_floor"] == {"ETHUSD": 2}
+    assert result.data["labelled_rows_by_pair"] == {"XBTUSD": 5}
+    assert result.data["labelled_rows"] == 5
+    assert result.data["label_counts"] == {"target": 0, "stop": 0, "timeout": 5}
+    assert result.data["decision_bars_considered"] == 5 + CONSIDERED_SURPLUS
+    assert result.data["ambiguous_labels"] == AMBIGUOUS_PER_PAIR
+    assert result.data["excluded_before_start_by_pair"]["ETHUSD"] == BEFORE_START_PER_PAIR
+    assert result.data["min_labelled_rows"] == 3
+
+
+def test_a_null_floor_is_refused_rather_than_read_as_zero(
+    archive: Path, tmp_path: Path, labeller: RecordingLabeller, engine_context: Any
+) -> None:
+    """0 is a stated value; null is a hole. The knob exists so the decision is visible,
+    and a hole read as "no floor" is the decision made silently."""
+    context = _with_config(
+        engine_context, _Override(engine_context.config, "dataset.min_labelled_rows", None)
+    )
+
+    with pytest.raises(RuntimeError, match=r"dataset\.min_labelled_rows"):
+        build(archive, tmp_path, labeller).process(context, {})
 
 
 def test_each_pair_is_labelled_as_its_own_series_not_as_one_merged_stream(

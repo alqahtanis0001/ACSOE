@@ -368,11 +368,61 @@ Settled with evidence. Do not relitigate. Changing one requires the operator, no
 - Alpha attribution uses the full equity curve including cash periods, not trade windows.
 - Execution offset bandit pooled by spread tier, not per pair.
 - Promotion metric haircut for the number of models tried.
-- Backtest training window capped at a rolling 90 days; retrains weekly during walk-forward.
+- Backtest training window is the 90 days **before** each test window and nothing after it — past-only, never two-sided; retrains weekly during walk-forward. Operator ruling 2026-09-12; the earlier wording *capped at a rolling 90 days* was read as two-sided and is retired.
+- Decision bars before `dataset.decision_start_date` (2017-01-01) are excluded from the labelled dataset. A tradability exclusion, not a data-quality one: the 2013–2016 bars are real but describe a market no position could have been taken in. Operator ruling 2026-09-12.
+- Every pair that clears the archive's two-year rule is in the dataset, thin ones included. `dataset.min_labelled_rows` is the per-pair floor, 0 today (no floor); a cross-sectional model may want one, and the decision is deferred behind that named knob. Operator ruling 2026-09-12.
 - An LLM is not the predictor. Any alternative method must first clear the fee hurdle.
 - Build order is structure, then interface, then backend.
 - Console is built against the real schema with seeded fake data, so no rework when real data arrives.
 - Paper mode until a validated model exists. A readiness gate, not an account-size gate.
+
+### Operator rulings of 2026-09-12, recorded here so Phase 5 inherits them rather than asking
+
+Context: the same day, the historical loader was pointed at the whole archive instead of
+three hand-picked pairs — 234 USD-quoted pairs with at least two years of history,
+20,443,861 bars — and the labelled dataset was measured over all of it. The measurement
+surfaced three things the operator ruled on.
+
+**RULING 1 — The walk-forward is past-only, not two-sided.** A fold trains on the 90 days
+before its test window and nothing after it. What was built trained on 90 days on both sides
+of the test window, which is purged cross-validation: legitimate for hyperparameter selection,
+but it lets a model see data from after the period it is scored on, so it reports a number
+better than the same model would achieve live and nothing says so. The project's goal is a
+system that trades, so the validation must answer "would this have worked if I had been
+trading it". **Applied:** `research/walkforward.py` now sets `train_end = test_start` and
+counts every row after the test window in `Fold.after_test_count` rather than training on it;
+the embargo moved to the training side of the boundary (the last `embargo_bars` before the test
+window). The Locked Decision above was reworded, and the retired wording is now a
+`docs_vocabulary` row. A new Phase 4 criterion, `walkforward_trains_on_the_past_only`, proves
+on every rolling fold that no training row's decision bar or label window end post-dates its
+test window, with mutation proofs in `tests/verify/test_phase4_criteria.py`. Measured effect on
+the three original pairs: median training rows fell from ~17,175 to
+~8,586, which is the ruling doing what it says.
+
+**RULING 2 — Exclude decision bars before 2017-01-01.** The archive begins 2013-10-07 and the
+earliest bars are single trades of 0.1 BTC in fifteen minutes. Those bars are real but describe
+a market no position could have been taken in at any size, and a model trained on them will
+learn patterns that do not transfer. **The exclusion is about tradability, not data quality.**
+**Applied:** `dataset.decision_start_date: "2017-01-01"` in `config/default.yaml`, read by
+`research/labelling.py` with no default (a null raises), applied in `label_series`, and
+reported per pair as `LabelledSeries.excluded_before_start` and by engine 23 as
+`excluded_before_start_by_pair`. **Cost, measured:** 92,791 labelled rows
+removed (0.45% of 20,424,028), across the 6 pairs whose history
+predates 2017 — XBTUSD 46,671, ETHUSD 25,973,
+LTCUSD 10,411, ETCUSD 7,221, ZECUSD 2,724,
+REPUSD 475. The dataset is 20,331,237 rows. Both figures are in
+`docs/PROJECT-STATE.md` section 10 and `docs/dataset/`.
+
+**RULING 3 — Keep the eleven thin pairs; add the floor as a named knob.** Eleven of 234 pairs
+carry fewer than 20,000 labelled rows (TUSDUSD 4,659 and ETHPYUSD 4,812 the
+smallest). They stay. `dataset.min_labelled_rows` is the per-pair floor, reads `0` today so
+nothing is excluded, and engine 23 names any pair it leaves out in `pairs_below_floor`. A
+cross-sectional model may want a floor; that decision is deferred with a named knob, not
+overlooked. **One deviation from the ruling's letter, stated:** the operator asked for a
+default of null. `platform/config.py` refuses every null key at load — null means OPERATOR
+REQUIRED and stops the process, which is the right rule for a trading threshold and is
+documented as deliberately not special-cased — so the absence of a floor is spelled `0`, with
+the reason in the YAML comment and in `DatasetConfig`.
 
 ## Open Questions
 
@@ -670,4 +720,5 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
 
 ## Session Notes
 
+- 2026-09-12 — full-archive rebuild (234 pairs), dataset measured, three operator rulings applied (past-only walk-forward, 2017 cutoff, thin-pair floor as a named knob). Phase 5 not started. The Phase 4 gate was not re-run in full after the new criterion landed; every Phase 4 criterion was run directly and the full pytest suite was run — see the lead's build log for the outputs.
 - Project starts from scratch. Any earlier ACSOE code was throwaway scaffolding and must not be carried over or referenced.

@@ -45,6 +45,29 @@ barriers:                        # Locked decisions; triple-barrier labelling
   stop_pct: 0.015                # -1.5%
   timeout_bars: 48               # 48 x 15m = 12h, consistent with the 2-12h horizon
 
+dataset:                         # Which labelled rows and pairs form the training dataset.
+                                 # Two operator rulings of 2026-09-12, recorded under Locked
+                                 # Decisions in context/progress-tracker.md. Neither is a
+                                 # trading threshold: no gate reads either and no order is
+                                 # sized from them. Both decide what Phase 5 learns from.
+  decision_start_date: "2017-01-01"
+                                 # Decision bars before this UTC calendar date are excluded
+                                 # from labelling. The archive begins 2013-10-07 and its
+                                 # earliest bars are single trades of 0.1 BTC in fifteen
+                                 # minutes: real, but a market no position could have been
+                                 # taken in at any size, and a model trained on them learns
+                                 # patterns that do not transfer. The exclusion is about
+                                 # TRADABILITY, not data quality. research/labelling.py
+                                 # applies it and reports how many rows it removed, per pair.
+  min_labelled_rows: 0           # A pair with fewer labelled rows than this is left out of
+                                 # the dataset by engine 23 `backtest`. 0 means NO FLOOR and
+                                 # 0 is the value today: the eleven pairs under 20,000 rows
+                                 # are kept. A cross-sectional model may want a floor; that
+                                 # decision is deferred behind this named knob, not
+                                 # overlooked. It is 0 rather than null because a null key
+                                 # in this file means OPERATOR REQUIRED and stops every
+                                 # process at load (see the header above).
+
 safety:                          # Engine 17, the circuit breaker. Guard chain, every tick.
   max_consecutive_data_blocks: 15   # invariant 14. One full decision bar at a 1m tick:
                                     # long enough that a websocket reconnect never

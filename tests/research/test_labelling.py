@@ -25,12 +25,14 @@ from typing import Any
 import pytest
 
 from acsoe.research.labelling import (
+    KEY_DECISION_START_DATE,
     LABEL_STOP,
     LABEL_TARGET,
     LABEL_TIMEOUT,
     label_candles,
     label_series,
     read_barriers,
+    read_decision_start,
 )
 
 INTERVAL = 900
@@ -458,6 +460,113 @@ def test_the_series_reports_what_it_excluded_and_why(paper_config: Any) -> None:
     assert result.excluded_past_end == 48
     assert len(result.labels) == 12
     assert result.excluded_empty_window == 0
+    # T0 is in November 2023, after the committed cutoff, so it removes nothing here.
+    assert result.excluded_before_start == 0
+
+
+# --------------------------------------------------------------------------- #
+# Operator ruling 2, 2026-09-12: decision bars before `dataset.decision_start_date`
+# --------------------------------------------------------------------------- #
+
+
+class _Cutoff:
+    """`paper_config` with one key overridden, so the committed value is never what a
+    test here depends on."""
+
+    def __init__(self, base: Any, value: Any) -> None:
+        self._base = base
+        self._value = value
+
+    def get(self, key: str, /) -> Any:
+        return self._value if key == KEY_DECISION_START_DATE else self._base.get(key)
+
+
+#: The first UTC midnight after T0. T0 is 2023-11-14T21:20:00Z, so this is bar 8.
+MIDNIGHT_AFTER_T0 = "2023-11-15"
+BARS_BEFORE_MIDNIGHT = 8
+
+
+def test_decision_bars_before_the_cutoff_are_excluded_and_counted(paper_config: Any) -> None:
+    """Excluded for tradability, not for anything wrong with the data - and counted,
+    so the cost of the ruling is visible per pair rather than absorbed into a smaller
+    row count."""
+    rows = [flat(i) for i in range(60)]
+
+    result = label_series(
+        rows,
+        pair="AAA/USD",
+        config=_Cutoff(paper_config, MIDNIGHT_AFTER_T0),
+        interval_s=INTERVAL,
+    )
+
+    assert result.excluded_before_start == BARS_BEFORE_MIDNIGHT
+    assert result.labels[0].decision_ts == T0 + BARS_BEFORE_MIDNIGHT * INTERVAL
+    assert len(result.labels) == 12 - BARS_BEFORE_MIDNIGHT
+    # The bars offered are still all sixty; the four buckets account for every one.
+    assert result.considered == 60
+    assert (
+        len(result.labels)
+        + result.excluded_past_end
+        + result.excluded_empty_window
+        + result.excluded_before_start
+        == result.considered
+    )
+
+
+def test_the_cutoff_composes_with_an_explicit_start(paper_config: Any) -> None:
+    """`start_ts` bounds what is offered; the cutoff removes from what was offered.
+    A start after the cutoff removes nothing, and a start before it counts only the
+    bars between the two."""
+    rows = [flat(i) for i in range(60)]
+    config = _Cutoff(paper_config, MIDNIGHT_AFTER_T0)
+
+    after = label_series(
+        rows, pair="AAA/USD", config=config, interval_s=INTERVAL, start_ts=T0 + 10 * INTERVAL
+    )
+    before = label_series(
+        rows, pair="AAA/USD", config=config, interval_s=INTERVAL, start_ts=T0 + 3 * INTERVAL
+    )
+
+    assert after.excluded_before_start == 0
+    assert after.considered == 50
+    assert before.excluded_before_start == BARS_BEFORE_MIDNIGHT - 3
+    assert before.considered == 57
+
+
+def test_the_cutoff_is_read_from_config_as_a_string_or_a_date(paper_config: Any) -> None:
+    """The committed YAML quotes it, so the test double hands over a string; the
+    platform loader parses it into a `date`. Both land on the same UTC midnight."""
+    from datetime import UTC, date, datetime
+
+    expected = int(datetime(2020, 6, 1, tzinfo=UTC).timestamp())
+
+    assert read_decision_start(_Cutoff(paper_config, "2020-06-01")) == expected
+    assert read_decision_start(_Cutoff(paper_config, date(2020, 6, 1))) == expected
+
+
+def test_a_null_cutoff_is_refused_rather_than_admitting_every_bar(paper_config: Any) -> None:
+    with pytest.raises(ValueError, match=KEY_DECISION_START_DATE):
+        read_decision_start(_Cutoff(paper_config, None))
+
+
+def test_a_cutoff_that_is_not_a_date_is_refused(paper_config: Any) -> None:
+    with pytest.raises(ValueError, match="ISO calendar date"):
+        read_decision_start(_Cutoff(paper_config, "the start of 2017"))
+
+
+def test_the_single_bar_entry_point_does_not_apply_the_cutoff(paper_config: Any) -> None:
+    """A caller naming one bar has already chosen it. The cutoff is a rule about which
+    bars form the dataset, and `label_series` is where the dataset is formed."""
+    label = label_candles(
+        series(candle(3, high="103", low="99.9")),
+        pair="AAA/USD",
+        decision_ts=T0,
+        config=_Cutoff(paper_config, MIDNIGHT_AFTER_T0),
+        interval_s=INTERVAL,
+    )
+
+    assert label is not None
+    assert label.label == LABEL_TARGET
 
 
 # --------------------------------------------------------------------------- #

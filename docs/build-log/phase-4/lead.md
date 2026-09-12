@@ -259,3 +259,100 @@ own five gate runs. It is the operator's to authorise.
 understood, **every phase gate carries a probability rather than a verdict.** A green run is
 evidence that the suite passed *that time*. The honest reading of Phase 4 is green on its ten
 criteria, with a suite that intermittently reports a failure nobody can yet explain.
+
+### The walk-forward trained on the future, and no test could see it
+
+**Agent:** Lead · **Task:** operator ruling 1 · **Date:** 2026-09-12
+
+**What happened.** `research/walkforward.py` built each fold's training set from
+`training_window_days` on *both* sides of the test window: `train_end = test_end + 90 days`.
+Section 10 of `docs/PROJECT-STATE.md` had flagged it on 2026-09-11 — the observed median of
+~17,175 training rows was ~179 days, twice the locked decision's "rolling 90 days" — and
+described it as purged cross-validation rather than a defect. The operator ruled otherwise: a
+model that has seen data from after the period it is scored on reports a number the live
+system will never reach, and nothing downstream says so.
+
+**Why.** Spec 53 phrased the embargo as "after the test window, drop training rows … before
+allowing training rows back in", which only means anything if rows after the test window can
+train, and the implementer read the lead's phrasing faithfully. The criterion
+`walkforward_folds_purged_and_embargoed` places four rows by hand and required the row *after*
+the embargo to survive into training — so the gate did not merely miss the two-sided design,
+it asserted it.
+
+**Fix.** `_one_fold` now sets `train_end = test_start`, counts every row after the test
+window in a new `Fold.after_test_count`, and moves the embargo to the last `embargo_bars`
+before the test window. The existing criterion's rows were rebuilt on the training side of the
+boundary (`embargoed` two bars before the test window, `before_embargo` one bar outside the
+span). A new criterion, `walkforward_trains_on_the_past_only`, splits a constructed series of
+one training window plus eight test windows into rolling folds and checks, for every fold and
+every training row, that both the decision bar and the label window end precede the test
+window, and that `after_test_count` agrees with the data.
+
+**The mutation that nearly passed.** The first version of the new criterion used 12-hour
+label windows. With `embargo_bars: 48` — also 12 hours — every straddling row was also an
+embargoed row, so a splitter with its purge deleted still passed on the embargo's back, and
+the mutation proof for the purge half went green. The constructed horizon is now two days,
+longer than the embargo, with the reason in a comment. The proof that would have passed
+against the wrong implementation is the one to distrust most.
+
+**Consequence.** Median training rows on XBTUSD fell from ~17,175 to
+~8,586; the retired wording is a `docs_vocabulary` row; `train_end_ts` now equals
+`test_start_ts` on every fold and the seam table says so.
+
+### Decision: the 2017 cutoff is a config key applied in the labeller, not in the loader
+
+**Agent:** Lead · **Date:** 2026-09-12
+
+**Options.** Apply `dataset.decision_start_date` when the archive is read
+(`research/historical.py`, A's), when bars are labelled (`research/labelling.py`, C's), or
+when the dataset is assembled (engine 23, A's).
+
+**Chose.** The labeller, in `label_series`, with the count in `LabelledSeries` and the
+per-pair total surfaced by engine 23. `label_candles`, the single-bar entry point, does not
+apply it.
+
+**Because.** The ruling is about which *decision bars* form the dataset, and `label_series` is
+the one place that decides that. Applying it in the loader would change `ArchiveReport`'s gap
+statistics and `replay_full_archive`'s reading of the archive, which are measurements of the
+source and should not move with a training rule. Applying it only in engine 23 would leave
+`label_frame` producing rows the ruling forbids.
+
+**Cost.** One more count to carry (93,475 bars across six pairs today), and a fourth
+exclusion bucket in the arithmetic `labelled + past_end + empty + before_start == considered`,
+which the tests now assert.
+
+### Decision: `dataset.min_labelled_rows` is `0`, not `null`
+
+**Agent:** Lead · **Date:** 2026-09-12
+
+**Options.** Honour the ruling's wording with `null`, special-case one key in
+`_refuse_nulls`, or spell "no floor" as `0`.
+
+**Chose.** `0`, with the reason in the YAML comment, in `DatasetConfig`, and in the tracker
+next to the ruling.
+
+**Because.** `platform/config.py` refuses every null key at load — null means OPERATOR
+REQUIRED — and its docstring says it counts what it finds rather than checking a list
+precisely so that the tenth such key is caught. Weakening that for a research knob would make
+the loader kinder than the rule it exists to enforce. The operator's intent was an
+off-by-default named knob, and `0` is that.
+
+**Cost.** A reader of the YAML has to be told that `0` means no floor. The comment does.
+
+### The full-archive rebuild, and what the estimate got wrong
+
+**Agent:** Lead · **Task:** operator-directed rebuild · **Date:** 2026-09-12
+
+**What happened.** `scripts/build_ohlcvt.py --write` over the whole archive: 413 USD-suffixed
+files scanned, 234 kept by the two-year rule, all 234 built, exit 0, zero out-of-order,
+late or malformed rows on every pair. 20,443,861 bars from 736,910,669 trades,
+about 1.1 GB, in roughly 85 minutes.
+
+**Why the estimate was low.** The previous session's plan predicted ~13.3M labelled rows,
+0.76 GB and 42 minutes. The row estimate came from a fill ratio measured on a handful of
+small sample pairs, and the real fill across the archive is higher; disk and wall clock
+overshot for the same reason. The three original pairs reproduced their documented bar and
+label counts exactly, so the rebuild is faithful.
+
+**Consequence.** Section 10 of `docs/PROJECT-STATE.md` was rewritten from the measurement,
+and the per-pair reports are committed under `docs/dataset/` so the numbers can be re-derived.

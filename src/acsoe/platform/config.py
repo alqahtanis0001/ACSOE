@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated, Any, Final, Literal, Self
@@ -185,6 +186,26 @@ class BarriersConfig(_Section):
     target_pct: Ratio = Field(gt=0, le=1)
     stop_pct: Ratio = Field(gt=0, le=1)
     timeout_bars: int = Field(gt=0)
+
+
+class DatasetConfig(_Section):
+    """Which labelled rows and pairs form the training dataset.
+
+    Two operator rulings of 2026-09-12, recorded under Locked Decisions in
+    ``context/progress-tracker.md``. ``decision_start_date`` is an ISO calendar date, UTC;
+    ``research/labelling.py`` turns it into the first permitted ``decision_ts`` and
+    excludes every decision bar before it, reporting the count per pair. The exclusion is
+    about tradability rather than data quality. ``min_labelled_rows`` is a per-pair floor
+    read by engine 23 ``backtest``; ``0`` means no floor and is the committed value.
+
+    It is ``0`` and not ``null`` because :func:`_refuse_nulls` treats a null key as
+    OPERATOR REQUIRED and stops the process. That is the right rule for a trading
+    threshold and it would make an off-by-default research knob impossible to ship, so
+    the absence of a floor is spelled as a number rather than as a hole.
+    """
+
+    decision_start_date: date
+    min_labelled_rows: int = Field(ge=0)
 
 
 class SafetyConfig(_Section):
@@ -443,6 +464,7 @@ class Config(BaseModel):
     logging: LoggingConfig
     timeframes: TimeframesConfig
     barriers: BarriersConfig
+    dataset: DatasetConfig
     safety: SafetyConfig
     trading: TradingConfig
     paper: PaperConfig

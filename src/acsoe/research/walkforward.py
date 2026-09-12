@@ -30,24 +30,33 @@ window late.
 
 ## Embargo
 
-After the test window, training rows are dropped for a further ``backtest.embargo_bars``
-bars before training rows are allowed back in. This exists because serial correlation
-carries information across the boundary even where no label window literally straddles
-it, so purging alone is not enough.
+The last ``backtest.embargo_bars`` bars before the test window are dropped from training
+even when their label windows closed before the test window opened. This exists because
+serial correlation carries information across the boundary even where no label window
+literally straddles it, so purging alone is not enough. It is a gap between the end of
+training and the start of testing, and it is counted separately from the purge so that
+the day one mechanism stops working the other's number cannot cover for it.
 
 **There is no default for ``backtest.embargo_bars``.** It is read from config and a
 missing key raises. An embargo that quietly defaulted to zero is precisely the defect
 this module exists to prevent, and it would be indistinguishable from a working one in
 every output.
 
-## The training set is on both sides of the test window
+## The training set is the past only. Operator ruling 1, 2026-09-12.
 
-Spec 53 states the embargo as "after the test window, drop training rows for a further
-``embargo_bars`` bars **before allowing training rows back in**", which only means
-anything if training rows can follow the test window. So a fold's training set is every
-row outside the test window and within ``backtest.training_window_days`` of it on either
-side, purged and embargoed. That is purged k-fold in the López de Prado sense, laid over
-rolling test windows, and it is the lead's reading rather than the implementer's.
+A fold trains on the ``backtest.training_window_days`` before its test window and on
+**nothing after it**. Every row whose decision bar post-dates the test window is counted
+in ``after_test_count`` and never trains in that fold.
+
+What was built first trained on a window of the same length on both sides of the test
+window, which is purged cross-validation in the López de Prado sense laid over rolling
+test windows. That is legitimate for hyperparameter selection, but it lets a model see
+data from after the period it is scored on, so it reports a number better than the same
+model would achieve live and nothing says so. The project's goal is a system that trades,
+so the validation must answer "would this have worked if I had been trading it", and
+only a past-only fold answers that. The phase criterion
+``walkforward_trains_on_the_past_only`` proves it on every fold rather than trusting the
+arithmetic here.
 """
 
 from __future__ import annotations
@@ -162,8 +171,12 @@ class Fold:
     purged_count: int
     embargoed_count: int
     out_of_window_count: int
-    """Rows outside the fold's training span entirely. Not a leak; reported so that
+    """Rows older than the fold's training span. Not a leak; reported so that
     `purged` and `embargoed` cannot absorb an unrelated exclusion and look larger."""
+    after_test_count: int = 0
+    """Rows whose decision bar post-dates the test window. **Never trained on**, by
+    operator ruling 1 of 2026-09-12, and counted separately from ``out_of_window`` so a
+    reader can see that the past-only rule did something rather than infer it."""
 
     @property
     def is_empty(self) -> bool:
@@ -185,6 +198,7 @@ class Fold:
             "purged": self.purged_count,
             "embargoed": self.embargoed_count,
             "out_of_window": self.out_of_window_count,
+            "after_test": self.after_test_count,
             "empty": self.is_empty,
         }
 
@@ -222,16 +236,18 @@ def _one_fold(
     settings: WalkForwardSettings,
     interval_s: int,
 ) -> Fold:
-    embargo_s = settings.embargo_s(interval_s)
-    embargo_end = test_end_ts + embargo_s
+    embargo_start = test_start_ts - settings.embargo_s(interval_s)
     train_start = test_start_ts - settings.training_window_s
-    train_end = test_end_ts + settings.training_window_s
+    # Exclusive. Training ends where testing begins, and nothing after the test window
+    # is ever trained on in this fold: operator ruling 1, 2026-09-12.
+    train_end = test_start_ts
 
     train: list[int] = []
     test: list[int] = []
     purged = 0
     embargoed = 0
     out_of_window = 0
+    after_test = 0
 
     for index, row in enumerate(rows):
         decision_ts = _required(row, DECISION_TS_FIELD, index)
@@ -240,23 +256,27 @@ def _one_fold(
         if test_start_ts <= decision_ts < test_end_ts:
             test.append(index)
             continue
-        if not (train_start <= decision_ts <= train_end):
+        if decision_ts >= test_end_ts:
+            # Post-dates the test window. A model scored on this window may not have
+            # seen it, whatever its label window did, and no bounded span brings it back.
+            after_test += 1
+            continue
+        if decision_ts < train_start:
             out_of_window += 1
             continue
-        if decision_ts < test_start_ts:
-            # **Purged on the label window end, never on the decision bar.** A decision
-            # bar two days inside the training period whose label was built from bars
-            # inside the test period is the leak, and its `decision_ts` says nothing
-            # about that.
-            if window_end >= test_start_ts:
-                purged += 1
-                continue
-            train.append(index)
+        # Before the test window and inside the training span.
+        #
+        # **Purged on the label window end, never on the decision bar.** A decision bar
+        # two days inside the training period whose label was built from bars inside the
+        # test period is the leak, and its `decision_ts` says nothing about that.
+        if window_end >= test_start_ts:
+            purged += 1
             continue
-        # After the test window. Serial correlation carries information across the
-        # boundary even where no label window literally straddles it, so a bounded span
-        # is dropped before training rows are allowed back in.
-        if decision_ts < embargo_end:
+        # Inside the embargo span just before the test window, with a label that closed
+        # in time. Serial correlation carries information across the boundary even
+        # where no label window literally straddles it, so the last `embargo_bars` of
+        # training are dropped.
+        if decision_ts >= embargo_start:
             embargoed += 1
             continue
         train.append(index)
@@ -272,6 +292,7 @@ def _one_fold(
         purged_count=purged,
         embargoed_count=embargoed,
         out_of_window_count=out_of_window,
+        after_test_count=after_test,
     )
 
 

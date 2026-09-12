@@ -1,0 +1,47 @@
+{
+ "meta": {
+  "measured_on": "2026-09-12",
+  "archive_built_at": "2026-09-11T22:34:49.228399Z",
+  "archive_built_by": "scripts/build_ohlcvt.py",
+  "archive_selection": "every archive file ending in 'USD' whose first and last trade are at least 2 years apart",
+  "pairs_scanned": 413,
+  "pairs_selected": 234,
+  "method": "acsoe.research.historical.read_archive_rows + to_frame, then acsoe.research.labelling.label_frame at config/default.yaml's barriers (+3% / -1.5% / 48 bars), one pair at a time",
+  "note": "Past-only walk-forward folds at the committed backtest settings, for the three pairs the retired two-sided table was measured on."
+ },
+ "pairs": [
+  {
+   "pair": "XBTUSD",
+   "folds": 457,
+   "empty": 0,
+   "purged": 14922,
+   "embargoed": 6944,
+   "after_test_total": 69817217,
+   "median_train_rows": 8586,
+   "median_test_rows": 672,
+   "max_train_decision_before_test": true
+  },
+  {
+   "pair": "ETHUSD",
+   "folds": 457,
+   "empty": 0,
+   "purged": 12780,
+   "embargoed": 9077,
+   "after_test_total": 69808414,
+   "median_train_rows": 8582,
+   "median_test_rows": 672,
+   "max_train_decision_before_test": true
+  },
+  {
+   "pair": "SOLUSD",
+   "folds": 224,
+   "empty": 0,
+   "purged": 3856,
+   "embargoed": 6890,
+   "after_test_total": 16756002,
+   "median_train_rows": 8582,
+   "median_test_rows": 672,
+   "max_train_decision_before_test": true
+  }
+ ]
+}

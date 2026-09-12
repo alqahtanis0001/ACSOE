@@ -7305,16 +7305,24 @@ def check_walkforward_folds_purged_and_embargoed(ctx: VerifyContext) -> Outcome:
       **inside the test window**. Must be purged. A splitter that purged on the
       decision bar timestamp instead of the window end keeps this row, which is the
       single most plausible wrong implementation.
-    * `embargoed` - decision bar and label window both **after** the test window,
-      inside the embargo span. Must be dropped. Nothing about its label window
-      straddles anything, so a purge alone cannot remove it and an embargo of zero
-      keeps it.
-    * `after_embargo` - past the embargo span. Must survive, or the criterion would
-      pass against a splitter that dropped everything after the test window.
+    * `embargoed` - decision bar two bars **before** the test window, inside the
+      embargo span, with a label window that closed before the test window opened.
+      Must be dropped. Nothing about its label window straddles anything, so a purge
+      alone cannot remove it and an embargo of zero keeps it.
+    * `before_embargo` - one bar older than the embargo span, label closed before the
+      span opens. Must survive, or the criterion would pass against a splitter whose
+      embargo is wider than the configured span, or that dropped everything near the
+      boundary.
 
     The last two are what make the embargo assertion independent of the purge
     assertion: a test that would pass with the embargo set to zero is not testing the
     embargo.
+
+    Operator ruling 1 of 2026-09-12 moved the embargo to the training side of the
+    boundary: a fold trains on the past only, so there are no training rows after the
+    test window for an embargo to hold back. Whether anything after the test window
+    can train is `walkforward_trains_on_the_past_only`'s question, asked over rolling
+    folds rather than one constructed row.
     """
     config_map, problem = load_config(ctx.root)
     if config_map is None:
@@ -7362,7 +7370,7 @@ def check_walkforward_folds_purged_and_embargoed(ctx: VerifyContext) -> Outcome:
         origin = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp())
         test_start = origin + train_days * day
         test_end = test_start + test_days * day
-        embargo_end = test_end + embargo_bars * _CONSTRUCTED_INTERVAL_S
+        embargo_start = test_start - embargo_bars * _CONSTRUCTED_INTERVAL_S
 
         rows = [
             {
@@ -7378,14 +7386,16 @@ def check_walkforward_folds_purged_and_embargoed(ctx: VerifyContext) -> Outcome:
                 "label_window_end_ts": test_start + day,
             },
             {
+                # Inside the embargo span before the test window; label closed in time.
                 "label_id": "embargoed",
-                "decision_ts": test_end + _CONSTRUCTED_INTERVAL_S,
-                "label_window_end_ts": test_end + 2 * _CONSTRUCTED_INTERVAL_S,
+                "decision_ts": test_start - 2 * _CONSTRUCTED_INTERVAL_S,
+                "label_window_end_ts": test_start - _CONSTRUCTED_INTERVAL_S,
             },
             {
-                "label_id": "after_embargo",
-                "decision_ts": embargo_end + day,
-                "label_window_end_ts": embargo_end + day + _CONSTRUCTED_INTERVAL_S,
+                # One bar older than the embargo span; label closed before it opens.
+                "label_id": "before_embargo",
+                "decision_ts": embargo_start - _CONSTRUCTED_INTERVAL_S,
+                "label_window_end_ts": embargo_start - 1,
             },
         ]
         try:
@@ -7430,15 +7440,17 @@ def check_walkforward_folds_purged_and_embargoed(ctx: VerifyContext) -> Outcome:
         return failed(
             "`embargoed` survived into the training index. It sits "
             + str(embargo_bars)
-            + " bars or fewer after the test window, inside the configured embargo. No "
+            + " bars or fewer before the test window, inside the configured embargo. No "
             "part of its label window straddles the boundary, so the purge cannot "
             "remove it - only the embargo can, and an embargo of zero keeps it."
         )
-    if "after_embargo" not in train_ids:
+    if "before_embargo" not in train_ids:
         return failed(
-            "`after_embargo` was dropped although it sits past the embargo span. The "
-            "embargo is a bounded span, not a truncation of everything after the test "
-            "window."
+            "`before_embargo` was dropped although it sits one bar older than the "
+            "embargo span. The embargo is a bounded span of exactly "
+            + str(embargo_bars)
+            + " bars before the test window, not a truncation of everything near the "
+            "boundary."
         )
 
     purged = getattr(fold, "purged_count", None)
@@ -7463,10 +7475,155 @@ def check_walkforward_folds_purged_and_embargoed(ctx: VerifyContext) -> Outcome:
 
     return passed(
         "a training row whose label window ends inside the test window was purged by "
-        "identity, and a row "
+        "identity, and a row inside the "
         + str(embargo_bars)
-        + " bars past the test window was embargoed, while a row a month earlier and a "
-        "row past the embargo span both survived (purged=1, embargoed=1)"
+        + "-bar embargo before the test window was embargoed, while a row a month "
+        "earlier and a row one bar older than the embargo span both survived "
+        "(purged=1, embargoed=1)"
+    )
+
+
+# --- walkforward_trains_on_the_past_only ------------------------------------ #
+
+
+def check_walkforward_trains_on_the_past_only(ctx: VerifyContext) -> Outcome:
+    """No training row post-dates its test window, on every fold. Operator ruling 1.
+
+    The splitter this replaced trained on a window of equal length on both sides of the
+    test window. That is purged cross-validation, legitimate for choosing
+    hyperparameters, and it lets a model see data from after the period it is scored
+    on - so the backtest reports a number better than the same model would achieve
+    live, and nothing says so. The project's goal is a system that trades, so the
+    validation must answer "would this have worked if I had been trading it", and only
+    a past-only fold answers that.
+
+    Constructed rather than read, like its sibling: a series of labelled rows every six
+    hours spanning one training window and eight test windows, split into rolling
+    folds. Then, for **every** fold and **every** training row, both the decision bar
+    and the label window end must precede the fold's test window. Both, because a
+    decision bar that precedes the window with an outcome known inside it is the
+    purge's job, and a past-only rule that forgot the purge would still be a leak.
+
+    Two things keep the assertion from being vacuous. The dataset must actually hold
+    rows after each fold's test window - the first fold has eight weeks of them - and
+    the fold must report how many it saw and refused, in `after_test_count`, agreeing
+    with the data. A splitter that never produced a post-window row to refuse would
+    pass the loop and prove nothing.
+    """
+    with root_import_path(ctx.root):
+        module, problem = try_import("acsoe.research.walkforward")
+        if module is None:
+            if problem is not None and problem.result is Result.FAIL:
+                return problem
+            return pending(
+                "acsoe.research.walkforward does not exist yet ("
+                + PHASE4_RESEARCH["acsoe.research.walkforward"]
+                + ")"
+            )
+        splitter, missing = module_attr(module, "purged_walk_forward")
+        if splitter is None:
+            return pending(missing)
+        engine_config, problem = _phase3_config()
+        if engine_config is None:
+            return problem or pending("the committed config could not be loaded")
+
+        train_days = int(engine_config.get("backtest.training_window_days"))
+        test_days = int(engine_config.get("backtest.retrain_interval_days"))
+        day = 86_400
+        step = 6 * 3600
+        # Two days, deliberately longer than the embargo span. With a horizon no longer
+        # than the embargo every straddling row is also an embargoed row, and a
+        # splitter that lost its purge would still pass here on the embargo's back:
+        # the mutation proof for the purge half needs a straddler the embargo cannot
+        # reach.
+        horizon = 2 * day
+        origin = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp())
+        span = (train_days + 8 * test_days) * day
+        rows = [
+            {
+                "decision_ts": origin + i * step,
+                "label_window_end_ts": origin + i * step + horizon,
+            }
+            for i in range(span // step)
+        ]
+        try:
+            folds = splitter(rows, config=engine_config, interval_s=_CONSTRUCTED_INTERVAL_S)
+        except TypeError as exc:
+            return pending(
+                "acsoe.research.walkforward.purged_walk_forward does not accept the "
+                "rolling call this criterion makes: " + str(exc)[:200]
+            )
+
+    if not folds:
+        return failed(
+            "the splitter returned no folds for a series spanning one training window "
+            "and eight test windows"
+        )
+
+    checked = 0
+    refused = 0
+    for fold in folds:
+        test_start = int(fold.test_start_ts)
+        test_end = int(fold.test_end_ts)
+        for i in fold.train_index:
+            row = rows[int(i)]
+            checked += 1
+            if int(row["decision_ts"]) >= test_start:
+                return failed(
+                    "fold "
+                    + str(fold.fold_index)
+                    + " trained on a row whose decision bar is at or after its test "
+                    "window opens. A fold trains on the past only (operator ruling 1, "
+                    "2026-09-12): a model that has seen data from after the period it "
+                    "is scored on reports a number the live system will never reach, "
+                    "and nothing downstream says so."
+                )
+            if int(row["label_window_end_ts"]) >= test_start:
+                return failed(
+                    "fold "
+                    + str(fold.fold_index)
+                    + " trained on a row whose decision bar precedes its test window "
+                    "but whose outcome became known inside it. That is the purge's "
+                    "job, and a past-only rule does not replace it."
+                )
+        after = getattr(fold, "after_test_count", None)
+        if after is None:
+            return failed(
+                "the fold does not expose `after_test_count`. The rows a fold refused "
+                "for post-dating its test window are counted in their own column so "
+                "the past-only rule is visible as a number rather than inferred from "
+                "an absence."
+            )
+        in_data = sum(1 for row in rows if int(row["decision_ts"]) >= test_end)
+        if int(after) != in_data:
+            return failed(
+                "fold "
+                + str(fold.fold_index)
+                + " reports after_test_count="
+                + str(after)
+                + " but the series holds "
+                + str(in_data)
+                + " rows after its test window. A count that disagrees with the data "
+                "is one nothing can be read from."
+            )
+        refused += int(after)
+
+    if checked == 0:
+        return failed("no fold had any training rows; the assertion above ran over nothing")
+    if refused == 0:
+        return failed(
+            "no fold saw a row after its test window, so nothing tested whether such "
+            "a row can train. The constructed series is meant to hold eight weeks of "
+            "them after the first fold."
+        )
+    return passed(
+        str(len(folds))
+        + " rolling folds, "
+        + str(checked)
+        + " training rows: every decision bar and every label window end precedes its "
+        "fold's test window, and "
+        + str(refused)
+        + " rows after test windows were counted and none trained"
     )
 
 
@@ -7814,6 +7971,16 @@ register(
     Criterion(
         "walkforward_folds_purged_and_embargoed",
         check_walkforward_folds_purged_and_embargoed,
+    ),
+)
+# Operator ruling 1, 2026-09-12. The splitter that passed the criterion above trained
+# on both sides of the test window; nothing in the gate could see it, because the
+# criterion above places every row by hand and never builds a fold with a future.
+register(
+    4,
+    Criterion(
+        "walkforward_trains_on_the_past_only",
+        check_walkforward_trains_on_the_past_only,
     ),
 )
 register(4, Criterion("console_history_reads_real_rows", check_console_history_reads_real_rows))
