@@ -19,11 +19,14 @@ If a change here makes that criterion red, the change is wrong.
 
 **The metric is the Brier score of P(target) against the base-rate Brier**, per fold, with
 multiclass log loss beside it and the target rate among BUY calls beside the break-even rates.
-Accuracy is not computed. Spec 59 decision 4, and the reason is in it.
+**Accuracy is not computed, because the base rate is 23.89% and a model predicting `stop`
+always scores 51%**: it rewards the model that never trades. Spec 59 decision 4, confirmed by
+the operator 2026-09-12.
 
-**Rows are weighted by average uniqueness.** Spec 59 decision 5. The effective sample size is
-reported beside every row count, per fold, so nobody reads a training set of two million rows
-as two million observations.
+**Rows are weighted by average uniqueness.** Spec 59 decision 5. **The effective sample size
+is reported per fold, on the same line as that fold's row count, and again in aggregate.** A
+fold with 8,000 rows and an effective size of 300 is a fold whose metrics mean almost nothing,
+and an aggregate figure hides exactly that fold. Operator addition, 2026-09-12.
 
 ## Implementation
 

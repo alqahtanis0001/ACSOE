@@ -40,6 +40,9 @@ src/acsoe/
     store/              SQLite and Parquet access                     [AGENT B]
     recorder/           append-only raw JSONL writer                  [AGENT A]
   research/             offline only: labelling, training, walk-forward
+  modelling/            leaf package: feature arithmetic, artefact manifest,   [AGENT C]
+                        DI arithmetic, sample weights. Imported by BOTH the
+                        engines and research/; imports nothing but core types
   console/              FastAPI app, static assets
   cli/                  acsoe engine, acsoe console, acsoe research entrypoints
 scripts/
@@ -142,6 +145,18 @@ Engine 9 (order book) and the spread component of Engine 10 cannot be backtested
 | SHAP explanations | Parquet, joined by decision id | One row per decision |
 
 Never put large arrays in SQLite. Never put relational records in Parquet.
+
+### Trained artefacts: `models/<run_id>/`
+
+One directory per training run, written once and **never overwritten**; the store client
+refuses an existing directory. Each holds `manifest.json` (the run id, the config digest, every
+seed, the feature version, **the ordered feature list**, the scaler as JSON, the fold bounds, the
+dataset provenance, the metrics and a sha256 per file) beside the model files. The layout is
+read and written by `modelling/artefacts.py` only, and an engine reaches it only through
+`context.clients.store.model_run_dir(run_id)`, never by building a path. A model without its
+exact feature order is unusable, and a run that cannot be reproduced from its config plus its
+data is not a result. Engines 8, 13 and 15 load the run named in `models.*_run_id` and block
+when it is absent, which is what a fresh clone with no `models/` does.
 
 ### Two records, two writers, and neither is derived from the other
 
@@ -261,6 +276,6 @@ The same engine code runs in all three modes. Mode differences live only in the 
 2. Engines never call the network directly; they use injected clients.
 3. Engines never read the clock; they use `context.now`.
 4. Engines never import each other. Communication is through `state` only.
-5. Research code never imports from the live loop path, and the live loop never imports from `research/`. This constrains `src/acsoe/` only. `scripts/verify.py` is neither — it is allowed to import both, which is how it checks the offline chain.
+5. Research code never imports from the live loop path, and the live loop never imports from `research/`. This constrains `src/acsoe/` only. `scripts/verify.py` is neither — it is allowed to import both, which is how it checks the offline chain. **`modelling/` is the one package both sides import** (operator ruling 2026-09-12): it holds the arithmetic that must agree between live and replay, imports nothing from `acsoe` but `core/contracts.py` types, reads no `state`, opens no client and holds no engine, and a test walks its import graph to keep it that way.
 6. Anything slower than the loop tick belongs offline, not in an engine.
 7. Credentials exist only in the environment.

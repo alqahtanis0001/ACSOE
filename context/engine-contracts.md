@@ -222,7 +222,7 @@ Note that 12 and 13 execute before 8 and 9, and that 17 executes before 5. The n
 
 Engine 6 is named `macro_context`, not `context`, so that it never reads ambiguously against the `context/` documentation directory.
 
-The Dissimilarity Index is not an engine. It lives inside `engines/prediction/` as a fitted artefact alongside the predictor, because it must be fitted on the predictor's training set. The execution offset bandit is likewise not an engine; it lives inside `engines/execution/` with its state in the store.
+The Dissimilarity Index is not an engine. It lives inside `engines/prediction/` as a fitted artefact alongside the predictor, because it must be fitted on the predictor's training set. Its arithmetic is `modelling/di.py`, so the trainer fits and the engine scores with one implementation. **Engine 8 blocks on a DI refusal** under rule 6, reason code `di_refused`, and stays a non-gate in the table below: `is_gate` is the declaration `verify.py` checks against the Gate column, and rule 6 already lets any engine halt the tick. Operator ruling 2026-09-12; the reasoning is in `feature-specs/59-phase-5-rulings-into-the-documents.md`. The execution offset bandit is likewise not an engine; it lives inside `engines/execution/` with its state in the store.
 
 ## Per-engine directory
 
@@ -259,6 +259,9 @@ Most of an engine's `data` is its own business, typed in its own `contracts.py`.
 | `state["prediction"]["expected_move_pct"]` | 8 `prediction` (C) | 10 `cost` (B) | Expected move as an exact decimal string, before friction |
 | `state["order_book"]["estimated_slippage_pct"]` | 9 `order_book` (C) | 10 `cost` (B) | Estimated slippage as an exact decimal string |
 | `state["market_sensor"]["quotes"][pair]["spread_pct"]` | 3 `market_sensor` (A) | 4 `data_guard` (A), 10 `cost` (B) | Live top-of-book spread as an exact decimal string |
+| `state["feature"]["pairs"][pair]` | 5 `feature` (C) | 7 `scout` (B), 6, 8, 12, 13 (C) | The feature row for every pair engine 3 published candles for, floats, `null` where a lookback was unfilled. Names and order from `modelling/features.py`. Present only on a tick where a decision bar closed |
+| `state["prediction"]["di"]`, `["di_threshold"]` | 8 `prediction` (C) | 14 `adaptive_router` (C, Phase 6), console | The Dissimilarity Index of this candidate against the active model's reference set. A refusal is a `BLOCK` with reason code `di_refused` and **no** `expected_move_pct`, so engine 10 fails closed on the absent key |
+| `state["regime"]["label"]` | 12 `regime` (C) | 14 `adaptive_router` (C, Phase 6), console | `trending`, `choppy`, `high_volatility`, or `null` with a reason |
 
 **On the last four, added 2026-09-09.** B built engine 10 needing all four and could read only the fee tier's location from a spec, so it proposed paths as `Final` constants under a heading marking them unratified rather than inventing behaviour. Three are ratified as proposed. The fourth is **re-pointed**: B proposed `state["exchange"]["pairs"][pair]["spread_pct"]`, and it belongs on engine 3, not engine 1.
 

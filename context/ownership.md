@@ -11,7 +11,7 @@ Confirm you own a file before editing it. If you do not, escalate.
 | **Lead** | `src/acsoe/core/`, `bootstrap.py`, `config/`, `context/*` except `progress/`, `feature-specs/`, all merges, all schema approvals | All |
 | **A — Platform** | `pyproject.toml`, `src/acsoe/platform/`, `src/acsoe/cli/`, `scripts/` **except `scripts/verify.py`**, `clients/kraken/`, `clients/recorder/`, `logs/`, `data/`, `engines/exchange`, `market_data_recorder`, `market_sensor`, `data_guard`, `research/replay.py`, `research/historical.py`, `research/backtest.py` | 0, 2, 4 |
 | **B — Store and trading** | `clients/store/`, `db/migrations/`, `engines/scout`, `cost`, `risk`, `safety`, `decision`, `execution`, `position_manager`, `exit` | 0, 3, 5, 6, 8 |
-| **C — Interface and models** | `console/`, `scripts/verify.py`, `tests/harness/`, `engines/feature`, `macro_context`, `prediction`, `regime`, `anomaly`, `order_book`, `adaptive_router`, `skeptic`, `memory`, `tournament`, `research/labelling.py`, `research/training.py`, `research/walkforward.py` | 0, 1, 4, 5, 6, 7, 8 |
+| **C — Interface and models** | `console/`, `scripts/verify.py`, `tests/harness/`, `engines/feature`, `macro_context`, `prediction`, `regime`, `anomaly`, `order_book`, `adaptive_router`, `skeptic`, `memory`, `tournament`, `research/labelling.py`, `research/training.py`, `research/walkforward.py`, `src/acsoe/modelling/` (Phase 5, operator ruling 2026-09-12: the leaf package both the engines and `research/` import) | 0, 1, 4, 5, 6, 7, 8 |
 
 Not every phase needs all three. Phase 1 is almost entirely C; Phase 3 is almost entirely B. Run the agents who have real work and let the others sit out — the ownership map is permanent, only the headcount per phase flexes. Never invent filler tasks. Nobody idles mid-phase: if you are waiting on another agent's interface, agree the contract, mock it, and keep building.
 
@@ -102,8 +102,12 @@ Agree the contract first, mock it, build against the mock.
 | Database schema | B | C | `db/migrations/` |
 | Seeded fixture data | B | C | `clients/store/seed.py` |
 | Tradable universe | B | C | `engines/scout/contracts.py` |
-| Feature vector | C | B | `engines/feature/contracts.py` |
-| Prediction and DI | C | B | `engines/prediction/contracts.py` |
+| Feature vector, `state["feature"]["pairs"][pair]`. **Produced and consumed in Phase 5.** | C (5 `feature`) | B (7 `scout`, the ranking), C (6, 8, 12, 13) | `engines/feature/contracts.py`, names in `modelling/features.py` |
+| Prediction and DI, `state["prediction"]` | C | B (10 `cost` reads `expected_move_pct`), C (15 `skeptic`), Phase 6 (14) | `engines/prediction/contracts.py` |
+| Model artefact directory, `models/<run_id>/`. B hands over a path; C's manifest says what is in it. **Consumed in Phase 5, produced in Phase 5 — spec 62 lands first.** | B (`StoreClient.model_run_dir`, `new_model_run_dir`) | C (`modelling/artefacts.py`, engines 8, 13, 15, `research/training.py`) | `clients/store/client.py`, `modelling/artefacts.py` |
+| Leaderboard rows. **Produced in Phase 5, consumed in Phase 6 by engine 14 and in Phase 7 by the promotion gate.** | C (20 `tournament`) writes, through the store | C (14 `adaptive_router`, console), Phase 7 | `clients/store/contracts.py` |
+| The ranking feature, `scout.rank_feature` and `scout.rank_descending`. Absent until the operator rules on spec 75's study; alphabetical meanwhile. | Lead (config) | B (7 `scout`, `rank_universe`) | `config/default.yaml`, `engines/scout/contracts.py` |
+| The one shared arithmetic: features, DI, weights, artefact layout. | C (`modelling/`) | C (engines 5, 8, 13, 15), C (`research/training.py`) | `src/acsoe/modelling/` |
 | Order intent | B | C | `engines/decision/contracts.py` |
 | **Rejection reason codes.** Every gate emits a `reason_code`; the console maps it to operator prose. **A code absent from the map renders "No reason was recorded." — silently, with no error anywhere.** | C (`console/format.py`, `REASON_PROSE`) | B (gates 7, 10, 11, 13, 15), and any future gate | `src/acsoe/console/format.py` |
 

@@ -68,6 +68,12 @@ These terms have precise meanings in this codebase. Do not substitute your own.
 
 **Brier score** — how well-calibrated probabilities are. Lower is better. A model that says 70% should be right 70% of the time.
 
+**Base-rate Brier** — the Brier a constant prediction of the fold's own target rate would earn, `p(1-p)`. The number every fold's Brier is reported beside; a model that does not beat it has learned nothing. Chosen as the primary comparison because, at a 23.89% target rate, a model that always predicts `stop` is right 51% of the time and a headline hit rate rewards the model that never trades.
+
+**BUY call** — a decision bar on which the predictor's `expected_move_pct` is positive: `p_target × target − p_stop × stop + p_timeout × mean timeout return`, before friction. The cost gate applies friction afterwards. The skeptic trains only on the predictor's out-of-sample BUY calls.
+
+**Uniqueness weight** — a row's sample weight in training: the mean, over its own label window, of one over the number of label windows covering each bar. Consecutive decision bars at a 48-bar horizon share almost all of their window, so twenty million rows are far fewer observations; the **effective sample size**, the sum of the weights, is reported beside every row count, per fold.
+
 **Sharpe ratio** — return divided by the volatility endured to get it.
 
 **Buy-and-hold** — the benchmark. Doing nothing. The thing this system has to beat to justify existing.
