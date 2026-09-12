@@ -125,6 +125,8 @@ Kraken WebSocket v2, recorded append-only to `data/raw/`.
 
 Engine 9 (order book) and the spread component of Engine 10 cannot be backtested from the historical archives. Any backtest covering periods before live recording began must either exclude those engines or model their inputs from an explicitly documented proxy. A backtest that silently assumes zero spread is invalid.
 
+**Phase 5 features are computed from the historical archive only.** The archive is OHLCVT and carries no spread, bid or ask — those exist only in the live recording, so a feature that reads them will not reproduce in replay.
+
 ## Storage model
 
 | Data | Store | Notes |

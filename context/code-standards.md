@@ -84,8 +84,9 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
 ## Models
 
 - Every trained artefact is written to `models/<run_id>/` and never overwritten.
-- Save the feature list, the scaler, and the model together. A model without its exact feature order is unusable.
-- Set every random seed from config. A training run must be reproducible from its config plus its data.
+- Save the feature list, the scaler, and the model together.
+- Set every random seed from config.
+- Why: a model without its exact feature order is unusable, and a run that cannot be reproduced from its config plus its data is not a result.
 - Never load a model at import time. Load it in the engine's constructor.
 
 ## Logging
