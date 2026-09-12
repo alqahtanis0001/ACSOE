@@ -328,6 +328,10 @@ ruff check src/ tests/ scripts/
 python scripts/verify.py --phase N
 ```
 
+Those are the widened paths of 2026-09-11. Any older copy of this list elsewhere that reads
+`mypy --strict src/` or `ruff check src/` is stale: an agent following it by hand passes checks
+the gate fails.
+
 **`TOOLCHAIN` was widened beyond `src/` on 2026-09-11, by operator ruling.** It had been
 deferred since Phase 0 and declined once at the Phase 1 boundary, and it was widened because
 the deferral finally cost something: a file committed in Phase 4 carried a backslash escape

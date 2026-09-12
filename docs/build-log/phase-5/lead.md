@@ -91,3 +91,59 @@ same prompts.
 leaves a claim is recoverable and one that leaves a mystery is not. Here there was neither,
 which is the cheapest possible case, and it is written down so a later reader of the progress
 files does not look for Phase 5 work dated 2026-09-12 that never existed.
+
+### Two sessions per lane: the dead team came back when the limit reset
+
+**Agent:** Lead · **Date:** 2026-09-13
+
+**What happened.** B stopped and escalated within minutes of starting spec 62: another writer
+had put 175 lines implementing the whole spec into `clients/store/client.py` seven seconds
+into B's session, and `test_store.py` was moving under it. B wrote nothing, snapshotted the
+file by sha256, and asked who owned the lane. `ListAgents` showed **six** teammates running:
+`A`, `B`, `C` started ten hours earlier, and `A-2`, `B-2`, `C-2` started six minutes earlier.
+
+**Why.** The original three reported *"weekly limit"* failures at spawn and were presumed
+dead; the lead spawned replacements after the reset. The limit reset also revived the
+originals, which resumed their briefs from the top. The lead's second spawn reused the names,
+so the runtime suffixed `-2`, and the originals kept their addresses. Nothing in the tooling
+says a failed agent will resume, and the lead did not check the roster before re-forming the
+team. The ownership map is the only concurrency control and it assumes one agent per lane; two
+instances of the same lane are invisible to it.
+
+**Fix.** The originals were ordered to stand down, write nothing further, list what they had
+modified and end. The `-2` set owns every lane. Each `-2` was told to re-read every file before
+its next edit and to keep, not overwrite, anything the original had written. Two of B's review
+notes on the duplicate's `client.py` were adopted as rulings: `models_dir` keyword-only, and
+`new_model_run_dir` creating a missing artefact root because C's trainer runs outside A's
+startup path.
+
+**Consequence.** B's stop was the ownership rule working exactly as written, and the reason
+the file on disk was recoverable rather than a merge of two half-written versions. The
+lesson for the lead: **check the roster before re-forming a team**, and treat an agent's
+failure report as a status, not a death certificate. The original C, in the minutes before it
+was stood down, also found that spec 60's committed inputs did not exist as written; that
+finding is accepted and is its own entry below.
+
+### Spec 60 reached for a fixture that was the labeller's output, not its input
+
+**Agent:** Lead, from C's finding · **Task:** spec 60 · **Date:** 2026-09-13
+
+**What happened.** Spec 60 told the Phase 5 criteria to train their subject from
+`tests/fixtures/labelled_sample.parquet`, and spec 63 defined the feature arithmetic over a
+seven-column OHLCVT frame. The fixture carries `pair, decision_ts, close, target_price, ...`:
+no open, high, low, volume or trades. It also spans ten days of one pair, and
+`backtest.training_window_days` is 90, so a rolling walk-forward over it produces no folds.
+
+**Why.** The fixture was built in Phase 4 for two label criteria, neither of which needs a
+bar's range or more than a few days of bars. Spec 60 reached for it a phase later as the
+universal training input without reading its columns. It is the seam failure
+`code-standards.md` already names from the other side: the producer's tests assert its
+behaviour, the consumer builds its own inputs, and the exported fields are tested by nobody.
+A close-only reconstruction would not have fixed it, because every range and volume feature
+would be a constant and two paths agreeing on a constant agree on nothing.
+
+**Fix.** Spec 60 criteria 1 and 7 and spec 67 step 10 amended: a second committed fixture,
+`tests/fixtures/candles_sample.parquet`, the real OHLCVT slice the labelled sample came from,
+extended backwards by `market_sensor.published_bars` and keeping its real gaps; and criterion 7
+as a committed digest from a real run plus the fold machinery over a constructed series long
+enough for several folds, the pattern `walkforward_folds_purged_and_embargoed` set.

@@ -70,8 +70,9 @@ and an aggregate figure hides exactly that fold. Operator addition, 2026-09-12.
    overwritten.
 9. `--pairs`, `--max-folds` and `--start`/`--end` flags for smoke runs; the full run over 234
    pairs and roughly 450 weekly folds is expected to take hours and is the `--live` half.
-10. `tests/research/test_training.py`, C lane, over the committed 960-row sample and over
-    constructed frames where the right answer is known.
+10. `tests/research/test_training.py`, C lane, over `tests/fixtures/candles_sample.parquet`
+    joined to the 960-row labelled sample (spec 60's corrected inputs) and over constructed
+    frames long enough to hold several folds, where the right answer is known.
 
 ## Scope Limits
 

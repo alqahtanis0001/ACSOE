@@ -17,13 +17,22 @@ the evidence.
 ## Implementation
 
 Each criterion runs offline on a fresh clone. Where the subject is a trained model, the
-criterion trains one **inside the criterion** from `tests/fixtures/labelled_sample.parquet`
-(960 SOLUSD rows) into a temporary models root, so no artefact is ever read from a gitignored
-path.
+criterion trains one **inside the criterion** into a temporary models root, so no artefact is
+ever read from a gitignored path.
 
-1. `features_reproduce_in_replay`: the feature module over the committed sample's candles
-   gives the same values through engine 5's live path (candles shaped as engine 3 publishes
-   them) and through the offline builder over the archive frame; and no name in
+**The committed inputs, corrected 2026-09-13 after C's finding.** `labelled_sample.parquet`
+is the labeller's *output*: it carries no open, high, low, volume or trades, and it spans ten
+days of one pair, which cannot hold a ninety-day fold. So: a second committed fixture,
+`tests/fixtures/candles_sample.parquet`, the OHLCVT slice of the real archive that the
+labelled sample was produced from, extended backwards by `market_sensor.published_bars` so the
+first labelled bar has a full lookback behind it, with its real gaps, because a time-window
+lookback and a row-count one only disagree where there is a hole. The labels join it on
+`decision_ts`. A close-only reconstruction is forbidden: every range and volume feature would
+be a constant, and two paths agreeing on a constant agree on nothing.
+
+1. `features_reproduce_in_replay`: the feature module over `candles_sample.parquet` gives the
+   same values through engine 5's live path (candles shaped as engine 3 publishes them) and
+   through the offline builder over the archive frame; and no name in
    `modelling/features.py` reads `spread`, `bid`, `ask` or `depth`, asserted on the AST and on
    the column set. **FAIL** when one feature is computed differently on the two paths.
 2. `feature_lookbacks_are_time_not_rows`: a lookback over a window containing a gap reports
@@ -44,13 +53,17 @@ path.
 6. `skeptic_trains_only_on_predictor_buy_rows`: every skeptic training row is a predictor
    **out-of-sample** BUY call from an earlier fold. **FAIL** when a non-BUY row or an
    in-sample BUY row is present.
-7. `walkforward_weekly_retrain_reports_oos`: `research/training.py` over the committed sample
-   completes a rolling walk-forward at `backtest.retrain_interval_days` and writes a digest with
-   one entry per fold carrying Brier, base-rate Brier, log loss, BUY-call target rate, row
-   count and effective sample size, with `train_end_ts == test_start_ts` on every fold. The
-   full dataset run is `--live` and reads `tests/fixtures/walkforward_digest.json` offline.
-   **FAIL** when any fold trains after its test window, and when the effective sample size
-   equals the row count on overlapping labels.
+7. `walkforward_weekly_retrain_reports_oos`, in two halves, the pattern
+   `walkforward_folds_purged_and_embargoed` set. Offline: the committed digest
+   `tests/fixtures/walkforward_digest.json`, produced by spec 67's `--write-fixture` from a real
+   run, carries one entry per fold with Brier, base-rate Brier, log loss, BUY-call target rate,
+   row count and effective sample size on the same line, and `train_end_ts == test_start_ts`
+   on every fold; and, separately, the fold-and-train machinery is driven over a **constructed**
+   series long enough to hold several weekly folds at the committed window settings, because
+   the ten-day sample cannot. `--live` re-runs the trainer over the real dataset and compares.
+   **FAIL** when any fold trains after its test window, when the effective sample size equals
+   the row count on overlapping labels, and when a fold's effective size is reported only in
+   aggregate.
 8. `anomaly_and_skeptic_have_both_tests`: the shape of `phase_3_gates_have_both_tests` for
    engines 13 and 15.
 9. `scout_ranks_by_feature_not_arrival`: `rank_universe` called **directly** with a feature
