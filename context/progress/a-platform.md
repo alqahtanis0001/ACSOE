@@ -3,6 +3,84 @@
 Your file. Only you write here. The lead merges into `context/progress-tracker.md`.
 Never edit the tracker directly.
 
+## HANDOFF — lane A at session close, 2026-09-13 ~03:00
+
+Written for a session that has never seen this one. Everything below is the state on disk,
+not an intention.
+
+**Spec 61 is done, all four parts, committed** (steps 3 and 4 at `02f8aad`; step 1 and the
+dependency move in the commits before it). Four gates were green at the time of the last run:
+2102 passed and 3 skipped, `mypy --strict src/ scripts/` clean on 106 source files,
+`ruff check src/ tests/ scripts/` clean, and `verify.py --phase 5` with its only FAIL in
+another lane. Detail is under "SPEC 61 IS COMPLETE" below and the gate output is under
+Verification.
+
+**Nothing in lane A is half-finished.** No file of mine is mid-edit and no change is
+uncommitted except my own build log, which the lead commits. The tree is coherent.
+
+### The one thing that was asked for and not started: a `training` config section
+
+The lead asked at 02:15 for `training` (`num_trees`, `learning_rate`, `num_leaves`,
+`min_data_in_leaf`) for the LightGBM hyperparameters, field first and then the lead pastes the
+YAML. **It is not started** — no field, no YAML, nothing to back out. The stop order arrived
+before it did and said not to begin it.
+
+Whoever picks it up: it is the same two-halves landing as the other eight sections and the
+pattern is in `platform/config.py` above `class SeedsConfig`. Declare the section
+`TrainingConfig | None = None`, tell the lead, let the YAML land, then tighten to required in
+one change — because `extra="forbid"` means a required field with no YAML key stops the
+committed config parsing, which takes every test in every lane with it. There is a test for
+that dance already: `test_the_phase_5_landing_is_closed_and_every_section_is_required` in
+`tests/platform/test_config.py` asserts every section in `PHASE_5_SECTIONS` is both present in
+the YAML and required on the model, so adding `training` to that tuple is what makes the
+tripwire cover it.
+
+### The full-archive run FINISHED, exit 0 — and my earlier diagnosis of it was wrong
+
+It completed during the wind-down, after about 36 minutes: `backtest OK`, **exit 0**, and a
+429 MB parquet at `data/derived/labelled_research-20260913T000430950753_20260913T004003Z.parquet`
+carrying **20,331,237 labelled rows** over 13 columns. So spec 61's acceptance check is proven
+against the committed config and the real archive, not only against the 400-bar scratch run.
+Nothing needs killing; PID 42016 exited on its own.
+
+**Correction, and it matters because the wrong version is already in
+`feature-specs/PHASE-5-TASKS.md`.** I reported a mysterious divergence "in the multi-pair path"
+and a run holding an order of magnitude more memory than the code should need. That was wrong,
+and the error was mine: I was reasoning from a Phase 4 fact that had stopped being true.
+`data/historical/` held **3 pair files and 859,248 bars** when I built it on 2026-09-11. It
+holds **234 CSVs and 20,443,861 bars** — 47 GB — today.
+
+With the real row count everything reconciles and there is no anomaly. My per-pair measurement
+of ~3 KB per bar was correct; 20.3M rows at that rate is about 60 GB and the process peaked at
+51.9 GB. Runtime likewise: 2,089 CPU-seconds over 20.3M rows is ~0.10 ms per bar, faster than
+the 0.44 ms the small slices showed, because those paid fixed per-pair setup over a few tens of
+thousands of rows.
+
+**What remains true, narrowed to something cheap to fix.** Engine 23 accumulates every labelled
+row of every pair in one Python list and writes a single parquet at the end, so it needs roughly
+50 GB of memory to produce a 429 MB file. That should be streamed — one parquet per pair, or
+appended row groups — and it is worth doing **before spec 67**, because the dataset every model
+in this phase trains on comes out of this command and on a smaller machine the failure is a
+killed process rather than a message. `research/backtest.py` is A's. It is an ordinary defect
+with an obvious fix, not a hunt.
+
+The cheap check I skipped was `ls data/historical/*.csv | wc -l`. The benchmark control I did
+apply — running the comparison in reverse order — was sound and proved the per-bar numbers
+honestly, and could not possibly have caught that I was multiplying them by the wrong N. A
+control on a measurement says nothing about the assumption it is compared against.
+
+### Open questions I am leaving
+
+1. **Is `acsoe research` meant to replay the whole archive every time it is run?** It does
+   now, by default, with no way to name a subset. That is what spec 61 asked for and it makes
+   C's engine 20 loop expensive: `acsoe research --digest ...` runs engine 23 first, every
+   time. A `--only <engine>` or a bar limit would fix it and neither is in any spec. The lead's
+   call.
+2. **Nothing has ever run engine 20 through `acsoe research`**, because the class does not
+   exist. The registration resolves it by name so it needs no edit from A, but the first real
+   run of that path will be the first test of it. The seam is
+   `TournamentEngine(*, digest_path: Path | None = None)`, agreed with C.
+
 ## Current Task
 
 **Phase 5. Claimed: spec 61**, all four parts, per `feature-specs/PHASE-5-TASKS.md` and
@@ -99,9 +177,9 @@ engine 20 would vanish from the chain silently. A constructor that does not acce
 
 - `acsoe research --config config/default.yaml` run for real against a 400-bar archive in a
   scratch root: `backtest OK`, exit 0, a labelled parquet in `data/derived/`, a migrated
-  database, and an empty `models/` created beside them. The full-archive run over the
-  committed 859,248 bars was still going when this was written and is the slow half of the
-  same evidence, not a different claim.
+  database, and an empty `models/` created beside them. **The full-archive run finished too:**
+  `backtest OK`, exit 0, about 36 minutes, 20,331,237 labelled rows written to a 429 MB parquet
+  over the real 234-pair, 20,443,861-bar archive. Both halves of the evidence are in.
 - Twelve mutations against `platform/config.py`, three against the packaging split, each
   restored from a byte copy and verified by sha256 in the same statement. Eleven of twelve
   killed; **one real survivor**, a default asserted against a fixture that supplied it, fixed
@@ -996,7 +1074,7 @@ turns the gate red for everyone. Messaged C-2 with the line and the autofix. My 
 is what dates the two runs either side of that landing.
 
 The `acsoe research` acceptance check, run for real against a 400-bar archive in a scratch root
-so it completes in seconds rather than over the full 859,248-bar archive:
+so it completes in seconds rather than over the full 20-million-bar archive:
 
 ```
 $ .venv/Scripts/python.exe -m acsoe.cli.main --config .../config/default.yaml research
@@ -1007,6 +1085,19 @@ exit=0
 
 It wrote `data/derived/labelled_research-20260913T001726685548_<stamp>.parquet`, migrated
 `data/db/acsoe.sqlite`, and created an empty `models/` beside them.
+
+The same command against the **real** archive — 234 pair files, 20,443,861 bars — also
+finished, exit 0, in about 36 minutes:
+
+```
+$ .venv/Scripts/python.exe -m acsoe.cli.main --config config/default.yaml research
+acsoe research: running 1 offline engine(s) from config\default.yaml.
+  backtest   OK
+exit=0
+
+rows 20331237  cols 13  mb 429
+data/derived/labelled_research-20260913T000430950753_20260913T004003Z.parquet
+```
 
 ### Phase 3, specs 38 and 39 complete (2026-09-10)
 

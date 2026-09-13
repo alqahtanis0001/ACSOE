@@ -460,3 +460,88 @@ every model in this phase trains on comes out of this command. A run that holds 
 is one an operator can start on a smaller machine and lose an hour to, and the failure mode when
 it runs out is a killed process rather than a message. Worth knowing before spec 67's
 walk-forward is run for real, not after.
+
+### Closing note on the full-archive run: 51.9 GB at session close, and I could not stop it
+
+**Agent:** A · **Task:** spec 61 step 4 · **Date:** 2026-09-13
+
+**What happened.** The full-archive `acsoe research` run described in the entry above kept
+growing for the rest of the session. Three readings, all taken with `Get-Process`: 35.7 GB at
+roughly 25 minutes, 39.6 GB at 33 minutes, **51.9 GB at 36 minutes** with 2,089 CPU-seconds
+burned and **19.7 GB free on a 96 GB machine**. It never printed a line and never wrote a
+parquet. Growth is close to half a gigabyte a minute and shows no sign of levelling.
+
+**Why this is a different fact from the entry above.** That entry reported a performance
+finding: the multi-pair path diverges by an order of magnitude from a per-pair measurement that
+is linear in both time and memory. This one is about the machine. Three agents were working in
+this checkout, and a process consuming memory at that rate is the environment-level version of
+the hazard `code-standards.md` already records for mutation harnesses — one lane's work turning
+another lane's run red, by a mechanism invisible from inside the second lane. A pytest run that
+fails on a `MemoryError` names nothing useful and looks like a defect in whatever was being
+tested.
+
+**Fix.** None available to me. I tried to stop the process and the action was refused by the
+permission layer as interference with a workload, which is a reasonable default and was the
+wrong answer here — the process was mine, started by me, producing nothing anyone needed.
+Recorded in the progress file with the PID and a plain instruction to kill it, because the
+next person to read that file is the only one who can.
+
+**Consequence, and it is the one I would want the next session to take.** The acceptance
+evidence for spec 61 step 4 came from a **400-bar scratch archive** that exits 0 in seconds,
+not from this run, and that was the right call for a reason worth stating: a check whose
+runtime is unbounded is not a check anyone will run twice. The full-archive run was worth
+starting once, as the honest end-to-end proof — and what it proved was not what I started it
+for.
+
+### CORRECTION: the full-archive run finished, exit 0, and my diagnosis of it was wrong
+
+**Agent:** A · **Task:** spec 61 step 4 · **Date:** 2026-09-13
+
+**What happened.** The run completed while I was writing the wind-down, after about 36 minutes:
+`backtest OK`, **exit 0**, and a 429 MB parquet at
+`data/derived/labelled_research-20260913T000430950753_20260913T004003Z.parquet`. So spec 61's
+acceptance check — "`acsoe research --config config/default.yaml` runs engine 23 and exits 0" —
+is proven against the committed config and the real archive, not only against the 400-bar
+scratch run.
+
+Then I read the output's metadata and the two entries above turned out to be wrong.
+
+**Why.** I had been reasoning from a number I carried over from Phase 4: that
+`data/historical/` held **three** pair files and **859,248** bars, which is what I built and
+recorded there on 2026-09-11. It holds **234 CSVs and 20,443,861 bars** today — 47 GB — and the
+labelled output is **20,331,237 rows over 13 columns**. Nobody told me the archive had grown by
+a factor of twenty-four and I never checked; I measured the code carefully and then compared it
+against a stale fact about the data.
+
+With the real row count the arithmetic closes almost exactly. My per-pair measurement was
+~3 KB of tracked memory per bar and it was *right*: 20.3M rows at that rate is about 60 GB, and
+the process peaked at 51.9 GB. **There is no anomaly in the multi-pair path.** Engine 23
+accumulates every labelled row of every pair in one Python list and writes a single parquet at
+the end, so its memory is linear in total rows — and the total is now twenty million.
+
+Runtime lands the same way: 2,089 CPU-seconds for 20.3M rows is ~0.10 ms per bar, *faster* per
+bar than the 0.44 ms my small slices measured, because those slices paid fixed per-pair setup
+over a few tens of thousands of rows. The earlier entry's "six minutes and 2.5 GB" projection
+was arithmetic applied to the wrong N.
+
+**Fix.** None to the code, and the correction narrows the real problem rather than dissolving
+it. The accumulate-then-write shape is still the thing to change before spec 67 — at 20M rows
+it needs ~50 GB of RAM to produce a 429 MB file, which is the whole of a large machine for an
+output that would stream — but it is now a known, ordinary defect with an obvious fix (write
+per pair, or append row groups) rather than a mysterious divergence somebody has to go hunting
+for. That is a much cheaper piece of work to schedule, and it belongs in its own A spec over
+`research/backtest.py`.
+
+**Consequence, and it is the reason this entry exists rather than an edit to the one above.**
+Two of this project's own rules caught me from opposite sides and I noticed neither in time.
+*"A wrong answer that is in range survives"* — 39 GB was alarming but plausible, so I explained
+it instead of checking the input. And the control I did apply, running the benchmark in reverse
+order, was sound and proved the per-bar numbers honestly; it simply could not detect that I was
+multiplying them by the wrong N. **A control on the measurement says nothing about the
+assumption the measurement is being compared against.** The cheap check I skipped was `ls
+data/historical/*.csv | wc -l`, against a directory I had written a table about in my own
+progress file three days earlier.
+
+The lead has already carried the wrong version into `feature-specs/PHASE-5-TASKS.md` under
+"What the next session would otherwise rediscover". It needs replacing with this, and the lead
+has been told.

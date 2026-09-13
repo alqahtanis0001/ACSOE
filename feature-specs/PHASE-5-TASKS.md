@@ -47,20 +47,24 @@ process at load; absent reads as `None`.
 - **Commits.** Lead commits only; every commit this session ran the lane's tests to a file
   and checked the exit code (one did not, and the entry says so). Latest commit hash is in the
   lead's final report and `git log`.
-- **The full-archive `acsoe research` run is a finding, not just a run.** A-2 started it
-  over the committed 859,248-bar archive (three pairs): at 33 minutes it held **39.6 GB
-  resident and climbing**, CPU-bound, nothing failed. A-2 measured the single-pair path and
-  found it linear (about 0.44 ms and 3 KB per bar, controlled by running the comparison in
-  reverse order), which projects to six minutes and 2.5 GB, so the divergence is in the
-  multi-pair path: the merged replay stream across pairs, or the accumulation of every labelled
-  row before one parquet write, with most of the memory outside Python's allocator (polars and
-  arrow buffers). A-2 did not widen spec 61 to fix it. **It must be fixed before spec 67**,
-  because the dataset every model trains on comes out of this command, and on a machine
-  smaller than this one's 96 GB the failure is a killed process, not a message. Open it as its
-  own A spec (`research/replay.py` and `research/backtest.py`, A's). A-2's measurement harness
-  is in its scratchpad, not the repo. The process (PID 42016 at the time) was still running
-  when the session closed; A-2 was refused permission to stop it and the lead did not kill it
-  either; the operator may.
+- **The full-archive `acsoe research` run finished: exit 0, "backtest OK", about 36
+  minutes, a 429 MB parquet of 20,331,237 labelled rows, peak 51.9 GB resident.** So spec
+  61's acceptance is proven against the real 234-pair archive, and the process exited on its
+  own; nothing to kill. **A-2's earlier "multi-pair divergence" diagnosis was wrong and A-2
+  corrected it itself**: it had reasoned from the Phase 4 archive (3 pairs, 859,248 bars) when
+  the directory now holds 234 CSVs and 20,443,861 bars; at the measured 3 KB per bar, 20.3
+  million rows is about 60 GB, so the memory is linear and there is no anomaly. What remains
+  is narrower and cheap: engine 23 accumulates every labelled row of every pair in one Python
+  list and writes one parquet at the end, so it needs ~50 GB to produce a 429 MB file. **Fix
+  before spec 67** as a small A spec on `research/backtest.py`: stream, one parquet per pair or
+  appended row groups. A-2's build log has the misdiagnosis as its own entry; the lesson is
+  that a benchmark control cannot catch a wrong assumption about the thing the benchmark is
+  compared against.
+- **Two open questions from A-2's progress file.** Whether `acsoe research` should replay the
+  whole archive on every invocation, since engine 20 in the same chain will pay engine 23
+  first every time and no spec asks for `--only` or a bar limit; and that nothing has yet run
+  engine 20 through the chain, so the first real run is the first test of the
+  `TournamentEngine(*, digest_path=None)` seam.
 
 ---
 
