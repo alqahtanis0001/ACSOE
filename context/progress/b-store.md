@@ -268,6 +268,45 @@ had already passed over it, because a mutation can only ask about behaviour some
 is a consumer reasoning about a producer, and it is the one review this project keeps proving
 no amount of self-testing replaces.
 
+#### COMPLETE 2026-09-13 — engines 6 and 12 rehearsed in the same file
+
+Same file, now **14 tests**, extended on the lead's request of 10:10. Engines 5, 6, 7 and 12
+through the real orchestrator in registry order, two real ticks, nothing staged.
+
+**The answer to the question the request asked:** yes, `state["scout"]` gates engine 12. It
+reads `state["scout"]["pair"]` and returns `PASS` with an empty payload when there is none, so
+a 5-6-12 chain reaches it and it declines to classify on every tick. Rather than fabricate a
+scout payload — forbidden by the request and a hand-built `state` besides — the chain carries
+**the real engine 7**, which sits between 6 and 12 in the registry and is mine. Engine 12 then
+classifies the pair engine 7 actually chose. Both cases are asserted: the no-candidate `PASS`
+and the full chain.
+
+**Four more mutations, four killed**, hashes verified before and after the sweep:
+
+| # | Mutation | Killed by |
+|---|---|---|
+| S1 | engine 6 reports `available` with a macro pair missing | the missing-asset test |
+| S2 | engine 6 drops the `missing` list | the same test |
+| S3 | engine 12 classifies with no candidate | the no-candidate test |
+| S4 | the orchestrator does not stop the chain on a `PASS` | the cadence test |
+
+**S4 is the mutation only a multi-engine rehearsal can ask.** While engine 5 was the only
+registered engine, "it returns `PASS` and the chain stops there" had no observable consequence
+and no test could see it. With three engines behind it, deleting the orchestrator's `PASS`
+check turns the cadence test red.
+
+**Nothing to report against engine 6 or engine 12**, and one finding against my own fixture:
+engine 7 first found no candidate, `{'insufficient_quote_balance': 3, 'no_live_quote': 1}`,
+because the fake account held no spendable USD. Not a defect — at the committed 1% risk
+fraction and 1.5% stop, $5,000 of equity sizes a $3,333 position. Diagnosed in one line from
+engine 7's own exclusion tally.
+
+**Two naming facts, and they are one fact twice.** The committed feature fixture is `SOLUSD`,
+the archive *filename* spelling; a stream and `AssetPairs` both say `SOL/USD`. Streaming under
+the archive spelling builds a universe engine 7 cannot match, and the rehearsal would then pass
+with an empty universe for a reason unrelated to wiring. The lead's `BTC/USD` versus `XBTUSD`
+ruling is the same distinction from the other side.
+
 #### COMPLETE 2026-09-13 — the two-tick orchestrator rehearsal of engine 5
 
 `tests/engines/test_feature_chain_rehearsal.py`, **8 tests, all passing**, and the phase gate

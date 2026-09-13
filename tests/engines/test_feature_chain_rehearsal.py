@@ -39,20 +39,39 @@ from typing import Any
 import pytest
 from tests.conftest import require_module
 from tests.harness.doubles import MappingConfig
+from tests.harness.fake_kraken import FakeKrakenClient
 
-from acsoe.clients.kraken.contracts import TradeTick
-from acsoe.clients.store.contracts import CommandName, CommandRow, CommandSource
+from acsoe.clients.kraken.contracts import QuoteTick, TradeTick
+from acsoe.clients.store.contracts import (
+    CommandName,
+    CommandRow,
+    CommandSource,
+    EquitySnapshotRow,
+)
 from acsoe.core.contracts import Chains, EngineStatus
 from acsoe.core.orchestrator import Orchestrator
 from acsoe.engines.data_guard.engine import DataGuardEngine
+from acsoe.engines.exchange.engine import ExchangeEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
+from acsoe.engines.scout.engine import ScoutEngine
 
 pl = require_module("polars", reason="polars is not installed")
 
 BAR = 900
 TICK = 60
-PAIR = "SOLUSD"
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "candles_sample.parquet"
+
+#: The **live** spelling, which is what a stream publishes and what `AssetPairs` lists.
+#: `candles_sample.parquet` is SOLUSD because that is the archive *filename* spelling; the
+#: prices are the same prices. The lead's ruling of 2026-09-13 fixes the same distinction
+#: for BTC: `BTC/USD` live, `XBTUSD` only as an archive filename. Streaming under the
+#: archive spelling would build a universe engine 7 cannot match against `AssetPairs`, and
+#: the rehearsal would then "pass" with an empty universe for a reason unrelated to wiring.
+PAIR = "SOL/USD"
+
+#: The two macro assets `config/default.yaml` names, in their live spelling. Engine 6 looks
+#: for exactly these, so they are what decides `available`.
+MACRO_PAIRS = ("BTC/USD", "ETH/USD")
 
 #: Engine 5 is C's and lands in spec 64. Until it does, this whole file skips **naming the
 #: module**, and `require_module` re-raises anything that is not that module — so a wrong
@@ -62,6 +81,15 @@ feature_module = require_module(
     "acsoe.engines.feature.engine", reason="engine 5 `feature` (C, spec 64) does not exist yet"
 )
 FeatureEngine = feature_module.FeatureEngine
+
+MacroContextEngine = require_module(
+    "acsoe.engines.macro_context.engine",
+    reason="engine 6 `macro_context` (C, spec 65) does not exist yet",
+).MacroContextEngine
+
+RegimeEngine = require_module(
+    "acsoe.engines.regime.engine", reason="engine 12 `regime` (C, spec 66) does not exist yet"
+).RegimeEngine
 
 pytestmark = pytest.mark.skipif(
     not FIXTURE.is_file(), reason="tests/fixtures/candles_sample.parquet is not committed"
@@ -87,12 +115,51 @@ class ArchiveStream:
         return None
 
 
+class BookedArchiveStream(FakeKrakenClient):
+    """C's fake Kraken client plus the two stream methods engine 3 reads.
+
+    One object serves engines 1 and 3, which is how the daemon runs. The prices come from
+    the committed archive and the book comes from the fake's own `order_book.json`, so
+    engine 7's universe is filtered against the same fixture every other engine 7 test
+    uses. The shape is `FakeKrakenWithStream` in `test_scout.py`, written out again rather
+    than imported for the reason this file's other double is: a test of mine should not go
+    red when another test of mine is refactored.
+    """
+
+    def __init__(self, bars: list[dict[str, Any]], pairs: tuple[str, ...]) -> None:
+        super().__init__()
+        from acsoe.platform.aio import run_blocking
+
+        # Engine 7 compares a position it sizes from equity against the **quote
+        # currency's** balance, so an account with no USD excludes every USD pair for
+        # `insufficient_quote_balance`. At the committed 1% risk fraction and 1.5% stop
+        # that position is equity/1.5, so $5,000 of equity needs about $3,334 to be
+        # affordable. Found by this rehearsal failing on its own fixture rather than on
+        # anything an engine did.
+        self.set_balances({"USD": "5000.00", "BTC": "0.01000000", "ETH": "0.50000000"})
+
+        self._stream_trades = tuple(t for pair in pairs for t in trades_for(bars, pair=pair))
+        last = datetime.fromtimestamp(int(bars[-1]["ts"]) + BAR, tz=UTC)
+        self._stream_quotes: dict[str, QuoteTick] = {}
+        for pair in pairs:
+            book = run_blocking(self.order_book(pair, 10))
+            self._stream_quotes[pair] = QuoteTick(
+                pair=pair, ts=last, bid=book.best_bid, ask=book.best_ask
+            )
+
+    def recent_trades(self) -> tuple[TradeTick, ...]:
+        return self._stream_trades
+
+    def latest_quote(self, pair: str) -> QuoteTick | None:
+        return self._stream_quotes.get(pair)
+
+
 def archive_bars(limit: int) -> list[dict[str, Any]]:
     """The newest `limit` rows of the committed OHLCVT slice, oldest first."""
     return pl.read_parquet(FIXTURE).sort("ts").tail(limit).to_dicts()
 
 
-def trades_for(bars: list[dict[str, Any]]) -> list[TradeTick]:
+def trades_for(bars: list[dict[str, Any]], *, pair: str = PAIR) -> list[TradeTick]:
     """Four trades per bar — open, high, low, close — that rebuild the bar exactly.
 
     `build_candles` takes the first price as the open, the last as the close, the max as
@@ -109,7 +176,7 @@ def trades_for(bars: list[dict[str, Any]]) -> list[TradeTick]:
         for offset, (price, qty) in enumerate(zip(prices, quantities, strict=True), start=1):
             out.append(
                 TradeTick(
-                    pair=PAIR,
+                    pair=pair,
                     ts=datetime.fromtimestamp(ts, tz=UTC) + timedelta(seconds=offset),
                     price=Decimal(str(price)),
                     qty=qty,
@@ -164,17 +231,40 @@ def build(
     bars: list[dict[str, Any]],
     *,
     with_data_guard: bool = False,
+    opportunity: list[Any] | None = None,
+    stream_pairs: tuple[str, ...] = (PAIR,),
+    quotes: bool = False,
 ) -> Orchestrator:
-    """The real orchestrator with engine 5 first in the opportunity chain."""
-    object.__setattr__(clients, "kraken", ArchiveStream(trades_for(bars)))
+    """The real orchestrator with engine 5 first in the opportunity chain.
+
+    `stream_pairs` decides which pairs trade, which is how engine 6's `available` is varied
+    without touching config: the same archive prices are replayed under each name. **That
+    is a fabrication of market data and it is deliberately confined to structure** — no
+    test below asserts anything about a macro *value*, only about which assets were found
+    and which were named missing. Prices that happen to be identical across three pairs
+    would make a correlation meaningless, and nothing here reads one.
+
+    `quotes` adds top-of-book, which engine 1 and engine 7 need and engine 3 republishes.
+    Without it engine 7 excludes every pair for `no_live_quote`, which is correct behaviour
+    and useless as a fixture.
+    """
+    stream: Any = (
+        BookedArchiveStream(bars, stream_pairs)
+        if quotes
+        else ArchiveStream([t for p in stream_pairs for t in trades_for(bars, pair=p)])
+    )
+    object.__setattr__(clients, "kraken", stream)
     guard: list[Any] = [MarketSensorEngine()]
+    if quotes:
+        # Engine 1 is the account engine and engine 7 reads its balances and pair rules.
+        guard.insert(0, ExchangeEngine())
     if with_data_guard:
         guard.append(DataGuardEngine())
     return Orchestrator(
         config=config,
         clock=clock,
         clients=clients,
-        chains=Chains(guard=guard, opportunity=[FeatureEngine()]),
+        chains=Chains(guard=guard, opportunity=opportunity or [FeatureEngine()]),
     )
 
 
@@ -357,6 +447,204 @@ def test_the_opportunity_chain_does_not_run_while_the_system_is_idle(
     assert state["system"]["mode"] == "idle"
     assert state["market_sensor"]["bar_closed"] is True, "the bar did close; only the mode differs"
     assert "feature" not in state
+
+
+# --------------------------------------------------------------------------- #
+# 3. Engines 6 and 12 behind engine 5, in registry order
+#
+# The registry order is 5, 6, 7, 12 — engine 7 `scout` sits between them and is mine.
+# Engine 12 reads `state["scout"]["pair"]` and returns PASS when there is no candidate,
+# so a chain of 5, 6, 12 alone can never reach engine 12's classifier. Rather than
+# fabricate a scout payload, which the rehearsal request forbids and which would be a
+# hand-built `state` besides, the chain below carries the **real engine 7** in its real
+# position. Nothing here is staged.
+# --------------------------------------------------------------------------- #
+
+
+def write_equity(store: Any, amount: str = "5000.00") -> None:
+    """Engine 7 sizes against total equity, which only engine 19 computes and which is
+    Phase 4. Same forward dependency engines 11 and 17 have, resolved the same way."""
+    store.write_equity_snapshot(
+        EquitySnapshotRow(
+            cycle_id=1,
+            run_id="rehearsal",
+            ts=1_000,
+            currency="USD",
+            equity=Decimal(amount),
+            peak_equity=Decimal(amount),
+            cash=Decimal(amount),
+            positions_value=Decimal("0.00"),
+            unrealised_pnl=Decimal("0.00"),
+            realised_pnl_cum=Decimal("0.00"),
+            open_position_count=0,
+            updated_at=1_000,
+        )
+    )
+
+
+def full_chain() -> list[Any]:
+    """Engines 5, 6, 7 and 12 in the order `engine-contracts.md` fixes."""
+    return [FeatureEngine(), MacroContextEngine(), ScoutEngine(), RegimeEngine()]
+
+
+def test_engine_6_reports_available_when_the_macro_pairs_are_streaming(
+    rehearsal_config: MappingConfig, rehearsal_clock: Any, fake_clients_with_store: Any, bars: Any
+) -> None:
+    """Engine 6 finds both configured macro assets and says so.
+
+    The macro pairs are streamed under their **live** spelling, which is what
+    `config/default.yaml` names and what the real recorder writes. The prices replayed
+    under each name are the same archive series, and this test asserts nothing about a
+    macro *value* for exactly that reason — only which assets were found.
+    """
+    activate(fake_clients_with_store.store)
+    orchestrator = build(
+        rehearsal_config,
+        rehearsal_clock,
+        fake_clients_with_store,
+        bars,
+        opportunity=[FeatureEngine(), MacroContextEngine()],
+        stream_pairs=(PAIR, *MACRO_PAIRS),
+    )
+
+    macro = orchestrator.tick()["macro_context"]
+
+    assert macro["available"] is True
+    assert tuple(macro["missing"]) == ()
+
+
+def test_engine_6_names_the_missing_asset_rather_than_substituting_one(
+    rehearsal_config: MappingConfig, rehearsal_clock: Any, fake_clients_with_store: Any, bars: Any
+) -> None:
+    """Spec 65's acceptance: `available: false` with the missing asset named.
+
+    Only SOL/USD trades here, so neither macro pair has a candle. The engine must say
+    which assets are missing rather than substitute a proxy or drop the key — a macro
+    context that silently stood in for BTC would be read downstream as BTC.
+    """
+    activate(fake_clients_with_store.store)
+    orchestrator = build(
+        rehearsal_config,
+        rehearsal_clock,
+        fake_clients_with_store,
+        bars,
+        opportunity=[FeatureEngine(), MacroContextEngine()],
+    )
+
+    macro = orchestrator.tick()["macro_context"]
+
+    assert macro["available"] is False
+    assert set(macro["missing"]) == {"btc", "eth"}
+
+
+def test_engine_12_passes_when_no_candidate_exists_rather_than_classifying_nothing(
+    rehearsal_config: MappingConfig, rehearsal_clock: Any, fake_clients_with_store: Any, bars: Any
+) -> None:
+    """**`state["scout"]` gates engine 12, and this is the file saying so.**
+
+    The rehearsal request asked whether a scout candidate is needed and said to report it
+    rather than fabricate one. It is: engine 12 reads `state["scout"]["pair"]` and returns
+    `PASS` with an empty payload when there is none. Without engine 7 in the chain there is
+    never a candidate, so a 5-6-12 chain reaches engine 12 and it correctly declines to
+    classify. That is the honest behaviour and it is asserted here rather than worked
+    around; the next test puts the real engine 7 in and gets a label.
+    """
+    activate(fake_clients_with_store.store)
+    orchestrator = build(
+        rehearsal_config,
+        rehearsal_clock,
+        fake_clients_with_store,
+        bars,
+        opportunity=[FeatureEngine(), MacroContextEngine(), RegimeEngine()],
+        stream_pairs=(PAIR, *MACRO_PAIRS),
+    )
+
+    state = orchestrator.tick()
+
+    assert state["feature"]["pairs"], "the bar tick published no features"
+    assert state["regime"] == {}, "engine 12 classified without a candidate"
+    assert "trading_blocked_by" not in state, "engine 12 blocked rather than passed"
+
+
+def test_the_whole_screening_chain_runs_and_engine_12_labels_the_candidate(
+    rehearsal_config: MappingConfig, rehearsal_clock: Any, fake_clients_with_store: Any, bars: Any
+) -> None:
+    """Engines 5, 6, 7 and 12 in registry order, one real tick, nothing staged.
+
+    Engine 7 is mine and sits between 6 and 12 in the registry, so putting it in is the
+    chain rather than a convenience. Its candidate is what engine 12 classifies.
+
+    The label is asserted as **a member of the closed set or null with a reason**, not as a
+    particular label: which regime the archive's last bars are in is C's arithmetic and is
+    tested in C's own file. What a rehearsal owes is that the payload crosses the chain
+    intact and that a null carries its reason instead of a default label.
+    """
+    write_equity(fake_clients_with_store.store)
+    activate(fake_clients_with_store.store)
+    orchestrator = build(
+        rehearsal_config,
+        rehearsal_clock,
+        fake_clients_with_store,
+        bars,
+        opportunity=full_chain(),
+        stream_pairs=(PAIR, *MACRO_PAIRS),
+        quotes=True,
+    )
+
+    state = orchestrator.tick()
+
+    candidate = state["scout"].get("pair")
+    assert candidate, f"engine 7 found no candidate: {state['scout']['excluded']}"
+    assert state["regime"]["pair"] == candidate, "engine 12 classified a different pair"
+
+    label = state["regime"]["label"]
+    if label is None:
+        assert state["regime"]["reason"], "a null label must carry its reason"
+    else:
+        assert label in {"trending", "choppy", "high_volatility"}, label
+        assert state["regime"]["reason"] is None
+
+
+def test_the_screening_chain_stops_at_engine_5_on_a_non_bar_tick(
+    rehearsal_config: MappingConfig, rehearsal_clock: Any, fake_clients_with_store: Any, bars: Any
+) -> None:
+    """The cadence rule, now with three engines behind engine 5 to prove it stops them.
+
+    `engine-contracts.md`: engine 5 returns `PASS` when no bar closed **and the chain stops
+    there**. With only engine 5 registered that claim is untestable from outside — nothing
+    downstream exists to not-run. This is the assertion the earlier tests could not make,
+    and it is the reason a rehearsal of three engines is more than three rehearsals.
+    """
+    write_equity(fake_clients_with_store.store)
+    activate(fake_clients_with_store.store)
+    orchestrator = build(
+        rehearsal_config,
+        rehearsal_clock,
+        fake_clients_with_store,
+        bars,
+        opportunity=full_chain(),
+        stream_pairs=(PAIR, *MACRO_PAIRS),
+        quotes=True,
+    )
+
+    bar_tick = orchestrator.tick()
+    rehearsal_clock.advance(TICK)
+    quiet_tick = orchestrator.tick()
+
+    assert bar_tick["macro_context"], "the bar tick did not reach engine 6"
+    for engine in ("macro_context", "scout", "regime"):
+        assert engine not in quiet_tick, f"{engine} ran on a tick where no bar closed"
+    assert quiet_tick["feature"] == {}
+    assert "trading_blocked_by" not in quiet_tick
+
+
+def test_engines_6_and_12_declare_themselves_as_the_registry_has_them() -> None:
+    """Neither is a gate. `scripts/verify.py` asserts this against the registry table, and
+    a rehearsal held before registration is the last cheap moment to find it wrong."""
+    assert (MacroContextEngine().name, MacroContextEngine().number) == ("macro_context", 6)
+    assert MacroContextEngine().is_gate is False
+    assert (RegimeEngine().name, RegimeEngine().number) == ("regime", 12)
+    assert RegimeEngine().is_gate is False
 
 
 def test_engine_5_declares_itself_as_the_registry_has_it() -> None:

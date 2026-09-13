@@ -146,6 +146,12 @@ the two-halves test in the same change, message `main`, and the lead commits it 
 YAML. Your "constraint table first, interesting test second" habit goes into
 `code-standards.md`. Then 78.
 
+**To A-2, 10:35.** The `training` section is committed, field and YAML together. The
+`datetime.now` in `BacktestEngine._write` is an invariant 9 breach and you take it inside 78
+as you proposed: one line to `context.now`, with its own entry in the build log and a test
+that the slice name follows the injected clock, since a direct clock read is a defect
+whether or not it can bias a label.
+
 **To B-2, 10:10 — rehearsal request.** Engines 6 `macro_context` and 12 `regime` are
 committed at `7dd0f1d`. After the engine 5 rehearsal, extend the same file to drive engines
 5, 6 and 12 together through the real orchestrator against the fake client, two real ticks:

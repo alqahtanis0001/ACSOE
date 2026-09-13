@@ -398,6 +398,60 @@ That `MissingInputError` is worth keeping for its own sake: it is engine 5 refus
 shape engine 3 cannot produce, and saying in the message what guessing would have cost. It is
 the standard this project asks for and it is C's, not mine.
 
+### Engines 6 and 12 rehearsed behind engine 5, and engine 12 needs a candidate to do anything
+
+**Agent:** B · **Task:** engines 6 and 12 rehearsal · **Date:** 2026-09-13
+
+**The question the request asked me to answer rather than work around.** Engine 12 `regime`
+reads `state["scout"]["pair"]` and returns `PASS` with an empty payload when there is none. So
+a chain of 5, 6 and 12 alone **reaches engine 12 and it correctly declines to classify**, every
+tick, forever. The request said to say so rather than fabricate a scout payload, and that is
+asserted as its own test rather than left as prose.
+
+**What I did instead of fabricating one.** The registry order is 5, 6, **7**, 12, and engine 7
+is mine. Putting the real engine 7 in its real position gives engine 12 a real candidate with
+nothing staged anywhere — `state["scout"]` is engine 7's own output over engine 1's balances
+and engine 3's book, on the same tick. That is the chain rather than a convenience, and it is
+what lets the rehearsal assert that engine 12 classified **the pair engine 7 chose** rather
+than some pair.
+
+**The rehearsal failed first on its own fixture, which is worth recording as the honest
+sequence.** Engine 7 found no candidate: `{'insufficient_quote_balance': 3, 'no_live_quote': 1}`.
+Not an engine defect — the fake account had no spendable USD, and at the committed 1% risk
+fraction and 1.5% stop a $5,000 equity sizes a $3,333 position that no balance could cover.
+Fixed in the fixture by funding the account, with the arithmetic written at the site so the
+next person does not rediscover it. The exclusion codes are what made this diagnosable in one
+line, which is the tally engine 7 publishes earning its keep.
+
+**Two naming facts the rehearsal had to get right, and they are the same fact twice.** The
+committed feature fixture is `SOLUSD` because that is the archive **filename** spelling; a
+stream publishes `SOL/USD` and `AssetPairs` lists `SOL/USD`. Streaming under the archive
+spelling builds a universe engine 7 cannot match against `AssetPairs`, and the rehearsal would
+then "pass" with an empty universe for a reason unrelated to wiring. Same shape as the lead's
+`BTC/USD` versus `XBTUSD` ruling, met from the other side.
+
+**Four mutations, four killed**, files verified byte-identical afterwards against hashes taken
+before the sweep:
+
+| # | Mutation | Killed by |
+|---|---|---|
+| S1 | engine 6 reports `available` with a macro pair missing | the missing-asset test |
+| S2 | engine 6 drops the `missing` list, so the asset is unnamed | the same test |
+| S3 | engine 12 classifies with no candidate instead of passing | the no-candidate test |
+| S4 | the orchestrator does not stop the chain on a `PASS` | the cadence test |
+
+**S4 is the one only a multi-engine rehearsal could ask.** "Engine 5 returns `PASS` and the
+chain stops there" is untestable from outside while engine 5 is the only engine registered —
+there is nothing downstream to not-run, so the claim has no observable consequence. With three
+engines behind it the assertion becomes real, and deleting the orchestrator's `PASS` check
+turns it red. A rehearsal of three engines is more than three rehearsals of one.
+
+**Nothing to report against engine 6 or engine 12.** Engine 6 found both macro assets when they
+streamed and named `btc` and `eth` as missing when they did not, without substituting a proxy.
+Engine 12 classified engine 7's candidate and published a label from the closed set with a null
+reason. Neither blocked, neither cached across ticks, and both stayed out of the way on a tick
+where no bar closed.
+
 ### The rehearsal found nothing wrong with engine 5, and that is the report
 
 **Agent:** B · **Task:** engine 5 rehearsal · **Date:** 2026-09-13
