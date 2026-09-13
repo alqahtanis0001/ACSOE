@@ -45,7 +45,7 @@ import hashlib
 import json
 import math
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -90,9 +90,12 @@ __all__ = [
     "CLASS_ORDER",
     "DATASET_COLUMNS",
     "OOS_COLUMNS",
+    "DatasetBuild",
     "TrainingError",
     "TrainingReport",
     "build_dataset",
+    "build_dataset_to_parquet",
+    "dataset_rows_for_pair",
     "main",
     "train_walkforward",
 ]
@@ -260,31 +263,15 @@ def build_dataset(
         frame = candles.get(pair)
         if frame is None:
             raise TrainingError(f"{pair} has labels and no candles")
-        features = _features_of(frame, interval_s, min_fill)
-        joined = (
-            labels.select(
-                pl.col("pair"),
-                pl.col("decision_ts").cast(pl.Int64),
-                pl.col("label"),
-                pl.col("label_window_end_ts").cast(pl.Int64),
-                pl.col("return_pct").cast(pl.Float64),
-            )
-            .join(features, left_on="decision_ts", right_on="ts", how="inner")
-            .sort("decision_ts")
+        rows = dataset_rows_for_pair(
+            labels,
+            frame,
+            macro_features=macro_frames,
+            interval_s=interval_s,
+            min_fill=min_fill,
         )
-        if joined.height == 0:
-            continue
-        joined = joined.with_columns(
-            pl.Series(
-                "weight",
-                average_uniqueness(
-                    [int(v) for v in joined["decision_ts"]],
-                    [int(v) for v in joined["label_window_end_ts"]],
-                ),
-                dtype=pl.Float64,
-            )
-        )
-        parts.append(_with_macro(joined, macro_frames))
+        if rows.height:
+            parts.append(rows)
 
     if not parts:
         raise TrainingError(
@@ -293,6 +280,222 @@ def build_dataset(
             "decision-bar grid."
         )
     return pl.concat(parts, how="vertical").sort(["decision_ts", "pair"])
+
+
+def dataset_rows_for_pair(
+    labels: pl.DataFrame,
+    candles: pl.DataFrame,
+    *,
+    macro_features: Mapping[str, pl.DataFrame],
+    interval_s: int,
+    min_fill: float,
+) -> pl.DataFrame:
+    """One pair's dataset rows: features joined to labels, weighted, with macro columns.
+
+    **The one place a pair becomes dataset rows**, called by `build_dataset` when the whole
+    archive is already in memory and by `build_dataset_to_parquet` when it is being streamed
+    a pair at a time. Two implementations of this join would agree on the committed sample
+    and disagree somewhere in twenty million rows, and the disagreement would be a dataset
+    that trains a model nobody can reproduce from the other path.
+
+    `macro_features` is `{asset: that asset's feature frame}` — already computed, because
+    every pair's rows need it and recomputing it per pair would cost 234 times what it costs
+    once.
+    """
+    joined = (
+        labels.select(
+            pl.col("pair"),
+            pl.col("decision_ts").cast(pl.Int64),
+            pl.col("label"),
+            pl.col("label_window_end_ts").cast(pl.Int64),
+            pl.col("return_pct").cast(pl.Float64),
+        )
+        .join(
+            _features_of(candles, interval_s, min_fill),
+            left_on="decision_ts",
+            right_on="ts",
+            how="inner",
+        )
+        .sort("decision_ts")
+    )
+    if joined.height == 0:
+        return joined
+    weighted = joined.with_columns(
+        pl.Series(
+            "weight",
+            average_uniqueness(
+                [int(v) for v in joined["decision_ts"]],
+                [int(v) for v in joined["label_window_end_ts"]],
+            ),
+            dtype=pl.Float64,
+        )
+    )
+    return _with_macro(weighted, macro_features)
+
+
+@dataclass
+class DatasetBuild:
+    """What one streamed dataset build produced, without holding the dataset itself."""
+
+    path: Path
+    rows: int
+    pairs: tuple[str, ...]
+    below_floor: tuple[str, ...]
+    no_rows: tuple[str, ...]
+
+    @property
+    def used_any(self) -> bool:
+        return bool(self.pairs)
+
+
+class _DatasetWriter:
+    """One parquet, written a row group per pair, never holding two.
+
+    The same shape spec 78 gave engine 23, one module over, and for the same measured
+    reason: the eager version held every pair's frame at once, about 60 GB over 234 pairs at
+    3 KB a bar, to produce a file of a few hundred megabytes.
+
+    **A schema mismatch is a refusal, not a coercion.** A row group written under a coerced
+    schema is a column that means something different for some pairs than for others, and
+    nothing downstream would report it. The one legitimate difference is a pair whose macro
+    join produced nulls where another pair's produced floats, and that is a cast pyarrow
+    makes safely; anything it cannot cast is a fault.
+    """
+
+    def __init__(self, target: Path) -> None:
+        self._target = target
+        self._writer: Any = None
+        self._schema: Any = None
+        self.rows_written = 0
+        self.pairs_written: list[str] = []
+
+    def write(self, pair: str, rows: pl.DataFrame) -> None:
+        import pyarrow.parquet as pq  # type: ignore[import-untyped]
+
+        if rows.height == 0:
+            return
+        table = rows.to_arrow()
+        if self._writer is None:
+            self._target.parent.mkdir(parents=True, exist_ok=True)
+            self._schema = table.schema
+            # zstd, matching what `polars.write_parquet` used before this was streamed, so
+            # the dataset file does not silently change size because the writer changed.
+            self._writer = pq.ParquetWriter(self._target, self._schema, compression="zstd")
+        elif table.schema != self._schema:
+            try:
+                table = table.cast(self._schema)
+            except (ValueError, TypeError) as problem:
+                raise TrainingError(
+                    f"{pair}: its dataset rows have a schema this dataset cannot hold. The "
+                    f"file was opened as {self._schema} and this pair produced "
+                    f"{table.schema}."
+                ) from problem
+        self._writer.write_table(table)
+        self.rows_written += table.num_rows
+        self.pairs_written.append(pair)
+
+    def close(self) -> None:
+        if self._writer is not None:
+            self._writer.close()
+            self._writer = None
+
+
+def build_dataset_to_parquet(
+    pairs: Iterable[tuple[str, pl.DataFrame]],
+    destination: Path,
+    *,
+    config: _Config,
+    macro_features: Mapping[str, pl.DataFrame] | None = None,
+    provenance: Mapping[str, Any] | None = None,
+) -> DatasetBuild:
+    """Stream the dataset to parquet, one pair's row group at a time.
+
+    `pairs` is an iterator of `(pair, candles)` — a generator, so the caller reads one pair
+    from the archive, this function turns it into rows, and the frame is dropped before the
+    next one is read. **At most one archive frame is resident**, which is the whole point:
+    the eager builder held every pair's Decimal frame at once and needed about 60 GB over
+    234 pairs to produce a file of a few hundred megabytes.
+
+    `macro_features` is `{asset: feature frame}` and is computed by the caller before the
+    loop, because every pair's rows need it. Two feature frames stay resident and that is
+    unavoidable — they are floats rather than Decimals and are a rounding error beside one
+    archive frame.
+
+    Returns what was written and by whom. The dataset itself is **not** returned: a function
+    that streamed to disk and then handed back the whole frame would have given up the
+    property it exists for.
+    """
+    interval_s = int(_required(config, "timeframes.decision_bar_s"))
+    min_fill = float(_required(config, "features.min_lookback_fill"))
+    floor = int(config.get("dataset.min_labelled_rows") or 0)
+
+    writer = _DatasetWriter(destination)
+    below: list[str] = []
+    empty: list[str] = []
+    try:
+        for pair, candles in pairs:
+            labels, _series = label_frame(
+                candles, pair=pair, config=config, interval_s=interval_s
+            )
+            if labels.height < floor:
+                below.append(pair)
+                continue
+            rows = dataset_rows_for_pair(
+                labels,
+                candles,
+                macro_features=macro_features or {},
+                interval_s=interval_s,
+                min_fill=min_fill,
+            )
+            if rows.height == 0:
+                empty.append(pair)
+                continue
+            writer.write(pair, rows)
+    finally:
+        writer.close()
+
+    if not writer.pairs_written:
+        raise TrainingError(
+            "no pair produced a labelled, featured row. Either the archive is shorter "
+            "than the longest lookback or the labels and the candles do not share a "
+            "decision-bar grid."
+        )
+    if provenance is not None:
+        _stamp_provenance(destination, provenance, rows=writer.rows_written)
+    return DatasetBuild(
+        path=destination,
+        rows=writer.rows_written,
+        pairs=tuple(writer.pairs_written),
+        below_floor=tuple(sorted(below)),
+        no_rows=tuple(sorted(empty)),
+    )
+
+
+def _stamp_provenance(path: Path, provenance: Mapping[str, Any], *, rows: int) -> None:
+    """Rewrite the finished parquet with its provenance in the file's own metadata.
+
+    A parquet that cannot say where it came from is indistinguishable from one written by
+    hand, which is the rule `labelled_sample.parquet` was deposited under. pyarrow cannot
+    add key-value metadata to a file it has already closed, so this reads the schema, not
+    the data, and rewrites the footer — the row groups are copied, not rebuilt.
+    """
+    import pyarrow.parquet as pq
+
+    payload = dict(provenance)
+    payload["rows"] = int(rows)
+    existing = pq.ParquetFile(path)
+    schema = existing.schema_arrow.with_metadata(
+        {b"acsoe_provenance": json.dumps(payload, sort_keys=True, default=str).encode("utf-8")}
+    )
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    writer = pq.ParquetWriter(temporary, schema, compression="zstd")
+    try:
+        for index in range(existing.num_row_groups):
+            writer.write_table(existing.read_row_group(index).cast(schema))
+    finally:
+        writer.close()
+        existing.close()
+    temporary.replace(path)
 
 
 def pairs_below_floor(
@@ -1629,45 +1832,114 @@ def _write_fold_artefacts(
 FIXTURE_DIGEST: Final = Path("tests") / "fixtures" / "walkforward_digest.json"
 
 
+def _run_ranking_study(args: Any, config: _Config) -> int:
+    """Spec 75's `--ranking-study`: read one run's output, write the table, recommend nothing."""
+    from acsoe.research.ranking_study import build_report, write_report
+
+    if args.dataset is None:
+        sys.stdout.write(
+            "--ranking-study needs --dataset: the out-of-sample file carries what the "
+            "predictor said and the feature values it ranked on live in the dataset.\n"
+        )
+        return 2
+    for path in (args.ranking_study, args.dataset):
+        if not Path(path).is_file():
+            sys.stdout.write(f"{path} is not a file\n")
+            return 2
+
+    report = build_report(
+        pl.read_parquet(args.ranking_study),
+        pl.read_parquet(args.dataset),
+        config=config,
+        provenance={
+            "oos_file": str(args.ranking_study),
+            "dataset_file": str(args.dataset),
+            "config_digest": _config_digest(config),
+            "feature_version": FEATURE_VERSION,
+        },
+    )
+    written = write_report(report, Path(args.docs))
+    rankings = list(report["rankings"])
+    sys.stdout.write(
+        f"{written}: {len(rankings)} row(s) over "
+        f"{report['meta']['bars']} bar(s); the control is {rankings[0]['feature']} "
+        f"at a target rate of {rankings[0]['target_rate']}\n"
+    )
+    sys.stdout.write(
+        "No feature is recommended. The break-even comparison is the reader's: friction is "
+        "live-only and this file carries the formula rather than a number.\n"
+    )
+    return 0
+
+
 def _load_config(path: Path) -> Any:
     from acsoe.platform.config import load_config
 
     return load_config(path)
 
 
-def _archive_frames(
-    directory: Path, interval_s: int, wanted: Sequence[str]
+def _macro_features(
+    archive: Path, interval_s: int, macro: Mapping[str, str], config: _Config
 ) -> dict[str, pl.DataFrame]:
-    """The archive frames for `wanted`, or for every pair when it is empty.
+    """`{asset: feature frame}` for the macro pairs, read before the streaming loop.
 
-    **One `frame(pair)` call each, never `dict(replay.frames())`.** Since spec 79 the
-    replay reads a pair from disk on demand and keeps nothing, so materialising the whole
-    archive is now something a caller has to ask for — and asking for it to then throw 233
-    of 234 away is what an earlier version of this function did, at five and a half
-    minutes a run.
+    **A function rather than a loop inline in `main`, and that is not tidiness.** The loop
+    variable holding the last macro frame would stay bound for the whole streaming loop that
+    follows, so one Decimal archive frame would be resident from the first pair to the last.
+    Here it dies on return. `test_the_builder_never_holds_two_archive_frames_at_once` counted
+    three live frames before this existed and two after.
+    """
+    min_fill = float(_required(config, "features.min_lookback_fill"))
+    by_archive_pair = {pair: asset for asset, pair in macro.items()}
+    out: dict[str, pl.DataFrame] = {}
+    for pair, frame in _archive_frames(archive, interval_s, sorted(by_archive_pair)):
+        out[by_archive_pair[pair]] = _features_of(frame, interval_s, min_fill)
+    return out
 
-    **The whole-archive case is still a known limit and is stated rather than hidden.**
-    Every pair's frame is held at once here, which is roughly 60 GB over 234 pairs at the
-    measured 3 KB per bar. That is the same shape as the engine 23 problem specs 78 and 79
-    exist for, one module over, and the fix is the same: build the dataset per pair and
-    append row groups rather than concatenating at the end. Until then the full run is
-    `--pairs`-bounded and this docstring is the warning.
+
+def _archive_selection(
+    directory: Path, interval_s: int, wanted: Sequence[str]
+) -> tuple[Any, list[str]]:
+    """The replay, and the pairs this run will read, validated against what is there.
+
+    Validated **before** anything is read, so `--pairs XBTUSD` on an archive that spells it
+    differently fails with a message naming the spelling rather than after the first pair
+    has been labelled.
     """
     from acsoe.research.replay import ArchiveReplay
 
     replay = ArchiveReplay.from_directory(directory, interval_s=interval_s)
     available = list(replay.report.pairs)
-    if wanted:
-        missing = [pair for pair in wanted if pair not in available]
-        if missing:
-            raise TrainingError(
-                "the archive has no " + ", ".join(missing) + "; --pairs names archive "
-                "spellings (XBTUSD), not live ones (BTC/USD). It holds "
-                + str(len(available))
-                + " pairs."
-            )
-        available = list(wanted)
-    return {pair: replay.frame(pair) for pair in available}
+    if not wanted:
+        return replay, available
+    missing = [pair for pair in wanted if pair not in available]
+    if missing:
+        raise TrainingError(
+            "the archive has no " + ", ".join(missing) + "; --pairs names archive "
+            "spellings (XBTUSD), not live ones (BTC/USD). It holds "
+            + str(len(available))
+            + " pairs."
+        )
+    return replay, list(wanted)
+
+
+def _archive_frames(
+    directory: Path, interval_s: int, wanted: Sequence[str]
+) -> Iterator[tuple[str, pl.DataFrame]]:
+    """`(pair, frame)` for `wanted`, or for every pair when it is empty, **one at a time**.
+
+    A generator, matching `ArchiveReplay.frames()` since spec 79, and never wrapped in a
+    `dict`. The replay reads a pair from disk on demand and keeps nothing, so the only thing
+    that can materialise the whole archive is a caller that asks for it — and this caller
+    must not: the eager version held every pair's Decimal frame at once, roughly 60 GB over
+    234 pairs at the measured 3 KB a bar, which is the wall engine 23 came off in spec 78.
+
+    **The `--pairs` filter is inside the loop**, before the read rather than after it. A
+    filter applied to a materialised dict would have read all 234 to keep one.
+    """
+    replay, selected = _archive_selection(directory, interval_s, wanted)
+    for pair in selected:
+        yield pair, replay.frame(pair)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1697,6 +1969,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--end", type=int, default=None, help="latest decision bar to keep")
     parser.add_argument(
+        "--ranking-study",
+        type=Path,
+        default=None,
+        help=(
+            "spec 75: read this run's out-of-sample parquet, rank every feature both ways "
+            "over it, and write docs/dataset/ranking-study-<date>.json. Needs --dataset. "
+            "Trains nothing."
+        ),
+    )
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=None,
+        help="the dataset parquet the out-of-sample file came from, for its feature values",
+    )
+    parser.add_argument(
+        "--docs",
+        type=Path,
+        default=Path("docs") / "dataset",
+        help="where --ranking-study writes its report",
+    )
+    parser.add_argument(
         "--write-fixture",
         action="store_true",
         help=(
@@ -1707,6 +2001,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = _load_config(args.config)
+    if args.ranking_study is not None:
+        # **A separate mode, and it trains nothing.** Spec 75's study is a reading of a run
+        # that already happened; re-training to produce it would make the table describe a
+        # different model from the one the operator is ruling on.
+        return _run_ranking_study(args, config)
     interval_s = int(_required(config, "timeframes.decision_bar_s"))
     wanted = [p.strip() for p in args.pairs.split(",") if p.strip()]
     macro_wanted = sorted(
@@ -1716,63 +2015,46 @@ def main(argv: Sequence[str] | None = None) -> int:
         # The macro pairs come too, or the run trains without a market backdrop and
         # produces a feature list engine 8 will refuse.
         wanted = sorted(set(wanted) | set(macro_wanted))
-    frames = _archive_frames(args.archive, interval_s, wanted)
-
-    labelled: dict[str, pl.DataFrame] = {}
-    for pair, frame in frames.items():
-        labels, _series = label_frame(
-            frame, pair=pair, config=config, interval_s=interval_s
-        )
-        if labels.height:
-            labelled[pair] = labels
-
+    # The macro assets' feature frames first, because every pair's rows need them.
     macro = macro_pair_names(config.get("macro") or {}, spelling="archive")
-    available = {asset: pair for asset, pair in macro.items() if pair in frames}
-    if len(available) != len(macro):
+    macro_features = _macro_features(args.archive, interval_s, macro, config)
+    if len(macro_features) != len(macro):
         # Silent macro loss would be the worst outcome: the model trains without a market
         # backdrop and the feature list still looks plausible right up to the moment
         # engine 8 refuses the artefact for a shape nobody chose.
         raise TrainingError(
             "the archive is missing the macro pair(s) "
-            + ", ".join(sorted(set(macro.values()) - set(frames)))
+            + ", ".join(sorted(set(macro) - set(macro_features)))
             + ". Every run carries the macro columns, smoke runs included: training "
             "without them produces a different feature list and an artefact engine 8 "
             "will refuse."
         )
 
-    dataset = build_dataset(labelled, frames, config=config, macro_archive=available or None)
+    started = datetime.now(UTC)
+    args.derived.mkdir(parents=True, exist_ok=True)
+    dataset_path = args.derived / f"dataset_{started.strftime('%Y%m%dT%H%M%S')}.parquet"
+    build = build_dataset_to_parquet(
+        _archive_frames(args.archive, interval_s, wanted),
+        dataset_path,
+        config=config,
+        macro_features=macro_features,
+        provenance={
+            "archive": str(args.archive),
+            "built_at": started.isoformat(),
+            "config_digest": _config_digest(config),
+            "feature_version": FEATURE_VERSION,
+            "interval_s": interval_s,
+            "macro_assets": sorted(macro_features),
+            "start_ts": args.start,
+            "end_ts": args.end,
+        },
+    )
+
+    dataset = pl.read_parquet(dataset_path).sort(["decision_ts", "pair"])
     if args.start is not None:
         dataset = dataset.filter(pl.col("decision_ts") >= args.start)
     if args.end is not None:
         dataset = dataset.filter(pl.col("decision_ts") <= args.end)
-
-    started = datetime.now(UTC)
-    args.derived.mkdir(parents=True, exist_ok=True)
-    dataset_path = args.derived / f"dataset_{started.strftime('%Y%m%dT%H%M%S')}.parquet"
-    # Written once and reused by the loop, with its provenance **in the file**: a parquet
-    # that cannot say where it came from is indistinguishable from one written by hand,
-    # which is the rule `labelled_sample.parquet` was deposited under.
-    dataset.write_parquet(
-        dataset_path,
-        metadata={
-            "acsoe_provenance": json.dumps(
-                {
-                    "archive": str(args.archive),
-                    "built_at": started.isoformat(),
-                    "config_digest": _config_digest(config),
-                    "feature_version": FEATURE_VERSION,
-                    "interval_s": interval_s,
-                    "macro_assets": sorted(available),
-                    "pairs": sorted(labelled),
-                    "pairs_below_floor": list(pairs_below_floor(labelled, config=config)),
-                    "rows": int(dataset.height),
-                    "start_ts": args.start,
-                    "end_ts": args.end,
-                },
-                sort_keys=True,
-            )
-        },
-    )
 
     report = train_walkforward(
         dataset,
@@ -1787,11 +2069,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         FIXTURE_DIGEST.parent.mkdir(parents=True, exist_ok=True)
         FIXTURE_DIGEST.write_bytes(report.digest_path.read_bytes())
 
-    excluded = pairs_below_floor(labelled, config=config)
-    if excluded:
+    if build.below_floor:
         sys.stdout.write(
-            "excluded below `dataset.min_labelled_rows`: " + ", ".join(excluded) + "\n"
+            "excluded below `dataset.min_labelled_rows`: "
+            + ", ".join(build.below_floor)
+            + "\n"
         )
+    if build.no_rows:
+        # A pair with labels and no joinable feature row. Reported separately from the
+        # floor, because they are two different facts: one pair is too short to label and
+        # the other's labels and candles do not share a decision-bar grid.
+        sys.stdout.write(
+            "labelled but no featured row: " + ", ".join(build.no_rows) + "\n"
+        )
+    sys.stdout.write(
+        f"{len(build.pairs)} pair(s), {build.rows} row(s) written\n"
+    )
     sys.stdout.write(
         f"{report.run_id}: {len(report.folds)} fold(s), dataset {dataset_path}, "
         f"digest {report.digest_path}, out-of-sample {report.oos_path}\n"
