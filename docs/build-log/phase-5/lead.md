@@ -320,6 +320,22 @@ sentence saying what it measures.
 
 **Cost.** The Phase 2 criterion's proof is narrower than its name; the tracker says so.
 
+### The lead changes model mid-phase; what carries over is the tree
+
+**Agent:** Lead · **Date:** 2026-09-13 17:35
+
+**What happened.** The operator is switching the lead from Fable 5.1 to Opus 5 to reduce
+usage and avoid mid-session cut-offs. The lead's conversation does not carry over; the
+teammates do. Handoff 3 at the top of `PHASE-5-TASKS.md` is written for a lead that has read
+nothing but the documents, in the same shape as the two operator wind-downs before it.
+
+**Why it is recorded.** Every rule this phase produced about interruptions (progress files
+before the work, diagnosis before the fix, the task file as the channel) was made for the
+teammates. This is the first time the lead is the one being replaced, and the same rules
+turn out to be what makes it survivable: the rulings log, the channel entries and the
+per-commit records are the lead's state, and the new lead inherits them by reading rather
+than by being told.
+
 ### The lead committed through a `tail` pipe and lost two failure names
 
 **Agent:** Lead · **Task:** committing specs 62 and 76 · **Date:** 2026-09-13

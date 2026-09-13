@@ -118,6 +118,50 @@ to `A`, `B` or `C`: a send to a stopped session's name resurrects it.** Teammate
 11. **The verify.py Phase 5 helper block on disk (line 7853) is C-2's to keep or delete
     wholesale.** One author of the criteria from here.
 
+## HANDOFF 3, 2026-09-13 17:35 — the LEAD is switching model mid-phase. Read this first.
+
+The operator is switching the lead from Fable 5.1 to Opus 5 to reduce usage. The teammates
+(`A-2`, `B-2`, `C-2`, all Opus) keep running; the lead's context does not carry over, so
+this section is what the new lead knows. The operator's standing rules still apply:
+`AGENTS.md` first, then `context/*` in order, then this file top to bottom.
+
+**Committed state, latest `e4da453`.** Done: 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70,
+71, 72, 76, 78, 79 (17 of 21). Gate at the last lead run: 10 PASS, 0 FAIL, 3 PENDING
+(`di_fitted_on_predictor_training_set` waits on the operator's `di_percentile`;
+`anomaly_and_skeptic_have_both_tests` on 73; `tournament_writes_leaderboard_from_oos` on 74).
+`joblib` is a declared dependency with a stack-table row.
+
+**In flight on disk, uncommitted, at 17:33 — do not commit until each owner reports green:**
+
+- **C-2**: spec 73 engine 15 `skeptic` (`src/acsoe/engines/skeptic/`, `tests/engines/
+  test_skeptic.py`), a `tests/research/test_training_main.py` (the no-double `main()` test
+  ruled at 11:50), and touches to `training.py`, `prediction/engine.py`,
+  `console/format.py` and its tests, `test_phase5_criteria.py`. C-2 was ordered at 16:50 to
+  report 71 and 72's four-gate state, then do the `build_dataset` per-pair fix, then start the
+  full 234-pair run in the background with `--write-fixture` and report its command and PID,
+  then 73, 74, 75. It has not yet reported since the resume; its next report says which of
+  those happened.
+- **B-2**: the engines 13 and 8 rehearsal in `tests/engines/test_feature_chain_rehearsal.py`
+  under the 17:25 request below; engine 15 joins that rehearsal when 73 lands.
+- **A-2**: idle, nothing outstanding; reviews B-2's rehearsal read-only if asked.
+
+**What the lead does at each report.** Run the owner's lane tests, tree-wide ruff and mypy,
+**to files with the exit code checked from `$?`** (never through a pipe), commit the
+owner's files with a message naming the spec and the agent, push, then answer in this
+channel with a dated entry and, where a reply matters quickly, one `SendMessage` to the
+`-2` name followed by `ListAgents` to confirm no bare-letter session was resurrected.
+**Never send to `A`, `B` or `C`.** Teammates send to `main`.
+
+**Still ahead.** 73, 74, 75 (C-2); the full run and its digest as the committed fixture;
+the three operator thresholds from that digest, plus `scout.rank_feature` from 75's study;
+the `build_dataset` fix (tracked item 1 in Handoff 2); the suite-runtime item after 74;
+then 77: the two-tick rehearsals complete, every teammate asked for an explicit stop, the
+six gates `--phase 0` to `--phase 5` run in order to files on a quiet tree, registration of
+5, 6, 12, 13, 8, 15 in `bootstrap.py` in registry order with holes for 9, 14, 16, 18, and the
+report. **Do not close the phase or consolidate the build logs; the operator has withheld
+both.** The open questions for the operator are in the tracker (anomaly threshold, macro
+self-identification, previous-bar DI, the `acsoe research` full-replay-every-time question).
+
 ## RESUMED 3, 2026-09-13 16:50 — same team. Handoff 2 below is still the state of record.
 
 C-2 died on its session limit at 14:08 while running spec 72's gates, after building
