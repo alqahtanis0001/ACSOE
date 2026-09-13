@@ -168,7 +168,29 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     "barriers_below_tick_size": "This pair's price steps are too coarse for a stop",
     "meta_label_veto": "The skeptic vetoed this entry",
     "outlier_market_state": "Market state is an outlier",
-    "dissimilarity_index": "Conditions are unlike anything in training",
+    # Engine 13 `anomaly`, spec 72. Deliberately not variants of each other, and
+    # deliberately not variants of `outlier_market_state` above, which is the seed
+    # generator's spelling for the same fact and stays because it is already on seeded rows.
+    # The engine's own code is `market_anomalous`, and its sentence says **market** because
+    # this gate has no opinion about the trade and could not form one.
+    "market_anomalous": "Trading conditions on this pair look broken",
+    "anomaly_unavailable": "No market-health model is loaded, so conditions were not checked",
+    "anomaly_inputs_incomplete": "Some market-health inputs were missing for this pair",
+    # Engine 8 `prediction`, spec 71. **`di_refused`, and `dissimilarity_index` is gone.**
+    # The code fixed by `engine-contracts.md` and emitted by the engine is `di_refused`;
+    # `dissimilarity_index` was the seed generator's older spelling for the same fact and
+    # mapping both gave two codes one sentence, which `test_no_two_codes_share_a_sentence`
+    # correctly refuses — an operator cannot tell two identical lines apart. Seeded rows are
+    # unaffected because `seed.py` writes prose and `operator_reason` prefers a row's own
+    # text over this table; `clients/store/seed.py` still spells the code the old way and
+    # that is raised with the lead, because it is B's file.
+    "di_refused": "Conditions are unlike anything in training",
+    # Deliberately not a variant of each other. The first is a data problem somebody must
+    # fix — there is no model to predict with at all, which is the state a fresh clone is
+    # in. The second is a model that is fine and inputs that are not, which is usually a
+    # pair whose longest lookback has not filled and needs no action.
+    "prediction_unavailable": "No usable model is loaded, so nothing was predicted",
+    "prediction_inputs_incomplete": "Some inputs the model needs were missing for this pair",
     "insufficient_depth": "Order book is too thin to fill without slippage",
     "no_candidate_cleared": "Nothing cleared the gates on this bar",
     # Engine 4 `data_guard`, requested by A on 2026-09-09. Codes fixed by A so the

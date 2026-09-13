@@ -138,6 +138,106 @@ def test_scout_reuses_engine_elevens_codes_rather_than_minting_parallel_ones() -
 
 
 # --------------------------------------------------------------------------- #
+# Engine 8 `prediction` — spec 71
+# --------------------------------------------------------------------------- #
+
+
+def test_every_reason_code_prediction_declares_has_prose() -> None:
+    """The same net over engine 8's contracts module, for the same reason.
+
+    Engine 8 is the first engine whose refusals are a *model* declining rather than a gate
+    refusing, and one of its three codes says nothing is wrong at all. An operator meeting
+    silence in the reason column would have no way to tell that apart from a fault.
+    """
+    from acsoe.engines.prediction import contracts as prediction_contracts
+
+    assert unmapped(prediction_contracts) == {}
+
+
+def test_the_two_load_failures_and_the_incomplete_inputs_do_not_share_a_sentence() -> None:
+    """Three refusals, three meanings, and only one of them is somebody's to fix.
+
+    `prediction_unavailable` is "there is no model at all", which is where a fresh clone
+    lives and which needs a trained run and a config key. `prediction_inputs_incomplete` is
+    a model that is fine and a pair whose longest lookback has not filled, which usually
+    needs nothing. `di_refused` is the model declining to answer, which is the system
+    working. One sentence across them would send an operator looking for a fault that is
+    not there, or leave a real one unlooked-for.
+    """
+    from acsoe.engines.prediction import contracts as prediction_contracts
+
+    sentences = {
+        REASON_PROSE[prediction_contracts.REASON_UNAVAILABLE],
+        REASON_PROSE[prediction_contracts.REASON_INPUTS_INCOMPLETE],
+        REASON_PROSE[prediction_contracts.REASON_DI_REFUSED],
+    }
+    assert len(sentences) == 3
+
+
+def test_the_seed_generators_older_di_spelling_still_renders_because_it_carries_prose() -> None:
+    """`dissimilarity_index` was retired from the map with spec 71 and nothing regressed.
+
+    `engine-contracts.md` fixes the code as `di_refused` and engine 8 emits that;
+    `clients/store/seed.py` still writes `dissimilarity_index` on its seeded rows. Mapping
+    both gave one sentence to two codes, which the test below refuses for good reason. The
+    seeded rows are unharmed because they carry their own prose and `operator_reason`
+    prefers it — asserted here rather than claimed, because "it renders fine" is exactly the
+    kind of thing that is true until it is not.
+
+    The spelling in `seed.py` is B's file and is raised with the lead.
+    """
+    assert "dissimilarity_index" not in REASON_PROSE
+    assert (
+        operator_reason(
+            "dissimilarity_index", "Conditions unlike anything in training (DI 0.97)"
+        )
+        == "Conditions unlike anything in training (DI 0.97)"
+    )
+    assert operator_reason("dissimilarity_index", "") == NO_REASON_RECORDED
+
+
+def test_the_di_refusal_reads_as_the_model_declining_rather_than_as_a_fault() -> None:
+    """`ui-context.md` rule 3: rejection reasons are written for the operator.
+
+    This one refusal means the system is working exactly as designed, and the sentence has
+    to carry that. Anything reading as an error would have an operator investigating the
+    single case where there is nothing to investigate.
+    """
+    from acsoe.engines.prediction import contracts as prediction_contracts
+
+    sentence = REASON_PROSE[prediction_contracts.REASON_DI_REFUSED].lower()
+    for alarming in ("error", "failed", "could not", "unavailable", "broken"):
+        assert alarming not in sentence, (alarming, sentence)
+
+
+# --------------------------------------------------------------------------- #
+# Engine 13 `anomaly` — spec 72
+# --------------------------------------------------------------------------- #
+
+
+def test_every_reason_code_anomaly_declares_has_prose() -> None:
+    from acsoe.engines.anomaly import contracts as anomaly_contracts
+
+    assert unmapped(anomaly_contracts) == {}
+
+
+def test_the_anomaly_block_says_market_rather_than_trade() -> None:
+    """Invariant 4, in the view layer.
+
+    Engine 13 judges the market and has no opinion about the candidate — it cannot even see
+    one. A sentence implying the *trade* was rejected would tell an operator the system
+    formed a view it did not form, and it is the kind of thing that gets repeated back as
+    fact in a dissertation.
+    """
+    from acsoe.engines.anomaly import contracts as anomaly_contracts
+
+    sentence = REASON_PROSE[anomaly_contracts.REASON_MARKET_ANOMALOUS].lower()
+    assert "condition" in sentence or "market" in sentence, sentence
+    for about_the_trade in ("trade", "entry", "edge", "signal"):
+        assert about_the_trade not in sentence, (about_the_trade, sentence)
+
+
+# --------------------------------------------------------------------------- #
 # The enumeration itself, broken on purpose
 # --------------------------------------------------------------------------- #
 

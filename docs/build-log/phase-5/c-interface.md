@@ -1242,3 +1242,168 @@ also block its calmest 1% during a genuinely broken week, which is the opposite 
 training matrix from rows recomputed by `purged_walk_forward`, scores them itself and takes the
 quantile — then compares that to the recorded threshold. The mutation makes those two numbers
 different, because the test window's score distribution is not the training window's.
+
+### Engine 8's tests were green against a path that never ran
+
+**Agent:** C-2 · **Task:** spec 71 · **Date:** 2026-09-13
+
+**What happened.** With engine 8 written, the first run of `tests/engines/test_prediction.py`
+had eleven tests passing and the rest failing on a fixture. The eleven that passed were the
+three refusal tests and the registry checks. Every test past the Dissimilarity Index — the
+probabilities, the calibration, the expected move, the attributions, the vector order — was
+failing with `prediction_inputs_incomplete`, naming `trades_z_4, trades_z_16, trades_z_48,
+trades_z_96`.
+
+Had I written fewer assertions about *which* refusal fired, that file would have been green.
+Every refusal test asserts a reason code rather than a status, so "the engine blocked" was
+never enough to pass, and the incomplete-input block could not masquerade as the DI refusal.
+That is the only reason this was visible at all.
+
+**Why.** `tests/engines/test_feature.py` builds a trade stream of exactly four ticks per bar
+— open, high, low, close — which rebuilds each bar exactly and is the right fixture for what
+that file tests. It also makes engine 3 publish a trade count of **4 on every bar**, so
+`trades_z_n` is a z-score of a constant: zero over zero, NaN, on every bar and every window.
+Engine 8 correctly refuses a vector with a hole in it, so every candidate blocked.
+
+The fix is a local trade builder that varies the tick count per bar. The extra ticks are
+priced at the close, which leaves the bar identical — the open is still first, the close
+still last, and a price already inside the bar can be neither a new high nor a new low — and
+the volume is split across however many ticks there are.
+
+**Then the second one, which is the interesting one.** With complete vectors, every candidate
+was refused by the DI: measured 1.0240 against a threshold of 1.0233. Not a bug. The fixture
+trains on the constructed 140-day series and was scoring **real SOLUSD archive bars**, and to
+a model that has never seen them those are exactly the market the Dissimilarity Index exists
+to refuse. The mechanism was working and the fixture was wrong about what it was measuring.
+
+So the bars are now the tail of the same series the fixture model was trained on, and the
+refusal is induced deliberately by moving features outside the training range. Both halves
+are needed and neither substitutes for the other: a fixture that scored out-of-distribution
+bars would refuse every candidate and leave every assertion past the DI unreachable, while a
+fixture that only ever scored in-distribution bars would never show the refusal firing.
+
+**The transferable part.** Two fixture faults, both of which produce a *uniformly refusing*
+engine, and a refusing engine is the shape that looks safe. A test file asserting only
+`BLOCK` would have been green through both, and green through an engine that refused
+everything for a third reason nobody had thought of. The assertions that caught it are the
+ones naming the code.
+
+### Spec 71's mutations, and the one the result cannot distinguish
+
+**Agent:** C-2 · **Task:** spec 71 · **Date:** 2026-09-13
+
+Three named mutations, three killed, both mutated files restored byte-identical by sha256.
+
+**"The DI scored after the prediction instead of before it" needed a different kind of
+assertion from the other two.** Predict-then-veto produces the same `BLOCK`, with the same
+reason code, the same DI, the same threshold and the same absent `expected_move_pct`. No
+assertion about the *result* can tell the two implementations apart, because the result is
+identical — which is exactly why the ordering is the kind of thing that drifts. So the test
+watches `lightgbm.Booster.predict` through a monkeypatch and asserts it is **never called**
+on a refused candidate. A number that was computed is a number something downstream can
+reach, and on a market unlike anything in training it is an extrapolation rather than a weak
+prediction.
+
+**"The feature order taken from the state row instead of the manifest"** is killed by scoring
+the same features twice, published in reversed order, and asserting the two predictions are
+identical to the bit. An engine iterating the published row gets every value in range and
+every value in the wrong column, with nothing anywhere to notice.
+
+**"The veto comparison flipped"** was mutated in `modelling/di.py` rather than in the engine,
+because that is where the comparison lives and mutating a copy of it in the engine would have
+proved something about a line that does not exist.
+
+### No single feature can trip engine 13, at any usable threshold
+
+**Agent:** C-2 · **Task:** spec 72 · **Date:** 2026-09-13
+
+**What happened.** Spec 72 asks for a block test and a pass test that differ in **one input**.
+Writing an absurd value into one market-quality column and scoring it did not block. So I
+measured every column: one fitted fold, one ordinary test bar at the median of its own
+out-of-sample scores, and each of the twenty-one inputs in turn moved a thousand scaled units
+outside its training range.
+
+| | score |
+|---|---|
+| threshold at the 0.85 percentile | 0.5491 |
+| the ordinary bar | 0.5125 |
+| best single column (`realised_vol_48`) | 0.5415 |
+| all twenty-one columns extreme at once | 0.6329 |
+
+**Not one of the twenty-one clears the threshold.** Seven of them — including all four
+`bars_in_lookback` counters, `volume_z_4`, `trades_z_4` and `range_atr_48` — move the score by
+**exactly nothing**, because the forest never splits on them in a way that isolates the point:
+they are constant or near-constant across the training window, so there is no range for a
+random split to fall inside.
+
+**What that means, stated plainly because it bears on the operator's threshold.** An isolation
+forest over twenty-one features cannot be tripped by any single broken input at a threshold
+that leaves ordinary bars passing. To block, a bar has to be unusual across many columns at
+once. A threshold low enough to catch a one-column break sits around the 0.75 percentile,
+where the gate would also refuse a quarter of all ordinary bars.
+
+**What I did.** Not lower the threshold, and not spike several columns while calling it one
+input. The block case now changes **one thing about the market** — the bar's volume and trade
+count, ten sigma, injected into the candle stream — and lets the real engines 3 and 5 compute
+what that does to the features. That is one input in the sense a reader means it, it is a
+thing that actually happens, and it propagates into eight columns the way a real spike does.
+It lands at the 0.904 quantile, measured under spec 70, and so it blocks at 0.85.
+
+This is the third measurement of the same underlying property, after spec 70's spike test and
+its saturation check. Together they say the detector is a **multi-column** instrument: it is
+sensitive to a market that has gone strange in several ways at once and nearly blind to one
+channel breaking. Whether that is the right instrument for engine 13's job is a design
+question above this lane, and it is now quantified rather than suspected.
+
+### Correction, same day: the volume spike does not block on the live path either
+
+**Agent:** C-2 · **Task:** spec 72 · **Date:** 2026-09-13
+
+The entry above says the block test spikes a bar rather than a column "and so it blocks at
+0.85". **That was wrong, and I wrote it before running it.** The same mistake as the
+`192.0` figure in the spec 63 entry: a number carried over from a nearby measurement and
+asserted about a different one.
+
+What the live path actually measures, engines 3 and 5 computing the features from a candle
+stream whose last bar carries ten sigma of volume and ten times the trades:
+
+| | score | quantile of the training scores |
+|---|---|---|
+| the ordinary bar | 0.5210 | 0.607 |
+| the same bar, spiked | 0.5263 | 0.664 |
+| threshold at 0.85 | 0.5491 | — |
+
+The spike reaches the features perfectly well — `volume_z_96` goes 1.53 to 6.93 and
+`trades_z_96` goes −1.15 to 9.54, eight columns moved between three and ten sigma. The
+isolation forest moves by 0.005.
+
+The earlier figure of 0.904 was measured on a different base bar, offline, over the full
+140-day frame. The absolute score depends heavily on which bar you start from; the *delta*
+does not, and the delta is what matters. It is 0.008 there and 0.005 here.
+
+**Why the model is built this way, which I had not understood when I wrote the first entry.**
+An isolation forest does not isolate an extreme point in one split. The split value is drawn
+uniformly inside the node's own data range, so a point beyond the training maximum always
+travels to the outer child *together with the largest training points*, and it is isolated
+only when that tail thins to one. Its depth is therefore bounded by the size of the tail
+rather than by how far outside it sits. That is why the score saturates identically at ten
+sigma, a hundred and a thousand, and why the whole training distribution fits in 0.449 to
+0.633.
+
+**What this means for spec 72, plainly.** A threshold that blocks a ten-sigma volume spike
+sits at about the 0.63 quantile, where the gate would also refuse **37% of ordinary bars**.
+There is no percentile at which this detector both blocks a broken market and passes an
+ordinary one. That is not a defect in engine 13, which does exactly what spec 72 asks; it is
+a property of the detector spec 70 specifies, now measured three ways.
+
+**What I did with the test rather than around it.** The pass path runs at a plausible 0.85.
+The block path uses a second artefact whose recorded threshold is set, by the fixture, to the
+midpoint of the two scores it just measured — so what is under test is **engine 13's
+comparison**, which is engine 13's responsibility, rather than the detector's separation,
+which is not. The fixture computes that midpoint rather than hardcoding it, so the test says
+what it depends on instead of carrying a number that rots.
+
+I also deleted a test I had written asserting that no single feature column can trip the
+gate. It was true of the bar I measured and false of the next one — `realised_vol_48` trips
+it from a live base row — and a characterisation test that depends on which bar you started
+from is a test that will go red for no reason somebody can act on.

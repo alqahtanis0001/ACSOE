@@ -321,6 +321,36 @@ def test_a_constant_feature_scales_to_a_half_rather_than_dividing_by_zero() -> N
     assert scaler.transform([[5.0], [9.0]]) == [[0.5], [0.5]]
 
 
+def test_a_narrowed_scaler_scales_its_columns_exactly_as_the_wide_one_did() -> None:
+    """The property engine 13 and the anomaly trainer both depend on.
+
+    Engine 13 reads only `MARKET_QUALITY_FEATURES` and has no macro columns to build a full
+    vector from, so it narrows the scaler; the trainer fits on the same narrowed one. If
+    narrowing changed a single bound by a bit, the offline threshold and the live score
+    would be measured in different units — and the refusal rate would move for a reason
+    nobody could name, with no error anywhere.
+    """
+    scaler = a_scaler()
+    wide = scaler.transform([[0.4, 17.0, 0.25]])[0]
+    narrow = scaler.subset(("gamma", "alpha")).transform([[0.25, 0.4]])[0]
+    assert narrow == [wide[2], wide[0]]
+
+
+def test_a_narrowed_scaler_keeps_the_order_it_was_asked_for() -> None:
+    """Not the order the wide scaler happened to be fitted in. The caller's order is the
+    order its own vector is built in, and a narrowing that silently re-sorted would put
+    every value in the wrong column with every value still in range."""
+    narrowed = a_scaler().subset(("gamma", "alpha"))
+    assert narrowed.feature_names == ("gamma", "alpha")
+
+
+def test_narrowing_to_a_name_the_scaler_never_saw_is_refused() -> None:
+    """Dropped silently, a live vector would be one feature short of the fit and every
+    value after the gap would be read as the wrong feature."""
+    with pytest.raises(artefacts.ArtefactError, match="delta"):
+        a_scaler().subset(("alpha", "delta"))
+
+
 def test_a_scaler_cannot_be_fitted_on_nothing() -> None:
     with pytest.raises(artefacts.ArtefactError, match="zero rows"):
         artefacts.Scaler.fit([], NAMES)

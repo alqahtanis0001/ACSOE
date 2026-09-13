@@ -1223,17 +1223,22 @@ def _anomaly_matrix(
     names: Sequence[str],
     inputs: Sequence[str],
 ) -> np.ndarray[Any, Any]:
-    """The market-quality columns of the **predictor's own** scaled matrix.
+    """The market-quality columns, scaled by the **predictor's own** scaler.
 
     Scaled by the predictor's scaler rather than by one fitted here, which spec 70 asks for
     and which matters for a reason worth stating: a second scaler fitted on the same rows
     would agree today and drift the moment either fit changed its row selection, and the
     drift would show up as a refusal rate that moved for no reason anybody could name.
     One scaler, one set of bounds, both models reading the same space.
+
+    Narrowed with `Scaler.subset` rather than scaled wide and sliced, because engine 13
+    reads only these columns live and has no macro vector to build a wide row from. One
+    narrowing and one `transform` on both sides of the live/replay boundary.
     """
-    scaled = np.asarray(scaler.transform(_matrix(frame, names)), dtype=np.float64)
-    position = {name: index for index, name in enumerate(names)}
-    return scaled[:, [position[name] for name in inputs]]
+    del names
+    return np.asarray(
+        scaler.subset(inputs).transform(_matrix(frame, inputs)), dtype=np.float64
+    )
 
 
 def _fit_anomaly(

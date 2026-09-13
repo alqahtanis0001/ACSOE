@@ -118,6 +118,14 @@ to `A`, `B` or `C`: a send to a stopped session's name resurrects it.** Teammate
 11. **The verify.py Phase 5 helper block on disk (line 7853) is C-2's to keep or delete
     wholesale.** One author of the criteria from here.
 
+## RESUMED 3, 2026-09-13 16:50 — same team. Handoff 2 below is still the state of record.
+
+C-2 died on its session limit at 14:08 while running spec 72's gates, after building
+engines 8 and 13 on disk (uncommitted); nothing moved since. Order now: C-2 reports 71 and
+72, then the `build_dataset` fix and the full run in the background, then 73, 74, 75. A-2
+takes the `joblib` item. B-2 rehearses engines 13, 8 and 15 after 73 lands; the request will
+appear in the channel. Lead commits at each boundary.
+
 ## HANDOFF 2, session closed by the operator 2026-09-13 ~14:00. Read this before the one below.
 
 **State.** Done and committed: 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, **70**, 76, 78,

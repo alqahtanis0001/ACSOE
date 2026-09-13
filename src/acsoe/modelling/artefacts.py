@@ -191,6 +191,36 @@ class Scaler(BaseModel):
             maximum=tuple(float(value) for value in highs),
         )
 
+    def subset(self, names: Sequence[str]) -> Scaler:
+        """This scaler narrowed to `names`, in the order given.
+
+        Engine 13 reads only `MARKET_QUALITY_FEATURES` and has no macro columns to build a
+        full vector from, so it needs the bounds for its own columns and nothing else. The
+        alternative — scaling a full vector and slicing the result — would make engine 13
+        depend on inputs it does not use and cannot always get, and it is what the trainer
+        did until this method existed. Both now go through **one** narrowing and one
+        `transform`, so the offline fit and the live score cannot drift in the way a second
+        copy of the arithmetic drifts.
+
+        Refuses a name this scaler was not fitted on, naming it. A silently dropped column
+        would be a live vector one feature short of the fit with every remaining value in
+        the wrong position.
+        """
+        position = {name: index for index, name in enumerate(self.feature_names)}
+        missing = [name for name in names if name not in position]
+        if missing:
+            raise ArtefactError(
+                "the scaler was not fitted on " + ", ".join(missing) + ". Its columns are "
+                "the model's feature list; a caller asking for a name outside it is asking "
+                "for bounds nobody measured."
+            )
+        picked = [position[name] for name in names]
+        return Scaler(
+            feature_names=tuple(str(name) for name in names),
+            minimum=tuple(self.minimum[index] for index in picked),
+            maximum=tuple(self.maximum[index] for index in picked),
+        )
+
     def transform(self, rows: Iterable[Sequence[float]] | Any) -> Any:
         """Scale to ``[0, 1]`` per feature, NaN preserved as NaN.
 

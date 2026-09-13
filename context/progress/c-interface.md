@@ -65,8 +65,11 @@ nothing below is carried over from it.
   `modelling/artefacts.py`. Four mutations, four killed — one only after a second attempt.
   **Carries a finding the operator has to read before choosing the threshold.** See
   "Spec 70 — what landed" below.
-- **Spec 71 — engine 8 `prediction`. Claimed.** `engines/prediction/`,
-  `tests/engines/test_prediction.py`.
+- **Spec 71 — engine 8 `prediction`. Claimed, and DONE.** `engines/prediction/` (four
+  files), `tests/engines/test_prediction.py` (20 tests), plus `console/format.py` and two
+  console tests for the reason codes. Three named mutations, three killed. **One code
+  retired from `REASON_PROSE` and one spelling in B's `seed.py` raised with the lead.** See
+  "Spec 71 — what landed" below.
 - **Spec 72 — engine 13 `anomaly`. Claimed.** `engines/anomaly/`,
   `tests/engines/test_anomaly.py`, `console/format.py`.
 - **Spec 73 — engine 15 `skeptic`. Claimed.** `engines/skeptic/`,
@@ -81,6 +84,47 @@ research runner), spec 62 (B — `StoreClient(models_dir=...)`, `model_run_dir`,
 `new_model_run_dir`), spec 76 (B — `rank_universe`), specs 59 and 77 (the lead).
 `research/walkforward.py` is read, never changed: if a Phase 5 change makes
 `walkforward_trains_on_the_past_only` red, the change is wrong.
+
+### Spec 71 — what landed
+
+`engines/prediction/` with `engine.py`, `contracts.py`, `README.md` and `__init__.py`. Loads
+the active artefact through `store.model_run_dir(run_id)` — never `models/` by path — scores
+the Dissimilarity Index **first**, and only then predicts, calibrates and publishes. Three
+probabilities as floats, the expected move as an exact decimal string formatted once through
+`repr` the way the labeller crosses the same boundary, the DI and its threshold, and SHAP
+attributions. `is_gate` is `False` and it blocks under contract rule 6.
+
+The artefact is held on the engine keyed by the run id it was loaded for, so a changed run id
+reloads; the `TreeExplainer` is dropped with it, because serving the previous run's explainer
+beside a new booster would attribute the decision to the wrong splits with nothing going
+wrong. Nothing loads at import.
+
+**Three reason codes, each with its own test asserting the code and not only the status.**
+`prediction_unavailable` covers six load failures because they are one fact to an operator;
+`prediction_inputs_incomplete` is separate because it is a different fault with a different
+owner; `di_refused` is the one refusal that says nothing is broken.
+
+**Two fixture faults, both of which made a green file test nothing.** First, engine 3's
+four-trades-per-bar stream makes the published trade count constant, so `trades_z_n` is a
+z-score of a constant and every candidate blocked on an incomplete vector. Second, with that
+fixed, every candidate was refused by the DI at 1.0240 against a threshold of 1.0233 — the
+fixture trains on the constructed series and was scoring real SOLUSD archive bars, which to
+that model are exactly what the DI exists to refuse. The mechanism was right and the fixture
+was wrong about what it measured. Both faults produce a *uniformly refusing* engine, which is
+the shape that looks safe; a file asserting only `BLOCK` would have been green through both.
+
+**Three mutations, three killed.** The one worth noting is the DI ordering: predict-then-veto
+produces the same status, the same code, the same DI and the same absent `expected_move_pct`,
+so no assertion about the result can tell the two apart. The test watches
+`lightgbm.Booster.predict` and asserts it is never called on a refused candidate.
+
+**One console change that needs the lead.** `engine-contracts.md` fixes the code as
+`di_refused` and the engine emits it; `clients/store/seed.py` writes `dissimilarity_index` for
+the same fact. Mapping both gave one sentence to two codes, which
+`test_no_two_codes_share_a_sentence` correctly refuses. I retired `dissimilarity_index` from
+`REASON_PROSE` and proved by test that seeded rows are unaffected, because they carry their
+own prose and `operator_reason` prefers it. **`seed.py` is B's file and the spelling there
+should follow the contract.**
 
 ### Spec 70 — what landed
 

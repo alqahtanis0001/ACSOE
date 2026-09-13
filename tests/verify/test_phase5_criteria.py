@@ -69,7 +69,10 @@ BUILT = (
 
 #: Still waiting on a spec, each with the module or engine its PENDING line must name.
 AWAITED = {
-    "anomaly_and_skeptic_have_both_tests": "test_anomaly.py",
+    # `test_anomaly.py` landed with spec 72, so the PENDING now names only the half still
+    # outstanding. That is the criterion doing its job: the message is a task list, and a
+    # task list that still names finished work sends its reader to look for it.
+    "anomaly_and_skeptic_have_both_tests": "test_skeptic.py",
     "tournament_writes_leaderboard_from_oos": "`tournament`",
 }
 

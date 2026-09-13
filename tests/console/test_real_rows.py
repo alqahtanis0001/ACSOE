@@ -194,7 +194,11 @@ def test_every_reason_code_engine_19_can_write_is_in_the_map() -> None:
     import importlib
 
     codes: set[str] = set()
-    for name in ("scout", "cost", "risk", "safety"):
+    # `prediction` joined the list with spec 71. Engine 8 is not a registry gate and it
+    # blocks under contract rule 6 all the same, so engine 19 copies its codes exactly as
+    # it copies a gate's — and a code left out of this tuple is one the enumeration cannot
+    # see, which is the same silence the enumeration exists to prevent.
+    for name in ("scout", "cost", "risk", "safety", "prediction", "anomaly"):
         module = importlib.import_module(f"acsoe.engines.{name}.contracts")
         for attr, value in vars(module).items():
             if attr.startswith("REASON_") and isinstance(value, str):
