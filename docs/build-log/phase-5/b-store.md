@@ -330,6 +330,44 @@ is configured.
 it survives every test written before today — which is the honest measure of how invisible this
 was. Three ways of being unable to rank now block and none falls back.
 
+### The rehearsal's central assertion could not tell a quiet tick from a crashed one
+
+**Agent:** B · **Task:** engine 5 rehearsal · **Date:** 2026-09-13
+
+**What happened.** `test_the_bar_tick_publishes_features_and_the_next_tick_does_not` is the
+test the whole rehearsal is built around: a bar closes on tick 1 and not on tick 2, and engine
+5 must publish a feature row on the first and nothing on the second. Its assertion for the
+second half was `quiet_tick["feature"] == {}`.
+
+R1 — the mutation that makes engine 5 **ignore `bar_closed` entirely** — did not kill it. R1
+was killed only by `test_engine_5_returns_pass_and_not_ok_on_a_non_bar_tick`, which is a test
+written for a different claim.
+
+**Why.** With the `bar_closed` guard removed, engine 5 runs on the quiet tick and falls over on
+the way — `closed_bar_ts` is `None` when no bar closed — and contract rule 7 makes the
+orchestrator convert the exception into `ERROR` with `data={}`. So `state["feature"]` is `{}`
+either way. **A tick where nothing was due and a tick where the engine crashed produce the
+identical payload**, and the assertion was reading the first fact out of a value that carries
+neither. The two are not remotely the same: the second sets `trading_blocked_by`, halts the
+opportunity chain and writes an `ERROR` row that engine 17 `safety` counts toward its error
+rate, which is a circuit-breaker input.
+
+This is the coverage-versus-mutation lesson in miniature. The line executed on every run; the
+assertion was true on every run; and it was true for a reason that had nothing to do with what
+it claimed to check. Had I only run the mutation and read the verdict, R1 says KILLED and the
+sweep looks clean — **the finding is entirely in *which* test killed it**, which is the
+question Phase 4 said to ask of every kill and the reason the harness prints the failing set
+rather than a count.
+
+**Fix.** The test now also asserts `"trading_blocked_by" not in quiet_tick`, so a quiet tick is
+distinguished from a crashed one by the thing that actually differs. R1 re-run afterwards: it
+is now killed by the test written for it as well as by the status test.
+
+**Consequence.** Worth generalising, because the shape will recur wherever a `PASS` engine is
+tested through the orchestrator: `state[engine] == {}` is the payload of *both* the engine that
+had nothing to do and the engine that raised. Assert the absence of a blocker beside it, or
+assert the status directly.
+
 ### The no-double seam test went from skipped to passing the moment engine 5 landed
 
 **Agent:** B · **Task:** spec 76 · **Date:** 2026-09-13
