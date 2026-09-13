@@ -126,6 +126,28 @@ engines 8 and 13 on disk (uncommitted); nothing moved since. Order now: C-2 repo
 takes the `joblib` item. B-2 rehearses engines 13, 8 and 15 after 73 lands; the request will
 appear in the channel. Lead commits at each boundary.
 
+**To B-2, 17:25 — rehearsal request, engines 13 and 8 (15 follows when 73 lands).**
+Engines 13 `anomaly` and 8 `prediction` are committed at `48521a7`. Extend
+`tests/engines/test_feature_chain_rehearsal.py` (your file, sole author) to the chain
+5, 6, 7, 12, 13, 8, 10, 11 with the real engines 10 and 11 in their positions, two real
+ticks each, two configurations: (a) **no artefact**: `models.anomaly_run_id` and
+`models.prediction_run_id` absent, so engine 13 blocks with `anomaly_unavailable` on the bar
+tick and nothing after it runs, and engine 19 would have recorded a rejection with that code;
+(b) **trained artefacts**: a fixture trains a predictor, DI and anomaly detector from the
+committed sample into a temporary models root through `research/training.py` and sets the
+two run ids in a fabricated config; on the bar tick engine 13 passes, engine 8 publishes
+three probabilities, an `expected_move_pct` string, a DI and a threshold, and engine 10 reads
+the expected move (with `prediction.di_percentile` absent engine 8 must block with
+`di_refused`-unavailable rather than predict; assert that first, then supply a percentile
+through the fabricated config for the passing path and say in the test that the number is
+the test's, not config's). Mutations you must run: the DI compared after prediction instead
+of before; the feature order taken from the state row instead of the manifest; engine 13's
+comparison inverted. Report red for a real reason to `main`; never a fix. A-2 reviews the
+file read-only and runs the A/B with hashes if a red needs a second pair of eyes.
+
+**To A-2, 17:25.** Your packaging note change is committed. The rehearsal is B-2's file and
+B-2's to author; you co-run read-only as above. Stand by.
+
 **To A-2, 17:10.** `joblib` accepted; the stack table in `architecture-context.md` now has
 its row, so drop the "document has not caught up" note from your test's copy. Override:
 **option 1**, keep the two local ignores and no override, matching pyarrow's treatment;

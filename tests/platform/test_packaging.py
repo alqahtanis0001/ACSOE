@@ -54,15 +54,16 @@ STACK_TABLE = {
     "pytest-asyncio",
     "hypothesis",
     "pyyaml",
-    # Declared directly on the lead's ruling of 2026-09-13 for spec 70. **It is not yet
-    # a row in `context/architecture-context.md`'s stack table**, and the lead has been
-    # asked to add one; that file is the lead's and this set is a copy of it.
+    # Declared directly on the lead's ruling of 2026-09-13 for spec 70, and a row in
+    # `context/architecture-context.md`'s stack table since `be497ce`. Engine 13 loads
+    # the anomaly detector with it on the live loop path, so the daemon imports by name
+    # a library that today arrives only because scikit-learn asks for it.
     #
-    # Listing it here first is the same order `pyyaml` went in — C escalated that the
-    # table named no YAML parser, the lead added the row — and it is recorded rather
-    # than quiet because the assertion below exists to make a dependency outside the
-    # document an escalation. A name in this set and not in the document is that
-    # escalation *in progress*, not a decision made by a test.
+    # It was in this set for about an hour before the document had the row, with a
+    # comment saying so, because the assertion below exists to make a dependency
+    # outside the document an escalation and a silent addition here would have been a
+    # test quietly granting one. Both halves are in now, which is why that note is gone
+    # rather than left to read as though it were still true.
     "joblib",
     # Tooling required by context/code-standards.md's four verification commands.
     "mypy",
