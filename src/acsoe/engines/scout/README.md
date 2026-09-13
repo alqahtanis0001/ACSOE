@@ -192,10 +192,21 @@ The rules, in full, because each of them is a decision and not an implementation
   NaN is included because `modelling/features.py` yields it for an unfilled lookback and it
   compares false against everything including itself, so a NaN left in a sort key orders
   unpredictably rather than loudly.
-- **A configured feature with no engine 5 output blocks**, with `scout_inputs_unavailable`.
+- **Three ways of being unable to rank, and all three block** with
+  `scout_inputs_unavailable`: `state["feature"]` absent, its `pairs` map absent, and
+  `scout.rank_feature` naming a feature that is not in engine 5's published `feature_names`.
   Falling back to alphabetical would report a ranking that did not happen, and would be right
-  on exactly the ticks where alphabetical agreed — see the history below for why that shape
-  is the one thing this engine may not do.
+  on exactly the ticks where alphabetical agreed — see the history below for why that shape is
+  the one thing this engine may not do.
+
+  **The third is the one that hides, and it was missed on the first pass.** A misspelt feature
+  name finds no value for any pair, the no-value rule then orders every pair alphabetically
+  among themselves, and the engine publishes the misspelt name beside a ranking it never
+  performed: no exception, no null, and a candidate that is a real pair from the real universe.
+  The per-pair question — does *this pair* have a value — and the whole-universe question —
+  does this *feature* exist — are different, and answering both by returning "no value" is what
+  made it silent. The empty feature name is the same defect at length zero and was refused from
+  the start; a typo of length fourteen behaved differently for no reason anyone would defend.
 - **The engine publishes what it used**: `rank_feature` and `rank_descending` in
   `state["scout"]`. `rank_feature` is **null rather than omitted** when nothing is
   configured, because null is the answer — the ordering was alphabetical for want of a key —

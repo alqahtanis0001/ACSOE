@@ -55,6 +55,7 @@ from acsoe.engines.scout.contracts import (
     EXCHANGE_KEY,
     EXCHANGE_PAIR_RULES_KEY,
     FEATURE_KEY,
+    FEATURE_NAMES_KEY,
     FEATURE_PAIRS_KEY,
     MARKET_SENSOR_KEY,
     MARKET_SENSOR_QUOTES_KEY,
@@ -509,6 +510,30 @@ class ScoutEngine(BaseEngine):
             raise MissingInputError(
                 f"{FEATURE_KEY}.{FEATURE_PAIRS_KEY} is absent while "
                 f"{RANK_FEATURE_KEY} names {feature!r}"
+            )
+
+        # **A feature nobody computes is a third way of being unable to rank**, and it is
+        # the one that hides. A misspelt name finds no value for any pair, the no-value
+        # rule then orders every pair alphabetically among themselves, and the engine
+        # publishes the misspelt name beside a ranking it never performed — no exception,
+        # no null, and a candidate that is a real pair from the real universe. The
+        # per-pair question and the whole-universe question are different, and answering
+        # both with `_feature_value` returning `None` is what made this silent.
+        #
+        # `feature_names` is engine 5's republication of `modelling.features.FEATURE_NAMES`
+        # and is a required field of its payload, so it is present whenever engine 5 ran at
+        # all. Absent or the wrong shape blocks here for the same reason a missing `pairs`
+        # does: the payload cannot answer the question this gate has to ask of it.
+        names = published.get(FEATURE_NAMES_KEY)
+        if not isinstance(names, (list, tuple)):
+            raise MissingInputError(
+                f"{FEATURE_KEY}.{FEATURE_NAMES_KEY} is absent while "
+                f"{RANK_FEATURE_KEY} names {feature!r}"
+            )
+        if feature not in {str(name) for name in names}:
+            raise MissingInputError(
+                f"{RANK_FEATURE_KEY} names {feature!r}, which is not one of the "
+                f"{len(names)} features engine 5 publishes"
             )
         return pairs
 

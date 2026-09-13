@@ -1459,7 +1459,8 @@ def test_the_engine_ranks_by_the_configured_feature(scout: ScoutEngine, account:
     """
     features = {
         "feature": {
-            "pairs": {"BTC/USD": {RANKED_FEATURE: 0.1}, "ETH/USD": {RANKED_FEATURE: 0.9}}
+            "feature_names": [RANKED_FEATURE],
+            "pairs": {"BTC/USD": {RANKED_FEATURE: 0.1}, "ETH/USD": {RANKED_FEATURE: 0.9}},
         }
     }
 
@@ -1492,11 +1493,12 @@ def test_the_candidate_moves_when_only_the_config_key_changes(
     """
     features = {
         "feature": {
+            "feature_names": ["a", "b"],
             "pairs": {
                 "BTC/USD": {"a": 0.1, "b": 0.9},
                 "ETH/USD": {"a": 0.9, "b": 0.5},
                 "SOL/USD": {"a": 0.5, "b": 0.1},
-            }
+            },
         }
     }
 
@@ -1548,6 +1550,93 @@ def test_a_feature_payload_without_pairs_blocks_rather_than_ranking_nothing(
     assert result.status is EngineStatus.BLOCK
     assert result.reason is not None
     assert "feature.pairs is absent" in result.reason
+
+
+def test_a_feature_name_engine_5_does_not_publish_blocks(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """**The third way of being unable to rank, and the one that hides.**
+
+    A misspelt `scout.rank_feature` finds no value for any pair, the no-value rule then
+    orders every pair alphabetically among themselves, and the engine publishes the
+    misspelt name beside a ranking it never performed. No exception, no null, and a
+    candidate that is a real pair out of the real universe — so there is no signal
+    anywhere that the ranking did not happen.
+
+    The per-pair question ("does this pair have a value?") and the whole-universe question
+    ("does this feature exist?") are different, and answering both with `_feature_value`
+    returning `None` is what made this silent. Found by C reviewing the seam for spec 60's
+    criterion, not by any of the thirteen mutations, which all mutate behaviour I had
+    already thought of.
+    """
+    features = {
+        "feature": {
+            "feature_names": [RANKED_FEATURE, "bar_body_pct"],
+            "pairs": {
+                "BTC/USD": {RANKED_FEATURE: 0.1},
+                "ETH/USD": {RANKED_FEATURE: 0.9},
+            },
+        }
+    }
+    typo = RANKED_FEATURE.replace("volatility", "volatilty")
+    context = with_scout_config(account, rank_feature=typo)
+
+    result = scout.process(context, build_state(context) | features)
+
+    assert result.status is EngineStatus.BLOCK
+    assert result.blocks_trading is True
+    assert result.data["reason_code"] == REASON_INPUTS_UNAVAILABLE
+    assert result.reason is not None
+    assert typo in result.reason
+    assert "not one of the 2 features" in result.reason
+
+    # And the near-miss is the whole point: the correctly spelled name still ranks, so
+    # this is not an engine that blocks on every configured feature.
+    spelled = with_scout_config(account, rank_feature=RANKED_FEATURE)
+    ranked = scout.process(spelled, build_state(spelled) | features)
+    assert ranked.status is EngineStatus.OK
+    assert ranked.data[CANDIDATE_FIELD] == "ETH/USD"
+
+
+def test_a_feature_payload_without_feature_names_blocks(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """`feature_names` is a required field of engine 5's payload, so its absence means the
+    payload cannot answer the question this gate has to ask of it. Same refusal as a
+    missing `pairs`, and for the same reason: reading it as "no names published" would put
+    the silent fallback back exactly where it was."""
+    context = with_scout_config(account, rank_feature=RANKED_FEATURE)
+    payload = {"feature": {"pairs": {"BTC/USD": {RANKED_FEATURE: 0.1}}}}
+
+    result = scout.process(context, build_state(context) | payload)
+
+    assert result.status is EngineStatus.BLOCK
+    assert result.reason is not None
+    assert "feature.feature_names is absent" in result.reason
+
+
+def test_every_name_engine_5_publishes_is_rankable(scout: ScoutEngine, account: Any) -> None:
+    """The membership check must not refuse a name that is genuinely published.
+
+    Against C's real engine 5 and its real `FEATURE_NAMES`, every published name is
+    accepted and produces a candidate. Without this, the refusal above could be satisfied
+    by an engine that refused everything, which is the fail-closed engine's likeliest bug
+    and the one a block test alone cannot see.
+    """
+    from tests.conftest import require_module
+
+    module = require_module(
+        "acsoe.engines.feature.engine", reason="engine 5 `feature` (C, spec 64) does not exist yet"
+    )
+    state = build_state(account)
+    state["feature"] = module.FeatureEngine().process(account, state).data
+    names = list(state["feature"].get("feature_names") or [])
+    assert len(names) > 1, "engine 5 published too few names for this to prove anything"
+
+    for name in names:
+        context = with_scout_config(account, rank_feature=str(name))
+        result = scout.process(context, build_state(context) | {"feature": state["feature"]})
+        assert result.status is not EngineStatus.BLOCK, f"{name} was refused but is published"
 
 
 def test_engine_5_absent_is_not_a_fault_while_no_feature_is_configured(

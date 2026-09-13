@@ -61,6 +61,7 @@ __all__ = [
     "EXCHANGE_PAIR_RULES_KEY",
     "EXCLUSION_REASONS",
     "FEATURE_KEY",
+    "FEATURE_NAMES_KEY",
     "FEATURE_PAIRS_KEY",
     "MARKET_SENSOR_KEY",
     "MARKET_SENSOR_QUOTES_KEY",
@@ -161,6 +162,17 @@ MARKET_SENSOR_QUOTES_KEY: Final = "quotes"
 #: chain and returns `PASS` on every other tick, stopping the chain before this engine.
 FEATURE_KEY: Final = "feature"
 FEATURE_PAIRS_KEY: Final = "pairs"
+
+#: `modelling.features.FEATURE_NAMES` in order, as engine 5 republishes it. A required
+#: field of C's `FeatureState`, so it is present whenever engine 5 published at all.
+#:
+#: **Read to refuse a configured feature nobody computes.** Without it a misspelt
+#: `scout.rank_feature` finds no value for any pair, the no-value rule orders them all
+#: alphabetically among themselves, and the engine publishes the misspelt name beside a
+#: ranking it never performed. The per-pair question ("does this pair have a value?") and
+#: the whole-universe question ("does this feature exist?") are different, and one answer
+#: cannot serve both.
+FEATURE_NAMES_KEY: Final = "feature_names"
 
 #: What this engine publishes about the ranking it performed, inside `state["scout"]`.
 #: **Null is the answer rather than the absence of one** — it says the ordering was

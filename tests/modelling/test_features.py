@@ -148,6 +148,113 @@ def test_market_quality_features_are_a_subset_of_the_feature_list() -> None:
     assert features.MARKET_QUALITY_FEATURES, "an empty subset would fit on nothing"
 
 
+def test_the_regime_rank_is_a_position_inside_its_own_window() -> None:
+    """Engine 12's high-volatility rule is percentile-relative, and this is the
+    percentile. `vol_regime_rank` is where the current short-window volatility sits
+    inside the long window's own distribution: 0 means calmer than anything in it, 1 the
+    most volatile bar in it.
+
+    It lives in this module rather than in engine 12 because a percentile needs a
+    distribution and engine 12 is handed one feature *row*. That is the property that
+    stops an absolute volatility threshold creeping back in — an absolute cutoff would
+    classify a $0.30 pair and a $60,000 one by the same number.
+
+    Asserted on a constructed series where the answer is known by construction: a long
+    calm stretch followed by one violently volatile bar must rank that bar at the top,
+    and the calm bars before it near the bottom.
+    """
+    long_window = features.REGIME_LONG_BARS
+    start = 1_700_000_000
+    stamps = [start + i * INTERVAL_S for i in range(long_window * 2)]
+
+    rows = []
+    price = 100.0
+    for index, ts in enumerate(stamps):
+        # Calm everywhere, then a single violent bar at the very end.
+        step = 0.0002 * ((index % 5) - 2)
+        if index == len(stamps) - 1:
+            step = 0.12
+        price = price * (1.0 + step)
+        rows.append(
+            {
+                "ts": ts,
+                "open": price * 0.9999,
+                "high": price * 1.0004,
+                "low": price * 0.9996,
+                "close": price,
+                "volume": 1000.0 + (index % 11),
+                "trades": 20 + (index % 5),
+            }
+        )
+    computed = compute(pl.DataFrame(rows))
+    ranks = computed["vol_regime_rank"].to_list()
+
+    assert ranks[-1] == pytest.approx(1.0), (
+        "the most volatile bar in the window must sit at the top of its own distribution"
+    )
+    calm = [value for value in ranks[long_window:-1] if value is not None and value == value]
+    assert calm, "the constructed series produced no comparable bars"
+    # Not "every calm bar ranks below 1.0" — a calm bar is legitimately the most volatile
+    # bar of its *own* window whenever the wobble peaks there, and asserting otherwise was
+    # this test's first, wrong form. What must hold is that the ranks are spread across
+    # the range rather than pinned at either end, which is what says the rank is measured
+    # against a distribution at all.
+    assert sum(calm) / len(calm) < 0.75, sum(calm) / len(calm)
+    assert min(calm) < 0.25, min(calm)
+    for value in ranks:
+        if value is not None and value == value:
+            assert 0.0 < value <= 1.0, value
+
+
+def test_a_constant_volatility_window_ranks_in_the_middle_rather_than_by_noise() -> None:
+    """The defect that made a flat market read as `high_volatility` one bar in ten.
+
+    A rank has no tolerance: it asks only which value is larger. `rolling_std_by` over a
+    genuinely constant series does **not** return a constant — it returns values differing
+    at a relative 1e-13, because a sliding variance is computed incrementally — so on a
+    quiet, tightly-ranged market the rank was decided entirely by the last bit. Two runs
+    of essentially the same series landed on 0.99 and on 0.21, and at a
+    `regime.high_vol_percentile` of 0.9 that mislabels roughly a tenth of the quietest
+    bars in the dataset, with nothing going red.
+
+    Rounding to ten significant figures before ranking makes genuine ties tie exactly, and
+    `average` ranking then gives them the middle rank — the honest percentile of a value
+    in a constant distribution, and one that cannot cross any sensible cutoff.
+
+    It would never have been found on real data: real volatility does not repeat to
+    thirteen decimal places, so every archive-derived fixture would have passed for ever.
+    """
+    long_window = features.REGIME_LONG_BARS
+    # Exactly alternating returns: the true standard deviation of every four-bar window
+    # is identical, so every bar sits at the same place in the distribution.
+    steps = [0.002 if index % 2 == 0 else -0.002 for index in range(long_window * 3)]
+    origin = 1_700_000_000
+    rows = []
+    price = 100.0
+    for index, step in enumerate(steps):
+        price = price * (1.0 + step)
+        rows.append(
+            {
+                "ts": origin + index * INTERVAL_S,
+                "open": price * 0.9999,
+                "high": price * 1.0005,
+                "low": price * 0.9995,
+                "close": price,
+                "volume": 1000.0,
+                "trades": 20,
+            }
+        )
+    computed = compute(pl.DataFrame(rows))
+    settled = [
+        value
+        for value in computed["vol_regime_rank"].to_list()[long_window * 2 :]
+        if value is not None and value == value
+    ]
+    assert settled, "the constructed series produced no comparable bars"
+    for value in settled:
+        assert value == pytest.approx(0.5, abs=0.05), value
+
+
 def test_max_lookback_bars_is_the_largest_window_actually_computed() -> None:
     """The number engine 5 and the trainer check against `features.max_lookback_bars`.
 

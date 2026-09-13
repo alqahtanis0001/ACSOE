@@ -138,11 +138,36 @@ _CLOCK_FEATURES: Final[tuple[str, ...]] = (
     "weekday_cos",
 )
 
+#: The two windows the regime measure relates: how volatile *now* is against how
+#: volatile this pair has recently been.
+REGIME_SHORT_BARS: Final[int] = min(LOOKBACK_BARS)
+REGIME_LONG_BARS: Final[int] = max(LOOKBACK_BARS)
+
+#: Features that are not one window's arithmetic but a relation between two, and the
+#: window each is blanked with.
+#:
+#: ``vol_regime_rank`` is where engine 12 `regime`'s high-volatility rule comes from, and
+#: it lives here rather than in the engine for a reason worth stating: the rule is
+#: **percentile-relative to the pair's own trailing window, never an absolute number**,
+#: and a percentile needs a distribution. Engine 12 is handed one feature *row*, so it
+#: could not compute one if it wanted to — which is the property that stops an absolute
+#: threshold creeping back in. An absolute volatility cutoff would classify a $0.30 pair
+#: and a $60,000 one by the same number and would mean something different in 2018 than
+#: in 2024; a rank within the pair's own recent history means the same thing everywhere.
+_DERIVED_BLANKED_WITH: Final[dict[str, int]] = {"vol_regime_rank": REGIME_LONG_BARS}
+
+#: Significant figures the volatilities are rounded to before they are ranked. Ten sits
+#: between the thirteenth decimal place, where a sliding-variance algorithm's noise lives,
+#: and the differences between real bars, which are many orders of magnitude larger. The
+#: reasoning is at :func:`_add_regime_rank`; the number is here so it is one edit.
+_RANK_SIG_FIGS: Final[int] = 10
+
 
 def _build_names() -> tuple[str, ...]:
     names: list[str] = [*_BAR_FEATURES, *_CLOCK_FEATURES]
     for bars in LOOKBACK_BARS:
         names.extend(f"{stem}_{bars}" for stem in _LOOKBACK_STEMS)
+    names.extend(_DERIVED_BLANKED_WITH)
     return tuple(names)
 
 
@@ -183,13 +208,16 @@ def features_for_lookback(bars: int) -> tuple[str, ...]:
     """
     if bars not in LOOKBACK_BARS:
         raise FeatureError(f"{bars} is not one of the lookbacks {LOOKBACK_BARS}")
-    return tuple(f"{stem}_{bars}" for stem in _LOOKBACK_STEMS)
+    derived = tuple(
+        name for name, window in _DERIVED_BLANKED_WITH.items() if window == bars
+    )
+    return (*(f"{stem}_{bars}" for stem in _LOOKBACK_STEMS), *derived)
 
 
 def lookback_of(name: str) -> int | None:
     """The lookback a feature belongs to, or ``None`` for a bar or clock feature."""
     for bars in LOOKBACK_BARS:
-        if name.endswith(f"_{bars}") and name in features_for_lookback(bars):
+        if name in features_for_lookback(bars):
             return bars
     return None
 
@@ -290,6 +318,7 @@ def compute(
 
     for bars in LOOKBACK_BARS:
         frame = _add_lookback(frame, bars=bars, interval_s=interval_s)
+    frame = _add_regime_rank(frame, interval_s=interval_s)
 
     # Blank each window that is too empty to mean anything, and blank only that window.
     for bars in LOOKBACK_BARS:
@@ -366,6 +395,60 @@ def _add_lookback(frame: pl.DataFrame, *, bars: int, interval_s: int) -> pl.Data
         .then((pl.col("close") - lowest) / (highest - lowest))
         .otherwise(float("nan"))
         .alias(f"high_low_position_{bars}"),
+    )
+
+
+def _add_regime_rank(frame: pl.DataFrame, *, interval_s: int) -> pl.DataFrame:
+    """Where this bar's short-window volatility sits inside the long window's own history.
+
+    ``0.0`` means calmer than anything in the window, ``1.0`` the most volatile bar in it.
+    Engine 12 `regime` compares it against ``regime.high_vol_percentile``, so the cutoff
+    the operator sets is a percentile of the pair's own recent distribution rather than a
+    number of percent — which is the whole of spec 66's "never absolute" rule, and it is
+    enforced here by engine 12 having no distribution to compute one from.
+
+    The rank is taken over the **raw** short-window volatilities, before the under-filled
+    windows are blanked, and the rank feature is then blanked with the long window like
+    any other. Ranking after blanking would rank NaNs, which sort last and would make a
+    bar with no history look like the most volatile one on record.
+
+    ``rolling_rank_by`` is marked unstable in polars and is used deliberately: computing
+    an empirical percentile any other way over twenty million rows means a per-row Python
+    callback. If it ever changes, `test_the_regime_rank_is_a_position_inside_its_own_window`
+    is what goes red.
+
+    **The volatilities are rounded to ten significant figures before being ranked**, and
+    that line is load-bearing rather than tidy. A rank has no tolerance: it asks only
+    which value is larger, so on a window whose values are all equal to thirteen decimal
+    places the answer is decided by the last bit. `rolling_std_by` over a genuinely
+    constant series does not return a constant — it returns values differing at a
+    relative 1e-13, because a sliding variance is computed incrementally — so on a quiet,
+    tightly-ranged market the rank became pure noise and a 0.9 cutoff labelled roughly one
+    such bar in ten `high_volatility`, for no reason and with nothing going red. Rounding
+    makes genuine ties tie exactly, and ``average`` ranking then gives them the middle
+    rank, which is the honest percentile of a value in a constant distribution.
+
+    Significant figures rather than an absolute tolerance, because realised volatility
+    spans orders of magnitude across 234 pairs and only a relative measure means the same
+    thing on a $0.30 pair and a $60,000 one. Real differences between bars are many orders
+    of magnitude above the tenth significant figure; the observed noise is at the
+    thirteenth.
+    """
+    span = f"{REGIME_LONG_BARS * interval_s}s"
+    source = f"realised_vol_{REGIME_SHORT_BARS}"
+    counter = f"bars_in_lookback_{REGIME_LONG_BARS}"
+    rank = (
+        pl.col(source)
+        .round_sig_figs(_RANK_SIG_FIGS)
+        .rolling_rank_by("_dt", window_size=span, closed="right")
+    )
+    # `rolling_rank_by` counts from 1, and its window holds at most as many values as
+    # the candle counter reports, so the ratio lands in (0, 1].
+    return frame.with_columns(
+        pl.when(pl.col(counter) > 0)
+        .then(rank / pl.col(counter))
+        .otherwise(float("nan"))
+        .alias("vol_regime_rank")
     )
 
 
