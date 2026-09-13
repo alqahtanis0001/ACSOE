@@ -351,15 +351,20 @@ looked like a typing complaint and was a crash — `json.loads` is `Any`, and a 
 parsing to a list while carrying the trade marker reached `.get` and raised. Two defects in two
 days, both in files the gate could not see.
 
-**`mypy` type-checks at `python_version = "3.12"` from Phase 5; the 3.11 floor is ruff's
-to guard.** Lead ruling 2026-09-13. numpy 2.5's stub uses a PEP 695 `type` statement, which
-mypy at 3.11 reports as a syntax error and then checks nothing, so the first `import numpy`
-under `src/` made the gate return no answer. `requires-python` and `architecture-context.md`
-still say 3.11, and that promise is checked by `ruff` with `target-version = "py311"`, which
-reports *"Cannot use `type` alias statement on Python 3.11"* and still catches the Phase 4
-f-string defect. Pinning numpy below 2.3 was rejected: a downgrade in the shared venv lands on
-every agent mid-work and ties the project to an ageing line for a stub quirk. A test pins the
-ruff target so nobody raises it to match mypy.
+**A skipped import must skip its stub too, or the first `import numpy` turns mypy dark.**
+2026-09-13. numpy 2.5's stub uses a PEP 695 `type` statement, a syntax error at
+`python_version = "3.11"`, and a syntax error in a followed import aborts mypy: for a few
+hours `mypy --strict src/ scripts/` reported one error naming a file in `.venv/` and checked
+**nothing**, which reads as an environment problem rather than as the gate going dark.
+`follow_imports = "skip"` silences a module's source, not its stub; the fix is
+`follow_imports_for_stubs = true` on the same numpy-and-polars override (A-2, spec 61 step 2),
+which changes no policy, keeps `python_version = "3.11"` and restores 106 checked files. Three
+other ways out were on the table and each gave something up: raising mypy to 3.12 (the lead's
+first ruling, withdrawn) stops mypy checking the floor, though ruff at `target-version =
+"py311"` still would; pinning numpy downgrades a shared venv under working agents; never
+importing numpy by name forbids the DI. All four agents treated a three-item list written for
+another purpose as exhaustive, and the fourth option was one line. When a gate returns no
+answer, read its first line, not its last.
 
 **`mypy --strict` is deliberately NOT widened to `tests/`.** Roughly 1,680 test functions would
 each need a return annotation. The hole that leaves is real and is stated rather than implied:

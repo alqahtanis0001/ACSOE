@@ -223,6 +223,76 @@ numpy line for a stub quirk.
 the ruff target so the two cannot be raised together by accident. numpy and polars stay `Any`
 to mypy until someone asks to drop the skip.
 
+### Correction: the mypy ruling is withdrawn; the fourth option was one line
+
+**Agent:** Lead · **Date:** 2026-09-13
+
+**What happened.** The decision entry above chose `python_version = "3.12"` for mypy. It never
+landed: the ruling was addressed to `A-2` and, like every lead send to a `-2` name, was
+delivered to the stopped original instead. A-2, working from the tree, found that
+`follow_imports = "skip"` silences a module's source and not its stub, and that
+`follow_imports_for_stubs = true` on the same override extends the skip to the stub. One
+line, no version change, no pin, no venv change; the lead verified `mypy --strict src/
+scripts/` at *"Success: no issues found in 106 source files"* with numpy 2.5.3 still installed
+and `di.py` still importing it by name.
+
+**Why the first ruling was wrong.** All four agents, the lead included, treated the three-item
+list in A's Phase 2 comment (raise the floor, pin numpy, keep the override) as exhaustive, and
+argued carefully about which of the three cost least. The list was written to explain a
+different decision and nobody asked whether it was complete. The original A said it best:
+measurements that answer a question that did not need asking are more expensive than a sloppy
+check of the right question, because they produce confidence.
+
+**Fix.** The ruling is superseded in `code-standards.md` and in the rulings log; the 3.12
+probe and the ruff-target test are not wanted. The earlier entry stays as written, per
+script-rules rule 6.
+
+### Messages to the `-2` sessions do not arrive; the task file is now the channel
+
+**Agent:** Lead · **Date:** 2026-09-13
+
+**What happened.** Three receipt checks were sent to `A-2`, `B-2` and `C-2`. The original A
+answered the one addressed to `A-2`, and every earlier pattern fits the same rule: the
+original B received rulings addressed to `B-2`, C-2 never saw the two spec 60 rulings, and
+each send to a `-2` name resurrected a stopped original. The `-2` sessions' sends to `main`
+arrive normally.
+
+**Why.** Not established at the transport level and not investigated further; the working
+hypothesis is that both spawns of a lane registered under the same base name and the first
+registration owns the mailbox. What matters is the observable rule.
+
+**Fix.** The lead no longer sends to teammate names at all. `feature-specs/PHASE-5-TASKS.md`
+carries a dated "Messages from the lead to teammates" section that every agent has
+demonstrably re-read, and every answer goes there. The cost is latency: an agent learns the
+answer when it next reads the file, which the section tells it to do before every spec step
+and every send to `main`.
+
+### The lead committed through a `tail` pipe and lost two failure names
+
+**Agent:** Lead · **Task:** committing specs 62 and 76 · **Date:** 2026-09-13
+
+**What happened.** The commit command for B-2's lane ran `pytest ... | tail -1 && ruff ... &&
+git commit`. The pytest line printed `2 failed, 253 passed, 1 skipped` and the chain went on
+to commit anyway, because `&&` tested `tail`'s exit code, not pytest's. The names of the two
+failures were never printed. An immediate re-run of the same two directories, redirected to a
+file and read from it, reported `255 passed, 1 skipped`, exit 0.
+
+**Why.** Two mistakes, both the lead's and both already rules in `code-standards.md`. The
+evidence was destroyed at the pipe: `tail -1` kept the summary line and binned the criterion
+names, which is the Phase 4 finding word for word. And the exit code of a pipeline is the last
+command's, so the guard that was supposed to stop the commit tested the wrong process.
+
+**What is and is not known.** The committed files pass on a quiet re-run and the tree at
+`16c5685` is what B-2 reported green (151 passed in its two files, 8 and 13 mutations
+killed). The two failures are **unattributable**: with three agents saving into the tree and
+a shared `conftest.py`, a mid-save fixture is the likeliest cause and the intermittent native
+fault is the other candidate, and neither can be claimed without the names. Recorded as
+unexplained rather than explained away, per the Phase 3 rule.
+
+**Fix.** Every lead gate run from here is redirected to a file under the scratchpad and read
+from the file, with the exit code checked from `$?` after the redirect and never from a
+pipeline. The commit stands because its content passes; the process that produced it did not.
+
 ### Spec 60 reached for a fixture that was the labeller's output, not its input
 
 **Agent:** Lead, from C's finding · **Task:** spec 60 · **Date:** 2026-09-13

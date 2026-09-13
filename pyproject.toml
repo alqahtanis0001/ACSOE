@@ -39,19 +39,44 @@ dependencies = [
     # one. Approved with a restriction that is part of the approval, not a
     # style note: `yaml.safe_load` only, never `yaml.load`.
     "pyyaml>=6.0",
+    # Models and explanations, moved out of the `research` extra on 2026-09-13
+    # by operator ruling (spec 59 decision 8, spec 61 step 2). They are base
+    # dependencies because engines 8 `prediction`, 13 `anomaly` and 15 `skeptic`
+    # import them **on the live loop path**: the predictor and the skeptic are
+    # LightGBM models, the anomaly detector and the MinMax scaling are
+    # scikit-learn, and engine 8 publishes per-feature attributions from
+    # `shap.TreeExplainer` on every decision it makes.
+    #
+    # The split they are leaving was correct when it was made and is wrong now,
+    # and the reason is worth keeping because it is the whole argument for the
+    # extra still existing. The line the extra draws is **live loop versus
+    # offline**, not "machine learning versus not". Before Phase 5 nothing on the
+    # live path imported any of them, so the packaging could say so; from Phase 5
+    # three engines in the opportunity chain do, and an extra that a daemon
+    # cannot start without is not an extra — it is a base dependency that a fresh
+    # clone finds out about as an ImportError from inside a gate.
+    "lightgbm>=4.5",
+    "scikit-learn>=1.5",
+    "shap>=0.46",
 ]
 
 [project.optional-dependencies]
-# Model, regime, explanation and statistics libraries. Split out of the base
-# install by lead decision: nothing on the live loop path imports them before
-# Phase 5, and architecture invariant 5 says the live loop never imports from
-# research/ — the packaging now says so too. Every name is from the stack
-# table; nothing has been added or dropped.
+# What is left here is genuinely offline, and that is the test for this list.
+#
+# `hmmlearn` is the optional HMM upgrade over the rule-based regime engine, which
+# spec 66 puts explicitly out of scope: engine 12 classifies from percentiles of
+# a pair's own trailing window and imports nothing from here. `statsmodels` is
+# Phase 7's alpha-versus-benchmark attribution, which runs in `research/` and is
+# never reached by a tick.
+#
+# Architecture invariant 5 is what the split expresses: the live loop never
+# imports from `research/`. A name belongs in this extra when no engine in the
+# guard, opportunity or manage chain can reach it — not when it merely feels like
+# a research library. Every name is from the stack table in
+# `context/architecture-context.md`; nothing has been added or dropped, three
+# have moved up into the base install above.
 research = [
-    "scikit-learn>=1.5",
-    "lightgbm>=4.5",
     "hmmlearn>=0.3.2",
-    "shap>=0.46",
     "statsmodels>=0.14",
 ]
 # `dev` includes `research`, so `pip install -e ".[dev]"` still installs
@@ -120,6 +145,26 @@ pretty = false
 # the lead 2026-09-09.
 module = ["numpy", "numpy.*", "polars", "polars.*"]
 follow_imports = "skip"
+# `follow_imports = "skip"` alone stopped being enough on 2026-09-13, and the way
+# it stopped is the reason this line exists rather than a wider change.
+#
+# `skip` silences a module's *source*. It does not silence its **stub**, so the
+# first module in `src/` to write `import numpy.typing as npt` — C's
+# `modelling/di.py`, spec 63 — pulled `numpy/__init__.pyi` back into the run, and
+# the PEP 695 `type` statement inside it is a syntax error under
+# `python_version = "3.11"`. A syntax error in a followed import aborts mypy
+# entirely: for the hours between that module landing and this line,
+# `mypy --strict src/ scripts/` reported **one error and checked nothing**, in the
+# check three agents' definition of done leans on. The abort names a file in
+# `.venv/`, so it reads as an environment problem rather than as the gate going
+# dark.
+#
+# `follow_imports_for_stubs` extends the skip to the stub, which is what the
+# paragraph above already claimed was happening. It changes no policy: numpy and
+# polars were already `Any` here deliberately. It restores the run — 106 source
+# files checked instead of nought — and it keeps the 3.11 floor, which is the
+# thing the other three ways out all give up.
+follow_imports_for_stubs = true
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
