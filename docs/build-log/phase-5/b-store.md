@@ -217,7 +217,87 @@ re-running against the current version, and M8's claim in particular changes sha
 writer creating the root, deleting the existence check can only be killed through the reader.
 Not run yet, because a mutation writes into a file a second live session is holding.
 
-### Decision: three ways of having no feature value are one fact, and NaN is the third
+### The evidence gap above is closed, and the asymmetry's own tests are proven
+
+**Agent:** B · **Task:** spec 62 · **Date:** 2026-09-13
+
+Re-run against the current `_artefact_root(run_id, *, create: bool)`, narrowly against
+`tests/clients/store/test_store.py`, baseline green first, every file restored and its sha256
+verified before the next mutation.
+
+| # | Mutation | Killed by |
+|---|---|---|
+| M2b | `models_dir is None` returns `Path("models")` | `test_model_run_dir_refuses_when_no_artefact_root_was_configured` |
+| M8b | the reader's refusal deleted, so it creates the root too | `test_model_run_dir_refuses_when_the_artefact_root_does_not_exist` **and** `test_a_reader_never_creates_the_artefact_root` |
+| M9b | the writer stops creating the root | `test_new_model_run_dir_creates_a_missing_artefact_root` |
+
+M8b and M9b are the two halves of the ruling, and each is killed by the test written for it —
+so the asymmetry is not merely implemented, it is **pinned from both sides**. That matters more
+here than for most behaviour: two methods that disagree about the same condition is exactly the
+shape someone tidies into one path later, and the tidy direction is towards creating the root,
+because that is what makes the writer work. M8b is the mutation a tidy would be.
+
+### The CRLF in `test_store.py` was not written by anybody this phase, and the real finding is a different one
+
+**Agent:** B · **Task:** spec 62 · **Date:** 2026-09-13
+
+**What happened.** Two separate readers — the other B session and the lead — concluded from
+`git diff`'s `CRLF will be replaced by LF` warning on `tests/clients/store/test_store.py` that
+a write had gone through text mode, and the lead asked for the mechanism to be fixed before the
+next write per `code-standards.md`. **There is no such write.** Measured rather than argued:
+
+- The file already reported CRLF terminators at the start of this session, before any edit of
+  mine. That reading was taken in the same command that checked `.gitattributes`.
+- Its **first twenty lines** — the module docstring and the import block, written in Phase 0
+  and untouched since — are CRLF today. No edit this phase went near them.
+- The committed blob at `HEAD` is LF, exactly as `.gitattributes` guarantees, so the working
+  tree and the index disagree and always did.
+- **136 tracked files** are CRLF in the working tree, including `tests/conftest.py`,
+  `src/acsoe/console/format.py`, `src/acsoe/engines/risk/engine.py` and
+  `tests/engines/test_risk.py` — none of which anyone has written this session.
+- `src/acsoe/clients/store/client.py`, which took the larger of my two edits, is **LF**.
+
+**Why the inference was reasonable and still wrong.** `git diff` emits that warning the first
+time a CRLF working-tree file appears in a diff **at all**, not when its endings change. A file
+that has been quietly CRLF for three phases is silent until somebody edits one line of it, and
+then it announces itself — so the warning correlates perfectly with the edit while being caused
+by neither the edit nor the editor. That is the whole trap: the signal appears at the moment of
+the change and points at the wrong thing, and `code-standards.md` names this exact mechanism as
+"the kind that hides".
+
+**Fix.** None to the mechanism, because the mechanism is sound. What the standard actually
+warns about is `tests/fixtures/`, which is marked `-text` precisely so no clean filter stands
+between the working tree and the blob — there, a text-mode round trip changes committed bytes
+and the criterion that reads them fails weeks later on someone else's machine. So the useful
+form of this check was run: **every committed file under `tests/fixtures/` is byte-identical to
+its blob at `HEAD`**, compared by sha256, with two expected exceptions that are C's spec 63
+deposits — `README.md`, modified deliberately, and `candles_sample.parquet`, newly added and
+therefore having no blob to match. That parquet parses at 1,208 rows and 7 columns and carries
+`PAR1` at both ends, so it has not been through a text filter either.
+
+**Consequence.** The 136 CRLF files are a standing property of this checkout rather than a
+defect anybody introduced, and the fixtures — the only place where it stops being cosmetic —
+are clean. Recorded here so the next reader who meets that warning does not go hunting for a
+bare `write_text` that does not exist, which is the second time this phase that a phantom
+defect has cost somebody a search.
+
+### The no-double seam test went from skipped to passing the moment engine 5 landed
+
+**Agent:** B · **Task:** spec 76 · **Date:** 2026-09-13
+
+Worth one short entry because it is the standard working rather than a problem.
+`test_the_ranking_runs_on_engine_5s_real_output_once_it_exists` drives C's real engine 5
+through the orchestrator and ranks by a name out of its own `feature_names`, with no double
+anywhere in it. It was written while `engines/feature/` did not exist, reaching the module
+through `require_module`, which skips **only** when that module itself is missing and re-raises
+anything else — so a wrong class name or a broken import would have failed loudly rather than
+skipping quietly under a reason that had stopped being true.
+
+C landed engine 5 while I was running my gates. The test went straight from `1 skipped` to
+`60 passed` with no edit, which is the property Phase 4 paid for twice: A's labeller tests were
+green for a phase against a `label_bars(...)` that never existed, because everything drove a
+double. A seam agreed between two agents needs at least one test with no double in it, and that
+test has to be able to start running by itself.
 
 **Agent:** B · **Task:** spec 76 · **Date:** 2026-09-13
 

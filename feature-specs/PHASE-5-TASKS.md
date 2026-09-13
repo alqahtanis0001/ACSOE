@@ -82,6 +82,42 @@ window. Mark 62 and 76 complete in your progress file now; the four-gate bar was
 last run except for A-2's mid-save import, which is A-2's. Nothing more is asked of you until
 C-2's engines exist; the rehearsal request will appear here.
 
+**To B-2, 02:25.** Received: 62 and 76 complete, 24 of 24 killed, the stopped original's six
+agreeing on every overlap. Your CRLF correction is accepted: the `git diff` warning fires the
+first time an already-CRLF working file appears in a diff and says nothing about the edit,
+136 tracked files are CRLF in this tree from before this session, and your sha256 check of
+every committed fixture against its blob is the check that matters; the lead's note to you
+was wrong and is withdrawn. Stand by for the rehearsal request here.
+
+**To A-2, 02:25, relayed from B-2.** Final signature `StoreClient(db_path, *, models_dir=None)`;
+the client creates a missing `models/` in the writer only, so keep creating it at startup and
+keep passing `models_dir` from both `cli/engine.py` and `cli/research.py`.
+
+**To C-2, 02:25, relayed from B-2.** `leaderboard_entries(model_id=, model_version=, fold=)`
+is on the client for engine 20's idempotency check, unlimited, null fold matched with `IS`.
+And the one thing failing `--phase 5` at 02:20 is yours:
+`src/acsoe/engines/feature/engine.py:123 SIM300 Yoda condition`. Also noted with thanks:
+B-2's engine 5 seam test went from skipped to passing the moment your engine landed, with no
+edit, which is the no-double rule paying out.
+
+**To C-2, 02:15.** Spec 63 is accepted and committed. Two things before spec 64. (1) The
+"two C instances" question has been answered here since 01:40 and in rulings 1 and 11: the
+original C is stopped; you own `scripts/verify.py`; **build spec 60 next, before 64**, because
+`--phase 5` registering two criteria over a phase with real code in it is the exact false
+green spec 60 exists to stop, and every later spec's four-gate claim needs its criterion to
+exist. Keep or delete the helper block on disk wholesale. (2) LightGBM hyperparameters are
+**config keys, not module constants**: a run must be reproducible from its config plus its
+data, and a tree count in a constant is a number the manifest cannot prove. A-2 adds a
+`training` section (`num_trees`, `learning_rate`, `num_leaves`, `min_data_in_leaf`, all
+plumbing the lead chooses) and the lead pastes the YAML; read them through `load_config` and
+write them into the manifest. Until the section lands, read them from config with a clear
+`MissingSettingError` rather than a default, the way `walkforward.read_settings` does.
+
+**To A-2, 02:15.** One more config section for spec 61, small: `training` with
+`num_trees: int > 0`, `learning_rate: Ratio in (0, 1)`, `num_leaves: int > 1`,
+`min_data_in_leaf: int > 0`, `extra="forbid"`, required once the YAML lands. Field first,
+message `main`, the lead pastes. Then steps 3 and 4 as planned.
+
 **To C-2, 02:05.** The `RUF100` at verify.py:8025 was removed by the stopped original C
 (resurrected by a misdelivered message, then stopped again); the directive is gone and the
 reasoning kept as a plain comment, ruff is clean. Do not redo it; do still narrow the
