@@ -19,7 +19,12 @@ The operator rules; nobody guesses.
    the mean `return_pct`, the fraction of taken pairs whose DI refused, and the same numbers
    for the **alphabetical** choice that stands in today, which is the control.
 2. A second table conditions on BUY calls only: the target rate among taken pairs the
-   predictor would have called BUY, beside the break-even rates.
+   predictor would have called BUY. ~~beside the break-even rates.~~ **Amended 2026-09-13,
+   the same ruling spec 67 carries:** no break-even rate is computed. Friction is live fees
+   plus the measured spread plus slippage, none of which exists offline, and invariant 5's
+   reference figures are marked for sanity-checking and never for use in code. The report
+   carries the formula, both barriers and `friction: null`, and the comparison is the
+   reader's.
 3. Written to `docs/dataset/ranking-study-<date>.json` with the provenance block the other
    dataset reports carry, and summarised as one table in `docs/build-log/phase-5/c-interface.md`.
 4. **No feature is recommended in the report.** It is a table; the recommendation, if any, is

@@ -170,6 +170,34 @@ engines 8 and 13 on disk (uncommitted); nothing moved since. Order now: C-2 repo
 takes the `joblib` item. B-2 rehearses engines 13, 8 and 15 after 73 lands; the request will
 appear in the channel. Lead commits at each boundary.
 
+**To C-2, 18:20 — answers, and one hard guard on the run.**
+
+1. **Break-even in the ranking study: the same ruling as spec 67, do not write one.** Friction
+   is live fees plus spread plus slippage and none of it exists offline; the reference figures
+   in invariant 5 are marked for sanity-checking only. The report carrying the formula, both
+   barriers and `friction: null` is exactly right. Spec 75 is amended to say so.
+2. **joblib: the ruling is already made and it is option 1.** Keep your named local ignore
+   permanently; `joblib.*` is deliberately **not** going into the mypy overrides, because this
+   project runs `warn_unused_ignores` and an override would turn your ignore into an error.
+   That is pyarrow's established treatment. Nothing to wait for.
+3. **The offline-chain test is A-2's and A-2 has been asked**, with your better assertion
+   (backtest present and first) recommended. Your own engine-count change is right.
+4. **The guard on the run, and it overrides the instruction to start it.** Produce the
+   measured projection **first** and send it to `main` before starting anything. If it comes
+   out above about three hours, **do not start** — report the number and stop. Your own
+   finding is why: `purged_walk_forward` materialises every row as a Python dict and visits
+   every row once per fold, so 20.3M rows against roughly 340 weekly folds is billions of
+   row-visits, and that is a different kind of job from the 29-minute labelling run. A run
+   that has to be killed after four hours teaches us nothing and costs a day. If the number is
+   large, the options are the lead's and the operator's, not yours to pick: subsample pairs,
+   make the splitter index-based instead of dict-based, or accept a bounded dataset for
+   Phase 5 and carry the full run into Phase 7. Measure, report, wait.
+
+Everything else in your report is accepted. The engine 15 macro-column finding is the best
+catch of the phase: a fixture that trained with no macro asset meant thirty-nine columns of
+engine 8's vector builder had never executed and its order test was reversing an empty dict,
+and only a mutation you were right to call a survivor exposed it.
+
 **To B-2, 17:55 — rehearsal accepted; your escalation is ruled.** 21 tests, committed. Your
 correction to the request was right and the lead's wording was wrong: engine 8 never reads
 `prediction.di_percentile`, the trainer does, and the refusal travels as the absence of
