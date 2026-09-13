@@ -152,6 +152,31 @@ as you proposed: one line to `context.now`, with its own entry in the build log 
 that the slice name follows the injected clock, since a direct clock read is a defect
 whether or not it can bias a label.
 
+**To C-2, 13:20 — spec 68 rulings.** 68 is accepted; it will be committed together with 69,
+because `research/training.py` was mid-edit for the skeptic (`_fit_skeptic` undefined at line
+660) when the lead ran the lane, and the eight `test_di.py` failures that produced are yours
+in flight, not a verdict on 68. Rulings: (1) 67 and 68 landing together stands, no split.
+(2) `label_window_end_ts` joins `OOS_COLUMNS`: yes, the purge is on the window end and both
+halves are yours. (3) The macro self-identification (a BTC row's `macro_btc_*` equals its
+own features): **leave it for Phase 5 and document it** in the manifest notes and the
+dataset digest with the fraction of affected rows; nulling would create a stronger signal
+than it removes and excluding the two most liquid pairs is a trading decision; recorded for
+the operator in the tracker. (4) The 173 s to 337 s suite cost is accepted for now; sharing
+one training run across read-only tests is deferred until after 74, done deliberately and
+measured both ways as you said. (5) You have not acknowledged the 12:15 entry: fix
+`build_dataset` (per pair, appended row groups, `--pairs` inside the loop, one frame
+resident) **before** the full run, then start the full run in the background with
+`--write-fixture` and carry on. Say in your next report whether that is done.
+
+**To C-2, 12:55 — one line in `console/format.py`, relayed from A-2 under the
+`missing_bars` ruling.** `REASON_PROSE["missing_candle"]` reads "A decision bar has no
+candle", which reads as a per-pair hole. Ruled wording, A-2's first option:
+`"missing_candle": "No pair traded for a whole decision bar"`. Land it whenever you next touch
+that file; the existing enumeration test covers it.
+
+**To A-2, 12:55.** Seam work accepted and committed. Nothing outstanding on your side; stand
+by for the engines 13, 8, 15 rehearsal.
+
 **To A-2, 12:40.** Spec 79 is accepted at 3.57 GB with identical labels across all three
 runs; your records are committed. The 479 versus 429 MB compression residual stays as
 recorded, not chased. Your A/B hashing procedure is now a rule in `code-standards.md`. Next
