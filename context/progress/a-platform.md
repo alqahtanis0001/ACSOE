@@ -52,6 +52,23 @@ both orders as the control:
 | accumulate first | 792.9 MB | 430.3 MB | 348.6 MB |
 | stream first | 800.1 MB | 404.1 MB | 350.3 MB |
 
+**5. The `missing_bars` seam work under the lead's 11:05 ruling — DONE.** One sentence each
+in `engines/market_sensor/README.md`, `engines/market_sensor/contracts.py`,
+`engines/data_guard/README.md` and `engines/data_guard/contracts.py` now says the same thing:
+`missing_bars` is **bars in which no subscribed pair traded at all**, which is feed-level
+silence and a real data fault; a single pair's hole is ordinary and is the feature layer's to
+mark. Engine 3 grew no per-pair map and nothing was renamed.
+
+The seam test has **no double on either engine** — engine 3 runs for real over a fake stream,
+`data_guard` runs for real over what engine 3 published — because the seam was previously
+tested by neither side. Two mutations: replacing the union with a per-pair reading goes red,
+and **only one test of 43 fails**, which is the finding rather than the pass; deleting the
+missing-candle condition goes red across six.
+
+**One thing still with the lead:** `REASON_PROSE["missing_candle"]` reads "A decision bar has
+no candle", which under the ruling is misleading — it sounds like one pair's hole. Proposed
+wording sent to `main`; `console/format.py` is C-2's to land.
+
 **3. The `missing_bars` assessment — DONE, reported to the lead, no code changed.** C-2 is
 right that the field pools every pair, and the consequence is worse than lost attribution:
 because the pooled set is a union, a bar counts as missing only when **no pair traded in it at

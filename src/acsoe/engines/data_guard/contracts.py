@@ -53,7 +53,14 @@ REASON_NEGATIVE_SPREAD: Final = "negative_spread"
 """A crossed book: the bid is above the ask."""
 
 REASON_MISSING_CANDLE: Final = "missing_candle"
-"""A decision bar inside the published window produced no candle.
+"""A decision bar inside the published window in which **no subscribed pair traded at all**.
+
+Engine 3 pools `missing_bars` across every pair it published candles for, so this code
+means the whole subscription was silent for a bar — a feed-level fault — and never that one
+pair had a hole, which is ordinary market behaviour and is the feature layer's to mark.
+Ruled by the lead 2026-09-13 after C-2 raised the pooling and A measured it: with two pairs
+the field is already empty when one of them misses bars the other traded in. The union is
+deliberate, because a per-pair reading would block on every thin pair's ordinary silence.
 
 **This is not a contradiction of `architecture-context.md`**, which says a missing
 candle in the *historical archive* means no trades occurred and is not a data error, and

@@ -67,6 +67,24 @@ emit, deriving the list from this engine's own constants so it cannot decay.
   `safety`, which is Phase 3. This engine does not write to `block_records` either —
   engine 19 `memory` is the single writer of relational rows, in Phase 4.
 
+## What `missing_bars` counts, and what it therefore blocks on
+
+**A bar in which *no subscribed pair traded at all*.** Engine 3 pools the timestamps
+across every pair it published candles for, so this gate fires on a whole-subscription
+silence — a feed-level fault — and never on one pair being quiet, which is ordinary
+market behaviour and is the feature layer's to mark.
+
+That is the ruling of 2026-09-13, taken after C-2 observed that the field pools pairs and
+A measured what the pooling does: with two pairs, one missing two bars the other traded
+in, the field is empty; at the 234 pairs the archive now holds it is empty on essentially
+every tick. The union stays deliberately. A per-pair reading here would block the tick
+every time any thin pair skipped a bar, which is most ticks, and a gate that blocks
+always is a gate that gets disabled.
+
+So read the reason string as "the feed went silent", not "some pair had a hole". The
+counterpart sentences are in `engines/market_sensor/README.md` and in both engines'
+`contracts.py`.
+
 ## The missing-candle rule is not a contradiction
 
 `architecture-context.md` says a missing candle in the **historical archive** means no

@@ -900,3 +900,37 @@ over another agent's tests must **hash the files that are not the variable, on b
 the comparison**, and report the hashes with the result. Without that the experiment measures
 whichever save happened to be on disk. Two lines of shell, and it is the difference between a
 finding and a coincidence.
+
+### The `missing_bars` seam now has a test, and it is the only thing holding the union
+
+**Agent:** A · **Task:** the lead's 11:05 ruling on `missing_bars` · **Date:** 2026-09-13
+
+**What was done.** The ruling was to change less than C-2 asked and more than nothing: engine 3
+grows no per-pair map, `data_guard`'s missing-candle condition stays, and the *meaning* is
+stated where it is produced and where it is consumed. One sentence each now says the same thing
+in `engines/market_sensor/README.md`, `engines/market_sensor/contracts.py`,
+`engines/data_guard/README.md` and `engines/data_guard/contracts.py`: `missing_bars` is **bars
+in which no subscribed pair traded at all** — feed-level silence, a genuine data fault — and a
+single pair's hole is ordinary market behaviour that the feature layer marks.
+
+**The test has no double on either engine.** Engine 3 runs for real over a fake stream, and
+`data_guard` runs for real over what engine 3 published. That matters because the seam was
+previously tested by neither side: engine 3's gap tests all use one pair, where the union and a
+per-pair reading are identical by construction, and `data_guard`'s tests build `missing_bars`
+themselves, so they prove the gate blocks on a value the test supplied. Two tests, differing in
+one thing — whether the quiet bar is quiet for one pair or for all of them.
+
+**The two mutations, restored from byte copies and verified by sha256.**
+
+- **The union replaced by a per-pair reading.** Red, and **only one test failed out of 43**:
+  the new one. That number is the finding rather than the passing test — this single test is
+  the whole of what stands between the codebase and a gate that blocks on every thin pair's
+  ordinary silence, which at 234 pairs is most ticks.
+- **The missing-candle condition deleted.** Red across six tests, including the new one.
+
+**A `noqa` I wrote and removed.** I suppressed `SLF001` on the line that reaches into the
+stream double's own field. `SLF001` is not in this project's selected rules, so the directive
+named a linter that is not running — and `RUF100` caught it, which is the same defect C-2 had at
+`verify.py:8025` earlier today. A suppression is a claim that a rule is wrong here; a
+suppression for a rule that is not running is a claim about nothing, and the comment that
+replaced it says why the access is fixture set-up.

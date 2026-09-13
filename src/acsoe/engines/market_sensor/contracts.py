@@ -104,10 +104,22 @@ class MarketSensorState(BaseModel):
     publishing a partial bar as a candle is look-ahead, and invariant 10 forbids it."""
 
     missing_bars: tuple[int, ...] = ()
-    """Bar openings inside the covered range in which nothing traded.
+    """Bar openings inside the covered range in which **no subscribed pair traded at all**.
 
     **Reported, never filled.** A missing candle means no trades occurred; it is a fact
     about the market, and the feature layer decides what to do about it.
+
+    **Pooled across pairs, deliberately, and the name undersells it.** The timestamps are
+    the union over every pair with published candles, so a bar is listed only when the
+    whole subscription was silent — a feed-level fault, which is what engine 4
+    `data_guard` blocks on. One pair going quiet for a bar is ordinary and is absent from
+    this tuple; engine 5 counts each pair's holes from that pair's own candles, which are
+    published here with the pair on every one.
+
+    Measured 2026-09-13: with two pairs, one missing two bars the other traded in, this is
+    empty; at 234 pairs it is empty on essentially every tick. Ruled by the lead the same
+    day — a per-pair reading would make `data_guard` block on every thin pair's ordinary
+    silence, which is most ticks.
     """
 
     quotes: dict[str, dict[str, Any]] = {}

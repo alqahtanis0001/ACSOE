@@ -71,6 +71,21 @@ not rounded into place.
 `missing_bars`; nothing fills, forward-fills, resamples or smooths one into existence,
 and there is deliberately no flag that does.
 
+**`missing_bars` is bars in which *no subscribed pair traded at all*, not bars a
+particular pair missed.** The timestamps are pooled across every pair this engine
+published candles for, so a bar is only listed when the whole subscription was silent —
+which is a feed-level fault and is what engine 4 `data_guard` blocks on. A single pair
+going quiet for a bar is ordinary market behaviour, it is not listed here, and marking it
+is the feature layer's job: engine 5 counts each pair's holes from that pair's own
+candles, which this engine already publishes with the pair on every one.
+
+Measured rather than assumed, 2026-09-13, and stated because the name suggests otherwise:
+with two pairs, one of them missing two bars the other traded in, this field is empty.
+With 234 pairs it is empty on essentially every tick. Ruled by the lead the same day after
+C-2 raised it from the consumer side — the union stays, because a per-pair reading here
+would have `data_guard` block permanently on the ordinary fact that a thin pair did not
+trade.
+
 This is load-bearing rather than tidy. Phase 4's triple-barrier labelling walks forward
 from each decision bar to decide whether the target, the stop or the timeout came first.
 A synthesised candle at a price that never traded invents a barrier touch that never

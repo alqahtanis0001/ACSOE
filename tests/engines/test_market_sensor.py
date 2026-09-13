@@ -358,3 +358,104 @@ def test_it_never_blocks_trading(
     result = engine.process(context_at(engine_context, ORIGIN, stream), fresh_state)
     assert result.blocks_trading is False
     assert result.reason is None
+
+
+# --------------------------------------------------------------------------- #
+# The engine 3 to engine 4 seam, with no double on either engine
+# --------------------------------------------------------------------------- #
+#
+# Ruling of 2026-09-13. `missing_bars` is pooled across pairs, so it lists a bar only
+# when *no subscribed pair traded at all*. C-2 raised that no consumer can tell which
+# pair has the hole; measuring it showed something sharper, which is that past a couple
+# of pairs the field is empty, and `data_guard`'s missing-candle block therefore fires
+# on feed-level silence rather than on one pair being quiet. The union stays — a
+# per-pair reading would block every tick a thin pair skipped a bar, which is most ticks.
+#
+# Neither engine is doubled here. Engine 3's own gap tests all use a single pair, where
+# the union and a per-pair reading are identical by construction, and `data_guard`'s
+# tests build `missing_bars` themselves as a tuple — so each side is correct about
+# itself and the pair of them proves nothing about the seam. Only the stream is fake,
+# because a market feed is the input.
+
+
+def two_pair_stream(quiet_bars: set[int], *, bars: int = 6) -> FakeStream:
+    """AAA trades in every bar; BBB skips `quiet_bars`. Fresh quotes for both.
+
+    The quotes are here so that the only thing varying between the two tests below is
+    which bars traded: without them `data_guard` blocks on "no market data" and the
+    missing-candle assertion would be reading a block it did not cause.
+    """
+    trades: list[TradeTick] = []
+    for index in range(bars):
+        offset = index * BAR + 10
+        trades.append(trade("AAA/USD", offset, f"{100 + index}", "1"))
+        if index not in quiet_bars:
+            trades.append(trade("BBB/USD", offset, f"{200 + index}", "1"))
+    stream = FakeStream(trades)
+    for pair in ("AAA/USD", "BBB/USD"):
+        stream.quotes[pair] = QuoteTick(
+            pair=pair,
+            ts=ORIGIN + timedelta(seconds=bars * BAR),
+            bid="100",
+            ask="101",
+        )
+    return stream
+
+
+def guard_on(engine_context: Any, stream: FakeStream, moment: datetime) -> Any:
+    """Run engine 3 for real, then engine 4 for real over what engine 3 published."""
+    from acsoe.engines.data_guard.engine import DataGuardEngine
+
+    state: dict[str, Any] = {}
+    sensor = MarketSensorEngine().process(context_at(engine_context, moment, stream), state)
+    state["market_sensor"] = sensor.data
+    return sensor, DataGuardEngine().process(context_at(engine_context, moment, stream), state)
+
+
+def test_one_pair_s_hole_is_not_a_missing_candle_and_does_not_block(
+    engine_context: Any,
+) -> None:
+    """BBB is silent for two bars AAA traded in. That is ordinary market behaviour.
+
+    A per-pair reading would block here, every time, on any thin pair — and with 234
+    pairs in the archive that is most ticks. The feature layer marks per-pair holes;
+    this gate does not.
+    """
+    moment = ORIGIN + timedelta(seconds=6 * BAR + 60)
+    sensor, guard = guard_on(engine_context, two_pair_stream({2, 3}), moment)
+
+    published = {candle["pair"] for candle in sensor.data["candles"]}
+    assert published == {"AAA/USD", "BBB/USD"}, "both pairs were published"
+    assert sensor.data["missing_bars"] == [], "a per-pair hole is not a missing bar"
+    assert guard.status is not EngineStatus.BLOCK
+    assert guard.data["reason_code"] is None
+
+
+def test_a_bar_in_which_every_pair_was_silent_blocks_as_a_missing_candle(
+    engine_context: Any,
+) -> None:
+    """The other side, and the one the gate exists for: the feed went quiet.
+
+    Both pairs skip bar 3 and both trade either side of it, so the hole is inside the
+    covered range and is a fact about the feed rather than about a pair.
+    """
+    from acsoe.engines.data_guard.contracts import REASON_MISSING_CANDLE
+
+    moment = ORIGIN + timedelta(seconds=6 * BAR + 60)
+    stream = two_pair_stream(set())
+    silent_bar = int(ORIGIN.timestamp()) + 3 * BAR
+    # Reaching into the double's own field, which is fixture set-up rather than a
+    # private access worth suppressing a rule for: `SLF001` is not in this project's
+    # selected rules, so a `noqa` naming it would be a directive for a linter that is
+    # not running — the exact defect the RUF100 check catches.
+    stream._trades = [
+        tick
+        for tick in stream.recent_trades()
+        if bar_open_seconds(int(tick.ts.timestamp()), interval_s=BAR) != silent_bar
+    ]
+    sensor, guard = guard_on(engine_context, stream, moment)
+
+    assert sensor.data["missing_bars"] == [silent_bar]
+    assert guard.status is EngineStatus.BLOCK
+    assert guard.data["reason_code"] == REASON_MISSING_CANDLE
+    assert guard.blocks_trading is True
