@@ -177,7 +177,27 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
         "console_history_reads_real_rows",
         "replay_full_archive",
     }
-    for phase in range(5, verify_module.MAX_PHASE + 1):
+    # Spec 60, registered first in Phase 5 and ahead of most of what it judges. Until
+    # these existed `--phase 5` carried `every_phase` alone and printed "Phase 5 is
+    # green" over a phase that by then held the modelling package, three engines and a
+    # ranking function. `walkforward_trains_on_the_past_only` appears here **and** under
+    # phase 4: it is the same check object re-registered, so a Phase 5 change that
+    # weakened the past-only walk-forward turns the Phase 5 gate red rather than only
+    # Phase 4's.
+    assert {c.name for c in verify_module._REGISTRY[5]} == every_phase | {
+        "features_reproduce_in_replay",
+        "feature_lookbacks_are_time_not_rows",
+        "predictor_trains_and_calibrates",
+        "training_is_reproducible_from_config_and_data",
+        "di_fitted_on_predictor_training_set",
+        "skeptic_trains_only_on_predictor_buy_rows",
+        "walkforward_weekly_retrain_reports_oos",
+        "anomaly_and_skeptic_have_both_tests",
+        "scout_ranks_by_feature_not_arrival",
+        "tournament_writes_leaderboard_from_oos",
+        "walkforward_trains_on_the_past_only",
+    }
+    for phase in range(6, verify_module.MAX_PHASE + 1):
         assert {c.name for c in verify_module._REGISTRY[phase]} == every_phase
 
 

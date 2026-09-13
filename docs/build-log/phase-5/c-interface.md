@@ -492,6 +492,209 @@ measurement" that means the same thing on a $0.30 pair and a $60,000 one.
 keeps it fixed. A second test pins the mechanism directly: a constructed window of exactly equal
 volatilities must rank 0.5, not 0 and not 1.
 
+### The live and offline feature paths cannot be bit-identical, and the reason is the frame length
+
+**Agent:** C-2 · **Task:** spec 60, criterion 1 · **Date:** 2026-09-13
+
+**What happened.** `features_reproduce_in_replay` FAILed the first time it was run, on its own
+central assertion:
+
+```
+FAIL  features_reproduce_in_replay  8 of 39 features differ between engine 5's live path and
+modelling.features over the same bar: range_atr_4: live=0.003932074590967397
+offline=0.003932074590967411; volume_z_4: live=0.5096157890350302
+offline=0.5096157890350339; ...
+```
+
+The differences are in the last two or three bits — a relative 1e-15 — on eight of thirty-nine
+features. I had written the comparison as **exact** and argued for it in the docstring: two
+callers of one function have no licence to differ in the last bit, and a tolerance would hide a
+drifting second implementation whose answers happen to be close.
+
+**Why.** The argument was right about the principle and wrong about the premise. The two callers
+are not given the same input. Engine 5 is handed `market_sensor.published_bars` candles — 200 —
+because that is what engine 3 publishes; the offline builder is handed the whole archive frame,
+1,208 rows here and twenty million in the real run. polars computes its rolling aggregates
+incrementally along the column, so the value at bar *t* depends on how many rows preceded it,
+and floating-point addition is not associative. The same 200-bar window therefore lands on
+slightly different bits depending on whether 0 or 1,008 rows came before it.
+
+Measured rather than assumed, three ways, and the decomposition is the whole finding:
+
+| Comparison | Differing features |
+|---|---|
+| engine 5's `float(str(Decimal))` vs polars' `Decimal`→`Float64`, same 200 rows | **0** |
+| `compute` over 200 rows vs `compute` over the same 200 rows inside a 1,208-row frame | **8** |
+
+So the two *conversions* are bit-identical, and engine 5's shaping — grouping, casting,
+truncating, NaN to null — changes nothing at all. The residual is reassociation inside polars'
+kernels and nothing else. Worst relative difference across three window lengths: **7.4e-15**, on
+`volume_z_4`.
+
+**The consequence is a fact about the system, not about the test.** The live loop will always
+see 200 bars and the trainer will always see the archive, so **the features a model is trained on
+and the features it is scored on live differ in the last few bits, permanently.** That is
+tolerable — a tree split would have to sit exactly on a threshold for it to change a decision,
+and where it did the two outcomes would be indistinguishable in expectation — but it has to be
+known and stated rather than discovered in Phase 6 by someone chasing a prediction that differs
+between a backtest and a replay of the same bar.
+
+**Fix.** The criterion now makes two assertions instead of one, and it is stricter than what it
+replaced rather than looser:
+
+1. **Exact** equality between engine 5's live path and `modelling.features.compute` over *the
+   candles engine 5 was actually given*. This is the one-arithmetic-two-callers claim with the
+   frame length held still, and it is exact — bit for bit, no tolerance. Any difference in
+   shaping, conversion, ordering or cut-off is caught here.
+2. **Bounded** agreement between that live window and the full-archive frame, at a relative
+   1e-9: six orders of magnitude above the observed 7.4e-15 and many orders below any genuine
+   difference in arithmetic, since a different indicator formula differs by percent rather than
+   by parts per billion. The worst observed relative difference is printed in the PASS line, so
+   drift shows up as a number moving rather than as a threshold being crossed.
+
+The second assertion is the one a later reader will be tempted to delete as noise. It is what
+says the live window is long enough to reproduce the trained feature at all: widen a lookback
+past what engine 3 publishes and this is what goes red, with a number rather than a shrug.
+
+### The "no criterion reads a gitignored path" guard is a substring scan, and it blocked the correct change
+
+**Agent:** C-2 · **Task:** spec 60 · **Date:** 2026-09-13
+
+**What happened.** `test_no_registered_criterion_reads_data_models_or_logs`, a Phase 0 test of
+mine widened in Phase 4, went red on two Phase 5 criteria:
+
+```
+AssertionError: features_reproduce_in_replay:  data = dict(getattr(result, "data", {}) or {})
+AssertionError: predictor_trains_and_calibrates:  run_dir = Path(str(getattr(report, "models_dir", tmp / "run" / "models")))
+```
+
+Neither line reads a gitignored path. The first reads `EngineResult.data`, the field every
+engine publishes through. The second names a directory **inside a temporary tree** that the
+criterion creates and deletes — which is the very thing the rule exists to require.
+
+**Why.** The check is a bare substring scan for `"data"`, `"models"` and `"logs"` in the source
+of every registered criterion. That was adequate while no criterion had an engine payload or a
+temporary artefact root in it, and Phase 5 is the first phase where both are ordinary. The rule
+it is trying to enforce is about **paths rooted at the repository** — `data/`, `models/` and
+`logs/` are gitignored, so a criterion depending on one passes only on the machine that produced
+it — and a quoted word is not a path.
+
+`code-standards.md` already has this exact shape written down, from the other direction:
+*"Widening a forbidden-list is as much a defect as narrowing it, and it only shows up when
+someone tries to do the right thing... An over-strict rule is invisible until it is in someone's
+way, and at that moment it looks like the change is wrong rather than the rule."* That was
+recorded about `test_the_live_loop_does_not_import_research` forbidding `cli/` from importing
+`research/`, which is the design the contracts mandate. This is the same defect in a different
+file, and the standard's own instruction is to replace it with narrower, stronger assertions
+rather than to add an exception.
+
+The pull towards an exception is worth naming, because it was my first thought and it is wrong:
+an allow-list entry for `getattr(result, "data"` would keep a check that cannot tell a path from
+a word, and the next correct change would meet it again.
+
+**Fix.** The scan is replaced by one read off the syntax tree, which distinguishes the two cases
+because they are syntactically different:
+
+* a **path construction** whose left operand is the repository root — `ctx.root / "data"` and
+  anything under it — is a hit;
+* a **string literal** beginning `data/`, `models/` or `logs/` is a hit;
+* a keyword or attribute named `data`, `models_dir` or similar, and a directory built under a
+  `tempfile.TemporaryDirectory`, are not.
+
+Strictly stronger than what it replaced: the old scan missed `ctx.root / dirname` where the name
+came from a variable, and it missed an `os.path.join`; the new one follows the operand rather
+than the spelling. Both directions proved — the real tree passes, and a criterion given
+`ctx.root / "models"` in a copied tree is caught.
+
+### The macro column names are in engine 6's `contracts.py`, and `research/` may not import them
+
+**Agent:** C-2 · **Task:** specs 65 and 67 · **Date:** 2026-09-13
+
+**What happened.** Spec 65 step 4 says the macro feature names are "exported from
+`contracts.py` as a tuple derived from `modelling.features.FEATURE_NAMES` and the configured
+assets, so the offline builder and the engine cannot disagree about a column name", and that is
+where I put `macro_column` and `macro_feature_names`: `engines/macro_context/contracts.py`.
+Spec 67 step 1 then needs the same two functions to join the macro columns into the training
+dataset. **It cannot have them.** Architecture invariant 5: research code never imports from the
+live loop path, and `engines/` is the live loop path.
+
+Found while designing spec 67 rather than while running it, which is the only reason it is
+cheap. The cost of noticing later is the shape the invariant exists to prevent: `research/`
+would have grown its own copy of `f"macro_{asset}_{feature}"`, the two would have agreed for
+months, and the first rename would have trained a predictor on `macro_btc_log_return_4` and fed
+it something else live — where the only thing that would notice is the artefact's feature-order
+check, at load time, as a refusal whose message names the shape and not the cause.
+
+**Why the spec says what it says.** Spec 65 predates spec 67 by a day and was written about the
+engine alone; "the offline builder and the engine cannot disagree" is exactly the right
+requirement and `engines/` is exactly the wrong place to satisfy it from. `modelling/` is the
+package that exists for this — the one both sides may import, holding "the arithmetic that must
+agree between live and replay" — and a column name is that arithmetic's vocabulary.
+
+**Fix.** `macro_column`, `macro_feature_names` and `macro_pair_names` move to
+`modelling/macro.py`. `engines/macro_context/contracts.py` imports them from there and
+re-exports, so spec 65's sentence stays true and engine 6's own tests keep passing unchanged;
+`research/training.py` imports the same module. The import-graph test in `tests/modelling/`
+already asserts `modelling/` imports nothing from `acsoe` but `core.contracts`, so the new
+module is held to the leaf rule from the moment it lands, and a matching assertion that
+`research/` does not import `engines/` is worth adding beside it.
+
+### Spec 60: eleven criteria, and what each of them would let through if it were written the obvious way
+
+**Agent:** C-2 · **Task:** spec 60 · **Date:** 2026-09-13
+
+Not a defect entry. A record of the design decisions, because each one is a place where the
+obvious criterion passes over the defect it is named for, and none of them is visible from the
+code afterwards.
+
+**Criterion 1, `features_reproduce_in_replay`, hands the two paths different inputs on
+purpose.** The obvious version computes one frame and passes it to both sides; it then proves
+that one function returns the same answer twice. The live path is given money as decimal
+strings through engine 3's own `MarketSensorState`, truncated to `market_sensor.published_bars`,
+and the offline path the whole archive frame with `Decimal` money — so a shaping bug on either
+side moves the last row's lookbacks and shows up. The payload is built through engine 3's
+pydantic model rather than as a dict, because a hand-written one is how
+`check_data_guard_blocks_bad_data` came to have a body that never executed.
+
+**Criterion 2's hole is wider than the window minus the tail, and the arithmetic is the
+reason.** With a narrower hole the window legitimately still reaches past it, the expected count
+is a sum of two runs, and the check goes red against a correct implementation — which is what
+happened the first time I wrote the equivalent unit test.
+
+**Criterion 5 asks about membership, not equality, and that is forced.** The DI subsamples its
+reference set to `prediction.di_reference_rows` with a seed, so a digest of the rows it *should*
+have seen matches nothing. The three questions it can answer are: is every reference row one of
+the fold's training rows, is at least one of them not a BUY call, and is none of them a test
+row. The second is the whole criterion — it is what separates "fitted on the training rows" from
+"fitted on the BUY subset of them" — and it is why `di.npz` stores identities rather than a
+hash. A digest can prove two sets are equal and can never prove one contains another.
+
+**Criterion 6 recomputes the skeptic's eligible set from the out-of-sample file** rather than
+reading back what the skeptic recorded about itself, which is ruling 7 of 2026-09-13. The point
+is to check which rows it saw; a number it reported is not evidence of that.
+
+**Criterion 9's ascending call is the one that does the work.** Descending by the probe feature
+happens to equal alphabetical order, so a `rank_universe` that returned its input would satisfy
+it. The tracker named this seam before the phase opened: engine 7 builds its scan set with
+`sorted`, so the function is always handed an already-ordered sequence and an end-to-end fixture
+cannot tell ordering from passing through. The mutation test mutates the **ranked branch only**
+for the same reason — dropping pairs in `names` would also empty the alphabetical answer and the
+criterion would fail on a different assertion, a kill for the wrong reason.
+
+**Criterion 10 constructs its digest and out-of-sample file, and that is safe only because two
+other criteria pin their shapes.** `walkforward_weekly_retrain_reports_oos` reads the real
+producer's digest against `FOLD_DIGEST_FIELDS` and
+`skeptic_trains_only_on_predictor_buy_rows` reads the real out-of-sample file against
+`OOS_COLUMNS`. Without those two, criterion 10 would be a criterion agreeing with its own
+fabrication. It also reads the leaderboard with `sqlite3` rather than through
+`StoreClient.leaderboard()`, which returns the newest fifty: a criterion counting rows through a
+limited read cannot tell "engine 20 wrote two" from "wrote two hundred and this showed fifty".
+
+**Where the file is honestly incomplete.** Four criteria have subjects today and carry all three
+observations. Seven report PENDING naming the module or engine that owes them, and their PASS
+and FAIL halves arrive with specs 67 to 74. `tests/verify/test_phase5_criteria.py` says so in
+its own docstring rather than implying completeness by silence.
+
 ### The spec 64 fixture's premise is asserted, not assumed
 
 **Agent:** C (second instance) · **Task:** spec 64 · **Date:** 2026-09-13

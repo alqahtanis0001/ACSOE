@@ -25,9 +25,10 @@ import re
 import sqlite3
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -1236,14 +1237,98 @@ def test_no_registered_criterion_reads_data_models_or_logs(verify_module: Module
         to_run, _skipped = verify_module.criteria_for(phase, False)
         for criterion in to_run:
             seen += 1
-            source = inspect.getsource(criterion.check)
-            for line in source.splitlines():
-                stripped = line.strip()
-                if stripped.startswith("#") or "gitignore" in stripped:
-                    continue
-                for forbidden in ('"data"', "'data'", '"models"', '"logs"'):
-                    assert forbidden not in stripped, f"{criterion.name}: {line}"
+            hits = gitignored_reads(inspect.getsource(criterion.check))
+            assert hits == [], f"{criterion.name}: {hits}"
     assert seen, "no criteria were walked; the registry lookup is wrong, not the rule"
+
+
+#: The three gitignored roots. A criterion that reads anything under one of them passes
+#: only on the machine that produced it.
+GITIGNORED_ROOTS: Final = ("data", "models", "logs")
+
+
+def gitignored_reads(source: str) -> list[str]:
+    """Every read of a repository-rooted gitignored path in `source`, off the syntax tree.
+
+    **This was a substring scan for `"data"`, `"models"` and `"logs"` and that was wrong
+    in the direction nobody notices until it is in the way.** Phase 5 is the first phase
+    where a criterion routinely holds an `EngineResult` payload — `getattr(result,
+    "data", {})` — and builds a temporary artefact root — `tmp / "run" / "models"`.
+    Neither reads a gitignored path; both tripped the scan. `code-standards.md` records
+    the same failure in `test_the_live_loop_does_not_import_research` and gives the same
+    instruction: an over-strict rule is replaced with narrower, stronger assertions, never
+    given an exception, because an exception keeps a check that cannot tell a path from a
+    word and the next correct change meets it again.
+
+    The rule is about **paths rooted at the repository**, and that is syntactically
+    distinguishable:
+
+    * ``ctx.root / "data"`` and anything below it — a division whose left operand chains
+      back to `ctx.root`;
+    * a string literal beginning ``data/``, ``models/`` or ``logs/``.
+
+    A field called `data`, a keyword called `models_dir`, and a directory built under a
+    `TemporaryDirectory` are none of those.
+
+    **What it does not see, stated rather than implied.** ``ctx.root / name`` where `name`
+    is a variable is not a hit, and cannot be: `docs_vocabulary` builds exactly that shape
+    over the documentation files it scans, so flagging it would be the same over-strictness
+    one turn later. A criterion that reached a gitignored directory through a computed name
+    would pass this. That residual gap is the review's job rather than the scan's, and it is
+    narrower than the one the substring version left — that one could not see
+    ``os.path.join(root, "models")`` either, while also rejecting two shapes that were
+    always fine.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except SyntaxError as exc:  # pragma: no cover - a criterion that does not parse
+        return [f"could not be parsed: {exc}"]
+
+    def rooted_at_repo(node: ast.AST) -> bool:
+        """Whether this expression chains back to `ctx.root`, however many `/` deep."""
+        if isinstance(node, ast.Attribute) and node.attr == "root":
+            return True
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            return rooted_at_repo(node.left)
+        return False
+
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and rooted_at_repo(
+            node.left
+        ):
+            right = node.right
+            if isinstance(right, ast.Constant) and right.value in GITIGNORED_ROOTS:
+                hits.append(f"line {node.lineno}: ctx.root / {right.value!r}")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            for word in GITIGNORED_ROOTS:
+                if node.value.startswith(word + "/"):
+                    hits.append(f"line {node.lineno}: {node.value!r}")
+    return hits
+
+
+def test_the_gitignored_scan_tells_a_path_from_a_word(verify_module: ModuleType) -> None:
+    """The detector, proved in both directions on the two cases that made it necessary.
+
+    Without this, the narrowing above is a claim. The negatives are the two shapes that
+    were false positives for a whole phase; the positives are the reads the rule exists to
+    forbid.
+    """
+    del verify_module
+    assert gitignored_reads('data = dict(getattr(result, "data", {}) or {})') == []
+    assert gitignored_reads('run_dir = tmp / "run" / "models"') == []
+    assert gitignored_reads("store = client(db, models_dir=tmp / 'artefacts')") == []
+
+    assert gitignored_reads('archive = ctx.root / "data" / "historical"')
+    assert gitignored_reads('artefacts = ctx.root / "models"')
+    assert gitignored_reads('path = ctx.root / "data"')
+    assert gitignored_reads('name = "models/run-1/manifest.json"')
+    # And the gap, pinned so it is a known limit rather than a surprise: a computed
+    # directory name is invisible to a syntax scan, and `docs_vocabulary` builds exactly
+    # that shape over the documents it scans.
+    assert gitignored_reads("path = ctx.root / chosen") == []
 
 
 def test_the_only_criterion_reading_a_gitignored_path_is_live_only(

@@ -31,6 +31,7 @@ import importlib
 import importlib.util
 import inspect
 import json
+import math
 import os
 import re
 import shutil
@@ -7850,6 +7851,2111 @@ def check_replay_full_archive(ctx: VerifyContext) -> Outcome:
 
 
 # --------------------------------------------------------------------------- #
+# Phase 5 - models (spec 60)
+# --------------------------------------------------------------------------- #
+#
+# Every phase so far failed loudly. Phase 5 fails quietly: a subtly wrong walk-forward,
+# a leaked feature, a metric that flatters, a DI fitted on the wrong rows. Each produces
+# a model that looks excellent and is worthless, and nothing goes red. So every
+# criterion below is written to be sensitive to a *named* wrong implementation rather
+# than to the shape of the evidence, and each is observed PENDING, PASS and FAIL in
+# `tests/verify/test_phase5_criteria.py`.
+#
+# Where a criterion needs a trained model it trains one **inside the criterion**, from
+# the committed fixtures into a temporary models root. Nothing here reads `models/`,
+# `data/` or `logs/`: all three are gitignored, and a criterion that depends on one
+# passes only on the machine that produced it.
+
+#: Engine number and owning spec, for the PENDING message. Same shape as
+#: `PHASE3_ENGINES` and `PHASE4_ENGINES`, and for the same reason: a PENDING that does
+#: not name the spec sends the reader to the task list to find out who is late.
+PHASE5_ENGINES: Final[Mapping[str, tuple[int, str]]] = {
+    "feature": (5, "spec 64, agent C"),
+    "macro_context": (6, "spec 65, agent C"),
+    "prediction": (8, "spec 71, agent C"),
+    "regime": (12, "spec 66, agent C"),
+    "anomaly": (13, "spec 72, agent C"),
+    "skeptic": (15, "spec 73, agent C"),
+    "tournament": (20, "spec 74, agent C"),
+}
+
+#: The leaf package spec 63 creates and the trainer spec 67 creates.
+PHASE5_MODULES: Final[Mapping[str, str]] = {
+    "acsoe.modelling.features": "spec 63, agent C",
+    "acsoe.modelling.artefacts": "spec 63, agent C",
+    "acsoe.modelling.weights": "spec 63, agent C",
+    "acsoe.modelling.di": "spec 63, agent C",
+    "acsoe.research.training": "spec 67, agent C",
+}
+
+#: Phase 5's two gates. `phase_3_gates_have_both_tests` asks the same question of
+#: engines 7, 10, 11 and 17; criterion 8 asks it of the two this phase adds.
+PHASE5_GATE_TEST_FILES: Final[Mapping[str, str]] = {
+    "anomaly": "tests/engines/test_anomaly.py",
+    "skeptic": "tests/engines/test_skeptic.py",
+}
+
+#: Committed evidence, both deposited by C under `tests/fixtures/`.
+CANDLES_FIXTURE: Final = Path("tests") / "fixtures" / "candles_sample.parquet"
+LABELS_FIXTURE: Final = Path("tests") / "fixtures" / "labelled_sample.parquet"
+WALKFORWARD_DIGEST_FIXTURE: Final = Path("tests") / "fixtures" / "walkforward_digest.json"
+
+#: Column names no feature may be computed from. The archive is OHLCVT: it carries no
+#: bid, ask, depth or spread, so a feature reading one is computable live and not in
+#: replay, and every metric a walk-forward reported would describe a model the live loop
+#: cannot reproduce.
+BOOK_COLUMNS: Final[tuple[str, ...]] = ("spread", "bid", "ask", "depth")
+
+#: Config keys Phase 5 adds. Each PENDING names the key and the spec that lands it,
+#: because a criterion reporting "config is incomplete" sends the reader to diff a file.
+KEY_MIN_LOOKBACK_FILL: Final = "features.min_lookback_fill"
+KEY_MAX_LOOKBACK_BARS: Final = "features.max_lookback_bars"
+KEY_DI_PERCENTILE: Final = "prediction.di_percentile"
+KEY_ANOMALY_PERCENTILE: Final = "anomaly.threshold_percentile"
+KEY_SKEPTIC_VETO: Final = "skeptic.veto_threshold"
+KEY_RANK_FEATURE: Final = "scout.rank_feature"
+
+#: The three values the operator has withheld until the walk-forward reports. Absent is
+#: not a defect and must never be a FAIL: spec 59 decision 7 says the engines fail
+#: closed and the criteria report PENDING naming the key. A default here would be this
+#: repository inventing a threshold that decides whether a model may refuse a trade.
+OPERATOR_WITHHELD_KEYS: Final[tuple[str, ...]] = (
+    KEY_DI_PERCENTILE,
+    KEY_ANOMALY_PERCENTILE,
+    KEY_SKEPTIC_VETO,
+)
+
+#: What the walk-forward digest carries per fold. Fixed here because spec 60 and spec 67
+#: are two halves of one seam and both are C's: a criterion asserting a field the
+#: trainer never writes can only ever be red, and a trainer writing a field nothing
+#: reads is a number nobody checks. `accuracy` is deliberately absent - spec 59
+#: decision 4, and `docs_vocabulary` carries the retired-term row for it.
+#: The three barriers, in the order every artefact records them and engine 8 reads them.
+#: Positional, so a permuted order swaps `target` for `stop` with nothing raising.
+PHASE5_CLASS_ORDER: Final[tuple[str, ...]] = ("target", "stop", "timeout")
+
+#: Retired by operator ruling of 2026-09-12 and computed nowhere. Present in a digest or a
+#: manifest it is a FAIL rather than a warning: the base rate is 23.89%, so a model that
+#: always predicts `stop` scores 51%, and the number itself is what misleads.
+FORBIDDEN_METRIC: Final = "accuracy"
+
+FOLD_DIGEST_FIELDS: Final[tuple[str, ...]] = (
+    "fold_index",
+    "train_end_ts",
+    "test_start_ts",
+    "test_end_ts",
+    "rows",
+    "effective_sample_size",
+    "brier",
+    "base_rate_brier",
+    "log_loss",
+    "buy_count",
+    "buy_target_rate",
+)
+
+
+def _phase5_module(dotted: str) -> tuple[ModuleType | None, Outcome | None]:
+    """Import a Phase 5 module, or say which spec still owes it."""
+    module, problem = try_import(dotted)
+    if module is not None:
+        return module, None
+    if problem is not None and problem.result is Result.FAIL:
+        return None, problem
+    return None, pending(f"{dotted} does not exist yet ({PHASE5_MODULES[dotted]})")
+
+
+def _phase5_symbol(module: ModuleType, attr: str, dotted: str) -> tuple[Any, Outcome | None]:
+    """An agreed symbol out of a Phase 5 module, or the PENDING naming its spec."""
+    value, missing = module_attr(module, attr)
+    if value is None:
+        return None, pending(f"{missing} ({PHASE5_MODULES[dotted]})")
+    return value, None
+
+
+def _phase5_engine_class(engine: str) -> tuple[Any, Outcome | None]:
+    """The engine class for `engine`, or a PENDING naming its number and spec."""
+    number, spec = PHASE5_ENGINES[engine]
+    module, problem = try_import(f"acsoe.engines.{engine}.engine")
+    if module is None:
+        if problem is not None and problem.result is Result.FAIL:
+            return None, problem
+        return None, pending(f"engine {number} `{engine}` does not exist yet ({spec})")
+    for attr in dir(module):
+        candidate = getattr(module, attr)
+        if (
+            isinstance(candidate, type)
+            and getattr(candidate, "name", None) == engine
+            and getattr(candidate, "number", None) == number
+        ):
+            return candidate, None
+    return None, pending(
+        f"acsoe.engines.{engine}.engine exists but declares no class with "
+        f"`name = {engine!r}` and `number = {number}` ({spec})"
+    )
+
+
+def _withheld_key(config: Any, key: str) -> Outcome | None:
+    """PENDING when the operator has not supplied `key`, and never a FAIL.
+
+    Spec 59 decision 7. `prediction.di_percentile`, `anomaly.threshold_percentile` and
+    `skeptic.veto_threshold` are the operator's to choose once the walk-forward has
+    reported, and until then they are absent on purpose. An absent threshold is an
+    unmade decision, not a broken one.
+
+    It is a helper rather than three copies because the wrong move is available in three
+    places, and it is the same wrong move each time: defaulting one of them would be an
+    agent inventing a number that decides whether a model is allowed to refuse a trade.
+    """
+    value = config_get(config, key) if isinstance(config, Mapping) else _config_attr(config, key)
+    if value is None:
+        return pending(
+            f"`{key}` is absent from config/default.yaml. It is the operator's to supply "
+            "once the walk-forward has reported (spec 59 decision 7), and nothing in "
+            "this repository may default it: the engine fails closed meanwhile, and this "
+            "criterion waits rather than inventing a threshold."
+        )
+    return None
+
+
+def _config_attr(config: Any, key: str) -> Any:
+    """`config.get(key)` where absence is a `None` and not an exception.
+
+    `Config.get` raises on an *unknown* key and returns `None` for a leaf the operator
+    has not decided - two different facts it reports differently on purpose. A criterion
+    waiting on a withheld value has to treat both as "not supplied yet", because until
+    spec 61 lands the section itself does not exist either, and the difference between
+    "no `prediction` section" and "no `di_percentile` inside it" is a matter of which
+    hour it is rather than anything the operator did.
+    """
+    getter = getattr(config, "get", None)
+    if getter is None:
+        return None
+    try:
+        return getter(key)
+    except Exception:
+        # An unknown key is an absent key to a criterion that is waiting for one. The
+        # broad catch is deliberate and narrow in effect: the only caller is
+        # `_withheld_key`, which turns either fact into the same PENDING.
+        return None
+
+
+def _feature_fixture_frame(ctx: VerifyContext) -> tuple[Any, Outcome | None]:
+    """`candles_sample.parquet` as a polars frame, or why not.
+
+    Read rather than constructed because its **hole is real**. The slice spans 1,209
+    fifteen-minute slots and holds 1,208 bars: the archive records no trades in one of
+    them. A lookback that is a window of time and a lookback that is a count of rows
+    return the same answer on every contiguous series ever written and differ only
+    across a hole, so a constructed contiguous fixture could not tell the correct
+    implementation from the defect.
+    """
+    polars, problem = _polars()
+    if polars is None:
+        return None, problem
+    path = ctx.root / CANDLES_FIXTURE
+    if not path.is_file():
+        return None, pending(
+            CANDLES_FIXTURE.as_posix() + " does not exist yet. It is the OHLCVT slice "
+            "the labelled sample was produced from, deposited by C under spec 60: the "
+            "labelled sample is the labeller's *output* and carries no open, high, low, "
+            "volume or trades, so there is nothing else committed for the feature "
+            "module to consume."
+        )
+    return polars.read_parquet(path), None
+
+
+def _book_column_hits(source: str) -> list[str]:
+    """Every mention of a book column in `source`, off the parsed syntax tree.
+
+    Read from the AST rather than with a substring scan, for one reason that matters: a
+    substring scan cannot tell `spread` inside a docstring explaining *why this module
+    never reads a spread* from `row["spread"]`. The first is the documentation this rule
+    wants and the second is the defect, and a check that cannot separate them makes the
+    honest comment unwriteable.
+
+    Names, attributes and string constants are all collected, because all three are how
+    a column gets reached: `frame.spread`, `row["spread"]` and `pl.col("spread")`.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return [f"could not be parsed: {exc}"]
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in BOOK_COLUMNS:
+            hits.append(f"line {node.lineno}: name `{node.id}`")
+        elif isinstance(node, ast.Attribute) and node.attr in BOOK_COLUMNS:
+            hits.append(f"line {node.lineno}: attribute `.{node.attr}`")
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value in BOOK_COLUMNS
+        ):
+            hits.append(f"line {node.lineno}: string {node.value!r}")
+    return hits
+
+
+#: The decision-bar grid and the live publication bound, both needed to shape the two
+#: feature paths identically. `KEY_DECISION_BAR_S` is Phase 4's and is reused rather than
+#: respelled: one name for one key is what stops a criterion measuring a different grid
+#: from the one the system trades on, which cost a criterion its meaning in Phase 4.
+KEY_PUBLISHED_BARS: Final = "market_sensor.published_bars"
+
+#: A fixed instant. Every Phase 5 criterion injects its clock; none reads the wall clock,
+#: so two runs a week apart reach the same verdict.
+PHASE5_NOW: Final = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
+
+#: How far the live and offline feature paths may differ, relative, once the frame length
+#: is allowed to differ.
+#:
+#: **They cannot be bit-identical and the reason is not a defect.** The live loop is handed
+#: `market_sensor.published_bars` candles because that is what engine 3 publishes; the
+#: trainer is handed the whole archive. polars accumulates its rolling aggregates along
+#: the column, and floating-point addition is not associative, so the same window lands on
+#: slightly different bits depending on how many rows preceded it. Measured on the
+#: committed slice at three window lengths: worst case **7.4e-15** relative, on
+#: `volume_z_4`; with the frame length held still the two paths agree on every bit of
+#: every feature.
+#:
+#: 1e-9 is six orders of magnitude above that noise and many orders below any genuine
+#: difference in arithmetic — a different indicator formula differs by percent, not by
+#: parts per billion. So this tolerance cannot hide a drifting second implementation,
+#: which is the objection an exact comparison exists to answer.
+FEATURE_REASSOCIATION_TOLERANCE: Final = 1e-9
+
+
+def _phase5_engine_absent(engine: str, problem: Outcome | None = None) -> Outcome:
+    if problem is not None and problem.result is Result.FAIL:
+        return problem
+    number, spec = PHASE5_ENGINES[engine]
+    return pending(f"engine {number} `{engine}` does not exist yet ({spec})")
+
+
+def _feature_surface(
+    module: ModuleType,
+) -> tuple[tuple[Any, tuple[str, ...], str, int] | None, Outcome | None]:
+    """`(compute, FEATURE_NAMES, FEATURE_VERSION, MAX_LOOKBACK_BARS)`, or what is missing.
+
+    All four, not just `compute`. A module with the arithmetic and no ordered feature
+    list would satisfy a criterion that asked only for the function, and an artefact
+    without its exact feature order is what `code-standards.md` calls unusable.
+    """
+    dotted = "acsoe.modelling.features"
+    compute, problem = _phase5_symbol(module, "compute", dotted)
+    if compute is None:
+        return None, problem
+    names, problem = _phase5_symbol(module, "FEATURE_NAMES", dotted)
+    if names is None:
+        return None, problem
+    version, problem = _phase5_symbol(module, "FEATURE_VERSION", dotted)
+    if version is None:
+        return None, problem
+    lookback, problem = _phase5_symbol(module, "MAX_LOOKBACK_BARS", dotted)
+    if lookback is None:
+        return None, problem
+    return (compute, tuple(str(name) for name in names), str(version), int(lookback)), None
+
+
+def _feature_values(row: Mapping[str, Any], names: Sequence[str]) -> dict[str, float | None]:
+    """One feature row with NaN normalised to `None`, whichever side produced it.
+
+    Engine 5 publishes `null` because `state` must be JSON-serialisable; the offline
+    frame carries the NaN itself. Normalising here is what lets the two be compared at
+    all, and it is done in the criterion rather than asked of either producer.
+    """
+    out: dict[str, float | None] = {}
+    for name in names:
+        value = row.get(name)
+        if value is None:
+            out[name] = None
+            continue
+        number = float(value)
+        out[name] = None if number != number else number
+    return out
+
+
+def _sensor_payload_through_the_real_contract(
+    frame: Any, *, pair: str, bar_ts: int, published_bars: int, interval_s: int
+) -> tuple[dict[str, Any] | None, Outcome | None]:
+    """`state["market_sensor"]` for these candles, built through engine 3's own model.
+
+    **Fabricate the subject, never the contract.** The candles are this criterion's to
+    choose; the *shape* they arrive in is engine 3's, so the payload is constructed by
+    `MarketSensorState` itself rather than as a dict written here. A hand-written payload
+    is how `check_data_guard_blocks_bad_data` came to have a body that never executed
+    while both halves of its proof passed, and it is how engine 5's own first test came to
+    assert against a non-bar tick that carried no candles when the real engine 3 publishes
+    candles on every tick and only nulls the bar timestamp.
+
+    `published_bars` is applied because engine 3 applies it. That is what makes the live
+    path a genuinely different input from the offline one, which sees the whole archive —
+    and a lookback longer than it is a window the live loop can never fill.
+    """
+    module, problem = try_import("acsoe.engines.market_sensor.contracts")
+    if module is None:
+        return None, problem or pending("engine 3 `market_sensor` does not exist yet")
+    state_cls, missing = module_attr(module, "MarketSensorState")
+    if state_cls is None:
+        return None, pending(missing)
+
+    tail = frame.tail(published_bars)
+    candles = tuple(
+        {
+            "pair": pair,
+            "ts": int(row["ts"]),
+            "open": str(row["open"]),
+            "high": str(row["high"]),
+            "low": str(row["low"]),
+            "close": str(row["close"]),
+            "volume": str(row["volume"]),
+            "trades": int(row["trades"]),
+        }
+        for row in tail.iter_rows(named=True)
+    )
+    payload = state_cls(
+        bar_closed=True,
+        closed_bar_ts=bar_ts,
+        interval_s=interval_s,
+        candles=candles,
+        missing_bars=(),
+        quotes={},
+        stream_available=True,
+        trades_seen=len(candles),
+    )
+    return payload.to_state(), None
+
+
+# --- features_reproduce_in_replay ------------------------------------------ #
+
+
+def check_features_reproduce_in_replay(ctx: VerifyContext) -> Outcome:
+    """One arithmetic, two callers: engine 5's live path and the offline builder agree.
+
+    This is the criterion `modelling/` exists for. Architecture invariant 5 keeps the live
+    loop and `research/` from importing each other, and the obvious consequence of that
+    rule — two implementations of one indicator, drifting — is the defect that makes a
+    backtest meaningless while every test stays green, because each implementation is
+    tested against itself and nothing ever compares them.
+
+    The two inputs are deliberately **not** the same object. The live path is handed money
+    as the decimal strings engine 3 publishes, truncated to `market_sensor.published_bars`
+    and shaped by engine 3's own `MarketSensorState`; the offline path is handed the whole
+    archive frame with `Decimal` money. If the shaping on either side loses or gains a bar
+    the last row's lookbacks move and the two disagree — which is the failure worth
+    catching and is invisible if the criterion hands both paths one pre-shaped frame.
+
+    Comparison is **exact**. `float(Decimal("20.24"))` and `float("20.24")` are the same
+    double, so two callers of one function have no licence to differ in the last bit, and
+    a tolerance would hide a genuinely different computation whose answers happen to be
+    close — which is what a drifting second implementation looks like early on.
+    """
+    polars, problem = _polars()
+    if polars is None:
+        return problem or pending("polars is unavailable")
+
+    frame, problem = _feature_fixture_frame(ctx)
+    if frame is None:
+        return problem or pending(CANDLES_FIXTURE.as_posix() + " could not be read")
+
+    config_map, problem = load_config(ctx.root)
+    if config_map is None:
+        return problem or pending("config/default.yaml could not be read")
+    values, problem = required_thresholds(
+        config_map, (KEY_DECISION_BAR_S, KEY_PUBLISHED_BARS, KEY_MIN_LOOKBACK_FILL)
+    )
+    if problem is not None:
+        return _with_contract(
+            problem,
+            "the feature keys are not in config/default.yaml yet",
+            "spec 61 (A-2) lands `features.min_lookback_fill`; this criterion needs it, "
+            "`timeframes.decision_bar_s` and `market_sensor.published_bars` to shape the "
+            "live and offline paths identically",
+        )
+    interval_s = int(values[KEY_DECISION_BAR_S])
+    published_bars = int(values[KEY_PUBLISHED_BARS])
+    min_fill = float(values[KEY_MIN_LOOKBACK_FILL])
+
+    source_path = ctx.root / "src" / "acsoe" / "modelling" / "features.py"
+
+    with root_import_path(ctx.root):
+        module, problem = _phase5_module("acsoe.modelling.features")
+        if module is None:
+            return problem or pending("acsoe.modelling.features does not exist yet")
+        if not source_path.is_file():
+            return pending(
+                "src/acsoe/modelling/features.py does not exist yet (spec 63, C-2); the "
+                "import resolved to " + str(getattr(module, "__file__", "?"))
+            )
+
+        hits = _book_column_hits(source_path.read_text(encoding="utf-8"))
+        if hits:
+            return failed(
+                "modelling/features.py reads a book-derived column: "
+                + "; ".join(hits[:4])
+                + ". The historical archive is OHLCVT — no bid, no ask, no depth, no "
+                "spread — so a feature reading one is computable live and not computable "
+                "in replay, and every backtest number it touched describes a model the "
+                "live loop cannot reproduce. architecture-context.md states it as a "
+                "Phase 5 rule."
+            )
+
+        surface, problem = _feature_surface(module)
+        if surface is None:
+            return problem or pending("acsoe.modelling.features is incomplete (spec 63)")
+        compute, names, version, max_lookback = surface
+
+        named_after_the_book = [
+            name for name in names if any(word in name.lower() for word in BOOK_COLUMNS)
+        ]
+        if named_after_the_book:
+            return failed(
+                "FEATURE_NAMES carries "
+                + ", ".join(named_after_the_book)
+                + ", named after an input the archive does not have"
+            )
+        if max_lookback > published_bars:
+            return failed(
+                "MAX_LOOKBACK_BARS is "
+                + str(max_lookback)
+                + " and `"
+                + KEY_PUBLISHED_BARS
+                + "` is "
+                + str(published_bars)
+                + ". Engine 3 publishes the smaller number, so the live path can never "
+                "fill the longest window while the offline builder fills it every time — "
+                "the two paths then differ on every bar, silently, with the offline "
+                "number being the one that looks right."
+            )
+
+        money = [c for c in ("open", "high", "low", "close", "volume") if c in frame.columns]
+        floats = frame.with_columns([polars.col(c).cast(polars.Float64) for c in money])
+        offline = compute(floats, interval_s=interval_s, min_lookback_fill=min_fill)
+        if "ts" not in offline.columns:
+            return failed(
+                "modelling.features.compute returned a frame with no `ts` column; without "
+                "it nothing downstream can join a feature row to a label"
+            )
+
+        pair = "SOLUSD"
+        bar_ts = int(frame["ts"].max())
+        sensor, problem = _sensor_payload_through_the_real_contract(
+            frame,
+            pair=pair,
+            bar_ts=bar_ts,
+            published_bars=published_bars,
+            interval_s=interval_s,
+        )
+        if sensor is None:
+            return problem or pending("engine 3 `market_sensor` does not exist yet")
+
+        engine_cls, problem = _phase5_engine_class("feature")
+        if engine_cls is None:
+            return problem or _phase5_engine_absent("feature")
+
+        engine_config, problem = _phase3_config()
+        if engine_config is None:
+            return problem or pending("the committed config could not be loaded")
+        clients, problem = _fake_clients()
+        if clients is None:
+            return problem or pending("the shared test doubles are unavailable")
+        context, problem = _engine_context(
+            engine_config, clients, run_id="verify-phase-5", now=PHASE5_NOW
+        )
+        if context is None:
+            return problem or pending("acsoe.core.contracts does not exist yet")
+
+        result = engine_cls().process(context, {"market_sensor": sensor})
+        data = dict(getattr(result, "data", {}) or {})
+        offline_row = _feature_values(offline.tail(1).to_dicts()[0], names)
+        # The same arithmetic over the same candles engine 5 was handed. This is what the
+        # exact comparison below is against; `offline_row` is the whole-archive frame and
+        # is compared within a tolerance, for the reason in the docstring.
+        same_window = compute(
+            floats.tail(published_bars),
+            interval_s=interval_s,
+            min_lookback_fill=min_fill,
+        )
+        window_row = _feature_values(same_window.tail(1).to_dicts()[0], names)
+
+    pairs = data.get("pairs")
+    if not isinstance(pairs, Mapping) or pair not in pairs:
+        return failed(
+            "engine 5 published no feature row for "
+            + pair
+            + " on a tick where `bar_closed` was true and "
+            + str(published_bars)
+            + " candles were available; it published "
+            + repr(sorted(data))[:200]
+        )
+    live_row = _feature_values(pairs[pair], names)
+
+    published_version = data.get("feature_version")
+    if published_version != version:
+        return failed(
+            "engine 5 published feature_version "
+            + repr(published_version)
+            + " while modelling.features.FEATURE_VERSION is "
+            + repr(version)
+            + ". An artefact records the version it was trained at and engine 8 refuses "
+            "one that disagrees, so two spellings mean an artefact can be loaded by an "
+            "engine computing something else."
+        )
+
+    # (1) EXACT, with the frame length held still. Engine 5 may group, cast, truncate and
+    # turn NaN into null; it may not change a number. Any difference here is a difference
+    # in shaping and there is no licence for one.
+    mismatches = [
+        f"{name}: engine 5={live_row[name]!r} modelling={window_row[name]!r}"
+        for name in names
+        if live_row[name] != window_row[name]
+    ]
+    if mismatches:
+        return failed(
+            str(len(mismatches))
+            + " of "
+            + str(len(names))
+            + " features differ between engine 5's live path and modelling.features over "
+            "the very same candles: "
+            + "; ".join(mismatches[:4])
+            + ". One arithmetic in modelling/ is the point of the package, and with the "
+            "same rows in, the engine's shaping must not move a single bit."
+        )
+
+    # (2) BOUNDED, across the frame lengths the two sides really see. The live loop is
+    # given `market_sensor.published_bars` candles and the trainer the whole archive;
+    # polars accumulates its rolling aggregates along the column, so the same window lands
+    # on slightly different bits depending on how many rows preceded it. Measured here at
+    # a relative 7.4e-15 worst case, which is reassociation and not arithmetic. The bound
+    # is six orders of magnitude above that and many orders below any genuine difference
+    # in formula, which shows up as percent rather than as parts per billion.
+    worst = 0.0
+    worst_name = ""
+    drifted: list[str] = []
+    for name in names:
+        live = live_row[name]
+        offline = offline_row[name]
+        if live is None or offline is None:
+            if live is not offline:
+                drifted.append(f"{name}: live={live!r} archive={offline!r} (one is null)")
+            continue
+        scale = max(abs(live), abs(offline), 1e-12)
+        relative = abs(live - offline) / scale
+        if relative > worst:
+            worst, worst_name = relative, name
+        if relative > FEATURE_REASSOCIATION_TOLERANCE:
+            drifted.append(f"{name}: live={live!r} archive={offline!r} rel={relative:.2e}")
+    if drifted:
+        return failed(
+            str(len(drifted))
+            + " features differ between the "
+            + str(published_bars)
+            + "-bar live window and the whole archive frame by more than "
+            f"{FEATURE_REASSOCIATION_TOLERANCE:.0e}"
+            + " relative: "
+            + "; ".join(drifted[:4])
+            + ". Floating-point reassociation inside a rolling kernel is parts per "
+            "quadrillion; a difference this large is a different computation, or a "
+            "lookback the live window is too short to fill."
+        )
+
+    filled = sum(1 for name in names if live_row[name] is not None)
+    return passed(
+        str(len(names))
+        + " features (version "
+        + version
+        + ") reproduce on bar "
+        + str(bar_ts)
+        + " of "
+        + CANDLES_FIXTURE.as_posix()
+        + ": engine 5's live path and modelling.features agree EXACTLY over the same "
+        + str(published_bars)
+        + " candles ("
+        + str(filled)
+        + " filled), and agree with the whole-archive frame to "
+        + (f"{worst:.1e} relative (worst: {worst_name})" if worst_name else "the last bit")
+        + "; no feature reads a spread, bid, ask or depth"
+    )
+
+
+# --- feature_lookbacks_are_time_not_rows ----------------------------------- #
+
+
+def check_feature_lookbacks_are_time_not_rows(ctx: VerifyContext) -> Outcome:
+    """A lookback is a window of seconds, and a hole inside it is missing data.
+
+    The archives contain only intervals in which trades occurred, so a missing candle
+    means *no trades* and nothing may interpolate one into existence. That leaves two
+    readings of "the last n bars", identical on every contiguous series and different on
+    exactly the quiet periods this market has most of:
+
+    * **Rows.** The previous n rows whatever their timestamps. Across a six-hour hole that
+      is a window reaching back most of a day, and every z-score and range built on it is
+      a statement about a different market.
+    * **Time.** The rows inside ``n * interval_s`` seconds. Across the same hole the window
+      holds a handful of bars, the counter says so, and every feature over it is NaN
+      because the fill is below `features.min_lookback_fill`.
+
+    It is the same rule the timeout barrier is held to in `architecture-context.md`,
+    arriving one layer down.
+
+    The series is **constructed**, like `walkforward_folds_purged_and_embargoed`'s rows:
+    the hole has to sit immediately behind the bar under test, and no committed slice can
+    be relied on to have one there. The hole is made **wider than the window minus the
+    tail**, which is not fussiness — with a narrower hole the window legitimately still
+    reaches past it and the expected count is a sum of two runs, which is how a first
+    version of this check went red against a correct implementation.
+    """
+    polars, problem = _polars()
+    if polars is None:
+        return problem or pending("polars is unavailable")
+
+    config_map, problem = load_config(ctx.root)
+    if config_map is None:
+        return problem or pending("config/default.yaml could not be read")
+    values, problem = required_thresholds(
+        config_map, (KEY_DECISION_BAR_S, KEY_MIN_LOOKBACK_FILL)
+    )
+    if problem is not None:
+        return _with_contract(
+            problem,
+            "`" + KEY_MIN_LOOKBACK_FILL + "` is not in config/default.yaml yet",
+            "spec 61 (A-2). A window whose fill is below it yields NaN for every feature "
+            "over it, and without the key there is nothing to compare a fill against",
+        )
+    interval_s = int(values[KEY_DECISION_BAR_S])
+    min_fill = float(values[KEY_MIN_LOOKBACK_FILL])
+
+    with root_import_path(ctx.root):
+        module, problem = _phase5_module("acsoe.modelling.features")
+        if module is None:
+            return problem or pending("acsoe.modelling.features does not exist yet")
+        surface, problem = _feature_surface(module)
+        if surface is None:
+            return problem or pending("acsoe.modelling.features is incomplete (spec 63)")
+        compute, names, _version, _max_lookback = surface
+
+        counters = {
+            name: int(match.group(1))
+            for name in names
+            if (match := re.fullmatch(r"bars_in_lookback_(\d+)", name)) is not None
+        }
+        if not counters:
+            return pending(
+                "FEATURE_NAMES carries no `bars_in_lookback_<n>` feature. Spec 63 makes "
+                "the fill of each lookback a feature in its own right, because a window "
+                "two thirds empty is a fact a model and an operator both need, and it is "
+                "the only thing that distinguishes a short window from a quiet market. "
+                "Names seen: " + ", ".join(names[:8]) + ("..." if len(names) > 8 else "")
+            )
+        counter_name = max(counters, key=lambda key: counters[key])
+        window_bars = counters[counter_name]
+
+        tail_bars = max(2, window_bars // 4)
+        hole_bars = window_bars  # wider than window - tail, so the count is unambiguous
+        origin = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp())
+        stamps = [origin + i * interval_s for i in range(window_bars * 3)]
+        resume = stamps[-1] + (hole_bars + 1) * interval_s
+        stamps.extend(resume + i * interval_s for i in range(tail_bars))
+
+        rows: list[dict[str, Any]] = []
+        price = 100.0
+        for index, ts in enumerate(stamps):
+            # Deterministic and deliberately not flat: a constant series makes every
+            # range and volume feature zero, and a check comparing zeros passes against
+            # arithmetic that never ran.
+            price = price * (1.0 + 0.0013 * ((index % 7) - 3))
+            rows.append(
+                {
+                    "ts": ts,
+                    "open": price * 0.999,
+                    "high": price * 1.004,
+                    "low": price * 0.996,
+                    "close": price,
+                    "volume": 1000.0 + 37.0 * (index % 11),
+                    "trades": 20 + (index % 5),
+                }
+            )
+        computed = compute(
+            polars.DataFrame(rows), interval_s=interval_s, min_lookback_fill=min_fill
+        )
+
+    if "ts" not in computed.columns:
+        return failed("modelling.features.compute returned a frame with no `ts` column")
+    last = computed.filter(polars.col("ts") == stamps[-1])
+    if last.height != 1:
+        return failed(
+            "compute produced "
+            + str(last.height)
+            + " rows for the last decision bar; one bar in, one feature row out"
+        )
+    row = _feature_values(last.to_dicts()[0], names)
+
+    reported = row.get(counter_name)
+    if reported is None:
+        return failed(counter_name + " is null on a bar that has candles behind it")
+    if int(reported) != tail_bars:
+        return failed(
+            counter_name
+            + " reported "
+            + str(int(reported))
+            + " over a "
+            + str(window_bars)
+            + "-bar window containing a "
+            + str(hole_bars)
+            + "-bar hole. A lookback counted in ROWS reaches back past the hole and "
+            "reports "
+            + str(window_bars)
+            + "; a lookback counted in TIME reports "
+            + str(tail_bars)
+            + ". The archive's holes are periods with no trades, so the rows on the far "
+            "side of one describe a different market and nothing may stretch a window "
+            "over them."
+        )
+
+    fill = int(reported) / window_bars
+    if fill >= min_fill:
+        return failed(
+            "the constructed hole leaves a fill of "
+             f"{fill:.3f}"
+             ", not below `"
+            + KEY_MIN_LOOKBACK_FILL
+            + "` = "
+            + f"{min_fill:.3f}"
+            + ", so this criterion cannot ask the NaN question it exists to ask. That is "
+            "a fault in the construction here, not in the feature module."
+        )
+
+    # Only the features of the deficient window. A bar's own range and the hour of the
+    # day are known whatever the history behind them looks like, and the shorter windows
+    # may legitimately be full; blanking those too would throw away the rows a
+    # short-history pair can be judged on, which is the opposite of what engine 5 does
+    # when it lists a pair rather than dropping it.
+    suffix = f"_{window_bars}"
+    of_this_window = [
+        name for name in names if name.endswith(suffix) and name != counter_name
+    ]
+    if not of_this_window:
+        return failed(
+            "no feature other than the counter is named for the "
+            + str(window_bars)
+            + "-bar window, so this criterion has nothing to assert about NaN"
+        )
+    still_filled = [name for name in of_this_window if row[name] is not None]
+    if still_filled:
+        return failed(
+            str(len(still_filled))
+            + " features carry a value over a window only "
+            + f"{fill:.1%}"
+            + " filled, below `"
+            + KEY_MIN_LOOKBACK_FILL
+            + "` = "
+            + f"{min_fill:.3f}"
+            + ": "
+            + ", ".join(still_filled[:5])
+            + ". A number computed over a mostly-absent window is indistinguishable from "
+            "one computed over a full window, and spec 63 says it is NaN. Nothing is "
+            "interpolated and nothing is stretched."
+        )
+
+    return passed(
+        counter_name
+        + " reported "
+        + str(int(reported))
+        + " of "
+        + str(window_bars)
+        + " bars across a constructed "
+        + str(hole_bars)
+        + "-bar hole (a row-counted lookback would report "
+        + str(window_bars)
+        + "), and all "
+        + str(len(of_this_window))
+        + " features over that window are NaN at a fill of "
+        + f"{fill:.3f}"
+        + " against `"
+        + KEY_MIN_LOOKBACK_FILL
+        + "` = "
+        + f"{min_fill:.3f}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# The trainer's seam, driven by criteria 3 to 7
+# --------------------------------------------------------------------------- #
+#
+# Spec 60 and spec 67 are two halves of one seam and both are C's. A criterion asserting
+# a field the trainer never writes can only ever be red; a trainer writing a field
+# nothing reads is a number nobody checks. So the names live in one place -
+# `FOLD_DIGEST_FIELDS` above and the four symbols below - and both halves are built
+# against them rather than against each other's prose.
+
+#: What `acsoe.research.training` must expose for these criteria to drive it.
+TRAINING_CONTRACT: Final = (
+    "expected acsoe.research.training: "
+    "build_dataset(labelled, candles, *, config, macro_archive=None) -> pl.DataFrame "
+    "carrying pair, decision_ts, label, label_window_end_ts, return_pct, weight and one "
+    "column per FEATURE_NAMES; "
+    "train_walkforward(dataset, *, config, models_dir, derived_dir, now, max_folds=None) "
+    "-> TrainingReport with .run_id, .fold_runs (one artefact run id per fold), .folds "
+    "(one mapping per fold carrying " + ", ".join(FOLD_DIGEST_FIELDS) + "), .digest, "
+    ".digest_path and .oos_path"
+)
+
+#: Columns the pooled dataset must carry beside the features. `pair` is an identifier and
+#: is **never** a feature: a pooled model that can memorise a pair name has learned which
+#: pairs went up in the training window and nothing that transfers.
+DATASET_COLUMNS: Final[tuple[str, ...]] = (
+    "pair",
+    "decision_ts",
+    "label",
+    "label_window_end_ts",
+    "return_pct",
+    "weight",
+)
+
+#: Columns the out-of-sample file must carry. Specs 69, 74 and 75 read this file and
+#: nothing else, so a missing column here is three specs with nothing to stand on.
+OOS_COLUMNS: Final[tuple[str, ...]] = (
+    "pair",
+    "decision_ts",
+    "fold_index",
+    "p_target",
+    "p_stop",
+    "p_timeout",
+    "expected_move_pct",
+    "is_buy",
+    "di",
+    "di_refused",
+    "label",
+    "return_pct",
+    "weight",
+)
+
+#: The constructed dataset the training criteria are driven over: two pairs, long enough
+#: to hold several weekly folds behind a ninety-day training window, small enough that
+#: five criteria can each train over it inside one gate run.
+#:
+#: **The committed sample cannot do this job and that is not a fixable oversight.**
+#: `labelled_sample.parquet` is ten days of one pair, and `backtest.training_window_days`
+#: is 90, so a rolling walk-forward over it produces **no folds at all** - and an
+#: assertion over an empty fold list is the shape this project has been burned by three
+#: times. Spec 60 was amended on 2026-09-13 to say so.
+CONSTRUCTED_DAYS: Final = 140
+CONSTRUCTED_PAIRS: Final[tuple[str, ...]] = ("AAAUSD", "BBBUSD")
+CONSTRUCTED_MAX_FOLDS: Final = 2
+
+
+def _training_module() -> tuple[ModuleType | None, Outcome | None]:
+    module, problem = _phase5_module("acsoe.research.training")
+    if module is None:
+        return None, _with_contract(
+            problem,
+            "acsoe.research.training does not exist yet (spec 67, C-2)",
+            TRAINING_CONTRACT,
+        )
+    return module, None
+
+
+def _constructed_candles(polars: ModuleType, *, pair: str, interval_s: int) -> Any:
+    """A deterministic price series per pair, long enough for several weekly folds.
+
+    Seeded arithmetic rather than a random generator, so two runs of the gate a week
+    apart produce the same bars and `training_is_reproducible_from_config_and_data` is
+    measuring the trainer rather than the weather. Each pair gets a different phase and
+    drift, because two identical series would make a pooled model's pair column and its
+    feature columns carry the same information and the "no pair identity" property
+    untestable.
+    """
+    bars = CONSTRUCTED_DAYS * 86_400 // interval_s
+    origin = (int(datetime(2024, 1, 1, tzinfo=UTC).timestamp()) // interval_s) * interval_s
+    offset = sum(ord(char) for char in pair)
+    rows: list[dict[str, Any]] = []
+    price = 100.0 + (offset % 17)
+    for index in range(bars):
+        # A wobble with a slow cycle on top, so the series has both quiet and volatile
+        # stretches and the labels come out mixed rather than all `stop`.
+        wobble = 0.0022 * (((index + offset) % 11) - 5) / 5.0
+        swing = 0.004 * math.sin((index + offset) / 97.0)
+        price = max(price * (1.0 + wobble + swing), 0.01)
+        span = abs(wobble + swing) + 0.0008
+        rows.append(
+            {
+                "ts": origin + index * interval_s,
+                "open": price * (1.0 - span / 3),
+                "high": price * (1.0 + span),
+                "low": price * (1.0 - span),
+                "close": price,
+                "volume": 900.0 + 60.0 * ((index + offset) % 13),
+                "trades": 15 + ((index + offset) % 9),
+            }
+        )
+    return polars.DataFrame(rows)
+
+
+def _constructed_dataset(
+    ctx: VerifyContext, polars: ModuleType, training: ModuleType, engine_config: Any
+) -> tuple[Any, Outcome | None]:
+    """The pooled, labelled, featured, weighted frame the trainer takes.
+
+    Built through the **real** labeller and the **real** feature module: only the prices
+    are this criterion's. Fabricate the subject, never the contract.
+    """
+    labelling, problem = try_import("acsoe.research.labelling")
+    if labelling is None:
+        return None, _with_contract(
+            problem,
+            "acsoe.research.labelling does not exist yet",
+            PHASE4_RESEARCH["acsoe.research.labelling"],
+        )
+    label_frame, missing = module_attr(labelling, "label_frame")
+    if label_frame is None:
+        return None, pending(missing)
+    builder, problem = _phase5_symbol(training, "build_dataset", "acsoe.research.training")
+    if builder is None:
+        return None, _with_contract(problem, "build_dataset is absent", TRAINING_CONTRACT)
+
+    interval_s = int(engine_config.get(KEY_DECISION_BAR_S))
+    candles: dict[str, Any] = {}
+    labelled: dict[str, Any] = {}
+    for pair in CONSTRUCTED_PAIRS:
+        frame = _constructed_candles(polars, pair=pair, interval_s=interval_s)
+        decimal_frame = frame.with_columns(
+            [
+                polars.col(column).cast(polars.Decimal(38, 12))
+                for column in ("open", "high", "low", "close", "volume")
+            ]
+        )
+        labels, _series = label_frame(
+            decimal_frame, pair=pair, config=engine_config, interval_s=interval_s
+        )
+        candles[pair] = frame
+        labelled[pair] = labels
+    dataset = builder(labelled, candles, config=engine_config)
+    del ctx
+    return dataset, None
+
+
+def _trained(
+    ctx: VerifyContext,
+    tmp: Path,
+    *,
+    name: str = "run",
+    max_folds: int = CONSTRUCTED_MAX_FOLDS,
+) -> tuple[tuple[Any, Any, Any] | None, Outcome | None]:
+    """`(report, dataset, config)` from one training run into a temporary models root.
+
+    **Nothing here reads `models/`, `data/` or `logs/`.** All three are gitignored, so a
+    criterion that depended on one would pass only on the machine that produced it. The
+    artefacts are written into `tmp` and thrown away with it.
+    """
+    polars, problem = _polars()
+    if polars is None:
+        return None, problem
+    training, problem = _training_module()
+    if training is None:
+        return None, problem
+    engine_config, problem = _phase3_config()
+    if engine_config is None:
+        return None, problem or pending("the committed config could not be loaded")
+    trainer, problem = _phase5_symbol(
+        training, "train_walkforward", "acsoe.research.training"
+    )
+    if trainer is None:
+        return None, _with_contract(problem, "train_walkforward is absent", TRAINING_CONTRACT)
+
+    dataset, problem = _constructed_dataset(ctx, polars, training, engine_config)
+    if dataset is None:
+        return None, problem
+    models_dir = tmp / name / "models"
+    derived_dir = tmp / name / "derived"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    derived_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        report = trainer(
+            dataset,
+            config=engine_config,
+            models_dir=models_dir,
+            derived_dir=derived_dir,
+            now=PHASE5_NOW,
+            max_folds=max_folds,
+        )
+    except TypeError as exc:
+        return None, _with_contract(
+            None,
+            "acsoe.research.training.train_walkforward does not accept the call this "
+            "criterion makes: " + str(exc)[:200],
+            TRAINING_CONTRACT,
+        )
+    return (report, dataset, engine_config), None
+
+
+def _fold_entries(report: Any) -> tuple[list[dict[str, Any]] | None, Outcome | None]:
+    folds = getattr(report, "folds", None)
+    if not folds:
+        return None, failed(
+            "the training run reported no folds. A rolling walk-forward over "
+            + str(CONSTRUCTED_DAYS)
+            + " days at `backtest.retrain_interval_days` must produce several, and an "
+            "assertion over an empty fold list is an assertion over nothing."
+        )
+    entries = [dict(entry) for entry in folds]
+    absent = [
+        field for field in FOLD_DIGEST_FIELDS if any(field not in entry for entry in entries)
+    ]
+    if absent:
+        return None, failed(
+            "a fold entry is missing " + ", ".join(absent) + ". Every one of "
+            + ", ".join(FOLD_DIGEST_FIELDS)
+            + " is reported per fold; the effective sample size in particular sits beside "
+            "that fold's row count by operator addition, because an aggregate hides the "
+            "fold whose 8,000 rows are 300 observations."
+        )
+    return entries, None
+
+
+def _identity_of(frame: Any, polars: ModuleType) -> set[str]:
+    """`{pair|decision_ts}` for every row of a dataset or OOS frame."""
+    del polars
+    return {
+        f"{row['pair']}|{int(row['decision_ts'])}"
+        for row in frame.select(["pair", "decision_ts"]).iter_rows(named=True)
+    }
+
+
+def _fold_indices(
+    dataset: Any, engine_config: Any, *, interval_s: int
+) -> tuple[list[Any] | None, Outcome | None]:
+    """The folds this criterion recomputes for itself, from the public splitter.
+
+    **Recomputed, never read back from the artefact.** Ruling 7 of 2026-09-13: an identity
+    proof that trusts the number the subject reported is not a proof. The splitter is
+    deterministic and public, so the criterion can derive the truth and compare.
+    """
+    module, problem = try_import("acsoe.research.walkforward")
+    if module is None:
+        return None, problem or pending("acsoe.research.walkforward does not exist yet")
+    splitter, missing = module_attr(module, "purged_walk_forward")
+    if splitter is None:
+        return None, pending(missing)
+    rows = dataset.select(["decision_ts", "label_window_end_ts"]).to_dicts()
+    return splitter(rows, config=engine_config, interval_s=interval_s), None
+
+
+# --- predictor_trains_and_calibrates --------------------------------------- #
+
+
+def check_predictor_trains_and_calibrates(ctx: VerifyContext) -> Outcome:
+    """A predictor trains, its probabilities are a distribution, and the metric is Brier.
+
+    Four claims, and the last is the one this phase turns on.
+
+    **Three probabilities summing to one.** An unrenormalised calibrator scales every
+    expected move by an unknown factor, and the ranking between candidates survives it, so
+    the BUY boundary moves while everything still looks internally consistent.
+
+    **A calibrator is present.** LightGBM's raw multiclass output is not calibrated, and
+    an `expected_move_pct` computed from uncalibrated probabilities is a number in the
+    right range and the wrong size.
+
+    **The manifest carries the ordered feature list and the scaler.** A model without its
+    exact feature order is unusable; `code-standards.md` says so and the artefact loader
+    refuses one, but only if the manifest recorded it.
+
+    **Brier against the fold's base-rate Brier, and accuracy nowhere.** The base rate is
+    23.89%, so a model that always predicts `stop` is right 51% of the time: a digest
+    reporting accuracy is reporting the model that never trades. `accuracy` present is a
+    FAIL rather than a warning, because the number itself is what misleads.
+    """
+    with tempfile.TemporaryDirectory(prefix="acsoe-verify-train-") as raw_tmp:
+        tmp = Path(raw_tmp)
+        with root_import_path(ctx.root):
+            trained, problem = _trained(ctx, tmp)
+            if trained is None:
+                return problem or pending("acsoe.research.training does not exist yet")
+            report, _dataset, _engine_config = trained
+
+            entries, problem = _fold_entries(report)
+            if entries is None:
+                return problem or failed("the training run reported no folds")
+
+            artefacts, problem = _phase5_module("acsoe.modelling.artefacts")
+            if artefacts is None:
+                return problem or pending("acsoe.modelling.artefacts does not exist yet")
+            features_mod, problem = _phase5_module("acsoe.modelling.features")
+            if features_mod is None:
+                return problem or pending("acsoe.modelling.features does not exist yet")
+            feature_names = tuple(str(n) for n in features_mod.FEATURE_NAMES)
+
+            fold_runs = list(getattr(report, "fold_runs", ()) or ())
+            if len(fold_runs) != len(entries):
+                return failed(
+                    "the run reported "
+                    + str(len(entries))
+                    + " folds and "
+                    + str(len(fold_runs))
+                    + " artefact run ids. One artefact directory per fold, never "
+                    "overwritten, is what makes a fold's metrics traceable to the model "
+                    "that produced them."
+                )
+
+            run_dir = Path(str(getattr(report, "models_dir", tmp / "run" / "models")))
+            directory = run_dir / fold_runs[0]
+            try:
+                loaded = artefacts.load_run(
+                    directory,
+                    expected_features=[
+                        str(name) for name in entries[0].get("feature_names", feature_names)
+                    ],
+                )
+            except Exception as exc:
+                return failed(
+                    "the first fold's artefact would not load from "
+                    + str(directory)
+                    + ": "
+                    + f"{type(exc).__name__}: {exc}"[:300]
+                )
+
+            manifest = loaded.manifest
+            if not manifest.feature_names:
+                return failed(
+                    "the manifest carries no feature list. A model without its exact "
+                    "feature order is unusable: hand LightGBM the same columns in a "
+                    "different order and it returns confident nonsense with nothing "
+                    "raising."
+                )
+            if tuple(manifest.feature_names[: len(feature_names)]) != feature_names:
+                return failed(
+                    "the manifest's feature list does not begin with FEATURE_NAMES in "
+                    "order; the macro columns follow them, they do not replace them"
+                )
+            if not loaded.scaler.feature_names:
+                return failed("scaler.json carries no feature names")
+            if tuple(manifest.class_order) != PHASE5_CLASS_ORDER:
+                return failed(
+                    "the manifest records class order "
+                    + repr(tuple(manifest.class_order))
+                    + "; it must be "
+                    + repr(PHASE5_CLASS_ORDER)
+                    + ", because the three probabilities are read positionally by engine "
+                    "8 and a permuted order swaps `target` for `stop` silently"
+                )
+            if not manifest.extras.get("calibrator"):
+                return failed(
+                    "the manifest names no calibrator. LightGBM's raw multiclass output "
+                    "is not calibrated, and an expected move computed from uncalibrated "
+                    "probabilities is a number in the right range and the wrong size."
+                )
+
+    first = entries[0]
+    for field in ("brier", "base_rate_brier"):
+        if first.get(field) is None:
+            return failed(
+                "fold 0 reports no `"
+                + field
+                + "`. The evaluation number is the Brier of P(target) against the fold's "
+                "own base-rate Brier; a Brier with nothing to compare it to says nothing."
+            )
+    offending = [
+        entry.get("fold_index") for entry in entries if FORBIDDEN_METRIC in entry
+    ]
+    if offending:
+        return failed(
+            "`"
+            + FORBIDDEN_METRIC
+            + "` is reported on fold(s) "
+            + repr(offending)
+            + ". It is retired by operator ruling of 2026-09-12 and computed nowhere: at "
+            "a 23.89% target rate a model that always predicts `stop` scores 51%, so a "
+            "digest carrying it is reporting the model that never trades."
+        )
+
+    return passed(
+        str(len(entries))
+        + " fold(s) trained over a constructed "
+        + str(CONSTRUCTED_DAYS)
+        + "-day, "
+        + str(len(CONSTRUCTED_PAIRS))
+        + "-pair dataset into a temporary models root: probabilities over "
+        + repr(PHASE5_CLASS_ORDER)
+        + ", a calibrator named in the manifest, the ordered feature list and the scaler "
+        "present, Brier "
+        + f"{float(first['brier']):.4f}"
+        + " against a base-rate Brier of "
+        + f"{float(first['base_rate_brier']):.4f}"
+        + " on fold 0, and no accuracy anywhere"
+    )
+
+
+# --- training_is_reproducible_from_config_and_data ------------------------- #
+
+
+def check_training_is_reproducible_from_config_and_data(ctx: VerifyContext) -> Outcome:
+    """Two runs over one config and one dataset agree, and a run id is never reused.
+
+    "A run that cannot be reproduced from its config plus its data is not a result" is in
+    `code-standards.md` and it is the only thing that makes a leaderboard comparable
+    across weeks. The check is behavioural rather than a source scan: a seed taken from
+    the clock, a thread count left to the machine, a dictionary iterated in insertion
+    order — every one of them shows up here as two runs disagreeing, and none of them
+    would show up in a grep.
+
+    The second half is the refusal. `models/<run_id>/` is written once and never
+    overwritten, so a second run into an existing run id must raise rather than replace:
+    an overwritten artefact makes every leaderboard row that referenced it a claim about a
+    model that no longer exists.
+    """
+    with tempfile.TemporaryDirectory(prefix="acsoe-verify-repro-") as raw_tmp:
+        tmp = Path(raw_tmp)
+        with root_import_path(ctx.root):
+            first, problem = _trained(ctx, tmp, name="one", max_folds=1)
+            if first is None:
+                return problem or pending("acsoe.research.training does not exist yet")
+            second, problem = _trained(ctx, tmp, name="two", max_folds=1)
+            if second is None:
+                return problem or pending("acsoe.research.training does not exist yet")
+
+            report_one, _dataset, _config = first
+            report_two, _dataset2, _config2 = second
+
+            entries_one, problem = _fold_entries(report_one)
+            if entries_one is None:
+                return problem or failed("the first run reported no folds")
+            entries_two, problem = _fold_entries(report_two)
+            if entries_two is None:
+                return problem or failed("the second run reported no folds")
+
+            differing = [
+                field
+                for field in FOLD_DIGEST_FIELDS
+                if entries_one[0].get(field) != entries_two[0].get(field)
+            ]
+            if differing:
+                return failed(
+                    "two runs over the same config and the same data disagree on "
+                    + ", ".join(differing)
+                    + " for fold 0: "
+                    + repr({f: (entries_one[0].get(f), entries_two[0].get(f)) for f in differing})[
+                        :260
+                    ]
+                    + ". Every seed comes from config; a seed from the clock, an unfixed "
+                    "thread count or an insertion-ordered dictionary all look exactly "
+                    "like this."
+                )
+
+            runs_one = list(getattr(report_one, "fold_runs", ()) or ())
+            runs_two = list(getattr(report_two, "fold_runs", ()) or ())
+            if not runs_one or not runs_two:
+                return failed("a training run reported no artefact run ids")
+            if set(runs_one) & set(runs_two):
+                return failed(
+                    "the two runs share the artefact run id(s) "
+                    + repr(sorted(set(runs_one) & set(runs_two)))
+                    + ". A run id identifies one training run; reusing it means the "
+                    "second run either overwrote the first or was refused, and the "
+                    "leaderboard cannot tell which model a row describes."
+                )
+
+            store_cls, problem = _store_class()
+            if store_cls is None:
+                return problem or pending("clients.store.client.StoreClient does not exist yet")
+            db_path, store_mod, problem = _migrated_db(tmp, "repro.sqlite")
+            if db_path is None:
+                return problem or pending("the store could not be migrated")
+            del store_mod
+            models_root = tmp / "artefact-root"
+            store = store_cls(db_path, models_dir=models_root)
+            try:
+                created = store.new_model_run_dir("train-verify-0")
+                if not created.is_dir():
+                    return failed(
+                        "new_model_run_dir returned "
+                        + str(created)
+                        + ", which is not a directory"
+                    )
+                try:
+                    store.new_model_run_dir("train-verify-0")
+                except Exception as exc:
+                    refusal = f"{type(exc).__name__}: {exc}"
+                else:
+                    return failed(
+                        "new_model_run_dir accepted an existing run id and returned a "
+                        "path. A trained artefact is never overwritten: an overwritten "
+                        "one makes every leaderboard row that referenced it a claim "
+                        "about a model that no longer exists."
+                    )
+            finally:
+                close = getattr(store, "close", None)
+                if callable(close):
+                    close()
+
+    return passed(
+        "two runs over one config and one dataset agree on every reported field of fold 0 "
+        "("
+        + ", ".join(FOLD_DIGEST_FIELDS)
+        + ") and were written under different run ids; writing into an existing run id is "
+        "refused - " + refusal[:140]
+    )
+
+
+# --- di_fitted_on_predictor_training_set ----------------------------------- #
+
+
+def check_di_fitted_on_predictor_training_set(ctx: VerifyContext) -> Outcome:
+    """The DI saw the predictor's training rows, by identity, and not the BUY subset.
+
+    **This is the criterion spec 68 exists for, and a row count cannot make it.** Fitted
+    on the BUY subset the DI learns that "normal" means a BUY-shaped setup and then vetoes
+    every ordinary market state: the veto rate is high, the few trades that survive look
+    clean, and the leaderboard flatters the model. Nothing crashes and nothing goes red. A
+    count of reference rows passes whenever the two sets happen to be the same size, and
+    on a fold where most calls are BUY they usually are.
+
+    So the criterion **recomputes both candidate sets itself** - ruling 7 of 2026-09-13 -
+    from the dataset it trained on and the public splitter, and asks three questions of
+    the identities the DI artefact actually recorded:
+
+    * is every reference row one of the fold's **training** rows;
+    * is at least one of them **not** a BUY call, so the set cannot be the BUY subset;
+    * is none of them one of the fold's **test** rows.
+
+    The second is the one that separates "fitted on the training rows" from "fitted on the
+    BUY subset of them", and it is why the DI artefact records identities rather than a
+    hash: a digest can prove two sets are equal and can never prove one contains another.
+    """
+    config_map, problem = load_config(ctx.root)
+    if config_map is None:
+        return problem or pending("config/default.yaml could not be read")
+    withheld = _withheld_key(config_map, KEY_DI_PERCENTILE)
+    if withheld is not None:
+        return withheld
+
+    with tempfile.TemporaryDirectory(prefix="acsoe-verify-di-") as raw_tmp:
+        tmp = Path(raw_tmp)
+        with root_import_path(ctx.root):
+            trained, problem = _trained(ctx, tmp, max_folds=1)
+            if trained is None:
+                return problem or pending("acsoe.research.training does not exist yet")
+            report, dataset, engine_config = trained
+            polars, problem = _polars()
+            if polars is None:
+                return problem or pending("polars is unavailable")
+
+            interval_s = int(engine_config.get(KEY_DECISION_BAR_S))
+            folds, problem = _fold_indices(dataset, engine_config, interval_s=interval_s)
+            if folds is None:
+                return problem or pending("the splitter could not be run")
+            if not folds:
+                return failed("the splitter produced no folds over the constructed dataset")
+            fold = folds[0]
+
+            rows = dataset.select(["pair", "decision_ts"]).to_dicts()
+            train_ids = {
+                f"{rows[i]['pair']}|{int(rows[i]['decision_ts'])}" for i in fold.train_index
+            }
+            test_ids = {
+                f"{rows[i]['pair']}|{int(rows[i]['decision_ts'])}" for i in fold.test_index
+            }
+
+            di_mod, problem = _phase5_module("acsoe.modelling.di")
+            if di_mod is None:
+                return problem or pending("acsoe.modelling.di does not exist yet")
+            fold_runs = list(getattr(report, "fold_runs", ()) or ())
+            if not fold_runs:
+                return failed("the training run reported no artefact run ids")
+            models_dir = Path(str(getattr(report, "models_dir", tmp / "run" / "models")))
+            di_path = models_dir / fold_runs[0] / "di.npz"
+            if not di_path.is_file():
+                return failed(
+                    "no di.npz beside the fold's predictor at "
+                    + str(di_path)
+                    + ". The DI is fitted per fold on that fold's training rows and is "
+                    "written under the same run id, because a DI from another fold is a "
+                    "reference set from another market."
+                )
+            fitted = di_mod.load(di_path)
+            reference = set(fitted.identity)
+            if not reference:
+                return failed("di.npz records no reference identities")
+
+            oos_path = Path(str(getattr(report, "oos_path", "")))
+            if not oos_path.is_file():
+                return failed(
+                    "the run wrote no out-of-sample file; specs 69, 74 and 75 read it and "
+                    "nothing else"
+                )
+            oos = polars.read_parquet(oos_path)
+            buy_ids = _identity_of(oos.filter(polars.col("is_buy")), polars)
+
+    outside = sorted(reference - train_ids)
+    if outside:
+        leaked = [entry for entry in outside if entry in test_ids]
+        return failed(
+            str(len(outside))
+            + " DI reference rows are not among the fold's training rows"
+            + (
+                f", and {len(leaked)} of them are TEST rows ({leaked[:3]})"
+                if leaked
+                else f" (first: {outside[:3]})"
+            )
+            + ". The reference set is the predictor's training rows for the fold and "
+            "nothing else; fitted on the test rows the DI accepts exactly the conditions "
+            "the model is about to be scored on."
+        )
+    non_buy = reference - buy_ids
+    if not non_buy:
+        return failed(
+            "every one of the "
+            + str(len(reference))
+            + " DI reference rows is a BUY call. The DI is fitted on the predictor's "
+            "training rows, never on the skeptic's BUY subset: fitted on BUY rows it "
+            "learns that `normal` means a BUY-shaped setup and vetoes every ordinary "
+            "market state, which raises the veto rate, leaves a handful of clean-looking "
+            "trades and flatters the leaderboard, with nothing going red."
+        )
+
+    return passed(
+        str(len(reference))
+        + " DI reference rows, every one of them among the fold's "
+        + str(len(train_ids))
+        + " training rows by (pair, decision_ts) identity, "
+        + str(len(non_buy))
+        + " of them not BUY calls so the set is not the BUY subset, and none among the "
+        + str(len(test_ids))
+        + " test rows"
+    )
+
+
+# --- skeptic_trains_only_on_predictor_buy_rows ----------------------------- #
+
+
+def check_skeptic_trains_only_on_predictor_buy_rows(ctx: VerifyContext) -> Outcome:
+    """Every skeptic training row is an out-of-sample BUY call from an earlier fold.
+
+    Three ways to get this wrong and each is silent:
+
+    * **a non-BUY row.** The skeptic grades the predictor's BUY calls. Trained on rows the
+      predictor never called, it is a second predictor wearing a veto.
+    * **an in-sample BUY call.** The predictor is right about its own training set far more
+      often than it is right live, so a skeptic trained on those calls learns the
+      predictor's overfit rather than its mistakes, and vetoes almost nothing.
+    * **a call from fold `k` or later.** That is the test window it will be judged on.
+
+    The identity is recomputed here from the out-of-sample file rather than read back from
+    the artefact, ruling 7: the whole point is to check which rows the skeptic saw, and a
+    number the skeptic reported about itself is not evidence of that.
+    """
+    with tempfile.TemporaryDirectory(prefix="acsoe-verify-skeptic-") as raw_tmp:
+        tmp = Path(raw_tmp)
+        with root_import_path(ctx.root):
+            trained, problem = _trained(ctx, tmp, max_folds=3)
+            if trained is None:
+                return problem or pending("acsoe.research.training does not exist yet")
+            report, _dataset, _engine_config = trained
+            polars, problem = _polars()
+            if polars is None:
+                return problem or pending("polars is unavailable")
+
+            entries, problem = _fold_entries(report)
+            if entries is None:
+                return problem or failed("the training run reported no folds")
+            with_skeptic = [
+                entry for entry in entries if entry.get("skeptic_rows") not in (None, 0)
+            ]
+            if not with_skeptic:
+                return pending(
+                    "no fold produced a skeptic over the constructed dataset. The first "
+                    "folds have no earlier out-of-sample BUY calls to train on and "
+                    "correctly produce none (spec 69), so this needs a run with enough "
+                    "folds; the digest says `skeptic_rows: 0` for each, and engine 15 "
+                    "blocks with `skeptic_unavailable` for a model version without one."
+                )
+            fold = with_skeptic[0]
+            fold_index = int(fold["fold_index"])
+
+            oos_path = Path(str(getattr(report, "oos_path", "")))
+            if not oos_path.is_file():
+                return failed("the run wrote no out-of-sample file")
+            oos = polars.read_parquet(oos_path)
+            absent = [column for column in OOS_COLUMNS if column not in oos.columns]
+            if absent:
+                return failed(
+                    "the out-of-sample file is missing " + ", ".join(absent) + ". Specs "
+                    "69, 74 and 75 read this file and nothing else."
+                )
+
+            eligible = oos.filter(
+                polars.col("is_buy") & (polars.col("fold_index") < fold_index)
+            )
+            expected = _identity_of(eligible, polars)
+            every_buy = _identity_of(oos.filter(polars.col("is_buy")), polars)
+            non_buy = _identity_of(oos.filter(~polars.col("is_buy")), polars)
+
+            artefacts, problem = _phase5_module("acsoe.modelling.artefacts")
+            if artefacts is None:
+                return problem or pending("acsoe.modelling.artefacts does not exist yet")
+            recorded = fold.get("skeptic_training_identity")
+            if not recorded:
+                return failed(
+                    "fold "
+                    + str(fold_index)
+                    + " trained a skeptic and recorded no `skeptic_training_identity`. "
+                    "The identity is the only thing that says which rows it saw; a row "
+                    "count passes whenever two sets happen to be the same size."
+                )
+            expected_digest = artefacts.identity_digest(
+                [entry.split("|")[0] for entry in sorted(expected)],
+                [int(entry.split("|")[1]) for entry in sorted(expected)],
+            )
+
+    if not expected:
+        return failed(
+            "fold "
+            + str(fold_index)
+            + " reports a skeptic but there are no out-of-sample BUY calls from earlier "
+            "folds for it to have trained on"
+        )
+    if recorded != expected_digest:
+        contaminating = sorted((every_buy | non_buy) - expected)[:3]
+        return failed(
+            "the skeptic's training identity for fold "
+            + str(fold_index)
+            + " does not match the out-of-sample BUY calls from folds strictly before it. "
+            "Recomputed over "
+            + str(len(expected))
+            + " eligible rows; the artefact records a different set. Rows that would "
+            "contaminate it look like "
+            + repr(contaminating)
+            + ": an in-sample BUY call teaches the predictor's overfit rather than its "
+            "mistakes, a non-BUY row makes the skeptic a second predictor, and a call "
+            "from this fold or later is the window it is about to be judged on."
+        )
+
+    return passed(
+        "fold "
+        + str(fold_index)
+        + "'s skeptic trained on exactly the "
+        + str(len(expected))
+        + " out-of-sample BUY calls from earlier folds, by (pair, decision_ts) identity "
+        "recomputed from the out-of-sample file; "
+        + str(len(non_buy))
+        + " non-BUY rows and every in-sample call are outside that set"
+    )
+
+
+# --- walkforward_weekly_retrain_reports_oos -------------------------------- #
+
+
+def check_walkforward_weekly_retrain_reports_oos(ctx: VerifyContext) -> Outcome:
+    """A rolling weekly walk-forward, reported per fold, with the effective sample size.
+
+    Two halves, because neither alone is enough and spec 60 was amended on 2026-09-13 to
+    say so.
+
+    **The fold machinery**, over a constructed series long enough to hold several weekly
+    folds. Every fold must satisfy ``train_end_ts == test_start_ts`` — the past-only
+    ruling, visible in the digest rather than only in the splitter's source — and every
+    fold's effective sample size must be **below** its row count, because at a 48-bar
+    horizon consecutive decision bars share almost all of their label window and an
+    effective size equal to the row count means the weights were never computed.
+
+    **The committed digest**, `tests/fixtures/walkforward_digest.json`, which spec 67's
+    `--write-fixture` produces from a real run. That is the evidence that the full dataset
+    was actually walked; re-running it is `--live`, and a criterion that re-ran twenty
+    million rows inside the gate would make the gate unrunnable.
+    """
+    with tempfile.TemporaryDirectory(prefix="acsoe-verify-wf-") as raw_tmp:
+        tmp = Path(raw_tmp)
+        with root_import_path(ctx.root):
+            trained, problem = _trained(ctx, tmp, max_folds=3)
+            if trained is None:
+                return problem or pending("acsoe.research.training does not exist yet")
+            report, _dataset, engine_config = trained
+            entries, problem = _fold_entries(report)
+            if entries is None:
+                return problem or failed("the training run reported no folds")
+            retrain_days = int(engine_config.get("backtest.retrain_interval_days"))
+
+    constructed, problem = _check_digest_entries(entries, retrain_days, "the constructed run")
+    if problem is not None:
+        return problem
+
+    path = ctx.root / WALKFORWARD_DIGEST_FIXTURE
+    if not path.is_file():
+        return pending(
+            WALKFORWARD_DIGEST_FIXTURE.as_posix()
+            + " has not been deposited yet. It is the committed evidence that the full "
+            "dataset was walked, written by `python -m acsoe.research.training "
+            "--write-fixture` (spec 67 step 7); the fold machinery above is already "
+            "proven over a constructed series."
+        )
+    try:
+        payload = json.loads(path.read_bytes().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return failed(WALKFORWARD_DIGEST_FIXTURE.as_posix() + " is not readable JSON: " + str(exc))
+    committed = payload.get("folds") if isinstance(payload, Mapping) else None
+    if not isinstance(committed, list) or not committed:
+        return failed(
+            WALKFORWARD_DIGEST_FIXTURE.as_posix()
+            + " carries no `folds` list. The digest is one entry per fold; an aggregate "
+            "alone hides exactly the fold whose 8,000 rows are 300 observations."
+        )
+    _entries, problem = _check_digest_entries(
+        [dict(entry) for entry in committed], retrain_days, "the committed digest"
+    )
+    if problem is not None:
+        return problem
+
+    return passed(
+        str(len(constructed))
+        + " fold(s) over a constructed "
+        + str(CONSTRUCTED_DAYS)
+        + "-day dataset and "
+        + str(len(committed))
+        + " in "
+        + WALKFORWARD_DIGEST_FIXTURE.as_posix()
+        + ": every fold reports "
+        + ", ".join(FOLD_DIGEST_FIELDS)
+        + ", trains only up to its own test window (train_end_ts == test_start_ts), and "
+        "reports an effective sample size below its row count"
+    )
+
+
+def _check_digest_entries(
+    entries: Sequence[Mapping[str, Any]], retrain_days: int, where: str
+) -> tuple[list[Mapping[str, Any]], Outcome | None]:
+    """The per-fold assertions, applied to a constructed run and to the committed digest.
+
+    One function rather than two copies: the committed digest is the same shape as the run
+    that produced it, and a check that only ran over one of them would let the other carry
+    a fold the machinery would have refused.
+    """
+    rows = list(entries)
+    absent = [f for f in FOLD_DIGEST_FIELDS if any(f not in entry for entry in rows)]
+    if absent:
+        return rows, failed(where + " is missing " + ", ".join(absent) + " on some fold")
+    for entry in rows:
+        index = entry.get("fold_index")
+        if int(entry["train_end_ts"]) != int(entry["test_start_ts"]):
+            return rows, failed(
+                where
+                + ", fold "
+                + str(index)
+                + ": train_end_ts "
+                + str(entry["train_end_ts"])
+                + " is not test_start_ts "
+                + str(entry["test_start_ts"])
+                + ". A past-only walk-forward trains up to the moment its test window "
+                "opens and no further; training on both sides is purged cross-validation, "
+                "legitimate for choosing hyperparameters and not for answering 'would "
+                "this have worked if I had been trading it'. Operator ruling 1 of "
+                "2026-09-12."
+            )
+        span_days = (int(entry["test_end_ts"]) - int(entry["test_start_ts"])) / 86_400
+        if abs(span_days - retrain_days) > 0.5:
+            return rows, failed(
+                where
+                + ", fold "
+                + str(index)
+                + ": the test window is "
+                + f"{span_days:.2f}"
+                + " days against `backtest.retrain_interval_days` of "
+                + str(retrain_days)
+                + ". The model retrains at the cadence the live system retrains at, or "
+                "the backtest is measuring a system nobody would run."
+            )
+        count = int(entry["rows"])
+        effective = float(entry["effective_sample_size"])
+        if count <= 0:
+            continue
+        if effective >= count:
+            return rows, failed(
+                where
+                + ", fold "
+                + str(index)
+                + ": effective sample size "
+                + f"{effective:.1f}"
+                + " is not below its row count of "
+                + str(count)
+                + ". At a 48-bar horizon consecutive decision bars share almost all of "
+                "their label window, so an effective size equal to the row count means "
+                "the uniqueness weights were never computed and every metric from this "
+                "fold describes a dataset far larger than the one that exists."
+            )
+        if FORBIDDEN_METRIC in entry:
+            return rows, failed(
+                where + ", fold " + str(index) + ": `" + FORBIDDEN_METRIC + "` is retired "
+                "and computed nowhere (operator ruling 2026-09-12)"
+            )
+    return rows, None
+
+
+# --- anomaly_and_skeptic_have_both_tests ----------------------------------- #
+
+
+def check_anomaly_and_skeptic_have_both_tests(ctx: VerifyContext) -> Outcome:
+    """Phase 5's two gates each have a test proving they block and one proving they pass.
+
+    The shape of `phase_3_gates_have_both_tests`, asked of engines 13 and 15. A gate with
+    only a happy path is incomplete; a gate with only block cases is one that refuses
+    everything and proves nothing. It reads the assertions rather than the test names, and
+    it is a completeness check rather than a correctness one — whether those tests pass is
+    `toolchain_green`'s question and that runs in every phase.
+    """
+    findings: list[str] = []
+    absent: list[str] = []
+    for engine in sorted(PHASE5_GATE_TEST_FILES):
+        number, spec = PHASE5_ENGINES[engine]
+        relative = PHASE5_GATE_TEST_FILES[engine]
+        path = ctx.root / Path(relative)
+        if not path.is_file():
+            absent.append(f"engine {number} `{engine}` ({relative}, {spec})")
+            continue
+        blocking, passing, problem = _test_directions(path)
+        if problem:
+            return failed(problem)
+        if not blocking or not passing:
+            missing = "no test asserting it blocks" if not blocking else "no test asserting it passes"
+            return failed(
+                f"engine {number} `{engine}` has {missing} in {relative} "
+                f"({blocking} block, {passing} pass). code-standards.md: every gate needs "
+                "at least one test proving it blocks and one proving it passes."
+            )
+        findings.append(f"{engine} {blocking}/{passing}")
+
+    if absent:
+        return pending(
+            "no test file yet for " + "; ".join(absent) + ". Each agent owns the tests "
+            "mirroring its own source, so this criterion reads them and never writes one."
+        )
+    return passed(
+        "both Phase 5 gates have a test asserting they block and one asserting they pass "
+        "(block/pass per engine: " + ", ".join(findings) + ")"
+    )
+
+
+# --- scout_ranks_by_feature_not_arrival ------------------------------------ #
+
+
+def check_scout_ranks_by_feature_not_arrival(ctx: VerifyContext) -> Outcome:
+    """`rank_universe` is called **directly**, on input where arrival order is wrong.
+
+    The seam the tracker named before Phase 5 opened. Engine 7 builds its scan set with
+    `sorted`, so `rank_universe` is always handed an already-ordered sequence, and **a
+    ranking that merely preserved arrival order would still answer alphabetically end to
+    end**. Only a direct call on input where arrival order and intended order disagree on
+    every element separates "orders by the feature" from "returns what it was given", and
+    no end-to-end fixture can see the difference.
+
+    The signature is read from `engines/scout/contracts.py` and not agreed by message. A
+    criterion written against a keyword the module never grew raises `TypeError` — and the
+    version that does *not* raise is worse, because it means the criterion reached a
+    double instead of the real function. That is the Phase 4 labeller failure exactly: a
+    signature agreed by message, a module that landed under another name, and nothing red.
+    """
+    with root_import_path(ctx.root):
+        module, problem = try_import("acsoe.engines.scout.contracts")
+        if module is None:
+            return problem or pending("engine 7 `scout` does not exist yet")
+        rank, missing = module_attr(module, "rank_universe")
+        if rank is None:
+            return pending(missing + " (spec 76, B-2)")
+
+        # Arrival order and intended order disagree on EVERY element: the alphabetically
+        # first pair has the highest value, the last has the lowest, and the sequence is
+        # handed over already sorted - which is what engine 7 does.
+        pairs = ("AAAUSD", "BBBUSD", "CCCUSD", "DDDUSD")
+        values = {"AAAUSD": 9.0, "BBBUSD": 7.0, "CCCUSD": 3.0, "DDDUSD": 1.0}
+        features = {pair: {"probe_feature": value} for pair, value in values.items()}
+        try:
+            descending = rank(
+                pairs, features=features, feature="probe_feature", descending=True
+            )
+            ascending = rank(
+                pairs, features=features, feature="probe_feature", descending=False
+            )
+            unconfigured = rank(pairs, features=features, feature=None)
+            with_a_gap = rank(
+                ("AAAUSD", "BBBUSD", "ZZZUSD"),
+                features={"AAAUSD": {"probe_feature": 1.0}, "BBBUSD": {"probe_feature": 5.0}},
+                feature="probe_feature",
+                descending=True,
+            )
+        except TypeError as exc:
+            return failed(
+                "acsoe.engines.scout.contracts.rank_universe does not accept "
+                "`rank_universe(pairs, *, features, feature, descending)`, which is spec "
+                "76's own wording: "
+                + str(exc)[:200]
+                + ". The criterion calls the real function on purpose; catching this and "
+                "reporting PENDING would be a criterion that never reaches what it judges."
+            )
+
+    if tuple(descending) != ("AAAUSD", "BBBUSD", "CCCUSD", "DDDUSD"):
+        return failed(
+            "ranking descending by the feature returned "
+            + repr(tuple(descending))
+            + "; the highest value is AAAUSD and the lowest DDDUSD"
+        )
+    if tuple(ascending) != ("DDDUSD", "CCCUSD", "BBBUSD", "AAAUSD"):
+        return failed(
+            "ranking ascending returned "
+            + repr(tuple(ascending))
+            + ", which is not the reverse of the descending order. **This is the case the "
+            "criterion exists for**: the descending answer happens to equal alphabetical "
+            "order, so a ranking that simply returned its input would satisfy it. The "
+            "ascending call is where arrival order and intended order disagree on every "
+            "element."
+        )
+    if tuple(unconfigured) != tuple(sorted(pairs)):
+        return failed(
+            "with no ranking feature configured the order was "
+            + repr(tuple(unconfigured))
+            + "; it must be alphabetical. `scout.rank_feature` is absent until the "
+            "operator rules on spec 75's study, and equal treatment of every pair is how "
+            "that absence is spelled."
+        )
+    if tuple(with_a_gap) != ("BBBUSD", "AAAUSD", "ZZZUSD"):
+        return failed(
+            "a pair with no value for the ranking feature came back as "
+            + repr(tuple(with_a_gap))
+            + "; it sorts after every pair that has one and is **never dropped**. A "
+            "dropped pair is one engine 7 silently never considered, and engine 5 "
+            "publishes a null feature rather than omitting the pair precisely so that "
+            "cannot happen."
+        )
+
+    config_map, problem = load_config(ctx.root)
+    if config_map is None:
+        return problem or pending("config/default.yaml could not be read")
+    configured = config_get(config_map, KEY_RANK_FEATURE)
+    if configured is not _CONFIG_MISSING and configured is not None:
+        return failed(
+            "`"
+            + KEY_RANK_FEATURE
+            + "` is set to "
+            + repr(configured)
+            + " in config/default.yaml. It is the operator's, after spec 75's ranking "
+            "study reports (ruling 7 of spec 59); until then the ordering is alphabetical "
+            "and the engine publishes `rank_feature: null`."
+        )
+
+    return passed(
+        "rank_universe called directly on four pairs whose feature order is the exact "
+        "reverse of their arrival order: descending and ascending both follow the "
+        "feature, a pair with no value sorts last and is not dropped, and with "
+        "`scout.rank_feature` still absent the order is alphabetical"
+    )
+
+
+# --- tournament_writes_leaderboard_from_oos -------------------------------- #
+
+
+def check_tournament_writes_leaderboard_from_oos(ctx: VerifyContext) -> Outcome:
+    """Engine 20 writes one leaderboard row per model version, through the store, unpromoted.
+
+    Phase 6's router weights by this table and Phase 7's promotion gate judges it, so an
+    empty leaderboard is two later phases with nothing to read. Three claims:
+
+    * **one row per model version**, carrying `brier`, `n_trades` and `win_rate`;
+    * **`promoted` is never true.** Promotion is Phase 7's, behind a deflated metric and a
+      multiple-testing haircut. A `promoted` row written in Phase 5 would be read by that
+      gate as a decision somebody made;
+    * **written through `StoreClient`.** Engine 19 `memory` is the single writer of
+      relational rows in the live loop and the store client is the single writer of
+      SQLite; an engine reaching past it with its own `sqlite3` connection is contract
+      rule 4 and it is checked on the source, because the row looks identical either way.
+
+    The digest and out-of-sample file are constructed here rather than trained, and that is
+    safe for one reason worth stating: their **shapes** are pinned by
+    `walkforward_weekly_retrain_reports_oos` and
+    `skeptic_trains_only_on_predictor_buy_rows`, which read the real producer's output
+    against `FOLD_DIGEST_FIELDS` and `OOS_COLUMNS`. Without those two this would be a
+    criterion agreeing with its own fabrication.
+    """
+    polars, problem = _polars()
+    if polars is None:
+        return problem or pending("polars is unavailable")
+
+    with root_import_path(ctx.root):
+        engine_cls, problem = _phase5_engine_class("tournament")
+        if engine_cls is None:
+            return problem or _phase5_engine_absent("tournament")
+
+        with tempfile.TemporaryDirectory(prefix="acsoe-verify-tournament-") as raw_tmp:
+            tmp = Path(raw_tmp)
+            digest_path = tmp / "walkforward_digest.json"
+            oos_path = tmp / "oos.parquet"
+            versions = ("train-verify-f0", "train-verify-f1")
+            folds = [
+                {
+                    "fold_index": index,
+                    "run_id": versions[index],
+                    "train_end_ts": 1_700_000_000 + index * 604_800,
+                    "test_start_ts": 1_700_000_000 + index * 604_800,
+                    "test_end_ts": 1_700_604_800 + index * 604_800,
+                    "rows": 400,
+                    "effective_sample_size": 90.5,
+                    "brier": 0.18 + 0.01 * index,
+                    "base_rate_brier": 0.2,
+                    "log_loss": 0.9,
+                    "buy_count": 2,
+                    "buy_target_rate": 0.5,
+                }
+                for index in range(len(versions))
+            ]
+            digest_path.write_bytes(
+                json.dumps(
+                    {"run_id": "train-verify", "folds": folds}, sort_keys=True, indent=2
+                ).encode("utf-8")
+                + b"\n"
+            )
+            oos_rows = []
+            for index in range(len(versions)):
+                for row_index, (label, is_buy) in enumerate(
+                    (("target", True), ("stop", True), ("stop", False))
+                ):
+                    oos_rows.append(
+                        {
+                            "pair": "AAAUSD",
+                            "decision_ts": 1_700_000_000 + index * 604_800 + row_index * 900,
+                            "fold_index": index,
+                            "p_target": 0.4,
+                            "p_stop": 0.4,
+                            "p_timeout": 0.2,
+                            "expected_move_pct": 0.004 if is_buy else -0.004,
+                            "is_buy": is_buy,
+                            "di": 0.1,
+                            "di_refused": False,
+                            "label": label,
+                            "return_pct": 0.03 if label == "target" else -0.015,
+                            "weight": 0.5,
+                        }
+                    )
+            polars.DataFrame(oos_rows).write_parquet(oos_path)
+
+            store_cls, problem = _store_class()
+            if store_cls is None:
+                return problem or pending("clients.store.client.StoreClient does not exist yet")
+            db_path, _store_mod, problem = _migrated_db(tmp, "tournament.sqlite")
+            if db_path is None:
+                return problem or pending("the store could not be migrated")
+
+            store = store_cls(db_path, models_dir=tmp / "models")
+            clients, problem = _fake_clients(store=store)
+            if clients is None:
+                return problem or pending("the shared test doubles are unavailable")
+            engine_config, problem = _phase3_config()
+            if engine_config is None:
+                return problem or pending("the committed config could not be loaded")
+            context, problem = _engine_context(
+                engine_config, clients, run_id="verify-phase-5", now=PHASE5_NOW
+            )
+            if context is None:
+                return problem or pending("acsoe.core.contracts does not exist yet")
+
+            try:
+                engine = engine_cls(digest_path=digest_path)
+            except TypeError as exc:
+                return failed(
+                    "TournamentEngine does not accept `TournamentEngine(*, "
+                    "digest_path=...)`, which is the seam `cli/research.py` constructs it "
+                    "through: " + str(exc)[:200]
+                )
+            first = engine.process(context, {})
+            again = engine.process(context, {})
+
+            rows = _leaderboard_rows(db_path)
+            source = (
+                ctx.root / "src" / "acsoe" / "engines" / "tournament" / "engine.py"
+            )
+            direct = (
+                [
+                    line.strip()
+                    for line in source.read_text(encoding="utf-8").splitlines()
+                    if "sqlite3" in line or "INSERT INTO" in line.upper()
+                ]
+                if source.is_file()
+                else []
+            )
+            del oos_path
+
+    if direct:
+        return failed(
+            "engines/tournament/engine.py reaches SQLite directly: "
+            + "; ".join(direct[:3])
+            + ". Contract rule 4 — an engine never touches the filesystem or the database "
+            "except through `context.clients.store`, and the row it writes looks identical "
+            "either way, so nothing but this would notice."
+        )
+    if getattr(first, "status", None) is EngineStatus_ERROR_SENTINEL:
+        return failed("engine 20 errored on its first run: " + str(getattr(first, "reason", "")))
+    if len(rows) != len(versions):
+        return failed(
+            "engine 20 wrote "
+            + str(len(rows))
+            + " leaderboard rows for a digest carrying "
+            + str(len(versions))
+            + " model versions. One row per version is what Phase 6's router weights by "
+            "and Phase 7's promotion gate judges."
+        )
+    promoted = [row for row in rows if row.get("promoted")]
+    if promoted:
+        return failed(
+            str(len(promoted))
+            + " leaderboard row(s) are marked promoted. Promotion is Phase 7's, behind a "
+            "deflated metric and a multiple-testing haircut; a promoted row written now "
+            "would be read by that gate as a decision somebody made."
+        )
+    empty = [
+        field
+        for field in ("brier", "n_trades", "win_rate")
+        if any(row.get(field) is None for row in rows)
+    ]
+    if empty:
+        return failed(
+            "leaderboard rows leave " + ", ".join(empty) + " null; spec 74 fills all three"
+        )
+    after_second = _leaderboard_rows(db_path) if db_path.is_file() else rows
+    if len(after_second) != len(rows):
+        return failed(
+            "a second run over the same digest wrote "
+            + str(len(after_second) - len(rows))
+            + " more rows. Engine 20 is idempotent on (model_id, model_version, fold): "
+            "`acsoe research` replays the whole chain on every invocation, so a "
+            "non-idempotent write doubles the leaderboard every time anybody runs it."
+        )
+    del again
+
+    return passed(
+        str(len(rows))
+        + " leaderboard rows written through the real StoreClient, one per model version, "
+        "with brier, n_trades and win_rate filled and promoted false on every one; a "
+        "second run over the same digest wrote none"
+    )
+
+
+#: `EngineStatus.ERROR` without importing `core/` at module scope. The criterion compares
+#: against the string because `EngineStatus` is a `StrEnum`, which is exactly the property
+#: `engine-contracts.md` chose it for.
+EngineStatus_ERROR_SENTINEL: Final = "ERROR"
+
+
+def _leaderboard_rows(db_path: Path) -> list[dict[str, Any]]:
+    """Every leaderboard row, read with sqlite3 rather than through the store.
+
+    Deliberately not through `StoreClient.leaderboard()`, which the console uses and which
+    returns the newest fifty: a criterion counting rows through a limited read cannot tell
+    "engine 20 wrote two" from "engine 20 wrote two hundred and this read showed fifty".
+    """
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute("SELECT * FROM leaderboard")
+        except sqlite3.Error:
+            return []
+        return [dict(row) for row in cursor.fetchall()]
+
+
+# --------------------------------------------------------------------------- #
 # Registration
 # --------------------------------------------------------------------------- #
 
@@ -7988,6 +10094,94 @@ register(4, Criterion("console_history_reads_real_rows", check_console_history_r
 # when no archive is present: the operator has not downloaded one, and an opt-in
 # criterion that FAILs on its absence makes `--live` useless for every other check.
 register(4, Criterion("replay_full_archive", check_replay_full_archive, live=True))
+
+# Phase 5 - models. Spec 60, registered first in the phase and ahead of most of what it
+# judges, for the reason spec 00 was first in Phase 0, spec 16 in Phase 1, spec 45 in
+# Phase 3 and spec 48 in Phase 4. Until these existed `--phase 5` registered
+# `docs_vocabulary` and `toolchain_green` alone and printed "Phase 5 is green: every
+# criterion PASS, zero PENDING" over a phase that by then held a feature package, three
+# engines and a ranking function. A phase with real code in it and nothing judging it
+# must not be able to report as finished, and PENDING is how it says so.
+#
+# **Phase 5 fails quietly**, which is why these are shaped differently from earlier
+# phases'. Every phase before this one failed loudly. Here a DI fitted on the wrong rows
+# vetoes ordinary markets and flatters what survives; a leaked feature makes the Brier
+# beautiful; a metric that flatters is simply believed. Nothing crashes and nothing goes
+# red. So each criterion is written against a *named* wrong implementation rather than
+# against the shape of the evidence, and the three that matter most assert row
+# **identity** rather than row counts - a count passes whenever two sets happen to be the
+# same size, which is exactly what a DI fitted on the BUY subset looks like on a fold
+# where most calls are BUY.
+#
+# Accuracy is computed nowhere in this file. The base rate is 23.89% and a model that
+# always predicts `stop` scores 51%, so a criterion reporting accuracy would be reporting
+# the model that never trades. Operator ruling, 2026-09-12.
+register(5, Criterion("features_reproduce_in_replay", check_features_reproduce_in_replay))
+register(
+    5,
+    Criterion(
+        "feature_lookbacks_are_time_not_rows", check_feature_lookbacks_are_time_not_rows
+    ),
+)
+register(
+    5,
+    Criterion(
+        "predictor_trains_and_calibrates", check_predictor_trains_and_calibrates
+    ),
+)
+register(
+    5,
+    Criterion(
+        "training_is_reproducible_from_config_and_data",
+        check_training_is_reproducible_from_config_and_data,
+    ),
+)
+register(
+    5,
+    Criterion(
+        "di_fitted_on_predictor_training_set", check_di_fitted_on_predictor_training_set
+    ),
+)
+register(
+    5,
+    Criterion(
+        "skeptic_trains_only_on_predictor_buy_rows",
+        check_skeptic_trains_only_on_predictor_buy_rows,
+    ),
+)
+register(
+    5,
+    Criterion(
+        "walkforward_weekly_retrain_reports_oos",
+        check_walkforward_weekly_retrain_reports_oos,
+    ),
+)
+register(
+    5,
+    Criterion("anomaly_and_skeptic_have_both_tests", check_anomaly_and_skeptic_have_both_tests),
+)
+register(
+    5,
+    Criterion("scout_ranks_by_feature_not_arrival", check_scout_ranks_by_feature_not_arrival),
+)
+register(
+    5,
+    Criterion(
+        "tournament_writes_leaderboard_from_oos",
+        check_tournament_writes_leaderboard_from_oos,
+    ),
+)
+# Re-registered under phase 5 unchanged, so that the Phase 5 gate itself goes red if a
+# Phase 5 change weakens the past-only walk-forward. `research/walkforward.py` is read by
+# spec 67 and never edited; this is what makes that instruction enforceable rather than
+# remembered. Operator ruling 1 of 2026-09-12.
+register(
+    5,
+    Criterion(
+        "walkforward_trains_on_the_past_only",
+        check_walkforward_trains_on_the_past_only,
+    ),
+)
 
 
 # --------------------------------------------------------------------------- #

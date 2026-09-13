@@ -11,11 +11,12 @@ Fourteen specs, claimed here in the order the lead fixed. Each entry names the f
 touch. The previous C session for this phase died on a usage limit before writing anything, so
 nothing below is carried over from it.
 
-- **Spec 60 — the Phase 5 exit criteria in `scripts/verify.py`. Claimed, first in the
-  phase**, for the reason specs 00, 16, 33, 45 and 48 were first in theirs: `--phase 5` today
-  registers `docs_vocabulary` and `toolchain_green` alone and prints *"Phase 5 is green"* over
-  a phase in which nothing exists. Eleven criteria, each PENDING until its subject lands.
-  Files: `scripts/verify.py`, `tests/verify/test_phase5_criteria.py`.
+- **Spec 60 — the Phase 5 exit criteria in `scripts/verify.py`. Claimed, and DONE.**
+  Eleven criteria registered for phase 5: **4 PASS against real subjects, 7 PENDING each
+  naming the module or engine that owes it, 0 FAIL.** Files: `scripts/verify.py`,
+  `tests/verify/test_phase5_criteria.py` (19 tests), plus two of my earlier files that had
+  to be narrowed — `tests/verify/test_phase0_criteria.py` and `tests/verify/test_runner.py`.
+  See "Spec 60 — what landed" below.
 - **Spec 63 — `src/acsoe/modelling/`. Claimed, and DONE.** `__init__.py`, `features.py`,
   `artefacts.py`, `weights.py`, `di.py`, `expected_move.py`; `tests/modelling/` (82 tests).
   See "Spec 63 — what landed" below.
@@ -61,6 +62,52 @@ research runner), spec 62 (B — `StoreClient(models_dir=...)`, `model_run_dir`,
 `new_model_run_dir`), spec 76 (B — `rank_universe`), specs 59 and 77 (the lead).
 `research/walkforward.py` is read, never changed: if a Phase 5 change makes
 `walkforward_trains_on_the_past_only` red, the change is wrong.
+
+### Spec 60 — what landed
+
+`--phase 5` now registers **13 criteria** (the eleven of spec 60 plus `docs_vocabulary` and
+`toolchain_green`) where it registered two. The false green is gone: it printed *"Phase 5 is
+green: every criterion PASS, zero PENDING"* over a phase that by then held the modelling
+package, three engines and B-2's ranking function.
+
+| Criterion | Today |
+|---|---|
+| `features_reproduce_in_replay` | PASS |
+| `feature_lookbacks_are_time_not_rows` | PASS |
+| `predictor_trains_and_calibrates` | PENDING — spec 67 |
+| `training_is_reproducible_from_config_and_data` | PENDING — spec 67 |
+| `di_fitted_on_predictor_training_set` | PENDING — spec 67/68 |
+| `skeptic_trains_only_on_predictor_buy_rows` | PENDING — spec 67/69 |
+| `walkforward_weekly_retrain_reports_oos` | PENDING — spec 67 |
+| `anomaly_and_skeptic_have_both_tests` | PENDING — specs 72, 73 |
+| `scout_ranks_by_feature_not_arrival` | PASS |
+| `tournament_writes_leaderboard_from_oos` | PENDING — spec 74 |
+| `walkforward_trains_on_the_past_only` | PASS — re-registered from phase 4, same object |
+
+**Two of my own earlier tests were too strict and had to be narrowed, not excepted.**
+`test_no_registered_criterion_reads_data_models_or_logs` was a substring scan for `"data"`,
+`"models"` and `"logs"`, and it went red on `getattr(result, "data", {})` — an `EngineResult`
+field — and on `tmp / "run" / "models"`, a directory inside a `TemporaryDirectory`. Neither
+reads a gitignored path. Replaced by an AST check that looks for a path *rooted at `ctx.root`*,
+with its own two-direction test and its residual gap (a computed directory name) pinned as a
+known limit. `code-standards.md` names this exact shape and says to narrow rather than add an
+exception, because an exception keeps a check that cannot tell a path from a word.
+`test_runner.py` pinned phases 5 to 8 as carrying only the every-phase criteria and now pins
+Phase 5's set.
+
+**The design decisions worth knowing before spec 67**, in full in the build log: criterion 1
+hands the two paths deliberately different inputs; criterion 5 asks membership rather than
+equality because the DI subsamples; criterion 6 recomputes the skeptic's eligible set from the
+out-of-sample file rather than trusting what the skeptic recorded; criterion 9's *ascending*
+call is the one that separates ranking from passing through; criterion 10 constructs its inputs
+and is safe only because criteria 6 and 7 pin those shapes against the real producer.
+
+**The seam spec 67 must build to** is fixed in `scripts/verify.py` as `TRAINING_CONTRACT`,
+`DATASET_COLUMNS`, `OOS_COLUMNS` and `FOLD_DIGEST_FIELDS`, and the PENDING lines print it.
+Summary: `build_dataset(labelled, candles, *, config, macro_archive=None)` returning a pooled
+frame, and `train_walkforward(dataset, *, config, models_dir, derived_dir, now, max_folds=None)`
+returning a report with `.run_id`, `.fold_runs`, `.folds`, `.digest`, `.digest_path`,
+`.oos_path` and `.models_dir`.
 
 ### Spec 63 — what landed
 
