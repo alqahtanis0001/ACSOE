@@ -118,6 +118,43 @@ to `A`, `B` or `C`: a send to a stopped session's name resurrects it.** Teammate
 11. **The verify.py Phase 5 helper block on disk (line 7853) is C-2's to keep or delete
     wholesale.** One author of the criteria from here.
 
+## HANDOFF 2, session closed by the operator 2026-09-13 ~14:00. Read this before the one below.
+
+**State.** Done and committed: 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 76, 78, 79 (14 of
+21). Gate `--phase 5`: **10 PASS, 0 FAIL, 3 PENDING** (`di_fitted_on_predictor_training_set`
+on the operator's `di_percentile`; `anomaly_and_skeptic_have_both_tests` on 72 and 73;
+`tournament_writes_leaderboard_from_oos` on 74). Tree-wide pytest, mypy and ruff green at the
+last lead run. Engines 5, 6, 7 and 12 rehearsed together through the real orchestrator.
+
+**Remaining.** 70 anomaly training, 71 prediction, 72 anomaly, 73 skeptic, 74 tournament, 75
+ranking study (all C); the engines 13, 8, 15 rehearsal (B-2 leads, A-2 may co-run); 77
+registration and the gate (lead). C-2's progress file says what of 70 exists.
+
+**Two items tracked to closure, in this order, first thing next session:**
+
+1. **`build_dataset` per-pair fix, then the full 234-pair training run.** The trainer's
+   dataset builder held every pair's frame at once (about 60 GB over 234 pairs), the same
+   shape spec 78 fixed in engine 23. The fix is ruled (per pair, appended row groups, `--pairs`
+   inside the loop, one frame resident, a test that it never holds two); C-2's progress file
+   says whether it landed before the stop. **The full run was deliberately not started at the
+   close**: it is hours, nobody would be present to harvest it, and a fixture appearing
+   uncommitted mid-run is a mystery for the next reader. Start it in the background with
+   `--write-fixture` once the fix is green, carry on with 70 while it runs, commit the digest
+   it writes as `tests/fixtures/walkforward_digest.json`. The three operator thresholds are
+   supplied from that digest, not before.
+2. **Suite runtime, 173 s to about 340 s** because 51 new tests train models, paid once per
+   phase in `toolchain_green`. Deferred by ruling until after 74; then share one training run
+   across the read-only tests in `test_training.py`, deliberately, measured in both orders,
+   with a check that no mutation now hides in a shared fixture.
+
+**Also outstanding and small.** `REASON_PROSE["missing_candle"]` becomes "No pair traded
+for a whole decision bar" (C-2, `console/format.py`, ruled 12:55). The macro
+self-identification and the previous-bar DI are open questions for the operator in the
+tracker, not blockers.
+
+**Everything below this line is the running record of the session; the rulings log and the
+lead-to-teammate channel are still authoritative.**
+
 ## RESUMED, 2026-09-13 09:50 — the same team, A-2, B-2, C-2, continues
 
 The stop order below is lifted. All three `-2` sessions were idle with nothing moved since

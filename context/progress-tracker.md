@@ -759,6 +759,13 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
 
 ## Session Notes
 
+- 2026-09-13, second session — Phase 5 resumed with the same team and wound down by the
+  operator's command. Done and committed: 14 of 21 specs (59 to 69, 76, 78, 79); gate 10 PASS,
+  0 FAIL, 3 PENDING; engines 5, 6, 7, 12 rehearsed together. Two items tracked to closure at
+  the top of `feature-specs/PHASE-5-TASKS.md` (Handoff 2): the `build_dataset` per-pair fix
+  followed by the full 234-pair training run, deliberately not started at the close; and the
+  suite runtime, deferred until after spec 74. Remaining: 70 to 75, the engines 13, 8, 15
+  rehearsal, 77.
 - 2026-09-13 — Phase 5 opened and run for one session, then wound down by the operator at
   the session limit. Done and committed: specs 59, 61, 62, 63, 76. Half-finished and
   uncommitted: 60 (helper block only) and 64 (engine 5 landed, one lint finding); untouched:
