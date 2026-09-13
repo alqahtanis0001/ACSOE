@@ -3,6 +3,87 @@
 Your file. Only you write here. The lead merges into `context/progress-tracker.md`.
 Never edit the tracker directly.
 
+## RESUMED 2026-09-13 09:50 — spec 61's `training` section, then spec 78
+
+Three things were asked of A this session, in order: the `training` config section, spec 78
+(engine 23 streams the labelled slice), and an assessment of C-2's engine 3 `missing_bars`
+finding.
+
+**1. The `training` section — DONE, both halves closed.** `TrainingConfig` with `num_trees`,
+`learning_rate`, `num_leaves`, `min_data_in_leaf`, `extra="forbid"`. Landed optional, the lead
+pasted the YAML about twenty minutes later, my two-halves test went red on the paste exactly as
+intended, and the field is now required with `training` in `LANDED_SECTIONS`. `num_leaves` is
+bounded `> 1` rather than `> 0` deliberately: a single leaf is a model that returns the base
+rate for every input, so it would report a Brier equal to the base-rate Brier — the comparison
+spec 59 decision 4 made primary — and read as "no edge" rather than "no model".
+
+A mutation survived the first version and the gap is worth remembering: the section shipped
+with a parse test and a `num_leaves` test and **no rows in the `BAD_VALUES` table**, so
+loosening `learning_rate` from `(0,1)` to `[0,1]` broke nothing. Seven rows added. Fill in the
+mechanical constraint table first, write the interesting test second.
+
+**2. Spec 78 — DONE, measured on the full archive.** Engine 23 no longer
+accumulates every labelled row: it asks each pair's frame for its height, hands the frame
+straight to a `_SliceWriter` that appends it as its own parquet row group, and releases it.
+The schema is established by the first pair and later pairs are cast to it, because
+`label_frame` infers dtypes per pair and a column that is all-null for a thin pair would infer
+differently; the writer closes in a `finally`; and the per-pair counts are cross-checked
+against the rows actually written, raising if they disagree.
+
+Also fixed in the same function: the slice filename was stamped from `datetime.now(tz=UTC)`,
+a direct clock read inside an engine that invariant 9 forbids. It now reads `context.now`.
+The path convention is unchanged.
+
+Also pinned: the parquet is written with zstd, because pyarrow's writer defaults to snappy
+where `polars.write_parquet` used zstd, and that alone moved the full slice from 429 MB to
+667 MB for byte-identical rows. One row group per pair, which is what lets a reader skip
+pairs by the `pair` column's per-group statistics.
+
+**The full archive, streamed: 20,331,237 rows, peak 23.6 GB, 31 minutes**, against the same
+20,331,237 rows at 51.9 GB before. The labels are identical row for row, not merely the total:
+target 4,857,764, stop 10,424,046, timeout 5,049,427 in both runs, a 23.89% target rate that
+matches the base rate spec 59 quotes.
+
+Peak memory over a 24-pair scratch archive, each run in its own process, the comparison run in
+both orders as the control:
+
+| | accumulate | stream | reader alone |
+|---|---|---|---|
+| accumulate first | 792.9 MB | 430.3 MB | 348.6 MB |
+| stream first | 800.1 MB | 404.1 MB | 350.3 MB |
+
+**3. The `missing_bars` assessment — DONE, reported to the lead, no code changed.** C-2 is
+right that the field pools every pair, and the consequence is worse than lost attribution:
+because the pooled set is a union, a bar counts as missing only when **no pair traded in it at
+all**, so past a handful of pairs the field is empty on essentially every tick and
+`data_guard`'s missing-candle block can never fire. Measured, not read. Neither side's tests
+can see it: engine 3's gap tests use a single pair, and `data_guard`'s tests build the tuple
+themselves. My proposal is to change *less* than was asked — engine 3 should not grow a
+per-pair map, because spec 64's amendment already has engine 5 deriving it from the candles
+engine 3 already publishes — and to get a ruling on whether the gate condition still means
+anything at this pair count. Waiting on the lead.
+
+### The open item on spec 78, and it is a scope question rather than a defect
+
+**Spec 78's Check When Done asks for a full-archive peak "well under a tenth of 51.9 GB",
+about 5 GB. The measured result is 23.6 GB, and the gap is not in the part spec 78 changed.**
+`ArchiveReplay.__init__` keeps the whole archive in memory **twice** and eagerly: `self._rows`,
+every pair's parsed rows as Python dicts, and `self._frames`, the same data again as polars
+frames, both for the life of the run. Engine 23 reads only `frame(pair)`; `_rows` exists for
+`bars()`, which the backtest never calls. On the 24-pair archive the reader alone is 81% of the
+streaming peak.
+
+**The next step, for whoever takes it:** make the reader lazy — load one pair's frame when it
+is asked for, release it after, and stop keeping a second copy nothing in this path reads.
+`research/replay.py` is A's. It is **not** in spec 78's Implementation steps, so it is reported
+rather than done; it needs an amendment to 78 or its own spec. My estimate is that it takes the
+full run close to a gigabyte, because nothing would then be resident but one pair.
+
+Worth carrying forward as a shape: **the spec's Implementation steps and its acceptance number
+disagreed**, and only measuring showed it. The steps describe the writer; the number can only
+be met by also changing the reader. Reporting the number the change actually achieves is the
+honest answer, and quietly widening the change to hit it would have been the other one.
+
 ## HANDOFF — lane A at session close, 2026-09-13 ~03:00
 
 Written for a session that has never seen this one. Everything below is the state on disk,

@@ -152,6 +152,13 @@ as you proposed: one line to `context.now`, with its own entry in the build log 
 that the slice name follows the injected clock, since a direct clock read is a defect
 whether or not it can bias a label.
 
+**To A-2, 11:35.** Spec 78 is accepted at 23.6 GB; its acceptance number is amended to
+the measurement and the reader floor is **spec 79**, yours, written now: `ArchiveReplay`
+loads one pair at a time, drops the eager dict copy, `frames()` a generator. Then the
+`missing_bars` seam test under the ruling at 11:05 above, which you have not yet read: the
+union stays, no per-pair map, the meaning stated at producer and consumer, one no-double test
+with its two mutations. Read that entry before writing.
+
 **To C-2, 11:20.** Spec 60 is committed. Three rulings on your three findings. (1) Macro
 names move to `modelling/macro.py` with engine 6 re-exporting: accepted; spec 65 step 4 is
 amended to say so. (2) The break-even rates are never in code: correct, and spec 67 is

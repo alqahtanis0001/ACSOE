@@ -691,3 +691,57 @@ second producer of one fact is the thing this project keeps paying for. What is 
 is separate and is not mine: whether `data_guard`'s missing-candle condition still means
 anything at 234 pairs, and whether the field should say what it actually measures, which is
 "bars in which no subscribed pair traded at all".
+
+### Spec 78's result: 51.9 GB to 23.6 GB, and the remaining floor is the reader, not the writer
+
+**Agent:** A · **Task:** spec 78 · **Date:** 2026-09-13
+
+**What happened.** The full 234-pair archive through the streamed engine: **20,331,237 rows**,
+peak **23.6 GB**, 31 minutes. Against the accumulating run recorded in the Phase 5 handoff —
+the same 20,331,237 rows at a peak of 51.9 GB — that is the same dataset for 45% of the
+memory. The labels are identical, not merely the count:
+
+| | rows | target | stop | timeout |
+|---|---|---|---|---|
+| accumulated (before) | 20,331,237 | 4,857,764 | 10,424,046 | 5,049,427 |
+| streamed (after) | 20,331,237 | 4,857,764 | 10,424,046 | 5,049,427 |
+
+(The target rate falls out at 23.89%, which is the base rate spec 59 decision 4 quotes. Nice
+to see the document and the data agree.)
+
+**Spec 78's Check When Done asks for "well under a tenth of 51.9 GB" and this is not that.**
+The target is about 5 GB and the run peaked at 23.6. The gap is measured rather than guessed,
+and it is not in the part spec 78 changed: **`ArchiveReplay` holds the whole archive in memory,
+twice, before labelling starts.** `__init__` keeps `self._rows` — every pair's parsed rows as
+Python dicts — *and* `self._frames`, the same data again as polars frames, both eagerly, both
+for the life of the run. Engine 23 reads only `frame(pair)`; `_rows` exists for `bars()`, which
+the backtest never calls.
+
+Measured on a 24-pair scratch archive, each run in its own process, both orders:
+
+| | accumulate | stream | reader alone |
+|---|---|---|---|
+| accumulate first | 792.9 MB | 430.3 MB | 348.6 MB |
+| stream first | 800.1 MB | 404.1 MB | 350.3 MB |
+
+The reader alone is 81% of the streaming peak. That is the floor under anything the writer
+does, and reaching spec 78's number means making the reader lazy — load one pair's frame when
+it is asked for, release it after, and stop keeping a second copy nobody in this path reads.
+That is `research/replay.py`, which is A's, and it is **not** in spec 78's Implementation
+steps, so it is reported rather than done.
+
+**One difference in the artefact, found by looking rather than by a test.** The first full
+streamed run produced a 667 MB parquet where the accumulating one produced 429 MB, for
+byte-identical rows: `polars.write_parquet` defaults to zstd and `pyarrow.ParquetWriter`
+defaults to snappy. Nothing downstream reads the codec, and a slice that quietly grows by half
+is still a change to the artefact made by an implementation detail rather than by a decision.
+Pinned to zstd, and a test now asserts both the codec and one row group per pair — the latter
+being what makes a selective read cheap, since parquet's per-group column statistics let a
+reader skip every pair but the one it wants. Dropping the `compression="zstd"` argument turns
+that test red; restored by byte copy, sha256 verified.
+
+**Worth noticing about the spec.** Its Implementation steps and its Check When Done disagreed,
+and only measuring showed it: the steps describe the writer and the acceptance number can only
+be met by also changing the reader. Neither is wrong on its own. Writing the number the change
+actually achieves, and why, is the honest answer; quietly widening the change to hit the number
+would have been the other one.

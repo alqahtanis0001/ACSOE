@@ -42,6 +42,9 @@ rather than a message.
 ## Check When Done
 
 - The full-archive `acsoe research` run completes with the same `labelled_rows` and
-  `label_counts` as the run recorded in the Phase 5 handoff, at a peak well under a tenth of
-  51.9 GB, measured and recorded.
+  `label_counts` as the run recorded in the Phase 5 handoff, ~~at a peak well under a tenth
+  of 51.9 GB~~. **Amended 2026-09-13:** measured at 23.6 GB with identical rows and labels;
+  the remaining floor is the reader, not the writer, and is spec 79's. The steps and the
+  number disagreed, and A-2 reported the number the change achieves rather than widening the
+  change to reach it, which was right.
 - `pytest tests/ -q` · `mypy --strict src/ scripts/` · `ruff check src/ tests/ scripts/` · `python scripts/verify.py --phase 5`

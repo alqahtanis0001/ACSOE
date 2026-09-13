@@ -842,3 +842,40 @@ def test_the_writer_never_holds_more_than_one_pair_s_rows(
 def _height_of(labels: Any) -> int:
     height = getattr(labels, "height", None)
     return int(height) if isinstance(height, int) else len(list(labels))
+
+
+def test_each_pair_is_its_own_row_group_and_the_codec_is_unchanged(
+    tmp_path: Path, engine_context: Any
+) -> None:
+    """Spec 78 item 3, and the reason it is worth asserting rather than assuming.
+
+    One row group per pair is what makes a selective read cheap: parquet writes min and
+    max statistics per column per row group, so the `pair` column's statistics let a
+    reader skip every group but the one it wants. Batch the pairs into a single group
+    and every query reads the whole file while still returning the right answer — a
+    performance property that degrades silently, which is the only kind worth a test.
+
+    The codec is here because pyarrow's default is snappy and `polars.write_parquet`,
+    which this replaced, used zstd. On the full archive that difference is 429 MB
+    against 667 MB for identical rows: not a correctness change, and not one anybody
+    decided either.
+    """
+    import pyarrow.parquet as pq
+
+    directory = tmp_path / "groups"
+    write_archive(directory, "AAAUSD_15.csv", list(range(200)))
+    write_archive(directory, "BBBUSD_15.csv", list(range(150)))
+    write_archive(directory, "CCCUSD_15.csv", list(range(180)))
+
+    engine = BacktestEngine(archive_dir=directory, derived_dir=tmp_path / "derived")
+    result = engine.process(engine_context, {})
+
+    metadata = pq.ParquetFile(Path(result.data["slice_path"])).metadata
+    written_pairs = result.data["labelled_rows_by_pair"]
+    assert metadata.num_row_groups == len(written_pairs)
+    assert metadata.num_rows == result.data["labelled_rows"]
+    assert metadata.row_group(0).column(0).compression == "ZSTD"
+
+    # And each group holds exactly one pair's rows, in the order the pairs were written.
+    sizes = [metadata.row_group(i).num_rows for i in range(metadata.num_row_groups)]
+    assert sizes == list(written_pairs.values())

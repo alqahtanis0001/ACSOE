@@ -239,7 +239,13 @@ class _SliceWriter:
         if self._writer is None:
             self._target.parent.mkdir(parents=True, exist_ok=True)
             self._schema = table.schema
-            self._writer = pq.ParquetWriter(self._target, self._schema)
+            # `compression="zstd"` because that is what `polars.write_parquet` used
+            # before spec 78 and pyarrow's own default is snappy. Measured on the full
+            # archive: the same 20,331,237 rows came out at 667 MB under snappy against
+            # 429 MB under zstd. Nothing downstream reads the codec, but a slice that
+            # silently grew by half would be a change to the artefact made by an
+            # implementation detail of the writer rather than by anyone's decision.
+            self._writer = pq.ParquetWriter(self._target, self._schema, compression="zstd")
         elif table.schema != self._schema:
             try:
                 table = table.cast(self._schema)
