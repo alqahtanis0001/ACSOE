@@ -368,6 +368,57 @@ tested through the orchestrator: `state[engine] == {}` is the payload of *both* 
 had nothing to do and the engine that raised. Assert the absence of a blocker beside it, or
 assert the status directly.
 
+**The red messages, quoted, because a sweep's verdict is not evidence and its output is
+destroyed at the pipe.** R1 before the strengthening, killing only the status test:
+
+```
+E  acsoe.engines.feature.contracts.MissingInputError: state['market_sensor']['bar_closed']
+   is true and 'closed_bar_ts' is absent. Engine 3 owns the decision-bar clock and publishes
+   both together; a bar that closed without a timestamp is a shape it cannot produce, and
+   guessing which bar it was would date every feature row in this tick to a bar nobody chose.
+```
+
+R1 after it, now killing the test written for it:
+
+```
+E  AssertionError: engine 5 did not pass, it failed
+E  assert 'trading_blocked_by' not in {'system': {'mode': 'running', ...}, 'cycle_id': 2, ...}
+```
+
+R3, the orchestrator running the opportunity chain on a blocked tick, and R4, running it while
+`idle`:
+
+```
+E  AssertionError: the opportunity chain ran on a blocked tick
+E  assert 'feature' not in {..., 'guard_blockers': [{'engine': 'data_guard', 'rea...
+E  AssertionError: assert 'feature' not in {'system': {'mode': 'idle', ...}, 'cycle_id': 1, ...
+```
+
+That `MissingInputError` is worth keeping for its own sake: it is engine 5 refusing a payload
+shape engine 3 cannot produce, and saying in the message what guessing would have cost. It is
+the standard this project asks for and it is C's, not mine.
+
+### The rehearsal found nothing wrong with engine 5, and that is the report
+
+**Agent:** B · **Task:** engine 5 rehearsal · **Date:** 2026-09-13
+
+Eight tests, all green, driving C's engine 5 alone in the opportunity chain behind A's real
+engine 3, two real `Orchestrator` ticks sixty seconds apart, over the archive's own prices
+rebuilt from `tests/fixtures/candles_sample.parquet`. The system reaches `running` through an
+`activate` **command row** rather than by setting `state["system"]`, which is the region the
+contract reserves for the orchestrator; setting it by hand would have proved nothing about
+whether the opportunity chain is reachable at all.
+
+Engine 5 behaved correctly on every tick: `PASS` with an empty payload off a bar, a feature row
+for every pair on a bar, a **different** `bar_ts` on a second bar tick an hour later — which is
+the stateless-across-cycles property a one-tick rehearsal cannot see — and a JSON-safe payload
+whose every value is a float or null and never a NaN, matching ruling 8 exactly. Its
+`feature_names` and its per-pair row key sets agree, which is the seam engine 7's ranking reads.
+
+**Nothing to report to C-2 and nothing to fix.** Recording that plainly, because a rehearsal
+that finds nothing is still the evidence that registration is a formality rather than a
+discovery, and because "an audit that lists hits alone says nothing about coverage".
+
 ### The no-double seam test went from skipped to passing the moment engine 5 landed
 
 **Agent:** B · **Task:** spec 76 · **Date:** 2026-09-13

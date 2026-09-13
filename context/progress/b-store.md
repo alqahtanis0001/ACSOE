@@ -268,6 +268,51 @@ had already passed over it, because a mutation can only ask about behaviour some
 is a consumer reasoning about a producer, and it is the one review this project keeps proving
 no amount of self-testing replaces.
 
+#### COMPLETE 2026-09-13 — the two-tick orchestrator rehearsal of engine 5
+
+`tests/engines/test_feature_chain_rehearsal.py`, **8 tests, all passing**, and the phase gate
+is green on the run that includes it: `pytest tests/ -q` **2167 passed, 2 skipped**;
+`mypy --strict src/ scripts/` **115 source files**; `ruff check src/ tests/ scripts/` clean;
+`scripts/verify.py --phase 5` **2 PASS, 0 FAIL, 0 PENDING**. That last line reads "Phase 5 is
+green" and **must not be believed**: only two criteria are registered, because C-2's spec 60
+has not landed. A phase with fifteen engines' worth of real code in it cannot be green on
+`docs_vocabulary` and `toolchain_green` alone, and spec 60 exists to stop exactly that reading.
+
+**What it drives.** Engine 5 alone in the opportunity chain, engine 3 in the guard chain, two
+real `Orchestrator.tick()` calls sixty seconds apart, over real prices: the trade stream is
+rebuilt from `tests/fixtures/candles_sample.parquet` so engine 3 produces the archive's own
+candles. The system reaches `running` through an `activate` **command row**, the way the
+console does, rather than by setting `state["system"]` — which is the one region of `state` the
+contract reserves for the orchestrator, and setting it by hand would prove nothing about
+whether the opportunity chain is reachable at all.
+
+**Four mutations, four killed**, each restored from a byte copy and verified by sha256 in the
+same statement (ruling 10; both files also hashed before and after the whole sweep and
+unchanged):
+
+| # | Mutation | Killed by |
+|---|---|---|
+| R1 | engine 5 ignores `bar_closed` | the bar/quiet-tick test **and** the status test |
+| R2 | engine 5 returns `OK` instead of `PASS` on a non-bar tick | the status test |
+| R3 | the orchestrator runs the opportunity chain on a blocked tick | the guard-block test |
+| R4 | the orchestrator runs the opportunity chain while `idle` | the idle test |
+
+**R1 is the reason this file earned its place, and it went the wrong way first.** On the first
+sweep R1 was killed *only* by the status test — not by the test written for it, whose assertion
+was `quiet_tick["feature"] == {}`. With the guard removed, engine 5 runs on the quiet tick and
+raises on the absent `closed_bar_ts`, and contract rule 7 turns that into `ERROR` with
+`data={}`: **a quiet tick and a crashed tick publish the identical payload.** The assertion
+was true for a reason unrelated to what it claimed. Fixed by also asserting
+`"trading_blocked_by" not in quiet_tick`; R1 then died on the test written for it, with
+`AssertionError: engine 5 did not pass, it failed`. The verdict alone said KILLED both times —
+the finding was entirely in *which* test killed it.
+
+**Nothing to report against engine 5 itself.** It behaved correctly on every tick: `PASS` with
+an empty payload off a bar, a feature row for every pair on a bar, a different `bar_ts` on a
+second bar tick an hour later, and a JSON-safe payload whose every value is a float or null and
+never NaN. Its refusal message when `closed_bar_ts` is absent is unusually good and is quoted
+in the build log.
+
 #### CLAIMED 2026-09-13 — the two-tick orchestrator rehearsal of engine 5
 
 The lead's offer of 02:35 in `feature-specs/PHASE-5-TASKS.md`: engine 5 alone, `PASS` on a
