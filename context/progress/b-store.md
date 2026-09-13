@@ -268,6 +268,46 @@ had already passed over it, because a mutation can only ask about behaviour some
 is a consumer reasoning about a producer, and it is the one review this project keeps proving
 no amount of self-testing replaces.
 
+#### COMPLETE 2026-09-13 — engines 13 and 8 rehearsed, two configurations
+
+Same file, now **21 tests**, on the lead's request of 17:25. Chain 5, 6, 7, 12, 13, 8, 10, 11
+with my real engines 10 and 11 in their positions.
+
+**(a) No artefact**, the committed config: engine 13 blocks `anomaly_unavailable` and engines
+8, 10 and 11 never appear in `state`. The reason code is checked against the console's
+`REASON_PROSE`, because a code missing from that map renders silently.
+
+**(b) Real artefacts**: a module-scoped fixture trains a predictor, DI and anomaly detector
+from the committed sample into a temporary models root through `research/training.py`, which
+also exercises my own `new_model_run_dir`. Engine 13 passes, engine 8 publishes three
+calibrated probabilities summing to one, an `expected_move_pct` **string**, a DI and a
+threshold, and engine 10 reads it. The DI refusal is driven by **real archive bars against a
+model trained on the constructed series** and asserts no expected move is published.
+
+**Three findings, none of them a fix of mine.**
+
+1. **`prediction.di_percentile` is a training-time key.** The request expected engine 8 to
+   block while it is absent; engine 8 never reads it — `research/training.py` does, and a run
+   trained without it carries no `di.npz`, which engine 8 then refuses to load. The property
+   holds, by a different route than the request assumed, and the test now exercises that route
+   by training a second run without the key. **Open for the operator:** an artefact trained
+   with somebody else's percentile predicts happily while the operator's key is still absent,
+   because the threshold travels in the artefact. Escalated, not answered.
+2. **Where the chain stops today.** Engine 9 `order_book` is Phase 6, so slippage is absent,
+   invariant 2 gives it no fallback, and engine 10 blocks. Asserted, so the day engine 9 lands
+   that test goes red and somebody extends the rehearsal.
+3. **A fixture defect of mine, twice.** A constant trade count makes `trades_z_*` a division by
+   zero, so engine 13 refused the vector as incomplete — correctly. Fixed by varying the count;
+   the first fix saturated on real archive bars and had to be fixed again.
+
+**Three named mutations. T1 and T3 killed by the rehearsal; T2 survived it and is killed by the
+whole suite** — C-2's own `test_the_vector_is_built_in_the_manifests_order_not_the_state_rows`.
+Engine 5 builds rows in `FEATURE_NAMES` order, so the row order and the manifest order coincide
+on any state the live chain produces, and no end-to-end fixture can construct the
+disagreement. Reporting it as a survivor would have sent someone to write a test C already had.
+The first wide baseline was red in C-2's spec 73 file; the harness refused to report, and the
+re-run excludes that one file and says so.
+
 #### COMPLETE 2026-09-13 — engines 6 and 12 rehearsed in the same file
 
 Same file, now **14 tests**, extended on the lead's request of 10:10. Engines 5, 6, 7 and 12

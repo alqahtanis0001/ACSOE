@@ -50,9 +50,11 @@ from acsoe.clients.store.contracts import (
 )
 from acsoe.core.contracts import Chains, EngineStatus
 from acsoe.core.orchestrator import Orchestrator
+from acsoe.engines.cost.engine import CostEngine
 from acsoe.engines.data_guard.engine import DataGuardEngine
 from acsoe.engines.exchange.engine import ExchangeEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
+from acsoe.engines.risk.engine import RiskEngine
 from acsoe.engines.scout.engine import ScoutEngine
 
 pl = require_module("polars", reason="polars is not installed")
@@ -90,6 +92,33 @@ MacroContextEngine = require_module(
 RegimeEngine = require_module(
     "acsoe.engines.regime.engine", reason="engine 12 `regime` (C, spec 66) does not exist yet"
 ).RegimeEngine
+
+AnomalyEngine = require_module(
+    "acsoe.engines.anomaly.engine", reason="engine 13 `anomaly` (C, spec 72) does not exist yet"
+).AnomalyEngine
+
+PredictionEngine = require_module(
+    "acsoe.engines.prediction.engine",
+    reason="engine 8 `prediction` (C, spec 71) does not exist yet",
+).PredictionEngine
+
+#: Engine 13's refusal when no anomaly artefact is configured. Imported from C's contracts
+#: rather than retyped: a code that drifted would make the assertion below pass against a
+#: string nobody publishes.
+ANOMALY_UNAVAILABLE = require_module(
+    "acsoe.engines.anomaly.contracts", reason="engine 13 `anomaly` does not exist yet"
+).REASON_UNAVAILABLE
+
+#: Engine 8's refusal when the configured run cannot be loaded or carries no DI.
+PREDICTION_UNAVAILABLE = require_module(
+    "acsoe.engines.prediction.contracts", reason="engine 8 `prediction` does not exist yet"
+).REASON_UNAVAILABLE
+
+#: Engine 8's refusal when the Dissimilarity Index says the market is unlike the training
+#: set. Spec 59 decision 3: a block under contract rule 6, with no `expected_move_pct`.
+PREDICTION_DI_REFUSED = require_module(
+    "acsoe.engines.prediction.contracts", reason="engine 8 `prediction` does not exist yet"
+).REASON_DI_REFUSED
 
 pytestmark = pytest.mark.skipif(
     not FIXTURE.is_file(), reason="tests/fixtures/candles_sample.parquet is not committed"
@@ -159,20 +188,42 @@ def archive_bars(limit: int) -> list[dict[str, Any]]:
     return pl.read_parquet(FIXTURE).sort("ts").tail(limit).to_dicts()
 
 
+#: Trades per bar never exceed this. The count only has to *vary*; a bar with thousands of
+#: real trades would make the fixture slow for no gain.
+MAX_TRADES_PER_BAR = 24
+
+
 def trades_for(bars: list[dict[str, Any]], *, pair: str = PAIR) -> list[TradeTick]:
-    """Four trades per bar — open, high, low, close — that rebuild the bar exactly.
+    """Trades that rebuild each bar exactly, in a count that **varies bar to bar**.
 
     `build_candles` takes the first price as the open, the last as the close, the max as
     the high and the min as the low. On real OHLC the high is never below the open or the
-    close and the low is never above them, so this ordering reproduces all four.
+    close and the low is never above them, so opening with those four reproduces all four,
+    and any number of filler trades at the close price leaves them untouched.
+
+    **The count has to vary, and that is a correctness requirement rather than realism.**
+    An earlier version emitted exactly four trades per bar. `modelling/features.py`
+    computes `trades_z_*`, a z-score of the trade count over a lookback window, and a
+    z-score over a constant series is a division by zero — NaN, published as null, and
+    engine 13 then refuses the whole market-quality vector as incomplete, correctly. The
+    fixture could not exhibit the property the test was about, which is the defect
+    `code-standards.md` warns is worse than no test.
     """
     out: list[TradeTick] = []
     for bar in bars:
         ts = int(bar["ts"])
         volume = Decimal(str(bar["volume"]))
-        part = (volume / 4).quantize(Decimal("1e-12"))
-        quantities = [part, part, part, volume - 3 * part]
+        # **Derived from the bar's own trade count, not clamped to it.** `min(trades, 24)`
+        # was the first attempt and it saturates: real archive bars routinely carry
+        # hundreds of trades, so every bar hit the ceiling and the count was constant
+        # again — the same zero-dispersion defect one level down, and it reappeared on the
+        # archive after being fixed on the constructed series. A modulus keeps the count
+        # varying with the real one while staying small enough to build quickly.
+        count = 4 + int(bar.get("trades") or 0) % (MAX_TRADES_PER_BAR - 3)
+        part = (volume / count).quantize(Decimal("1e-12"))
+        quantities = [part] * (count - 1) + [volume - (count - 1) * part]
         prices = [bar["open"], bar["high"], bar["low"], bar["close"]]
+        prices += [bar["close"]] * (count - 4)
         for offset, (price, qty) in enumerate(zip(prices, quantities, strict=True), start=1):
             out.append(
                 TradeTick(
@@ -636,6 +687,478 @@ def test_the_screening_chain_stops_at_engine_5_on_a_non_bar_tick(
         assert engine not in quiet_tick, f"{engine} ran on a tick where no bar closed"
     assert quiet_tick["feature"] == {}
     assert "trading_blocked_by" not in quiet_tick
+
+
+# --------------------------------------------------------------------------- #
+# 4. Engines 13 and 8 behind them, in the two configurations that matter
+#
+# Registry order 5, 6, 7, 12, 13, 8, 10, 11 — engines 10 `cost` and 11 `risk` are mine and
+# sit in their real positions. Engine 9 `order_book` does not exist (Phase 6), so engine 10
+# meets an absent slippage input; what it does about that is asserted rather than avoided.
+#
+# Configuration (a) is the committed config, where `models.anomaly_run_id` and
+# `models.prediction_run_id` are deliberately absent — a fresh clone has no artefact. (b)
+# trains real artefacts from the committed sample into a temporary root.
+# --------------------------------------------------------------------------- #
+
+#: The DI percentile the passing path needs. **This number is the test's, not config's.**
+#: `prediction.di_percentile` is one of the three keys the operator has not supplied, it is
+#: deliberately absent from `config/default.yaml`, and engine 8 fails closed while it is.
+#: A number here decides when a model may refuse a trade, so it stays in the test that
+#: needs it and never reaches the committed file.
+TEST_DI_PERCENTILE = 0.99
+
+
+class Wrapped:
+    """The committed config with named keys answered, and nothing else changed.
+
+    The same shape C-2 uses in `test_prediction.py`. Written out rather than imported for
+    this file's standing reason, and because importing a fixture from another agent's test
+    would make my rehearsal go red when they refactor theirs.
+    """
+
+    def __init__(self, inner: Any, **overrides: Any) -> None:
+        self._inner = inner
+        self._overrides = overrides
+
+    def get(self, key: str) -> Any:
+        if key in self._overrides:
+            value = self._overrides[key]
+            if value is _ABSENT_KEY:
+                raise KeyError(f"config has no key {key!r}")
+            return value
+        return self._inner.get(key)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+class _AbsentKey:
+    """Sentinel: the key is not there at all, which is not the same as `None`."""
+
+
+_ABSENT_KEY = _AbsentKey()
+
+
+def judgement_chain() -> list[Any]:
+    """Engines 5, 6, 7, 12, 13, 8, 10, 11 in the order `engine-contracts.md` fixes."""
+    return [
+        FeatureEngine(),
+        MacroContextEngine(),
+        ScoutEngine(),
+        RegimeEngine(),
+        AnomalyEngine(),
+        PredictionEngine(),
+        CostEngine(),
+        RiskEngine(),
+    ]
+
+
+def test_without_an_artefact_engine_13_blocks_and_nothing_after_it_runs(
+    rehearsal_config: MappingConfig, rehearsal_clock: Any, fake_clients_with_store: Any, bars: Any
+) -> None:
+    """Configuration (a): the committed config, which names no artefact.
+
+    `models.anomaly_run_id` is deliberately absent — a fresh clone has no `models/` — so
+    engine 13 blocks with `anomaly_unavailable`. **The assertion that matters is the
+    second one**: engines 8, 10 and 11 must not appear in `state` at all. A gate that
+    blocked while the chain kept running would be a gate in name only, and invariant 4
+    rests on the chain stopping.
+    """
+    write_equity(fake_clients_with_store.store)
+    activate(fake_clients_with_store.store)
+    orchestrator = build(
+        rehearsal_config,
+        rehearsal_clock,
+        fake_clients_with_store,
+        bars,
+        opportunity=judgement_chain(),
+        stream_pairs=(PAIR, *MACRO_PAIRS),
+        quotes=True,
+    )
+
+    state = orchestrator.tick()
+
+    assert state["trading_blocked_by"] == "anomaly"
+    assert state["anomaly"]["reason_code"] == ANOMALY_UNAVAILABLE
+    for engine in ("prediction", "cost", "risk"):
+        assert engine not in state, f"{engine} ran after the chain was blocked"
+    # And the engines before it did run, so this is a block at 13 rather than a chain that
+    # never started: without this the test would pass against a broken engine 5.
+    assert state["scout"].get("pair"), "the chain never reached engine 7"
+    assert state["regime"]["pair"] == state["scout"]["pair"]
+
+
+def test_the_block_carries_a_reason_the_console_can_render(
+    rehearsal_config: MappingConfig, rehearsal_clock: Any, fake_clients_with_store: Any, bars: Any
+) -> None:
+    """Invariant 12: a rejection is research data, and `anomaly_unavailable` is the code
+    engine 19 would write. A code absent from the console's `REASON_PROSE` renders "No
+    reason was recorded." silently, so the seam is checked here rather than assumed."""
+    from acsoe.console.format import REASON_PROSE
+
+    write_equity(fake_clients_with_store.store)
+    activate(fake_clients_with_store.store)
+    orchestrator = build(
+        rehearsal_config,
+        rehearsal_clock,
+        fake_clients_with_store,
+        bars,
+        opportunity=judgement_chain(),
+        stream_pairs=(PAIR, *MACRO_PAIRS),
+        quotes=True,
+    )
+
+    state = orchestrator.tick()
+
+    assert state["block_reason"], "a block with no reason violates contract rule 6"
+    assert ANOMALY_UNAVAILABLE in REASON_PROSE, "the console cannot render this code"
+
+
+# --------------------------------------------------------------------------- #
+# 4b. Configuration (b): real artefacts, trained from the committed sample
+# --------------------------------------------------------------------------- #
+
+#: The anomaly threshold percentile the fixture trains with. **The test's number, not
+#: config's**, for the same reason as `TEST_DI_PERCENTILE`: `anomaly.threshold_percentile`
+#: is the operator's key and is deliberately absent from `config/default.yaml`.
+TEST_ANOMALY_PERCENTILE = 0.99
+
+
+@pytest.fixture(scope="module")
+def trained(tmp_path_factory: Any) -> tuple[Path, str]:
+    """One fold trained from the committed sample into a temporary artefact root.
+
+    Module-scoped because it fits real models: one fit shared by every test below. The
+    artefacts are written through **B's real `StoreClient`** path that `research/training.py`
+    uses, so this also exercises `new_model_run_dir` in the position it was built for.
+
+    Both percentiles are supplied here and nowhere else. They are the operator's keys, they
+    are absent from the committed config on purpose, and a number in that file would be a
+    test lane deciding when a model may refuse a trade.
+    """
+    from tests.harness.doubles import load_default_config
+    from tests.research.test_training import NOW, dataset_for
+
+    from acsoe.research import training
+
+    config = load_default_config()
+    root = tmp_path_factory.mktemp("rehearsal-models")
+    report = training.train_walkforward(
+        dataset_for(config, random_walk=False),
+        config=Wrapped(
+            config,
+            **{
+                "prediction.di_percentile": TEST_DI_PERCENTILE,
+                "anomaly.threshold_percentile": TEST_ANOMALY_PERCENTILE,
+            },
+        ),
+        models_dir=root / "models",
+        derived_dir=root / "derived",
+        now=NOW,
+        max_folds=1,
+    )
+    run_id = report.fold_runs[0]
+    directory = report.models_dir / run_id
+    assert (directory / "di.npz").is_file(), "no DI was fitted; every path below would block"
+    assert (directory / "anomaly.joblib").is_file(), "no anomaly detector; 13 would block"
+    return report.models_dir, run_id
+
+
+@pytest.fixture(scope="module")
+def trained_bars() -> list[dict[str, Any]]:
+    """The tail of **the same series the fixture models were trained on**.
+
+    Not the archive, and the reason is the Dissimilarity Index rather than convenience: to
+    a model that has never seen them, real archive bars are exactly the market the DI
+    exists to refuse — C measured that at DI 1.024 against a 1.023 threshold. A rehearsal
+    that scored out-of-distribution bars would refuse every candidate and everything past
+    the DI would be unreachable, so the passing path is driven from the training
+    distribution and the refusal is C's own test to induce.
+    """
+    from tests.research.test_training import candle_frame
+
+    frame = candle_frame("AAAUSD", interval_s=BAR, random_walk=False, days=140)
+    return [
+        {
+            "ts": int(row["ts"]),
+            "open": row["open"],
+            "high": row["high"],
+            "low": row["low"],
+            "close": row["close"],
+            "volume": row["volume"],
+            "trades": int(row["trades"]),
+        }
+        for row in frame.tail(300).to_dicts()
+    ]
+
+
+@pytest.fixture
+def trained_clock(trained_bars: list[dict[str, Any]], fixed_clock: Any) -> Any:
+    """One bar and one second past the newest trained bar: the first bar tick."""
+    fixed_clock._now = datetime.fromtimestamp(int(trained_bars[-1]["ts"]) + BAR + 1, tz=UTC)
+    return fixed_clock
+
+
+def artefact_config(
+    base: MappingConfig, root: Path, run_id: str, **overrides: Any
+) -> Any:
+    """The committed config naming the trained run, plus whatever the test needs.
+
+    **The pair the model sees is not the pair it was trained on, and that is deliberate.**
+    `modelling/features.py` encodes no pair identity — spec 63 forbids it, because a pooled
+    model that can memorise a pair name has learned nothing that transfers — so replaying
+    the training distribution under a tradable pair name is exactly the situation the live
+    system is in, and it is what lets engine 7 select a candidate at all.
+    """
+    return Wrapped(
+        base,
+        **{
+            "models.prediction_run_id": run_id,
+            "models.anomaly_run_id": run_id,
+            "data_guard.max_data_age_s": 120.0,
+            **overrides,
+        },
+    )
+
+
+def build_trained(
+    config: Any, clock: Any, clients: Any, bars: list[dict[str, Any]], root: Path
+) -> Orchestrator:
+    """The judgement chain against a store that knows the artefact root."""
+    from acsoe.clients.store.client import StoreClient
+
+    store = StoreClient(clients.store.db_path, models_dir=root)
+    object.__setattr__(clients, "store", store)
+    write_equity(store)
+    activate(store)
+    return build(
+        config,
+        clock,
+        clients,
+        bars,
+        opportunity=judgement_chain(),
+        stream_pairs=(PAIR, *MACRO_PAIRS),
+        quotes=True,
+    )
+
+
+@pytest.fixture(scope="module")
+def trained_without_di(tmp_path_factory: Any) -> tuple[Path, str]:
+    """A run trained while `prediction.di_percentile` was absent, so it carries no DI.
+
+    This is what the operator's unset key actually produces, and it is the fixture the
+    refusal below needs. The anomaly percentile is still supplied, so engine 13 passes and
+    the chain reaches engine 8 — otherwise the test would pass on engine 13's block and
+    prove nothing about engine 8.
+    """
+    from tests.harness.doubles import load_default_config
+    from tests.research.test_training import NOW, dataset_for
+
+    from acsoe.research import training
+
+    config = load_default_config()
+    root = tmp_path_factory.mktemp("rehearsal-models-no-di")
+    report = training.train_walkforward(
+        dataset_for(config, random_walk=False),
+        config=Wrapped(config, **{"anomaly.threshold_percentile": TEST_ANOMALY_PERCENTILE}),
+        models_dir=root / "models",
+        derived_dir=root / "derived",
+        now=NOW,
+        max_folds=1,
+    )
+    run_id = report.fold_runs[0]
+    assert not (report.models_dir / run_id / "di.npz").exists(), (
+        "the trainer fitted a DI with no percentile configured; this fixture is void"
+    )
+    return report.models_dir, run_id
+
+
+def test_a_run_trained_without_the_di_percentile_makes_engine_8_block(
+    paper_config: MappingConfig,
+    trained_clock: Any,
+    fake_clients_with_store: Any,
+    trained_bars: Any,
+    trained_without_di: tuple[Path, str],
+) -> None:
+    """**Asserted before the passing path, deliberately, and it corrects the request.**
+
+    The rehearsal request expected engine 8 to block while `prediction.di_percentile` is
+    absent. It does, but **not by reading that key** — the key is read by
+    `research/training.py` and nowhere else, and a run trained without it simply carries no
+    `di.npz`. Engine 8 then refuses to load the run at all, saying so in as many words:
+    *"That run was trained while `prediction.di_percentile` was absent, which is the
+    operator's key; engine 8 will not predict without the refusal it exists to make."*
+
+    So the fail-closed property spec 59 decision 9 asks for is real and is enforced at the
+    artefact rather than at the config read. **The distinction matters and is reported to
+    the lead rather than papered over**: an artefact trained with somebody else's
+    percentile predicts happily while the operator's key is still absent, because the
+    threshold travels in the artefact. That is a question about when a model may refuse a
+    trade, so it is the operator's, not this rehearsal's.
+    """
+    root, run_id = trained_without_di
+    config = artefact_config(paper_config, root, run_id)
+    orchestrator = build_trained(config, trained_clock, fake_clients_with_store, trained_bars, root)
+
+    state = orchestrator.tick()
+
+    assert state["anomaly"]["reason_code"] is None, (
+        f"engine 13 blocked; this is engine 8's test: {state.get('block_reason')}"
+    )
+    assert state["trading_blocked_by"] == "prediction"
+    assert state["prediction"]["reason_code"] == PREDICTION_UNAVAILABLE
+    assert state["prediction"].get("expected_move_pct") is None, (
+        "a refusal published an expected move, which engine 10 would price a hurdle from"
+    )
+    assert "di_percentile" in str(state["block_reason"]), (
+        "the block does not say which operator key is missing, so nobody can act on it"
+    )
+    for engine in ("cost", "risk"):
+        assert engine not in state, f"{engine} ran on a prediction that never happened"
+
+
+def test_with_artefacts_the_chain_reaches_engine_8_and_publishes_what_10_reads(
+    paper_config: MappingConfig,
+    trained_clock: Any,
+    fake_clients_with_store: Any,
+    trained_bars: Any,
+    trained: tuple[Path, str],
+) -> None:
+    """Configuration (b): engine 13 passes, engine 8 predicts, engine 10 reads it.
+
+    The DI percentile supplied here is **the test's number and not config's**, and it is
+    supplied only after the refusal above has been asserted, so the passing path cannot be
+    mistaken for the default.
+
+    `expected_move_pct` is asserted to be a **string**: contract rule 8 requires money to
+    cross `state` as an exact decimal string, and engine 10 parses it as one. A float here
+    would arrive in a hurdle comparison wrong in the fourth decimal, which is the magnitude
+    the cost gate operates at.
+    """
+    root, run_id = trained
+    config = artefact_config(
+        paper_config, root, run_id, **{"prediction.di_percentile": TEST_DI_PERCENTILE}
+    )
+    orchestrator = build_trained(config, trained_clock, fake_clients_with_store, trained_bars, root)
+
+    state = orchestrator.tick()
+
+    assert state["anomaly"]["reason_code"] is None
+    assert state["trading_blocked_by"] != "anomaly"
+
+    prediction = state["prediction"]
+    assert prediction.get("reason_code") is None, prediction.get("reason_code")
+    probabilities = [prediction["p_target"], prediction["p_stop"], prediction["p_timeout"]]
+    assert all(isinstance(p, float) for p in probabilities)
+    assert all(0.0 <= p <= 1.0 for p in probabilities), probabilities
+    assert abs(sum(probabilities) - 1.0) < 1e-9, "calibrated probabilities must sum to 1"
+
+    assert isinstance(prediction["expected_move_pct"], str), "money crosses state as a string"
+    Decimal(prediction["expected_move_pct"])
+    assert isinstance(prediction["di"], float)
+    assert isinstance(prediction["di_threshold"], float)
+
+    # Engine 10 read it. Whether it then blocks is a separate question and is the next test.
+    assert "cost" in state, "engine 10 never ran on a tick engine 8 completed"
+
+
+def test_the_di_refuses_market_data_the_model_never_saw_and_publishes_no_expected_move(
+    paper_config: MappingConfig,
+    rehearsal_clock: Any,
+    fake_clients_with_store: Any,
+    bars: Any,
+    trained: tuple[Path, str],
+) -> None:
+    """**The refusal, driven by real out-of-distribution data rather than by a stub.**
+
+    The artefacts are trained on the constructed series; these are real SOLUSD bars from
+    the committed archive. To a model that has never seen them that is exactly the market
+    the Dissimilarity Index exists to refuse, and C measured it at DI 1.024 against a
+    1.023 threshold — the mechanism working, not a bug.
+
+    **The assertion that carries the weight is the absent `expected_move_pct`.** Spec 59
+    decision 3: engine 8 blocks on a DI refusal and publishes no expected move, so engine
+    10 fails closed on the absent key. An engine that compared the DI *after* asking the
+    model would have an expected move in hand at this point, and publishing it would let
+    the cost gate price a hurdle from a prediction the DI had already distrusted.
+    """
+    root, run_id = trained
+    config = artefact_config(
+        paper_config, root, run_id, **{"prediction.di_percentile": TEST_DI_PERCENTILE}
+    )
+    orchestrator = build_trained(config, rehearsal_clock, fake_clients_with_store, bars, root)
+
+    state = orchestrator.tick()
+
+    assert "prediction" in state, (
+        f"the chain stopped before engine 8: blocked by {state.get('trading_blocked_by')} "
+        f"reason {state.get('block_reason')}"
+    )
+    prediction = state["prediction"]
+    assert prediction["reason_code"] == PREDICTION_DI_REFUSED, (
+        f"the archive bars did not refuse: {prediction}"
+    )
+    assert state["trading_blocked_by"] == "prediction"
+    assert prediction.get("expected_move_pct") is None, (
+        "a DI refusal published an expected move, which engine 10 would price a hurdle from"
+    )
+    # The DI and its threshold are still published: the console renders them and engine 14
+    # will weight by them in Phase 6, so a refusal is a reading rather than a silence.
+    assert isinstance(prediction["di"], float)
+    assert isinstance(prediction["di_threshold"], float)
+    assert prediction["di"] > prediction["di_threshold"]
+    for engine in ("cost", "risk"):
+        assert engine not in state, f"{engine} ran on a refused prediction"
+
+
+def test_engine_10_stops_the_chain_for_want_of_engine_9_and_says_so(
+    paper_config: MappingConfig,
+    trained_clock: Any,
+    fake_clients_with_store: Any,
+    trained_bars: Any,
+    trained: tuple[Path, str],
+) -> None:
+    """**The honest end of this chain today, reported rather than avoided.**
+
+    Engine 9 `order_book` is Phase 6 and does not exist, so
+    `state["order_book"]["estimated_slippage_pct"]` is absent. Invariant 2 gives slippage no
+    fallback and invariant 3 says a gate that cannot reach its data blocks, so engine 10
+    blocks and engine 11 never runs. That is the cost gate working, not a rehearsal
+    failure, and it is asserted here so that the day engine 9 lands this test goes red and
+    someone extends the rehearsal rather than discovering it in Phase 6.
+    """
+    root, run_id = trained
+    config = artefact_config(
+        paper_config, root, run_id, **{"prediction.di_percentile": TEST_DI_PERCENTILE}
+    )
+    orchestrator = build_trained(config, trained_clock, fake_clients_with_store, trained_bars, root)
+
+    state = orchestrator.tick()
+
+    assert state["trading_blocked_by"] == "cost"
+    assert state["block_reason"]
+    assert "risk" not in state, "engine 11 ran after the cost gate blocked"
+
+
+def test_engines_13_and_8_declare_themselves_as_the_registry_has_them() -> None:
+    """Engine 13 is a gate; engine 8 is not, even though it blocks on a DI refusal.
+
+    That asymmetry is spec 59 decision 3 and it is easy to read as a mistake: `is_gate` is
+    the declaration `verify.py` checks against the registry table, and contract rule 6
+    already lets any engine halt the tick. Asserted here so a rehearsal held before
+    registration is where a wrong declaration surfaces.
+    """
+    assert (AnomalyEngine().name, AnomalyEngine().number, AnomalyEngine().is_gate) == (
+        "anomaly",
+        13,
+        True,
+    )
+    assert (PredictionEngine().name, PredictionEngine().number, PredictionEngine().is_gate) == (
+        "prediction",
+        8,
+        False,
+    )
 
 
 def test_engines_6_and_12_declare_themselves_as_the_registry_has_them() -> None:

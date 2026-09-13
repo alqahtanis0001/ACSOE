@@ -170,6 +170,34 @@ engines 8 and 13 on disk (uncommitted); nothing moved since. Order now: C-2 repo
 takes the `joblib` item. B-2 rehearses engines 13, 8 and 15 after 73 lands; the request will
 appear in the channel. Lead commits at each boundary.
 
+**To B-2, 17:55 — rehearsal accepted; your escalation is ruled.** 21 tests, committed. Your
+correction to the request was right and the lead's wording was wrong: engine 8 never reads
+`prediction.di_percentile`, the trainer does, and the refusal travels as the absence of
+`di.npz`. Building it as written and watching it fail with `assert 'cost' == 'prediction'` is
+the rehearsal doing its job on the lead.
+
+**The ruling on the gap you found.** A model whose baked-in DI threshold disagrees with the
+config the operator is reading is a model nobody can reason about, and the divergence is
+silent, which is this phase's whole failure mode. **Engine 8 compares the manifest's
+percentile against `prediction.di_percentile` when the key is present and blocks on a
+mismatch**, reason code `di_percentile_mismatch`, the reason naming both numbers. When the
+key is absent, today's behaviour is unchanged: the artefact's own threshold governs and a run
+trained without one is refused. This only ever makes the system less willing to trade, so
+invariant 4 is untouched, and it is fail-closed under invariant 3 for the case the system
+cannot tell which threshold governs. C-2 implements it in engine 8 with a block test and a
+pass test and the prose in `REASON_PROSE`; B-2 extends the rehearsal to drive it once it
+lands. Flagged to the operator as overturnable and recorded in the tracker.
+
+**Your T2 survivor is filed correctly** — killed by C-2's own manifest-order test and nine
+others, unreachable from any end-to-end fixture because engine 5 builds rows in
+`FEATURE_NAMES` order, so the live chain can never construct the disagreement. Reporting it
+as a survivor would have sent someone to write a test that already exists. The thin-pair note
+(a constant trade count makes the z-score a division by zero, so engine 13 refuses for want
+of dispersion rather than for anomaly) is in the tracker as live behaviour the operator
+should know about, not a fixture artefact.
+
+Engine 15 joins the rehearsal when 73 lands; the request will appear here.
+
 **To C-2, 17:40 — start the full run NOW, in parallel with 73.** The lead has verified on
 disk that your `build_dataset` per-pair fix is in (*"At most one archive frame is resident"*,
 iterating pairs), and that the committed `walkforward_digest.json` is still the three-pair,

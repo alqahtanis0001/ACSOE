@@ -398,6 +398,163 @@ That `MissingInputError` is worth keeping for its own sake: it is engine 5 refus
 shape engine 3 cannot produce, and saying in the message what guessing would have cost. It is
 the standard this project asks for and it is C's, not mine.
 
+### Engines 13 and 8 rehearsed in two configurations, with real artefacts
+
+**Agent:** B · **Task:** engines 13 and 8 rehearsal · **Date:** 2026-09-13
+
+The file is now 21 tests over the chain 5, 6, 7, 12, 13, 8, 10, 11 — engines 10 `cost` and 11
+`risk` in their real positions, mine — in two configurations.
+
+**(a) No artefact.** The committed config, where `models.anomaly_run_id` is deliberately absent
+because a fresh clone has no `models/`. Engine 13 blocks with `anomaly_unavailable` and
+**engines 8, 10 and 11 do not appear in `state` at all**. That second half is the assertion
+that matters: a gate that blocked while the chain kept running would be a gate in name only.
+The block's reason code is also checked against the console's `REASON_PROSE`, because a code
+missing from that map renders "No reason was recorded." silently.
+
+**(b) Real artefacts.** A module-scoped fixture trains a predictor, a DI and an anomaly
+detector from the committed sample into a temporary models root, through the same
+`research/training.py` path the real trainer uses — which exercises B's own
+`new_model_run_dir` in the position it was built for. On the bar tick engine 13 passes, engine
+8 publishes three calibrated probabilities summing to one, an `expected_move_pct` **string**,
+a DI and a threshold, and engine 10 reads it.
+
+**Three things that had to be got right and are worth naming.**
+
+*The pair the model sees is not the pair it was trained on.* `modelling/features.py` encodes no
+pair identity — spec 63 forbids it, because a pooled model that can memorise a pair name has
+learned nothing that transfers — so the training distribution is replayed under a tradable pair
+name. That is what lets engine 7 select a candidate at all, and it is the situation the live
+system is in.
+
+*The macro columns are real rather than fabricated.* C's own engine 8 test supplies them by
+hand and says so, because the committed sample has none. Here engine 6 runs for real over
+streamed macro pairs and publishes them, so the one fabricated part of that fixture is absent
+from this one.
+
+*The refusal is driven by real out-of-distribution data.* The DI refusal test streams the actual
+SOLUSD archive against a model trained on the constructed series — the market the Dissimilarity
+Index exists to refuse — and asserts that no `expected_move_pct` is published, while the DI and
+its threshold are. That is spec 59 decision 3 exactly: engine 10 fails closed on the absent key
+rather than pricing a hurdle from a prediction the DI had already distrusted.
+
+**Where the chain honestly stops today.** Engine 9 `order_book` is Phase 6, so
+`state["order_book"]["estimated_slippage_pct"]` does not exist, slippage has no fallback under
+invariant 2, and engine 10 blocks. Engine 11 never runs. That is the cost gate working, and it
+is asserted rather than avoided — so the day engine 9 lands, that test goes red and somebody
+extends the rehearsal instead of discovering the gap in Phase 6.
+
+### The three named mutations, and the one that survived the rehearsal was killed by C's own test
+
+**Agent:** B · **Task:** engines 13 and 8 rehearsal · **Date:** 2026-09-13
+
+| # | Mutation | Verdict against the rehearsal | Killed by |
+|---|---|---|---|
+| T1 | the DI compared after prediction rather than before | KILLED | the DI-refusal test |
+| T2 | the feature order taken from the state row, not the manifest | **SURVIVED** | see below |
+| T3 | engine 13's comparison inverted | KILLED | four tests in configuration (b) |
+
+**T2 survived the rehearsal and is killed by the whole suite.** Asked wide — every test under
+`tests/engines/`, `tests/modelling/` and `tests/research/` — it dies on C's own
+`test_the_vector_is_built_in_the_manifests_order_not_the_state_rows`, plus nine more in
+`test_prediction.py`. So the branch is covered, by the test written for it, in the producer's
+own file.
+
+**Why the rehearsal cannot see it, which is the part worth keeping.** Engine 5 builds each
+feature row in `FEATURE_NAMES` order, so on any state the live chain produces, the row's key
+order and the manifest's order **coincide**. Taking the order from the row is therefore
+indistinguishable from taking it from the manifest until something reorders the row — which is
+what C's test does deliberately and what no end-to-end fixture will ever do by accident. The
+rehearsal drives the real chain, and that is exactly why it cannot construct the disagreement:
+a test of the wiring and a test of the ordering are different tests, and this is a clean example
+of a property an integration test is structurally unable to hold.
+
+**The standing rule earned its keep.** *A mutation that survives a subset has not survived — it
+has not been asked.* Reporting T2 as a survivor would have sent somebody to write a test for a
+case C had already covered, and made the real survivors look less urgent. It took one wide run
+to find out.
+
+**One process note.** The wide baseline was red on the first attempt —
+`tests/engines/test_skeptic.py::test_p_wrong_is_the_probability_of_being_wrong_and_not_of_being_right`,
+C-2 landing spec 73 as I swept — and the harness refused to report rather than sweeping over a
+red tree, which would have marked every mutation killed. The re-run excludes that one file and
+says so, per the rule that a sweep must name what it excluded and why. Both mutated files were
+sha256-verified identical afterwards.
+
+### The DI percentile is a training-time key, so engine 8's refusal lives in the artefact
+
+**Agent:** B · **Task:** engines 13 and 8 rehearsal · **Date:** 2026-09-13
+
+**What happened.** The rehearsal request asked me to assert that *"with `prediction.di_percentile`
+absent engine 8 must block rather than predict"*. Built as written — a trained artefact, the
+key absent from config — and engine 8 **predicted**, the chain ran on to engine 10, and the
+test failed with `assert 'cost' == 'prediction'`.
+
+**Why.** `prediction.di_percentile` is read in exactly one place in the codebase:
+`research/training.py`, where the DI's threshold is fitted. Engine 8 never reads it. The
+threshold travels **inside the artefact** — spec 59 decision 6 says the reference set and its
+percentile are fitted per fold and refitted weekly — so an engine holding a run with a `di.npz`
+has a threshold and predicts, config key or no config key.
+
+The fail-closed property spec 59 decision 9 asks for is still real, and it is enforced one
+level down: a run trained while the key was absent carries **no `di.npz` at all**, and engine 8
+then refuses to load the run, saying so in the message — *"That run was trained while
+`prediction.di_percentile` was absent, which is the operator's key; engine 8 will not predict
+without the refusal it exists to make."* That is a good refusal and it is the mechanism that
+actually exists.
+
+**Fix.** The test now trains a **second** run with the percentile absent and drives the chain
+against it: engine 13 passes, engine 8 blocks with `prediction_unavailable`, publishes no
+expected move, and the block reason names the operator's key so somebody can act on it.
+Engines 10 and 11 do not run. The request's expectation is met in substance and by the route
+that implements it, rather than by the route the request assumed.
+
+**Consequence, and it is the operator's rather than mine.** An artefact trained with *somebody
+else's* percentile predicts happily while the operator's key is still absent — which is exactly
+what my own fixture does, with 0.99 chosen by this test. Nothing in the live path asks whether
+the percentile baked into an artefact is the one the operator ruled. That is a question about
+when a model may refuse a trade, so it is escalated rather than answered here. The narrow
+version: engine 8 could compare the manifest's recorded percentile against
+`prediction.di_percentile` when the key is present and refuse a mismatch, which would cost one
+comparison and would close the gap without changing any threshold.
+
+### A fixture with a constant trade count cannot produce a trade-count z-score
+
+**Agent:** B · **Task:** engines 13 and 8 rehearsal · **Date:** 2026-09-13
+
+**What happened.** Configuration (b) — real artefacts, the whole judgement chain — blocked at
+engine 13 with `anomaly_inputs_incomplete`, and the reason named exactly which inputs:
+
+```
+the market-quality vector is incomplete: trades_z_4, trades_z_16, trades_z_48, trades_z_96.
+A gate that scored a partial vector would be reporting the feature pipeline's gaps as a
+healthy market.
+```
+
+**Why.** My `trades_for` helper rebuilds each bar from exactly **four** synthetic trades —
+open, high, low, close — for every bar, because four is what it takes to reproduce an OHLC
+candle exactly. So engine 3 counts four trades in every bar, the trade count has **zero
+dispersion**, and a z-score over a constant series is a division by zero: NaN, published as
+null, and engine 13 correctly refuses to score a partial vector.
+
+Nothing is wrong with any engine. Engine 5 published null for a feature that genuinely does not
+exist on that input, and engine 13 refused rather than scoring around the hole, which is the
+behaviour its message says it is protecting. **The fixture was the defect**, and it was a
+fixture that could not exhibit the property the test was about — the standing rule from
+`code-standards.md`, arriving through a helper written for a different purpose two rehearsals
+earlier, where four trades per bar was exactly right and nothing downstream read a trade count.
+
+**Fix.** `trades_for` now emits a **varying** number of trades per bar, taken from the bar's own
+`trades` column and clamped, with the four OHLC-defining prices first and the remainder at the
+close. The candle is still reproduced exactly — first price is the open, last is the close, max
+is the high, min is the low — and the trade count now varies bar to bar, so its z-score exists.
+
+**Consequence, and the reason this is more than a fixture note.** The live case this mimics is
+real: a pair whose trade count never varies across a whole lookback window produces the same
+null, and engine 13 blocks it. That is correct and fail-closed, and it is worth knowing that a
+very thin pair can be refused by the anomaly gate for want of dispersion rather than for
+anomaly. Not raised as a defect; recorded so nobody debugs it twice.
+
 ### Engines 6 and 12 rehearsed behind engine 5, and engine 12 needs a candidate to do anything
 
 **Agent:** B · **Task:** engines 6 and 12 rehearsal · **Date:** 2026-09-13

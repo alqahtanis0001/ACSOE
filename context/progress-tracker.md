@@ -455,6 +455,25 @@ the reason in the YAML comment and in `DatasetConfig`.
   drives engine 3 with two pairs whose holes differ and asserts what `data_guard` does. The
   operator may overturn in favour of a per-pair block, which would block the whole tick on
   the ordinary fact that a thin pair did not trade.
+- **RULED by the lead 2026-09-13, flagged to the operator as overturnable: engine 8 blocks
+  when an artefact's baked-in DI percentile disagrees with the config.** Found by B-2 while
+  rehearsing engines 13 and 8. The DI threshold travels *inside* the artefact, and engine 8
+  never reads `prediction.di_percentile` — the trainer does, and a run trained without it
+  carries no `di.npz`, which engine 8 refuses. So the withheld-key case is already
+  fail-closed. What was open is the other case: once any percentile is baked in, changing the
+  config changes nothing, and the operator would read a number the running system does not
+  use. Ruled: compare the manifest's percentile against the config key **when the key is
+  present** and block on a mismatch, reason code `di_percentile_mismatch`, naming both
+  numbers; unchanged when the key is absent. It only reduces willingness to trade, so
+  invariant 4 is untouched, and it is invariant 3's answer to "the system cannot tell which
+  threshold governs".
+- **NOTED 2026-09-13, live behaviour the operator should know about: a very thin pair can be
+  refused by the anomaly gate for want of dispersion rather than for anomaly.** A constant
+  trade count over a window makes the trade-count z-score a division by zero, so engine 13
+  correctly refuses the vector as incomplete. Found by B-2 as a fixture defect twice over;
+  the live case is real and is the correct fail-closed outcome, but it means the anomaly gate
+  and the thin-pair floor (`dataset.min_labelled_rows`, operator ruling 3) are two views of
+  one question the operator may want to answer together.
 - **OPEN, Phase 5, for the operator, and it bears on `anomaly.threshold_percentile`: the
   anomaly detector as built does not flag a ten-sigma volume spike at any high percentile.**
   Measured by C-2 in spec 70: the spiked bar scores at the 0.904 quantile of training scores,
