@@ -16,6 +16,7 @@
 | Relational store | `sqlite3` (stdlib) | Trades, rejections, runs, leaderboard |
 | Columnar store | `pyarrow`, `duckdb` | Feature snapshots, recordings, analysis |
 | Serialization | `orjson` | Recording hot path |
+| Model artefact serialisation | `joblib` | The one non-text artefact, the anomaly detector's isolation forest, which scikit-learn has no text dump for. Declared directly because engine 13 loads it on the live loop path; a transitive dependency that vanished would break a gate at load with nothing here to explain it. The manifest's sha256 over the file defends a swapped file, not a hostile original: unpickling executes, so never load an artefact from an untrusted source |
 | Config parsing | `pyyaml` | `config/default.yaml`. **`yaml.safe_load` only, never `yaml.load`** |
 | Console | `fastapi`, `uvicorn` | Local read-only dashboard |
 | Logging | `structlog` | Structured JSON logs |

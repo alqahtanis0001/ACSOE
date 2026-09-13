@@ -58,6 +58,15 @@ dependencies = [
     "lightgbm>=4.5",
     "scikit-learn>=1.5",
     "shap>=0.46",
+    # Declared directly, on the lead's ruling of 2026-09-13 for spec 70, although it
+    # arrives anyway as a dependency of scikit-learn. Engine 13 `anomaly` loads its
+    # detector with `joblib.load` on the live loop path, and a library the daemon
+    # imports by name is one this project names: today it is installed only because
+    # something else asked for it, so a scikit-learn release that dropped or renamed
+    # the dependency would break a gate at load time with nothing in `pyproject.toml`
+    # to explain why. An indirect dependency is a fact about another project's
+    # packaging, not a promise to this one.
+    "joblib>=1.4",
 ]
 
 [project.optional-dependencies]

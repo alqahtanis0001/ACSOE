@@ -934,3 +934,47 @@ named a linter that is not running — and `RUF100` caught it, which is the same
 `verify.py:8025` earlier today. A suppression is a claim that a rule is wrong here; a
 suppression for a rule that is not running is a claim about nothing, and the comment that
 replaced it says why the access is fixture set-up.
+
+### joblib is declared directly; the mypy override it was asked to come with cannot land alone
+
+**Agent:** A · **Task:** the lead's spec 70 item · **Date:** 2026-09-13
+
+**What was asked.** Declare `joblib` as a direct base dependency, and add `joblib` and
+`joblib.*` to the mypy overrides beside numpy and polars, with a comment saying why.
+
+**The dependency is in.** It arrives anyway as a dependency of scikit-learn, and that is the
+argument for naming it rather than against: engine 13 `anomaly` calls `joblib.load` on the live
+loop path, so the daemon imports by name a library nothing in this project asks for. A
+scikit-learn release that dropped or renamed the dependency would break a gate at load time
+with nothing in `pyproject.toml` to explain it. An indirect dependency is a fact about another
+project's packaging, not a promise to this one.
+
+That tripped the guard it should have: `test_no_dependency_outside_the_stack_table` went red,
+because `joblib` is not a row in `context/architecture-context.md`'s stack table. Correct
+behaviour — a dependency outside the document is an escalation, and this is the escalation. The
+name is in the test's copy with a comment saying the document has not caught up and the lead
+has been asked; that is the order `pyyaml` went in, and writing it down is what keeps the
+assertion meaning what it says rather than becoming a decision a test made.
+
+**The override cannot land on its own, and this is measured rather than predicted.** Two files
+already carry `import joblib  # type: ignore[import-untyped]` — `engines/anomaly/engine.py:232`
+and `research/training.py:1515` — and the second cites the pyarrow precedent in a comment
+directly above it. With `joblib` and `joblib.*` added to the override list,
+`mypy --strict src/ scripts/` reports:
+
+    src\acsoe\engines\anomaly\engine.py:232: error: Unused "type: ignore" comment
+    src\acsoe\research\training.py:1515: error: Unused "type: ignore" comment
+
+Both lines are C-2's. This project runs `warn_unused_ignores`, so a global override does not
+remove the need for a local ignore, it makes the local ignore an error — which is exactly what
+happened when I added `pyarrow.*` this morning and had to take it back out. So the override and
+the deletion of those two lines are one change across two lanes, and I have landed neither and
+reported the measurement instead.
+
+**On the comment the lead asked the override to carry**, which is worth recording even though
+the override is not in yet: the manifest's sha256 over `anomaly.joblib` **defends a swapped
+file, not a hostile original**. `joblib.load` unpickles, and unpickling executes; the hash
+proves the bytes are the ones this project wrote, so it catches corruption and substitution
+after the fact. It is not a sandbox and it does not make loading an artefact from an untrusted
+source safe. The distinction matters because the hash check *looks* like a security control for
+the second case and is only a control for the first.

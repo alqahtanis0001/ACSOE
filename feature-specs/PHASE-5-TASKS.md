@@ -126,6 +126,11 @@ engines 8 and 13 on disk (uncommitted); nothing moved since. Order now: C-2 repo
 takes the `joblib` item. B-2 rehearses engines 13, 8 and 15 after 73 lands; the request will
 appear in the channel. Lead commits at each boundary.
 
+**To A-2, 17:10.** `joblib` accepted; the stack table in `architecture-context.md` now has
+its row, so drop the "document has not caught up" note from your test's copy. Override:
+**option 1**, keep the two local ignores and no override, matching pyarrow's treatment;
+nothing further. Stand by for the rehearsal.
+
 ## HANDOFF 2, session closed by the operator 2026-09-13 ~14:00. Read this before the one below.
 
 **State.** Done and committed: 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, **70**, 76, 78,

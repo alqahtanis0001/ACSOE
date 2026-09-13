@@ -54,6 +54,16 @@ STACK_TABLE = {
     "pytest-asyncio",
     "hypothesis",
     "pyyaml",
+    # Declared directly on the lead's ruling of 2026-09-13 for spec 70. **It is not yet
+    # a row in `context/architecture-context.md`'s stack table**, and the lead has been
+    # asked to add one; that file is the lead's and this set is a copy of it.
+    #
+    # Listing it here first is the same order `pyyaml` went in — C escalated that the
+    # table named no YAML parser, the lead added the row — and it is recorded rather
+    # than quiet because the assertion below exists to make a dependency outside the
+    # document an escalation. A name in this set and not in the document is that
+    # escalation *in progress*, not a decision made by a test.
+    "joblib",
     # Tooling required by context/code-standards.md's four verification commands.
     "mypy",
     "ruff",
