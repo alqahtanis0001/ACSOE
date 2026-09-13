@@ -445,12 +445,12 @@ class ArchiveReplay:
     socket, and the only I/O is reading files the caller named.
     """
 
-    __slots__ = ("_clock", "_frames", "_interval_s", "_report", "_rows")
+    __slots__ = ("_clock", "_interval_s", "_report", "_sources")
 
     def __init__(
         self,
         *,
-        rows: Mapping[str, Sequence[Mapping[str, Any]]],
+        sources: Mapping[str, Path],
         archives: Mapping[str, ArchiveReport],
         interval_s: int,
         clock: SettableClock | None = None,
@@ -458,28 +458,42 @@ class ArchiveReplay:
         provenance: str | None = None,
         holes_mean_no_trades: bool | None = None,
     ) -> None:
+        """Hold the archive's **paths**, never its rows. Spec 79.
+
+        Until 2026-09-13 this kept every pair's parsed rows as Python dicts *and* the
+        same data again as polars frames, both eagerly, for the life of the object. Over
+        the 234-pair archive that was the floor under `acsoe research`: spec 78 took the
+        writer's accumulation out and the run still peaked at 23.6 GB, of which the
+        reader was almost all. Nothing on that path ever needs two pairs at once.
+
+        So the rows are read when a pair is asked for and released when the caller lets
+        go. The summary the report needs — how many bars, the first and last timestamp —
+        comes from the per-pair :class:`ArchiveReport`s, which the loader has already
+        produced and which are small; counting rows a second time would mean reading
+        every file again to learn what the reports already say.
+
+        **Money still keeps the archive's own precision on the way to a bar.** Bars are
+        built from the parsed rows, not from the frame: `to_frame` widens money to
+        `Decimal(38, 12)`, which is exact but is not the text the archive carried, and a
+        price that reads differently from the file it came out of is a thing somebody
+        will eventually have to explain.
+        """
         if interval_s <= 0:
             raise ValueError("interval_s must be positive")
-        # Bars are built from the parsed rows and the frame from the same rows, so the
-        # two can never disagree. Money keeps the archive's own precision on the way to
-        # a bar: `to_frame` widens it to Decimal(38, 12), which is exact but is not the
-        # text the archive carried, and a price that reads differently from the file it
-        # came out of is a thing somebody will eventually have to explain.
-        self._rows = {pair: list(items) for pair, items in rows.items()}
-        self._frames = {pair: to_frame(items) for pair, items in self._rows.items()}
+        self._sources = {pair: Path(path) for pair, path in sources.items()}
         self._interval_s = interval_s
         self._clock = clock
 
-        timestamps = [
-            int(row["ts"]) for items in self._rows.values() for row in items
-        ]
+        reports = [archives[pair] for pair in self._sources if pair in archives]
+        firsts = [r.first_ts for r in reports if r.first_ts is not None]
+        lasts = [r.last_ts for r in reports if r.last_ts is not None]
         self._report = ReplayReport(
             interval_s=interval_s,
-            pairs=tuple(sorted(self._frames)),
+            pairs=tuple(sorted(self._sources)),
             archives=dict(archives),
-            bar_count=len(timestamps),
-            first_ts=min(timestamps) if timestamps else None,
-            last_ts=max(timestamps) if timestamps else None,
+            bar_count=sum(r.row_count for r in reports),
+            first_ts=min(firsts) if firsts else None,
+            last_ts=max(lasts) if lasts else None,
             coverage_known=coverage is not None,
             holes_mean_no_trades=holes_mean_no_trades,
             coverage=dict(coverage or {}),
@@ -518,19 +532,22 @@ class ArchiveReplay:
         if not named:
             raise ArchiveError("no archive was given to replay")
 
-        rows: dict[str, list[dict[str, Any]]] = {}
         reports: dict[str, ArchiveReport] = {}
         for pair, path in named.items():
             # The gap report is the loader's own, not a second opinion computed here —
             # which costs a second parse of the file. Deliberate: a report this module
             # derived for itself could agree with a bug in this module, and the gap
             # report is the artefact a criterion judges the archive by.
+            #
+            # Since spec 79 this is also the *only* pass over the file at construction:
+            # the rows are no longer read here and kept, they are read when a pair is
+            # asked for. `load_archive` already knows how many rows it saw and when they
+            # started and ended, which is everything the replay-level report needs.
             reports[pair] = load_archive(
                 path, interval_s=interval_s, pair=pair, derived_dir=derived_dir
             )
-            rows[pair] = sorted(read_archive_rows(path), key=lambda item: int(item["ts"]))
         return cls(
-            rows=rows,
+            sources=named,
             archives=reports,
             interval_s=interval_s,
             clock=clock,
@@ -600,13 +617,45 @@ class ArchiveReplay:
         """The gap report and the coverage caveat, alongside the frame."""
         return self._report
 
+    def _rows_for(self, pair: str) -> list[dict[str, Any]]:
+        """One pair's rows, read now and owned by the caller. Nothing is cached.
+
+        Sorted here rather than trusted, because `out_of_order_rows` is a condition the
+        loader *reports* rather than repairs, and every consumer of this module has
+        always been handed ascending rows.
+
+        Not caching is the property spec 79 is about, not an oversight: a cache would
+        make the second full-archive run hold everything again, and the only reason the
+        first one does not is that nothing keeps what it hands out.
+        """
+        path = self._sources.get(pair)
+        if path is None:
+            raise ArchiveError(
+                f"no archive for {pair!r} in this replay; it holds "
+                f"{', '.join(self._report.pairs) or 'nothing'}"
+            )
+        return sorted(read_archive_rows(path), key=lambda item: int(item["ts"]))
+
     def frame(self, pair: str) -> pl.DataFrame:
         """One pair's archive as a `polars` frame, ascending, with exact `Decimal`
-        money. The archive's own timestamps and no others."""
-        return self._frames[pair]
+        money. The archive's own timestamps and no others.
 
-    def frames(self) -> dict[str, pl.DataFrame]:
-        return dict(self._frames)
+        **Read from disk on every call and not kept.** Spec 79: a caller that wants two
+        pairs at once holds two frames deliberately, rather than every caller paying for
+        all 234 because one of them once asked.
+        """
+        return to_frame(self._rows_for(pair))
+
+    def frames(self) -> Iterator[tuple[str, pl.DataFrame]]:
+        """Every pair's frame in `report.pairs` order, one at a time.
+
+        **A generator since spec 79, where it used to return a `dict`.** The dict was
+        the whole archive materialised at once, which is exactly what the spec exists to
+        stop; a caller that genuinely needs them all can still write `dict(replay.frames())`
+        and will then be the one place paying for it.
+        """
+        for pair in self._report.pairs:
+            yield pair, self.frame(pair)
 
     def bars(self, pair: str | None = None) -> Iterator[DecisionBar]:
         """Yield decision bars in timestamp order, advancing the injected clock.
@@ -630,10 +679,23 @@ class ArchiveReplay:
         knowable, which is the whole anti-look-ahead mechanism: there is no reading of
         this clock from which a later bar is visible.
         """
-        selected = [pair] if pair is not None else list(self._rows)
-        ordered: list[tuple[int, str, int, Mapping[str, Any]]] = []
+        # Insertion order rather than `report.pairs`, and **it makes no difference**,
+        # which is worth saying because the obvious comment here would claim it does.
+        # The sort key below is `(ts, pair)` — a total order — so the order rows go in
+        # cannot change the order they come out. Iterating the sorted `report.pairs`
+        # instead was run as a mutation and nothing went red, correctly: it is an
+        # equivalent mutant, not a gap.
+        #
+        # What *is* load-bearing is the tie-break inside the key, and that is tested:
+        # dropping `item[1]` from it turns
+        # `test_a_tie_between_two_pairs_is_broken_by_pair_name_not_by_arrival` red.
+        # This used to be true only by accident — the key was `ts` alone and the input
+        # happened to arrive in name order, so a stable sort gave the right answer
+        # either way and the mutation survived 43 tests.
+        selected = [pair] if pair is not None else list(self._sources)
+        ordered: list[tuple[int, str, int, dict[str, Any]]] = []
         for name in selected:
-            for index, row in enumerate(self._rows[name]):
+            for index, row in enumerate(self._rows_for(name)):
                 ordered.append((int(row["ts"]), name, index, row))
         ordered.sort(key=lambda item: (item[0], item[1]))
 

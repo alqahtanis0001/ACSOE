@@ -152,6 +152,18 @@ as you proposed: one line to `context.now`, with its own entry in the build log 
 that the slice name follows the injected clock, since a direct clock read is a defect
 whether or not it can bias a label.
 
+**To C-2, 11:50 — a seam that will not go red, relayed from A-2.** Under spec 79
+`ArchiveReplay.frames()` is now a **generator of `(pair, frame)`** in `report.pairs` order,
+not a dict. `research/training.py` `_archive_frames` (line ~1112) annotates it as a dict and
+`main()` uses `pair not in frames`, `frames[pair]` and `frames.items()`; no test exercises
+`main()`, so the suite is green with that path broken, and with `--pairs` the failure is a
+plausible "the archive has no XBTUSD" blaming the operator's argument. Ruling: do not wrap it
+in `dict(...)`; iterate `for pair, frame in _archive_frames(...)`, label as you go, keep only
+the labels and features, one pair resident, with the `--pairs` filter inside the loop. The
+trainer as written would otherwise hold every frame and every label at once and hit the 51.9
+GB wall engine 23 just came off. Add one test with no double that drives `main()` over the
+committed candles sample with and without `--pairs`, so this seam is tested by someone.
+
 **To A-2, 11:35.** Spec 78 is accepted at 23.6 GB; its acceptance number is amended to
 the measurement and the reader floor is **spec 79**, yours, written now: `ArchiveReplay`
 loads one pair at a time, drops the eager dict copy, `frames()` a generator. Then the

@@ -307,23 +307,18 @@ def test_a_tie_between_two_pairs_is_broken_by_pair_name_not_by_arrival(
     tie-break can only be tested by an input whose arrival order is not already the
     answer.
     """
-    rows = {
-        pair: [
-            {
-                "ts": BASE_TS,
-                "open": Decimal("1"),
-                "high": Decimal("1"),
-                "low": Decimal("1"),
-                "close": Decimal("1"),
-                "volume": Decimal("1"),
-                "trades": 1,
-            }
-        ]
-        for pair in ("SOLUSD", "BTCUSD", "ETHUSD")
-    }
-    assert list(rows) == ["SOLUSD", "BTCUSD", "ETHUSD"]
+    directory = tmp_path / "tied"
+    sources: dict[str, Path] = {}
+    for pair in ("SOLUSD", "BTCUSD", "ETHUSD"):
+        path = directory / f"{pair}_15.csv"
+        write_archive(path, [0])
+        sources[pair] = path
+    # Files on disk rather than hand-built row dicts, since spec 79: the replay takes
+    # paths now, and a fabricated row mapping would be a contract this test invented.
+    # The deliberate insertion order survives, which is the whole point of the test.
+    assert list(sources) == ["SOLUSD", "BTCUSD", "ETHUSD"]
     replay = ArchiveReplay(
-        rows=rows,
+        sources=sources,
         archives={},
         interval_s=INTERVAL_S,
         clock=clock,
@@ -780,3 +775,127 @@ def test_todays_replay_of_a_real_archive_reports_no_spread(
     assert replay.report.has_spread is False
     assert provenance["counted_bars"] == 0
     assert provenance["exact_fraction"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Spec 79 — one pair resident at a time
+# --------------------------------------------------------------------------- #
+#
+# `ArchiveReplay` used to keep every pair's parsed rows as Python dicts and the same
+# data again as polars frames, both eagerly, for the life of the object. Spec 78 took
+# the writer's accumulation out of engine 23 and the full-archive run still peaked at
+# 23.6 GB, of which the reader was almost all. These tests hold the property that
+# replaced it, and they assert it on observable behaviour rather than on memory, which
+# a unit test cannot see.
+
+
+def test_construction_reads_no_pair_s_rows_into_the_replay(
+    tmp_path: Path, clock: FixedClock
+) -> None:
+    """The object holds paths. Asserted on the object rather than on a memory figure.
+
+    `__slots__` is the honest place to look: a frame or a row list cannot be retained by
+    an object that has no attribute to retain it in, and the slots are part of the
+    class rather than of one instance's state, so this cannot pass by accident on an
+    empty archive.
+    """
+    directory = tmp_path / "historical"
+    write_archive(directory / "BTCUSD_15.csv", [0, 1, 2])
+    write_archive(directory / "ETHUSD_15.csv", [0, 1])
+    replay = ArchiveReplay.from_directory(directory, interval_s=INTERVAL_S, clock=clock)
+
+    assert "_rows" not in ArchiveReplay.__slots__
+    assert "_frames" not in ArchiveReplay.__slots__
+    # And the summary still has to be right without them: it now comes from the
+    # per-pair archive reports rather than from a second pass over every file.
+    assert replay.report.bar_count == 5
+    assert replay.report.pairs == ("BTCUSD", "ETHUSD")
+
+
+def test_the_bar_count_matches_the_rows_on_disk(tmp_path: Path) -> None:
+    """The report's totals moved from counting rows to summing the loader's counts.
+
+    Two ways of measuring one thing, and the swap is invisible unless something
+    compares them: `row_count` is what `load_archive` saw, `read_archive_rows` is what
+    a second reader sees. A pair whose file the loader skips, or counts twice, would
+    otherwise show up as a quietly wrong `bars_replayed` in every backtest report.
+    """
+    from acsoe.research.historical import read_archive_rows
+
+    directory = tmp_path / "historical"
+    write_archive(directory / "BTCUSD_15.csv", [0, 1, 2, 5, 9])
+    write_archive(directory / "ETHUSD_15.csv", [0, 3])
+    replay = ArchiveReplay.from_directory(directory, interval_s=INTERVAL_S)
+
+    on_disk = sum(
+        len(read_archive_rows(directory / f"{pair}_15.csv")) for pair in replay.report.pairs
+    )
+    assert replay.report.bar_count == on_disk == 7
+
+
+def test_asking_for_one_pair_reads_only_that_pair_s_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The property, observed at the only place it is observable: the files opened.
+
+    Counting reads rather than measuring memory, because a test that asserts "the peak
+    was small" measures the machine. If `frame("BTCUSD")` touches ETHUSD's file, the
+    replay is loading the archive rather than the pair — which is the defect spec 79
+    removes — and if it touches nothing, it is serving a cache, which the spec forbids
+    for the same reason.
+    """
+    from acsoe.research import historical
+
+    directory = tmp_path / "historical"
+    write_archive(directory / "BTCUSD_15.csv", [0, 1, 2])
+    write_archive(directory / "ETHUSD_15.csv", [0, 1])
+    replay = ArchiveReplay.from_directory(directory, interval_s=INTERVAL_S)
+
+    opened: list[str] = []
+    original = historical.read_archive_rows
+
+    def recording(path: Path) -> list[dict[str, object]]:
+        opened.append(Path(path).name)
+        return original(path)
+
+    monkeypatch.setattr("acsoe.research.replay.read_archive_rows", recording)
+
+    frame = replay.frame("BTCUSD")
+    assert frame.height == 3
+    assert opened == ["BTCUSD_15.csv"], "one pair asked for, one file read"
+
+    # Asked again: read again. Not caching is the property, not an oversight — a cache
+    # would put the whole archive back in memory one call at a time.
+    replay.frame("BTCUSD")
+    assert opened == ["BTCUSD_15.csv", "BTCUSD_15.csv"]
+
+
+def test_frames_yields_one_pair_at_a_time_in_report_order(tmp_path: Path) -> None:
+    """`frames()` is a generator since spec 79, where it returned the whole archive.
+
+    A caller that genuinely needs every frame can still write `dict(replay.frames())`
+    and is then the one place paying for it, which is the point: the cost is visible at
+    the call site instead of charged to everyone.
+    """
+    directory = tmp_path / "historical"
+    write_archive(directory / "BTCUSD_15.csv", [0, 1, 2])
+    write_archive(directory / "ETHUSD_15.csv", [0, 1])
+    replay = ArchiveReplay.from_directory(directory, interval_s=INTERVAL_S)
+
+    produced = list(replay.frames())
+    assert [pair for pair, _ in produced] == list(replay.report.pairs)
+    assert [frame.height for _, frame in produced] == [3, 2]
+    assert not isinstance(replay.frames(), dict)
+
+
+def test_an_unknown_pair_names_what_the_replay_actually_holds(tmp_path: Path) -> None:
+    """It used to be a bare `KeyError` off a dict lookup, which says the pair name and
+    nothing else. With the frames gone the lookup is ours, so the message can say what
+    is there — and the caller most likely to hit this is one that spelled a pair the
+    live way (`BTC/USD`) where the archive uses the file spelling (`XBTUSD`)."""
+    directory = tmp_path / "historical"
+    write_archive(directory / "BTCUSD_15.csv", [0, 1])
+    replay = ArchiveReplay.from_directory(directory, interval_s=INTERVAL_S)
+
+    with pytest.raises(ArchiveError, match="no archive for 'BTC/USD'"):
+        replay.frame("BTC/USD")

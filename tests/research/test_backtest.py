@@ -879,3 +879,56 @@ def test_each_pair_is_its_own_row_group_and_the_codec_is_unchanged(
     # And each group holds exactly one pair's rows, in the order the pairs were written.
     sizes = [metadata.row_group(i).num_rows for i in range(metadata.num_row_groups)]
     assert sizes == list(written_pairs.values())
+
+
+def test_the_slice_name_follows_the_injected_clock_and_not_the_wall_clock(
+    tmp_path: Path, engine_context: Any
+) -> None:
+    """Invariant 9 inside engine 23, asserted on the one thing it can be seen through.
+
+    `_write` used to stamp the filename with `datetime.now(tz=UTC)`. That is a direct
+    clock read inside an engine, which invariant 9 forbids without qualification, and
+    the usual argument against caring — it only names a file, it cannot bias a label —
+    is exactly the argument that puts the next one somewhere that matters.
+
+    A clock read is invisible in a passing test unless something compares the output to
+    the injected time, so that is what this does: the context's `now` is a fixed instant
+    and the slice's name has to carry it. Against the old code this fails on every run
+    except one taking place at that instant.
+    """
+    directory = tmp_path / "clock"
+    write_archive(directory, "AAAUSD_15.csv", list(range(200)))
+    engine = BacktestEngine(archive_dir=directory, derived_dir=tmp_path / "derived")
+    result = engine.process(engine_context, {})
+
+    stamp = engine_context.now.strftime("%Y%m%dT%H%M%SZ")
+    name = Path(result.data["slice_path"]).name
+    assert name == f"labelled_{engine_context.run_id}_{stamp}.parquet"
+    assert stamp in name, "the slice is named from context.now, never from the wall clock"
+
+
+def test_no_engine_module_under_research_reads_the_clock() -> None:
+    """The general form, on the AST, because the test above only covers the one path.
+
+    `datetime.now`, `datetime.utcnow` and `time.time` are all forbidden inside an engine
+    by invariant 9. `time.perf_counter` is not: it measures a duration rather than
+    telling the time, every engine uses it for `duration_ms`, and the orchestrator does
+    the same.
+    """
+    import ast
+
+    source = (SRC / "acsoe" / "research" / "backtest.py").read_text(encoding="utf-8")
+    forbidden: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        target = node.func
+        if isinstance(target, ast.Attribute) and target.attr in {"now", "utcnow", "time"}:
+            owner = target.value
+            name = owner.id if isinstance(owner, ast.Name) else getattr(owner, "attr", "")
+            if name in {"datetime", "time"}:
+                forbidden.append(f"{name}.{target.attr}")
+    assert not forbidden, (
+        f"engine 23 reads the clock directly: {forbidden}. Invariant 9 — engines receive "
+        "`context.now`, which is what makes a replay reproducible from its inputs."
+    )

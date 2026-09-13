@@ -745,3 +745,88 @@ and only measuring showed it: the steps describe the writer and the acceptance n
 be met by also changing the reader. Neither is wrong on its own. Writing the number the change
 actually achieves, and why, is the honest answer; quietly widening the change to hit the number
 would have been the other one.
+
+### Engine 23 read the wall clock to name its own output, and no test could see it
+
+**Agent:** A · **Task:** spec 78, at the lead's instruction · **Date:** 2026-09-13
+
+**What happened.** `BacktestEngine._write` built the slice filename from
+`datetime.now(tz=UTC).strftime(...)`. That is a direct clock read inside an engine, which
+invariant 9 forbids without qualification: engines receive `context.now` and never call the
+clock. It was mine, from spec 55 in Phase 4, and it survived a phase of tests.
+
+**Why nothing caught it.** Every existing assertion about the slice name checked the half that
+does not move — that `context.run_id` appears in it — and the stamp was free to come from
+anywhere. A clock read is invisible to a test unless something compares the output against the
+injected time, and nothing did. `ruff`'s `DTZ` rules are satisfied by `datetime.now(tz=UTC)`
+because the defect they hunt is a *naive* datetime, not an engine reading the time at all.
+
+**The argument for leaving it, and why it is wrong.** It only names a file; it cannot bias a
+label; no replay result changes. All true, and it is exactly the argument that puts the next
+one somewhere that matters. The rule has no qualifier for a reason, and the property it
+protects is real even here: a replay's output name should be derivable from its inputs, so two
+runs of the same archive with the same run id produce the same path rather than one that
+depends on when someone started it.
+
+**Fix.** One line, to `context.now`, in the renamed `_slice_target`. Two tests: the slice name
+must equal `labelled_<run_id>_<context.now stamp>.parquet`, and an AST walk over the module
+asserting no `datetime.now`, `datetime.utcnow` or `time.time` call anywhere in it —
+`time.perf_counter` deliberately excluded, because measuring a duration is not telling the
+time and every engine uses it for `duration_ms`.
+
+**Proven capable of failing.** Reinstating the wall-clock read turns both red: the name test
+fails on the stamp, and the AST test names `datetime.now`. Restored from a byte copy, sha256
+verified. The AST test is the one worth keeping: the first test would pass on any run that
+happened to start inside the same second as the injected instant, and the second cannot.
+
+### Spec 79: the replay holds paths, and an equivalent mutant that looked like a gap
+
+**Agent:** A · **Task:** spec 79 · **Date:** 2026-09-13
+
+**What changed.** `ArchiveReplay` no longer keeps any pair's data. It held two copies of the
+whole archive — `self._rows`, every pair's parsed rows as dicts, and `self._frames`, the same
+data again as polars frames, both built eagerly in `__init__` — on a path that reads one pair
+at a time and never touches `_rows` at all. Now it holds `self._sources`, a map of pair to
+path; `frame(pair)` reads that file and builds that frame when asked and keeps neither;
+`frames()` is a generator in `report.pairs` order; and `bars()` goes through the same per-pair
+read.
+
+The replay-level report used to be computed by counting every row it had just loaded. It now
+sums `row_count` and takes the min and max of `first_ts`/`last_ts` from the per-pair
+`ArchiveReport`s the loader already produced — so construction reads each file **once**, for
+the gap report, instead of twice. On the 24-pair archive that alone took construction from
+5.0 seconds to 1.5.
+
+**Two ways of counting one thing, so there is a test that compares them.** `row_count` is what
+`load_archive` saw; `read_archive_rows` is what a second reader sees. They have to agree or
+`bars_replayed` in every backtest report is quietly wrong, and nothing else would say so.
+
+**Measured, 24 pairs, each run in its own process, both orders:**
+
+| | before spec 79 | after |
+|---|---|---|
+| construction only | 348.6 / 350.3 MB | 136.8 / 143.0 MB |
+| full engine 23 run | 430.3 / 404.1 MB | 219.5 / 218.4 MB |
+
+**The equivalent mutant, reported as a checked negative rather than as a survivor.** Three
+mutations killed: a cache on `frame()` (kills the read-counting test and 29 others), the bar
+count off by one (kills the count-agreement test), and dropping the pair from the sort key in
+`bars()` (kills the tie-break test). A fourth **survived**: replacing `bars()`'s insertion-order
+iteration with the sorted `report.pairs`. It survived because it cannot fail — the sort key is
+`(ts, pair)`, a total order, so the order rows go in cannot change the order they come out.
+
+That one is worth the paragraph because I had written a comment in the code claiming the
+opposite: that insertion order was load-bearing, because feeding an already-sorted list to a
+stable sort would let the tie-break be deleted unnoticed. That **was** true historically — the
+key was `ts` alone and the redundancy hid a mutation through 43 tests — and it stopped being
+true when the pair went into the key. I nearly shipped a comment defending a property the code
+no longer has, which is how a stale claim starts. The comment now says what is actually true
+and names the mutation that proves it.
+
+**One cross-lane consequence, reported to the lead and not fixed by me.** C-2's
+`research/training.py` calls `frames()` and uses the result as a dict in three places. It is
+called only from `main()` and no test in `tests/research/test_training.py` reaches it, so the
+whole suite is green with that call broken — the seam pattern again. It fails two ways, and the
+second is the bad one: without `--pairs` it raises `AttributeError` loudly, and with `--pairs`
+it reports "the archive has no XBTUSD" for a pair that is right there, because `pair not in
+generator` compares a string against `(pair, frame)` tuples.
