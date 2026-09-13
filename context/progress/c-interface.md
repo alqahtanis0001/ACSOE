@@ -60,8 +60,11 @@ nothing below is carried over from it.
   `scripts/verify.py` and `tests/verify/test_phase5_criteria.py` — the criterion was the
   other half of this seam and it was wrong. Three mutations, three killed.
   `skeptic_trains_only_on_predictor_buy_rows` now PASSes. See "Spec 69 — what landed" below.
-- **Spec 70 — anomaly detector training. Claimed.** `research/training.py`,
-  `tests/research/test_anomaly_training.py`.
+- **Spec 70 — anomaly detector training. Claimed, and DONE.** `research/training.py`,
+  `tests/research/test_anomaly_training.py` (14 tests), plus one corrected docstring in
+  `modelling/artefacts.py`. Four mutations, four killed — one only after a second attempt.
+  **Carries a finding the operator has to read before choosing the threshold.** See
+  "Spec 70 — what landed" below.
 - **Spec 71 — engine 8 `prediction`. Claimed.** `engines/prediction/`,
   `tests/engines/test_prediction.py`.
 - **Spec 72 — engine 13 `anomaly`. Claimed.** `engines/anomaly/`,
@@ -78,6 +81,59 @@ research runner), spec 62 (B — `StoreClient(models_dir=...)`, `model_run_dir`,
 `new_model_run_dir`), spec 76 (B — `rank_universe`), specs 59 and 77 (the lead).
 `research/walkforward.py` is read, never changed: if a Phase 5 change makes
 `walkforward_trains_on_the_past_only` red, the change is wrong.
+
+### Spec 70 — what landed
+
+An `IsolationForest` per fold over the 21 `MARKET_QUALITY_FEATURES`, fitted on the fold's own
+training rows, scaled by the **predictor's** scaler so both models read one space, seeded from
+`seeds.train`. No labels, no macro columns, no probabilities: this model answers whether the
+market is broken, not whether the trade is good. Scores are oriented so larger means more
+anomalous, and the manifest says so, because a sign that flips between the artefact and engine
+13 is a detector that blocks the ordinary markets and passes the broken ones.
+
+`anomaly.joblib` is **the one artefact in a run directory that is not text**, because
+scikit-learn has no text dump for an isolation forest. `write_run` hashes it and `load_run`
+refuses a file whose hash differs — which defends against a swapped file and not against a
+hostile original, and that limit is stated rather than implied. joblib itself is a hard
+dependency of scikit-learn rather than a declared one in `pyproject.toml`; it is imported with
+a named `# type: ignore[import-untyped]`, the same shape `clients/store/parquet.py` uses for
+pyarrow. **Raised with the lead** to declare it and add `joblib.*` to the mypy overrides.
+
+**The finding, and it is the reason this spec is not just "done".** Spec 70's own acceptance
+check is that a ten-sigma volume spike scores above the threshold. It does not. Measured with
+the spike injected into the candles and the features recomputed, on fold 0:
+
+| | score | quantile of the training scores |
+|---|---|---|
+| the bar, unspiked | 0.5284 | 0.683 |
+| the same bar, ten-sigma volume and trade spike | 0.5595 | 0.904 |
+
+The 0.99 threshold is 0.5954 and the 0.95 threshold is 0.5713. The spike clears neither. Two
+causes stacked. **The features cap it before the model sees it** — `volume_z_n` is a rolling
+z-score, so an outlier inflates its own denominator and is bounded by roughly sqrt(n); the
+score is identical at ten sigma, a hundred and a thousand. **Isolation dilutes it** — the
+spike is extreme in 8 of 21 columns and ordinary in the other 13, and the forest picks its
+split dimension at random. I did not widen the feature set, change the scaling or swap the
+model to make the check pass; all three are decisions above this lane and the third would be
+choosing a detector by whether it satisfied a test. The trade the operator now has in front of
+them: this detector blocks a volume spike only at about a 0.90 percentile, where it also
+blocks one training bar in ten.
+
+**Four mutations, four killed.** The outcome joined into the inputs (spec 70's named one),
+fitted on the test rows, the threshold taken from the test scores, and the score orientation
+flipped. **The third survived the first sweep** with the whole file green, and the fault was
+my own test: `test_the_threshold_is_the_quantile_of_the_training_scores` compared the digest to
+the manifest, which are two numbers written by one function from one variable. That is ruling 7
+in the form I have now walked into three times this phase — the calibrator, the scaler, and
+this. The test recomputes the quantile from the fitted forest and the fold's own training rows
+now. The leak it had missed: a threshold taken from the test window blocks a fixed share of
+that window whatever happened in it, so the block rate stops being a measurement.
+
+One docstring in `modelling/artefacts.py` was wrong and is corrected: it said engine 13 passes
+`MARKET_QUALITY_FEATURES` to `load_run`. It passes the full list, because the manifest records
+what the *run* was trained on; the detector's narrower inputs live in
+`extras["anomaly"]["input_names"]`. Left alone it would have sent spec 72 into a refusal for
+the right reason at the wrong place.
 
 ### Spec 69 — what landed
 

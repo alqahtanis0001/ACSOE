@@ -384,10 +384,16 @@ def load_run(
     """Read an artefact directory, verifying every hash and the exact feature order.
 
     :param expected_features: the feature list the caller computes, in the order it
-        computes it. Engine 8 passes ``FEATURE_NAMES`` plus the macro columns; engine 13
-        passes ``MARKET_QUALITY_FEATURES``. It is a parameter rather than a constant
-        because the three engines legitimately expect three different lists, and an
-        artefact that agrees with the wrong one of them is exactly the failure to catch.
+        computes it, checked against the manifest's own ``feature_names``. Engine 8 passes
+        ``FEATURE_NAMES`` plus the macro columns. It is a parameter rather than a constant
+        because a caller that agrees with the wrong list is exactly the failure to catch.
+
+        **Engine 13 passes the same full list, not ``MARKET_QUALITY_FEATURES``**, and an
+        earlier version of this sentence said otherwise. The manifest records the list the
+        *run* was trained on; the anomaly detector's own narrower inputs are recorded
+        beside its artefact as ``extras["anomaly"]["input_names"]``, which is the list
+        engine 13 rebuilds its vector from. Passing the narrow list here would be refused
+        by the order check, which is the right refusal for the wrong reason.
 
     Refuses, each with its own message:
 

@@ -1151,3 +1151,94 @@ assembling the out-of-sample file differently would hand it — and asserts they
 `skeptic_trains_only_on_predictor_buy_rows` moved from `AWAITED` to `BUILT` in
 `tests/verify/test_phase5_criteria.py`, which is what turned `toolchain_green` red for one
 run: that file asserts an awaited criterion never passes, and this one had just started to.
+
+### A ten-sigma volume spike is only the 90th percentile of "unusual"
+
+**Agent:** C-2 · **Task:** spec 70 · **Date:** 2026-09-13
+
+**What happened.** Spec 70's own acceptance check is that a test row with a ten-sigma volume
+spike scores above the threshold while an ordinary row scores below it. It does not. Measured
+on fold 0 of the constructed dataset, with the spike injected into the **candles** and the
+features recomputed so it propagates the way a real one would:
+
+| | score | quantile of the training scores |
+|---|---|---|
+| the bar, unspiked | 0.5284 | 0.683 |
+| the same bar, ten-sigma volume and trade-count spike | 0.5595 | 0.904 |
+
+The threshold at a 0.99 percentile is 0.5954. The spike does not clear it. It does not clear
+0.95 (0.5713) either. It clears 0.90 (0.5587), by very little.
+
+**Why, and it is two separate causes stacked.**
+
+**The features cap the spike before the model ever sees it.** `volume_z_n` is a rolling
+z-score, so an outlier inflates its own denominator: a bar ten sigma above the mean of the
+whole series moved `volume_z_4` from 1.00 to 1.13 in scaled units, because over four bars the
+spike *is* most of the mean and most of the standard deviation. The 96-bar view moved furthest,
+0.68 to 2.68, and even that is nowhere near ten. A rolling z-score over n bars is bounded by
+roughly sqrt(n) whatever the market does. So "ten sigma in the volume column" is not ten sigma
+in any feature the detector reads, and no amount of making the underlying bar more extreme
+changes that — the scores saturate, measured identically at +1, +10, +100 and +1000.
+
+**Isolation dilutes it across the ordinary dimensions.** The detector reads 21 market-quality
+columns. A volume spike is extreme in eight of them and perfectly ordinary in the other
+thirteen, and an isolation forest picks its split dimension at random, so most trees isolate
+this point no faster than they isolate a bar that is mildly unusual everywhere. Three of the
+21 — `bars_in_lookback_4`, `_16` and `_48` — are constant on a dataset with no gaps, so they
+are pure dilution here, though they will vary on the real archive.
+
+**What I did, and what I did not.** The detector is built exactly as spec 70 specifies:
+`IsolationForest`, market-quality features only, the predictor's scaler, the threshold as the
+`anomaly.threshold_percentile` quantile of the training rows' own scores. I did not widen the
+feature set, change the scaling, or reach for a different model to make the acceptance check
+pass — all three are design decisions above this lane, and the third would be choosing a
+detector by whether it satisfies a test.
+
+The test asserts what is true and load-bearing rather than a boolean tuned until it held: that
+the spiked row scores strictly above the same row unspiked, that it sits above the 0.85
+quantile of the training distribution while the unspiked row sits below it, and that a run
+whose `anomaly.threshold_percentile` is 0.85 blocks the spike and passes the ordinary bar.
+0.85 is the test's number, chosen to sit clearly below the measured 0.904 so the assertion has
+margin, and it is stated as the test's rather than implied to be an operating point.
+
+**The question this hands the operator, which is the reason it is written down here.** The
+percentile that makes this detector block a volume spike is around 0.90, and at 0.90 it also
+blocks one training bar in ten. That is the trade, measured rather than asserted: this
+detector cannot be both sensitive to a single-channel extreme and quiet on ordinary markets,
+because the features it reads do not separate the two. Whether the answer is a lower
+percentile, a narrower velocity-and-volume feature set for engine 13, or a different detector
+is not this lane's to decide, and the number that decides when the market is declared broken
+is the operator's by ruling.
+
+### A third invisible leak, in my own test this time: the threshold from the test scores
+
+**Agent:** C-2 · **Task:** spec 70 · **Date:** 2026-09-13
+
+**What happened.** Four mutations against `tests/research/test_anomaly_training.py`. Three
+killed. One survived with the whole file green: `_fit_anomaly` changed to take its threshold
+from the **test** rows' scores rather than the training rows'.
+
+```
+=== SURVIVED: the threshold taken from the test scores
+    14 passed in 21.26s
+```
+
+**Why it survived, and it is my own test that was wrong.** I had written
+`test_the_threshold_is_the_quantile_of_the_training_scores`, and what it actually asserted was
+that the number in the digest equals the number in the manifest. Both of those are written by
+the same function from the same variable. It is ruling 7 in the form I have now walked into
+three times this phase — the calibrator, the scaler, and now this — a proof that compares two
+things the subject said about itself. The docstring even claimed it was recomputing.
+
+**Why this particular leak is worse than it looks.** A threshold at the 99th percentile of the
+*test* window's own scores blocks exactly one per cent of that window, always, whatever
+happened in it. The block rate stops being a measurement and becomes a constant: a calm week
+and a week of broken books both report 1%, and the number an operator would read to decide
+whether the detector is worth having is the number that can no longer vary. The detector would
+also block its calmest 1% during a genuinely broken week, which is the opposite of what engine
+13 is for. Nothing goes red, no metric moves, and the artefact looks exactly right.
+
+**The fix.** The test now loads the fitted forest out of `anomaly.joblib`, rebuilds the fold's
+training matrix from rows recomputed by `purged_walk_forward`, scores them itself and takes the
+quantile — then compares that to the recorded threshold. The mutation makes those two numbers
+different, because the test window's score distribution is not the training window's.

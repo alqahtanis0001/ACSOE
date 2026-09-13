@@ -70,7 +70,12 @@ from acsoe.modelling.calibration import (
     to_json as calibration_to_json,
 )
 from acsoe.modelling.expected_move import expected_move_pct, is_buy_call
-from acsoe.modelling.features import FEATURE_NAMES, FEATURE_VERSION, compute
+from acsoe.modelling.features import (
+    FEATURE_NAMES,
+    FEATURE_VERSION,
+    MARKET_QUALITY_FEATURES,
+    compute,
+)
 from acsoe.modelling.macro import (
     MACRO_AVAILABLE_COLUMN,
     macro_column,
@@ -669,6 +674,8 @@ def _train_one_fold(
         buys=buys,
     )
 
+    anomaly, anomaly_report = _fit_anomaly(config, train, test, scaler, names, seed)
+
     entry = _fold_entry(
         fold,
         train=train,
@@ -678,6 +685,7 @@ def _train_one_fold(
         di_fit=di_fit,
         di_refusals=di_refusals,
         skeptic_report=skeptic_report,
+        anomaly_report=anomaly_report,
     )
 
     fold_run_id = f"{run_id}-f{fold.fold_index}"
@@ -703,6 +711,8 @@ def _train_one_fold(
         scaler_rows=scaler_rows,
         skeptic=skeptic,
         skeptic_report=skeptic_report,
+        anomaly=anomaly,
+        anomaly_report=anomaly_report,
         calibration_identity=calibration_identity,
         calibration_rows=int(calibration_rows.height),
         calibration_end_ts=calibration_end_ts,
@@ -1147,6 +1157,173 @@ def _skeptic_veto_report(
     }
 
 # --------------------------------------------------------------------------- #
+# The anomaly detector - spec 70
+# --------------------------------------------------------------------------- #
+
+#: The one artefact in a run directory that is not a text format, and the reason is that
+#: scikit-learn has no text dump for an isolation forest the way LightGBM has one for a
+#: booster. Everything else here is text precisely because a pickle in an artefact
+#: directory is code that runs when a model is loaded, inside the process that places
+#: orders. `write_run` hashes every file it finds and `load_run` refuses one whose hash
+#: differs, which is what spec 70 pairs the format with — but be clear about what that
+#: buys: it defends against a **swapped** file, not against a hostile original. The
+#: alternative was hand-serialising the ensemble's split points, which is a great deal of
+#: code whose own bugs would be silent. Recorded as a decision rather than a default.
+ANOMALY_MODEL_NAME: Final = "anomaly.joblib"
+
+#: Stated in the manifest rather than silently absent. `trading-invariants.md` describes
+#: engine 13's inputs as velocity, volume and spread. The historical archive is OHLCVT and
+#: carries no book at all, so a spread cannot be computed in replay, and a feature that is
+#: computable live and not in replay makes every backtest number it touched describe a
+#: model the live loop cannot reproduce. If the spread is wanted later that is a stop and a
+#: question for the operator, not a reach for the recorder.
+ANOMALY_SPREAD_INPUT: Final = (
+    "absent - the historical archive is OHLCVT and carries no book, so a spread is not "
+    "computable in replay and is not read from anywhere"
+)
+
+#: Below this many complete training rows, the fold produces no anomaly detector.
+#: Anchored to `IsolationForest`'s own default subsample size rather than chosen by taste:
+#: below 256 rows every tree sees every row, the isolation depth stops being a sample
+#: statistic, and the quantile taken from those depths is a threshold with no distribution
+#: behind it. Engine 13 blocking with `anomaly_unavailable` is the honest answer for a
+#: model version without one.
+MIN_ANOMALY_ROWS: Final = 256
+
+
+def _anomaly_input_names(names: Sequence[str]) -> tuple[str, ...]:
+    """`MARKET_QUALITY_FEATURES`, in the feature list's own order, and nothing else.
+
+    **Market data only, by definition.** This model answers "is the market broken", not
+    "is the trade good": a macro column or a label reaching it turns it into a second
+    predictor whose refusals would correlate with the predictor's own calls, and the
+    refusal would look like caution while being an opinion about the trade.
+
+    The order is `names`' rather than `MARKET_QUALITY_FEATURES`' so that the recorded input
+    list, the fitted column order and the predictor's scaler all index the same way.
+    Engine 13 rebuilds this vector live from the manifest's `input_names`.
+    """
+    wanted = set(MARKET_QUALITY_FEATURES)
+    inputs = tuple(name for name in names if name in wanted)
+    missing = sorted(wanted - set(inputs))
+    if missing:
+        raise TrainingError(
+            "the dataset is missing market-quality features "
+            + ", ".join(missing)
+            + ". modelling/features.MARKET_QUALITY_FEATURES names engine 13's inputs and "
+            "every one of them is computed by modelling/features.compute; a dataset "
+            "without them was not built by build_dataset."
+        )
+    return inputs
+
+
+def _anomaly_matrix(
+    frame: pl.DataFrame,
+    scaler: Scaler,
+    names: Sequence[str],
+    inputs: Sequence[str],
+) -> np.ndarray[Any, Any]:
+    """The market-quality columns of the **predictor's own** scaled matrix.
+
+    Scaled by the predictor's scaler rather than by one fitted here, which spec 70 asks for
+    and which matters for a reason worth stating: a second scaler fitted on the same rows
+    would agree today and drift the moment either fit changed its row selection, and the
+    drift would show up as a refusal rate that moved for no reason anybody could name.
+    One scaler, one set of bounds, both models reading the same space.
+    """
+    scaled = np.asarray(scaler.transform(_matrix(frame, names)), dtype=np.float64)
+    position = {name: index for index, name in enumerate(names)}
+    return scaled[:, [position[name] for name in inputs]]
+
+
+def _fit_anomaly(
+    config: _Config,
+    train: pl.DataFrame,
+    test: pl.DataFrame,
+    scaler: Scaler,
+    names: Sequence[str],
+    seed: int,
+) -> tuple[Any, dict[str, Any]]:
+    """Spec 70: an unsupervised outlier model over market-data features, per fold.
+
+    Fitted on **the fold's training rows** — this function reads the training frame itself
+    and never accepts a caller's choice of rows, the same structural guarantee spec 68 asks
+    for on the DI — and on the market-quality subset of the feature vector only. **No
+    labels.** It is unsupervised by definition, and a label reaching it makes it a second
+    predictor wearing a market-health badge.
+
+    The threshold is the `anomaly.threshold_percentile` quantile of the training rows' own
+    scores. That key is the operator's and is absent, so the model is fitted and the
+    threshold is recorded as `null` until it is supplied: the forest needs no number from
+    anybody, and its score distribution is a finding in its own right, while the number
+    that decides when the market is declared broken is not this module's to invent. Engine
+    13 reads a manifest with no threshold and blocks with `anomaly_unavailable`.
+
+    Scores are oriented so that **larger means more anomalous** — `score_samples` returns
+    the opposite — because the threshold is then an upper bound and "above the threshold"
+    means blocked in the manifest, in the digest and in engine 13 alike. A sign that flips
+    between the artefact and the engine is a detector that blocks exactly the ordinary
+    markets and passes the broken ones, with nothing going red.
+    """
+    from sklearn.ensemble import IsolationForest
+
+    inputs = _anomaly_input_names(names)
+    report: dict[str, Any] = {
+        "anomaly_rows": 0,
+        "anomaly_input_names": None,
+        "anomaly_training_identity": None,
+        "anomaly_percentile": None,
+        "anomaly_threshold": None,
+        "anomaly_scored_rows": 0,
+        "anomaly_block_rate": None,
+    }
+
+    matrix = _anomaly_matrix(train, scaler, names, inputs)
+    complete = [index for index, row in enumerate(matrix) if np.isfinite(row).all()]
+    if len(complete) < MIN_ANOMALY_ROWS:
+        return None, report
+    rows = train[complete]
+
+    model = IsolationForest(
+        # `n_estimators` is sklearn's default and is deliberately not a config key: the
+        # `anomaly:` section holds exactly one key by config/default.yaml's own comment,
+        # and config/ is not this lane's to extend. Raised with the lead rather than
+        # invented here.
+        random_state=seed,
+        n_jobs=int(_required(config, "prediction.threads")),
+    )
+    model.fit(matrix[complete])
+
+    report["anomaly_rows"] = len(complete)
+    report["anomaly_input_names"] = list(inputs)
+    report["anomaly_training_identity"] = identity_digest(
+        [str(value) for value in rows["pair"]],
+        [int(value) for value in rows["decision_ts"]],
+    )
+
+    percentile = config.get("anomaly.threshold_percentile")
+    if percentile is None:
+        return model, report
+
+    training_scores = -model.score_samples(matrix[complete])
+    threshold = float(np.quantile(training_scores, float(percentile)))
+    report["anomaly_percentile"] = float(percentile)
+    report["anomaly_threshold"] = threshold
+
+    test_matrix = _anomaly_matrix(test, scaler, names, inputs)
+    scored = [index for index, row in enumerate(test_matrix) if np.isfinite(row).all()]
+    report["anomaly_scored_rows"] = len(scored)
+    if scored:
+        # An incomplete vector is blocked upstream by engine 8's own gate rather than
+        # scored here, and the offline record says the same: it is excluded from the
+        # denominator rather than counted as an ordinary market. Counting it as blocked
+        # would report the feature pipeline's gaps as a broken market.
+        out_of_sample = -model.score_samples(test_matrix[scored])
+        report["anomaly_block_rate"] = float(np.mean(out_of_sample > threshold))
+    return model, report
+
+
+# --------------------------------------------------------------------------- #
 # The digest entry, and the artefacts
 # --------------------------------------------------------------------------- #
 
@@ -1181,6 +1358,9 @@ def _empty_entry(fold: Fold, train_rows: int, test_rows: int) -> dict[str, Any]:
         "di_threshold": None,
         "di_refusal_rate": None,
         "skeptic_rows": 0,
+        "anomaly_rows": 0,
+        "anomaly_threshold": None,
+        "anomaly_block_rate": None,
         "is_empty": True,
     }
 
@@ -1195,6 +1375,7 @@ def _fold_entry(
     di_fit: Any,
     di_refusals: Sequence[bool],
     skeptic_report: Mapping[str, Any],
+    anomaly_report: Mapping[str, Any],
 ) -> dict[str, Any]:
     """One fold's line in the digest.
 
@@ -1244,6 +1425,7 @@ def _fold_entry(
             else sum(1 for value in di_refusals if value) / max(len(di_refusals), 1)
         ),
         **dict(skeptic_report),
+        **dict(anomaly_report),
         "is_empty": False,
     }
 
@@ -1288,6 +1470,8 @@ def _write_fold_artefacts(
     scaler_rows: pl.DataFrame,
     skeptic: Any,
     skeptic_report: Mapping[str, Any],
+    anomaly: Any,
+    anomaly_report: Mapping[str, Any],
     calibration_identity: str,
     calibration_rows: int,
     calibration_end_ts: int,
@@ -1314,6 +1498,18 @@ def _write_fold_artefacts(
         (directory / "skeptic.txt").write_bytes(
             skeptic.booster_.model_to_string().encode("utf-8")
         )
+    if anomaly is not None:
+        # The one binary artefact, and the only one, because scikit-learn has no text dump
+        # for an isolation forest. `write_run` hashes it into the manifest below and
+        # `load_run` refuses a file whose hash differs — which defends against a swapped
+        # file and not against a hostile original. See `ANOMALY_MODEL_NAME`.
+        # `import-untyped` named rather than a bare ignore, and the same shape
+        # `clients/store/parquet.py` uses for pyarrow: joblib ships no `py.typed`. joblib
+        # is a hard dependency of scikit-learn rather than a direct one in
+        # `pyproject.toml`, which is A's file — raised with the lead to declare it.
+        import joblib  # type: ignore[import-untyped]
+
+        joblib.dump(anomaly, directory / ANOMALY_MODEL_NAME)
 
     training_identity = identity_digest(
         [str(value) for value in train["pair"]],
@@ -1372,6 +1568,26 @@ def _write_fold_artefacts(
                 "input_names": list(skeptic_report["skeptic_input_names"] or []),
                 "training_identity": skeptic_report["skeptic_training_identity"],
                 "label": "wrong = label != 'target'",
+            },
+            # **Market data only, and the manifest says which columns rather than naming a
+            # constant.** Engine 13 rebuilds this vector live from `input_names`, and the
+            # spread the invariants describe is stated absent rather than left to be
+            # inferred from a list that happens not to contain one.
+            "anomaly": None
+            if anomaly is None
+            else {
+                "file": ANOMALY_MODEL_NAME,
+                "format": "joblib",
+                "model": "sklearn-isolation-forest",
+                "rows": int(anomaly_report["anomaly_rows"]),
+                "input_names": list(anomaly_report["anomaly_input_names"] or []),
+                "training_identity": anomaly_report["anomaly_training_identity"],
+                "percentile": anomaly_report["anomaly_percentile"],
+                "threshold": anomaly_report["anomaly_threshold"],
+                "score_orientation": "larger is more anomalous; blocked when above "
+                "threshold",
+                "spread_input": ANOMALY_SPREAD_INPUT,
+                "labels": "none - unsupervised",
             },
             "calibration_identity": calibration_identity,
             "calibration_rows": calibration_rows,
