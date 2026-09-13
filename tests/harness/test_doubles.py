@@ -30,6 +30,7 @@ from tests.harness.doubles import (
     MappingConfig,
     build_verify_doubles,
     fresh_state,
+    load_default_config,
 )
 
 # --------------------------------------------------------------------------- #
@@ -143,6 +144,51 @@ def test_a_key_present_but_null_returns_none_and_does_not_raise() -> None:
 def test_dotted_lookup_walks_nested_mappings() -> None:
     config = MappingConfig({"paper": {"starting_balances": {"USD": "1000.00"}}})
     assert config.get("paper.starting_balances.USD") == "1000.00"
+
+
+def test_a_leaf_the_model_declares_optional_and_the_file_omits_reads_as_none() -> None:
+    """The one dimension this double used to get wrong, and it is the dimension Phase 5
+    lives in.
+
+    Five keys are absent from `config/default.yaml` by operator ruling — the three
+    thresholds the operator supplies after the walk-forward reports, plus the model run
+    ids a fresh clone has no artefact for — and engines 8, 13 and 15 are written to read
+    the `None` and block with **their own** reason code. This double wraps the raw dict,
+    so it raised; the orchestrator turns a raise into `ERROR`, `ERROR` also blocks, and
+    every test of those engines would have been written against the wrong branch with
+    nothing red anywhere.
+
+    The real `Config` declares each as `Ratio | None` or `str | None` and returns `None`.
+    """
+    config = load_default_config()
+    for key in (
+        "prediction.di_percentile",
+        "anomaly.threshold_percentile",
+        "skeptic.veto_threshold",
+        "models.prediction_run_id",
+        "scout.rank_feature",
+    ):
+        assert config.get(key) is None, key
+
+
+def test_a_typo_still_raises_rather_than_reading_as_an_unset_leaf() -> None:
+    """The half that keeps the fix from being a blanket `None`.
+
+    The answer comes from the real model's declared fields rather than from a list of key
+    names here, so a misspelling is not declared, is not optional, and still raises — and
+    the day the operator supplies `prediction.di_percentile` and the lead makes it
+    required, this double starts raising for it again with nobody editing the harness.
+    """
+    config = load_default_config()
+    for typo in ("prediction.di_percentil", "prediction.nosuch", "nosuch.key"):
+        with pytest.raises(KeyError):
+            config.get(typo)
+
+
+def test_a_required_leaf_is_still_a_real_value() -> None:
+    """The control. Without it, a double that returned `None` for everything would satisfy
+    both tests above."""
+    assert load_default_config().get("prediction.di_window_days") == 30
 
 
 def test_attribute_access_returns_a_config_for_a_nested_mapping() -> None:

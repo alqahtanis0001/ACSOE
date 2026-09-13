@@ -20,10 +20,14 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[2] / "src"
 PACKAGE = SRC / "acsoe" / "modelling"
 
-#: The one `acsoe` module `modelling/` may import. `core/` itself imports nothing from
-#: the rest of the package (architecture invariant 0), so depending on it drags nothing
-#: across with it — which is the whole reason it is the permitted one.
+#: The one `acsoe` module outside this package that `modelling/` may import. `core/` itself
+#: imports nothing from the rest of the package (architecture invariant 0), so depending on
+#: it drags nothing across with it — which is the whole reason it is the permitted one.
 ALLOWED = "acsoe.core.contracts"
+
+#: `modelling/` importing itself is not crossing anything, and it is how the package stays
+#: one vocabulary rather than five modules that each redefine a feature name.
+SELF = "acsoe.modelling"
 
 
 def imported_acsoe_modules(root: Path) -> list[tuple[str, str]]:
@@ -62,8 +66,14 @@ def offenders(root: Path) -> list[str]:
     return [
         f"{filename}: {module}"
         for filename, module in imported_acsoe_modules(root)
-        if module != ALLOWED and not module.startswith(ALLOWED + ".")
+        if not _permitted(module)
     ]
+
+
+def _permitted(module: str) -> bool:
+    if module == ALLOWED or module.startswith(ALLOWED + "."):
+        return True
+    return module == SELF or module.startswith(SELF + ".")
 
 
 def test_modelling_exists_where_this_test_thinks_it_does() -> None:
@@ -80,6 +90,7 @@ def test_modelling_exists_where_this_test_thinks_it_does() -> None:
         "di.py",
         "expected_move.py",
         "features.py",
+        "macro.py",
         "weights.py",
     ]
 

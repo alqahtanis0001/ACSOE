@@ -130,10 +130,28 @@ class MappingConfig:
         state and deliberately not an error: the lead writes OPERATOR REQUIRED
         thresholds as `null`, and "the operator has not decided yet" is not the same
         as "this key does not exist".
+
+        **A leaf the real model DECLARES as optional and the YAML omits returns `None`,
+        not a raise**, and getting that wrong was a live defect in this double. The real
+        `Config` is a pydantic model, so `prediction.di_percentile` — declared
+        `Ratio | None = None` and deliberately absent from the file by operator ruling —
+        reads as `None` there. This wrapper sees the raw dict, so it used to raise; engines
+        8, 13 and 15 are written to read the `None` and block with their **own** reason
+        code, and driven through the raising version they would take the `ERROR` branch
+        instead, with every test of those engines written against the wrong branch and
+        nothing red anywhere, because `ERROR` blocks too.
+
+        The fix does not hardcode the five withheld keys. It asks the real model whether
+        the path it was given is a declared optional leaf, so a typo
+        (`prediction.di_percentil`) still raises and only a genuine declared-and-unset leaf
+        answers `None`. Fabricate the subject, never the contract: the contract is the
+        model, and it is the model that gets asked.
         """
         node: Any = self._data
         for index, part in enumerate(dotted.split(".")):
             if not isinstance(node, Mapping) or part not in node:
+                if _is_declared_optional(dotted):
+                    return None
                 reached = ".".join(dotted.split(".")[:index]) or "(root)"
                 raise KeyError(
                     f"config has no key {dotted!r}; {part!r} is not present under {reached}"
@@ -146,6 +164,52 @@ class MappingConfig:
 
     def __repr__(self) -> str:
         return f"MappingConfig({sorted(self._data)})"
+
+
+def _is_declared_optional(dotted: str) -> bool:
+    """Whether the real `Config` model declares this dotted path as an optional leaf.
+
+    Walks `model_fields` rather than consulting a list of key names, so the answer comes
+    from the contract and cannot drift from it: the day the operator supplies
+    `prediction.di_percentile` and the lead makes it required, this starts raising again
+    without anybody editing the harness.
+
+    Returns `False` — meaning "raise" — when `platform/config.py` has not been written,
+    which is the state a fabricated tree under `tests/verify/` is in. A double that guessed
+    "optional" there would turn every absent key into a silent `None`, which is the exact
+    failure this function exists to prevent, one level up.
+
+    `ImportError` only, and narrowly on purpose: "the module does not exist" and "the
+    module exists and is broken" are two facts with different right answers, and a bare
+    `except Exception` would answer both with "nothing is declared optional" — turning a
+    broken config model into a wall of key errors a long way from the cause.
+    """
+    try:
+        from acsoe.platform.config import Config
+    except ImportError:
+        return False
+
+    model: Any = Config
+    parts = dotted.split(".")
+    for index, part in enumerate(parts):
+        fields = getattr(model, "model_fields", None)
+        if not fields or part not in fields:
+            return False
+        annotation = fields[part].annotation
+        if index == len(parts) - 1:
+            # The leaf. `Ratio | None` and `str | None` carry NoneType in their args;
+            # a required leaf does not.
+            import types
+            import typing
+
+            if annotation is None:
+                return True
+            origin = typing.get_origin(annotation)
+            if origin in (types.UnionType, typing.Union):
+                return type(None) in typing.get_args(annotation)
+            return False
+        model = annotation
+    return False
 
 
 def load_default_config(path: Path = DEFAULT_CONFIG_PATH) -> MappingConfig:

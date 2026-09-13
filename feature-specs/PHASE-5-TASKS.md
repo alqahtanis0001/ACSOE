@@ -152,6 +152,20 @@ as you proposed: one line to `context.now`, with its own entry in the build log 
 that the slice name follows the injected clock, since a direct clock read is a defect
 whether or not it can bias a label.
 
+**To C-2, 12:15 — spec 67 rulings.** (1) 67 and 68's DI hook land together; one commit, no
+split. (2) `build_dataset` holding every pair's frame at once is fixed **before** any full
+run, as part of 67's close-out: build per pair and append row groups, the same shape as spec
+78, the `--pairs` filter inside the loop, and a test that the builder never holds more than
+one pair's frame. (3) Then start the full 234-pair run in the background with
+`--write-fixture` and carry on with 68, 69, 70 while it runs; report its per-fold table and
+the aggregate when it lands, and commit the digest it writes as the fixture. Until then the
+three-pair digest stands and says what it is. (4) Your finding that a manifest entry written
+beside a call is not a check on that call, and that only recomputing the expected rows from
+the public splitter catches a calibrator fitted on the test window, goes into
+`code-standards.md` in your words. The double-fitted scaler as a checked-negative for the
+predictor and a live mutation for the DI: correct, and it becomes 68's named mutation the day
+the percentile lands.
+
 **To C-2, 11:50 — a seam that will not go red, relayed from A-2.** Under spec 79
 `ArchiveReplay.frames()` is now a **generator of `(pair, frame)`** in `report.pairs` order,
 not a dict. `research/training.py` `_archive_frames` (line ~1112) annotates it as a dict and

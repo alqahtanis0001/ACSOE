@@ -8005,9 +8005,20 @@ def _withheld_key(config: Any, key: str) -> Outcome | None:
     It is a helper rather than three copies because the wrong move is available in three
     places, and it is the same wrong move each time: defaulting one of them would be an
     agent inventing a number that decides whether a model is allowed to refuse a trade.
+
+    **Absent and present-but-`null` both count as withheld, and only the first can
+    actually happen.** The ruling is that these keys are *absent* from
+    `config/default.yaml`: the file's own header says a `null` is OPERATOR REQUIRED and
+    stops every process at load, so a null here would be a different and much louder
+    state. This tested `value is None` alone and therefore never fired, because
+    `config_get` answers an absent key with the `_CONFIG_MISSING` sentinel — so
+    `di_fitted_on_predictor_training_set` walked past its own PENDING branch and FAILed
+    the trainer for not writing a DI it was right not to write. Two facts arriving through
+    one channel, answered as one; both are accepted here and the message names the key
+    either way.
     """
     value = config_get(config, key) if isinstance(config, Mapping) else _config_attr(config, key)
-    if value is None:
+    if value is None or value is _CONFIG_MISSING:
         return pending(
             f"`{key}` is absent from config/default.yaml. It is the operator's to supply "
             "once the walk-forward has reported (spec 59 decision 7), and nothing in "
@@ -8840,6 +8851,7 @@ def _trained(
     *,
     name: str = "run",
     max_folds: int = CONSTRUCTED_MAX_FOLDS,
+    now: datetime | None = None,
 ) -> tuple[tuple[Any, Any, Any] | None, Outcome | None]:
     """`(report, dataset, config)` from one training run into a temporary models root.
 
@@ -8875,7 +8887,7 @@ def _trained(
             config=engine_config,
             models_dir=models_dir,
             derived_dir=derived_dir,
-            now=PHASE5_NOW,
+            now=PHASE5_NOW if now is None else now,
             max_folds=max_folds,
         )
     except TypeError as exc:
@@ -9109,7 +9121,14 @@ def check_training_is_reproducible_from_config_and_data(ctx: VerifyContext) -> O
             first, problem = _trained(ctx, tmp, name="one", max_folds=1)
             if first is None:
                 return problem or pending("acsoe.research.training does not exist yet")
-            second, problem = _trained(ctx, tmp, name="two", max_folds=1)
+            # One second later, which is what distinguishes two real runs. Injecting the
+            # **same** instant into both made them one run by construction, and the
+            # criterion then failed them for sharing a run id - asserting a property its
+            # own fixture had made impossible, and one that could only have been satisfied
+            # by putting a random suffix into an id whose whole job is to be reproducible.
+            second, problem = _trained(
+                ctx, tmp, name="two", max_folds=1, now=PHASE5_NOW + timedelta(seconds=1)
+            )
             if second is None:
                 return problem or pending("acsoe.research.training does not exist yet")
 
@@ -9152,6 +9171,30 @@ def check_training_is_reproducible_from_config_and_data(ctx: VerifyContext) -> O
                     + ". A run id identifies one training run; reusing it means the "
                     "second run either overwrote the first or was refused, and the "
                     "leaderboard cannot tell which model a row describes."
+                )
+
+            # The assertion the fold metrics cannot make. Identical metrics would also be
+            # produced by two models that differ in a way the four reported numbers happen
+            # not to separate; identical bytes would not.
+            model_one = (
+                Path(str(getattr(report_one, "models_dir", tmp))) / runs_one[0] / "model.txt"
+            )
+            model_two = (
+                Path(str(getattr(report_two, "models_dir", tmp))) / runs_two[0] / "model.txt"
+            )
+            if not model_one.is_file() or not model_two.is_file():
+                return failed(
+                    "a fold wrote no `model.txt`; the model is written as LightGBM's own "
+                    "text dump rather than a pickle, because a pickle in an artefact "
+                    "directory is code that runs inside the process that places orders"
+                )
+            if model_one.read_bytes() != model_two.read_bytes():
+                return failed(
+                    "two runs over the same config and the same data produced different "
+                    "model bytes while agreeing on every reported metric. The metrics are "
+                    "four numbers and the model is the thing a leaderboard row points at; "
+                    "a seed from the clock, an unfixed thread count or a non-deterministic "
+                    "histogram strategy all look exactly like this."
                 )
 
             store_cls, problem = _store_class()

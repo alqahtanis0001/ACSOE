@@ -40,5 +40,6 @@ __all__ = [
     "di",
     "expected_move",
     "features",
+    "macro",
     "weights",
 ]

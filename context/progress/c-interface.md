@@ -37,7 +37,11 @@ nothing below is carried over from it.
   from three constructed price series through engines 3, 5 and 12, and again from one real
   engine 5 payload with **exactly one** input changed. `di_regime_shift` is a declared
   `null` with the reasoning in the README. Four mutations, four killed.
-- **Spec 67 — `research/training.py`, the walk-forward predictor. Claimed.**
+- **Spec 67 — `research/training.py`, the walk-forward predictor. Claimed, and DONE.**
+  `src/acsoe/research/training.py` (1,270 lines), `src/acsoe/modelling/macro.py`,
+  `tests/research/test_training.py` (20 tests), `tests/fixtures/walkforward_digest.json`
+  from a real archive run. Six mutations, six killed — two of them only after two
+  attempts. See "Spec 67 — what landed" below. **Original claim line, for the record:**
   `research/training.py`, `tests/research/test_training.py`,
   `tests/fixtures/walkforward_digest.json`.
 - **Spec 68 — the Dissimilarity Index. Claimed.** `modelling/di.py`, `research/training.py`,
@@ -62,6 +66,57 @@ research runner), spec 62 (B — `StoreClient(models_dir=...)`, `model_run_dir`,
 `new_model_run_dir`), spec 76 (B — `rank_universe`), specs 59 and 77 (the lead).
 `research/walkforward.py` is read, never changed: if a Phase 5 change makes
 `walkforward_trains_on_the_past_only` red, the change is wrong.
+
+### Spec 67 — what landed
+
+`research/training.py`: dataset assembly, average-uniqueness weights, the weekly
+walk-forward, LightGBM multiclass with per-class isotonic calibration, the expected move,
+the out-of-sample file, the per-fold digest, the artefacts, and a `python -m
+acsoe.research.training` entry point. `modelling/macro.py` holds the macro column names,
+moved out of engine 6 because `research/` may not import an engine (the lead amended spec
+65 for it).
+
+**It has been run against the real archive.** `--pairs SOLUSD --start 1640995200
+--max-folds 3`, 8 minutes, SOLUSD plus the two macro pairs, 420,081 rows:
+
+| fold | rows | effective | Brier | base-rate Brier |
+|---|---|---|---|---|
+| 0 | 2,016 | 101.0 | 0.1470 | 0.1345 |
+| 1 | 2,016 | 92.1 | 0.0992 | 0.0945 |
+| 2 | 2,016 | 65.7 | 0.1200 | 0.1318 |
+
+Two things in that table matter more than the Brier. **The effective sample size is about
+5% of the row count** — 2,016 test rows are roughly 101 independent observations, which is
+the overlapping-label reality the weighting exists to make visible. And the model is at or
+slightly worse than the base rate on two folds of three, which is the honest first-pass
+result and is what "a negative result is a valid result" anticipates. A leak would show as
+a Brier near zero; it does not.
+
+That digest is now `tests/fixtures/walkforward_digest.json`, byte-identical through a git
+round trip, and `walkforward_weekly_retrain_reports_oos` PASSes against it. **It is a
+three-pair bounded run, not the full archive**, and the digest says so in its own `pairs`
+field. The full run is hours and needs the lead's approval.
+
+**The anti-leak test and its control.** `test_a_random_walk_cannot_be_predicted` trains on
+a series that is unpredictable by construction and asserts the Brier does not beat the
+base rate; `test_a_deterministic_series_is_learned` is its control, because the first is
+satisfied by a trainer that always returns the base rate. Measured: 0.1718 against 0.1556
+on the random walk, 0.0000 against 0.2446 on the deterministic one.
+
+**Two leaks that no metric can see, and the random-walk test did not catch either.** A
+calibrator fitted on the test window and a scaler fitted on train plus test both survived
+the whole suite, twice — the second time even after I had added identity fields to the
+manifest, because the manifest recorded what the caller intended while the mutation
+changed what the fit was handed. They are killed now by tests that **recompute** the
+expected rows from the public splitter and compare the artefact against that. Full account
+in the build log; the transferable part is that a detector's docstring claiming it catches
+"every leak" is the claim to distrust, including when I wrote it.
+
+**Known limit, stated rather than hidden.** `build_dataset` holds every pair's frame at
+once, which is roughly 60 GB over 234 pairs. That is the same shape as the engine 23
+problem specs 78 and 79 exist for, one module over, and the fix is the same: build per
+pair and append row groups. Until then the full run is `--pairs`-bounded. The docstring on
+`_archive_frames` carries the warning.
 
 ### Spec 60 — what landed
 

@@ -122,8 +122,19 @@ class Scaler(BaseModel):
     maximum: tuple[float, ...]
 
     @classmethod
-    def fit(cls, rows: Sequence[Sequence[float]], names: Sequence[str]) -> Scaler:
-        if not rows:
+    def fit(cls, rows: Sequence[Sequence[float]] | Any, names: Sequence[str]) -> Scaler:
+        """The per-feature minimum and maximum of the **training** rows.
+
+        A 2-D numpy array takes the vectorised path, for the reason
+        :meth:`transform` does: the trainer fits this over millions of rows per fold.
+        Both paths ignore NaN, because a feature that is NaN in every training row has no
+        range to learn and is scaled to a constant rather than refused — a pair with no
+        history for one window is normal, and refusing the fold over it would throw away
+        the features that *are* there.
+        """
+        if getattr(rows, "ndim", None) == 2:
+            return cls._fit_array(rows, names)
+        if len(rows) == 0:
             raise ArtefactError("a scaler cannot be fitted on zero rows")
         width = len(names)
         lows = [float("inf")] * width
@@ -154,14 +165,50 @@ class Scaler(BaseModel):
             maximum=tuple(highs),
         )
 
-    def transform(self, rows: Iterable[Sequence[float]]) -> list[list[float]]:
+    @classmethod
+    def _fit_array(cls, rows: Any, names: Sequence[str]) -> Scaler:
+        """The vectorised half of :meth:`fit`, for a 2-D `float64` array."""
+        import numpy as np
+
+        matrix = np.asarray(rows, dtype=np.float64)
+        if matrix.shape[0] == 0:
+            raise ArtefactError("a scaler cannot be fitted on zero rows")
+        if matrix.shape[1] != len(names):
+            raise ArtefactError(
+                f"a row has {matrix.shape[1]} values against {len(names)} feature names"
+            )
+        all_nan = np.isnan(matrix).all(axis=0)
+        # `nanmin` warns and returns NaN for an all-NaN column, so those columns are
+        # handled first and the warning never fires.
+        safe = np.where(all_nan[None, :], 0.0, matrix)
+        lows = np.nanmin(np.where(np.isnan(safe), np.inf, safe), axis=0)
+        highs = np.nanmax(np.where(np.isnan(safe), -np.inf, safe), axis=0)
+        lows = np.where(all_nan, 0.0, lows)
+        highs = np.where(all_nan, 0.0, highs)
+        return cls(
+            feature_names=tuple(str(name) for name in names),
+            minimum=tuple(float(value) for value in lows),
+            maximum=tuple(float(value) for value in highs),
+        )
+
+    def transform(self, rows: Iterable[Sequence[float]] | Any) -> Any:
         """Scale to ``[0, 1]`` per feature, NaN preserved as NaN.
 
         A degenerate feature — one whose training minimum and maximum are equal — maps to
         0.5 rather than dividing by zero. Preserving NaN rather than filling it is
         deliberate: LightGBM handles a missing value natively and has learned a split for
         it, and a zero-filled NaN is a value the model was never shown.
+
+        **A 2-D numpy array in gives a numpy array out, through the same arithmetic.** The
+        trainer scales twenty million rows by forty columns per fold and the row-by-row
+        path would allocate 800 million Python floats to do it; engine 8 scales one vector
+        per tick and the list path reads better there. One implementation with two shapes,
+        rather than a fast copy beside the readable one — a second implementation of the
+        scaling is the drift `modelling/` exists to prevent, one layer down.
         """
+        array = getattr(rows, "ndim", None)
+        if array == 2:
+            return self._transform_array(rows)
         spans = [
             (high - low) if high > low else 0.0
             for low, high in zip(self.minimum, self.maximum, strict=True)
@@ -184,6 +231,32 @@ class Scaler(BaseModel):
                     scaled.append((number - self.minimum[index]) / spans[index])
             out.append(scaled)
         return out
+
+    def _transform_array(self, rows: Any) -> Any:
+        """The vectorised half of :meth:`transform`, for a 2-D `float64` array.
+
+        Written as the same three cases in the same order — NaN through, degenerate to
+        0.5, otherwise min-max — so that a reader can check the two against each other
+        line by line rather than trusting that they agree.
+        """
+        import numpy as np
+
+        matrix = np.asarray(rows, dtype=np.float64)
+        if matrix.shape[1] != len(self.feature_names):
+            raise ArtefactError(
+                f"rows have {matrix.shape[1]} columns against "
+                f"{len(self.feature_names)} feature names"
+            )
+        low = np.asarray(self.minimum, dtype=np.float64)
+        high = np.asarray(self.maximum, dtype=np.float64)
+        span = high - low
+        degenerate = span <= 0.0
+        safe = np.where(degenerate, 1.0, span)
+        scaled = (matrix - low) / safe
+        scaled = np.where(degenerate[None, :], 0.5, scaled)
+        # NaN survives the arithmetic already; the `where` above would have replaced it in
+        # a degenerate column, so it is put back explicitly rather than left to luck.
+        return np.where(np.isnan(matrix), np.nan, scaled)
 
 
 class FoldBounds(BaseModel):

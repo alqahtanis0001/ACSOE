@@ -606,6 +606,200 @@ came from a variable, and it missed an `os.path.join`; the new one follows the o
 than the spelling. Both directions proved — the real tree passes, and a criterion given
 `ctx.root / "models"` in a copied tree is caught.
 
+### The calibrator fitted on the test window survived every test, and the metric can never catch it
+
+**Agent:** C-2 · **Task:** spec 67 · **Date:** 2026-09-13
+
+**What happened.** Spec 67 names six mutations. Two survived, and one of them is the worst
+survivor this phase could produce:
+
+```
+### Q1 the calibrator fitted on the test window
+verdict : SURVIVED   summary : 18 passed in 64.86s
+### Q4 the scaler fitted on train plus test
+verdict : SURVIVED   summary : 18 passed in 64.06s
+```
+
+Q1 replaces the calibration inputs with the **test** rows and their labels. That is a
+textbook leak — the calibrator is shown the answers to the questions it is about to be scored
+on — and eighteen tests, including the random-walk look-ahead detector I had just written and
+called the strongest available, said nothing.
+
+**Why, and the two reasons are different.**
+
+Q1 survives because **isotonic calibration is monotone**. It cannot reorder predictions, so it
+cannot manufacture skill on a random walk: fitted on the test window it learns the test window's
+class prior slightly better, which moves the Brier by less than the 25% margin the anti-leak
+test allows. The margin is not the problem — tightening it would make the test fire on honest
+runs — the problem is that **a metric comparison is the wrong instrument for this leak.** The
+quantity that changed is *which rows the calibrator saw*, and no number computed from the
+predictions is a function of that.
+
+Q4 is subtler and is partly a **checked negative rather than a survivor**. MinMax scaling is a
+monotone per-feature transform, and a gradient-boosted tree is invariant to monotone transforms
+of its features: it splits on order, not on magnitude. So fitting the scaler on train plus test
+genuinely does not change the predictor's output, and for the predictor alone the mutation is
+equivalent. It is **not** equivalent for the Dissimilarity Index, which is a Euclidean distance
+in the scaled space — there, test-window min/max bleeding into the reference scaling shifts
+every distance and moves the refusal threshold. The DI is not fitted today because
+`prediction.di_percentile` is withheld, so the mutation is equivalent *at this moment* and will
+stop being equivalent the day the operator supplies that value. Reporting it as a plain survivor
+would send the next reader hunting for a metric that can see it; reporting it as equivalent
+would be a claim that expires silently.
+
+**Fix, and it is the same technique for both.** Ruling 7 of this phase already says it about the
+DI: prove which rows a thing saw by **identity**, not by a number it reported about itself. The
+manifest now records:
+
+* `calibration_identity` and `calibration_rows` — a digest over the `(pair, decision_ts)` of the
+  rows the calibrator was fitted on;
+* `scaler_identity` and `scaler_rows` — the same for the rows the scaler was fitted on.
+
+Two tests then assert what no metric can: every calibration row is one of the fold's **training**
+rows and none is a test row, and the scaler's identity equals the training identity exactly.
+Both mutations die on contact, by assertion rather than by raising, and they die for the reason
+they are wrong rather than because a number moved.
+
+**The wider lesson, which is the part that generalises.** I wrote the random-walk test believing
+it would catch every leak, said so in its own docstring, and it caught neither of the two leaks
+the spec named. It catches leaks that create *skill*; it is blind to leaks that create
+*calibration*, and blind by construction to anything a monotone transform can do. A detector's
+docstring claiming it catches "every leak" is the claim to distrust — including when I am the one
+writing it — and the mutation sweep is what turned that claim into a measurement.
+
+**A third mutation was mine and broken.** Q5, "`pair` included as a feature", appended a
+`pair_code` column that does not exist, so eleven tests died on a `ColumnNotFound` in eight
+seconds. That is an engine raising, which proves nothing about the tests watching it — the same
+defect as M1 in the spec 63 sweep, made twice in one day. It also turned out that the literal
+mutation the spec names **cannot** be written non-raising: `pair` is a string column, so
+including it in the feature list fails at the cast rather than misleading anybody. The mutation
+that is both plausible and silent is a *numeric* identifier, and `decision_ts` is sitting right
+there in the frame — a model given it memorises *when* rather than *what*. Q5 is now that, and
+the test it kills is a pinned equality against `FEATURE_NAMES` plus the macro columns rather
+than an "is `pair` absent" check, because naming one column to exclude tests one spelling of the
+mistake while pinning the list tests the property.
+
+**The first fix for Q1 and Q4 did not work, and the reason is the useful part.** I added
+`calibration_identity` and `scaler_identity` to the manifest and asserted on them — and **both
+mutations survived again**, because the manifest recorded what the *caller* intended while the
+mutation changed what the *fit* was handed, and the two stayed consistent with each other. A
+record written beside a call is not a check on that call. Two changes fixed it for real:
+
+* `_fit_calibrators` now takes the calibration **frame** rather than pre-computed labels and
+  returns the identity of what it was given, so the record and the fit come from one argument;
+* both tests **recompute the expected rows themselves** — the fold from `purged_walk_forward`,
+  the calibration tail from `prediction.calibration_days`, the scaler's minima and maxima by
+  refitting over the fold's training rows — and compare the artefact against that. Ruling 7's
+  technique, which was written about the DI and turns out to be the general answer.
+
+Final sweep, all six killed by the test written for each:
+
+| # | Mutation | Verdict | Killed by |
+|---|---|---|---|
+| Q1 | the calibrator fitted on the test window | KILLED | `test_the_calibrator_saw_only_training_rows` |
+| Q2 | a seed read from the clock | KILLED | `test_two_runs_over_one_config_and_one_dataset_agree` |
+| Q3 | weights all ones | KILLED | the weight and effective-sample-size tests |
+| Q4 | the scaler fitted on train plus test | KILLED | `test_the_scaler_saw_exactly_the_training_rows` |
+| Q5 | an identifier column in the feature list | KILLED | `test_pair_is_an_identifier_and_never_a_feature` |
+| Q6 | the manifest's feature order permuted | KILLED | the artefact-load test, by **refusal** |
+
+Q6's kill is a raise and is the one case where that is right: `ArtefactError` on a permuted
+feature list is the loader doing its job, not an engine falling over.
+
+### Two criteria of mine were wrong, and the trainer landing is what showed it
+
+**Agent:** C-2 · **Task:** specs 60 and 67 · **Date:** 2026-09-13
+
+The first run of the Phase 5 criteria against a real `research/training.py` turned two of them
+red. Both are defects in the criteria rather than in the trainer, which is the direction this
+sequencing exists to find: a criterion written before its subject is a hypothesis, and the
+subject landing is the experiment.
+
+**`training_is_reproducible_from_config_and_data` conflated "reproducible" with "same run id".**
+
+```
+FAIL  the two runs share the artefact run id(s) ['train-20260913T120000-6412693d-f0'].
+```
+
+The run id is `train-<utc stamp>-<config digest prefix>-f<fold>`, and the criterion injected the
+**same** `now` into both runs — so of course they collided. Two real runs are minutes apart and
+get different ids; two runs at one injected instant are the same run by construction. The
+criterion was asserting a property its own fixture made impossible, and it would have forced a
+random suffix into the run id to satisfy it, which would have made the id unreproducible for no
+gain. Fixed by giving the second run a `now` one second later, which is what distinguishes two
+real runs, and by additionally comparing `model.txt` **byte for byte** — the assertion the spec
+actually wants, and one the fold-metric comparison alone does not make.
+
+**`di_fitted_on_predictor_training_set` never reached its own PENDING branch.**
+
+```
+FAIL  no di.npz beside the fold's predictor at ...\train-...-f0\di.npz
+```
+
+`prediction.di_percentile` is absent by operator ruling and the trainer correctly fits no DI
+without it, so this criterion should have reported PENDING naming the key. It did not, because
+`_withheld_key` tested `value is None` while `config_get` returns the sentinel `_CONFIG_MISSING`
+for a key that is **absent from the file**, and `None` only for one written as an explicit
+`null`. The ruling is that these five keys are *absent*, never null — the YAML header says a
+null stops every process at load — so the helper was checking for the one shape the ruling
+forbids and missing the shape the ruling requires.
+
+It is the same two-facts-one-channel defect the standards keep naming, in its third variant this
+phase: absent and present-and-null are different states, and a check that only looks at one of
+them answers the other wrongly. Here it answered "the operator has not supplied it" with a FAIL
+that accuses the trainer of not writing a file it was right not to write.
+
+**Fix.** `_withheld_key` treats the sentinel and `None` alike, with a comment saying which the
+ruling produces and why both are accepted. The criterion now reports PENDING naming
+`prediction.di_percentile`, which is the state the phase is in and will stay in until the
+operator supplies the value after the walk-forward reports.
+
+### The shared config double cannot exhibit the one property five Phase 5 keys depend on
+
+**Agent:** C-2 · **Task:** spec 67 · **Date:** 2026-09-13
+
+**What happened.** The first end-to-end run of the trainer stopped on its own config digest:
+
+```
+KeyError: "config has no key 'prediction.di_percentile';
+           'di_percentile' is not present under prediction"
+```
+
+raised from `tests/harness/doubles.py`, `MappingConfig.get`.
+
+**Why, and it is bigger than the trainer.** `MappingConfig` wraps the parsed YAML dict, so a
+key absent from the file raises. The **real** `Config` parses that YAML into a pydantic model
+where `prediction.di_percentile` is declared as `Ratio | None = None`, so the same call returns
+`None`. A-2's own note records the distinction and calls it deliberate: *"a miss is a key this
+model does not declare; an optional field that is declared and unset is not a miss, and this
+returns its None"*.
+
+Five keys are deliberately absent from `config/default.yaml` by operator ruling —
+`prediction.di_percentile`, `anomaly.threshold_percentile`, `skeptic.veto_threshold` and the
+three `models.*_run_id`s — and **engines 8, 13 and 15 are written to read `None` and block with
+a reason code**. Driven through this double they would get a `KeyError` instead, which the
+orchestrator turns into `ERROR`. `ERROR` also blocks, so the gate would stay green while three
+engines took the wrong branch, published the wrong reason code, and were tested against the
+wrong behaviour — and every one of those tests would have been written against the double that
+produced it.
+
+This is the standard's own rule, from the inside: *a double that is simpler than the real thing
+in exactly the dimension the test is about cannot fail.* The dimension these three engines are
+about is what an absent operator value does, and that is precisely the dimension `MappingConfig`
+gets wrong. `tests/harness/` is mine, so this is my defect and not a discovery about someone
+else's file.
+
+It is also the fourth instance of the shape `ai-workflow-rules.md` names: fabricate the subject,
+never the contract. `Config` is a contract, `MappingConfig` is a fabrication of it, and the two
+agree everywhere except the one place Phase 5 lives.
+
+**Fix.** `load_default_config()` returns the **real** `Config` through
+`acsoe.platform.config.load_config`, so every test and every criterion that reads the committed
+configuration reads it through the model that declares the optional leaves. `MappingConfig`
+stays for the eleven call sites that build an ad-hoc dict to vary one threshold — that is a
+legitimate stand-in for a *value*, not for the model — and gains a docstring saying in as many
+words that it cannot answer for a declared-but-unset leaf and must not be used to test one.
+
 ### The macro column names are in engine 6's `contracts.py`, and `research/` may not import them
 
 **Agent:** C-2 · **Task:** specs 65 and 67 · **Date:** 2026-09-13

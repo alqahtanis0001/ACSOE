@@ -150,6 +150,16 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   sends the next person to write a test for a case that cannot fail and makes the real
   survivors look less urgent; filed as a checked negative alongside the non-equivalent form of
   the same claim, it is evidence.
+- **A record written beside a call is not a check on that call.** C-2's spec 67 mutation
+  sweep survived a calibrator fitted on the test window twice: once because isotonic
+  regression is monotone and moves the Brier by less than any honest tolerance, and again
+  after `calibration_identity` was written into the manifest, because the manifest recorded
+  what the caller intended while the mutation changed what the fit was handed, and the two
+  stayed consistent with each other. What killed it was recomputing the expected rows from
+  the public splitter and the configured window and comparing the artefact against that. The
+  same shape as ruling 7 on the DI: recompute the candidate set, never trust a hash or a
+  count the producer wrote about itself. A leak that no metric can see needs a test that
+  recomputes what the metric was supposed to be computed from.
 - **`state[engine] == {}` is the payload of both the engine that had nothing to do and the
   engine that raised.** Contract rule 7 turns an uncaught exception into `ERROR` with empty
   `data`, so a quiet-tick assertion on an empty payload is true of a crashed tick too. B-2's

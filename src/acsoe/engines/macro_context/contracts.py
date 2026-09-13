@@ -5,22 +5,27 @@ beside it — contract rule 3 forbids importing engine 5 to find out what its ke
 called, and a rename upstream without a matching change here would not raise. Engine 6
 would simply report every macro asset missing, on every bar, for ever.
 
-The **macro column names** are derived here too, from `modelling.features.FEATURE_NAMES`
-and the configured assets, and nothing else builds one. Spec 67's offline dataset builder
-joins the same columns out of the archive; if the two spelled a name differently the
-predictor would train on `macro_btc_log_return_4` and be handed
-`macro_BTC_log_return_4` live, and the artefact's feature-order check is the only thing
-that would notice — at load time, as a refusal, with the cause nowhere in the message.
+The **macro column names live in `modelling/macro.py`** and are re-exported here. They were
+written in this file first, which was wrong for a reason worth keeping: spec 65 asks that
+"the offline builder and the engine cannot disagree about a column name", and the offline
+builder is `research/training.py`, which may not import an engine — architecture invariant
+5. `modelling/` is the package both sides may import and is where a shared spelling
+belongs. The names are still reachable from here, so nothing that reads engine 6's
+contracts has to know where they moved. Amended 2026-09-13; spec 65 step 4 records it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict
 
-from acsoe.modelling.features import FEATURE_NAMES
+from acsoe.modelling.macro import (
+    MACRO_PREFIX,
+    macro_column,
+    macro_feature_names,
+    macro_pair_names,
+)
 
 __all__ = [
     "FEATURE_BAR_TS_FIELD",
@@ -61,55 +66,10 @@ FEATURE_NAMES_FIELD: Final = "feature_names"
 #: two modes the same code has to run in.
 KEY_MACRO: Final = "macro"
 
-#: Every macro column starts with this. One prefix, declared once, so a reader of a
-#: training manifest can tell a macro column from a pair's own feature by its name.
-MACRO_PREFIX: Final = "macro"
-
-
-def macro_column(asset: str, feature: str) -> str:
-    """The one spelling of a macro column: ``macro_<asset>_<feature>``.
-
-    A function rather than an f-string at each call site, because there are three call
-    sites — this engine, the offline dataset builder and the manifest — and two of them
-    are in packages that may not import each other.
-    """
-    return f"{MACRO_PREFIX}_{asset}_{feature}"
-
-
-def macro_feature_names(assets: Sequence[str]) -> tuple[str, ...]:
-    """Every macro column, in a fixed order: assets sorted, features in feature order.
-
-    **Sorted by asset**, deliberately. The configured mapping is a YAML dict and its
-    iteration order is the file's, so a reordering of two lines in `config/default.yaml`
-    would otherwise permute the trained feature order — and a model handed its columns
-    permuted returns confident nonsense with nothing raising.
-    """
-    return tuple(
-        macro_column(asset, feature)
-        for asset in sorted(assets)
-        for feature in FEATURE_NAMES
-    )
-
-
-def macro_pair_names(configured: Mapping[str, Any], *, spelling: str) -> dict[str, str]:
-    """``{asset: pair}`` for one spelling, from whatever the config layer hands back.
-
-    The config model parses `macro` into typed objects; a test double may hand back
-    plain dicts. Both are read, because the alternative is an engine that works against
-    the real config and not against the criterion driving it, which is the seam this
-    project keeps finding on the wrong side.
-    """
-    out: dict[str, str] = {}
-    for asset, pair in configured.items():
-        value = pair.get(spelling) if isinstance(pair, Mapping) else getattr(pair, spelling, None)
-        if not value:
-            raise ValueError(
-                f"macro asset {asset!r} has no {spelling!r} pair name. Both spellings "
-                "are config, and neither may be inferred from the other: Kraken calls "
-                "the same pair BTC/USD live and XBTUSD in the archive."
-            )
-        out[str(asset)] = str(value)
-    return out
+#: Re-exported from `modelling/macro.py`, which is where a spelling both the live loop and
+#: `research/` must agree on belongs. Kept importable from here so nothing reading engine
+#: 6's contracts has to know where the functions live.
+__reexported__: Final = (MACRO_PREFIX, macro_column, macro_feature_names, macro_pair_names)
 
 
 class MacroContextState(BaseModel):

@@ -55,24 +55,29 @@ PHASE5_CRITERIA = (
     "walkforward_trains_on_the_past_only",
 )
 
-#: The four whose subjects exist today and which therefore carry all three observations.
+#: Whose subjects exist today and which therefore carry all three observations.
 BUILT = (
     "features_reproduce_in_replay",
     "feature_lookbacks_are_time_not_rows",
+    "predictor_trains_and_calibrates",
+    "training_is_reproducible_from_config_and_data",
+    "walkforward_weekly_retrain_reports_oos",
     "scout_ranks_by_feature_not_arrival",
     "walkforward_trains_on_the_past_only",
 )
 
-#: The seven still waiting, each with the module or engine its PENDING line must name.
+#: Still waiting on a spec, each with the module or engine its PENDING line must name.
 AWAITED = {
-    "predictor_trains_and_calibrates": "acsoe.research.training",
-    "training_is_reproducible_from_config_and_data": "acsoe.research.training",
-    "di_fitted_on_predictor_training_set": "acsoe.research.training",
-    "skeptic_trains_only_on_predictor_buy_rows": "acsoe.research.training",
-    "walkforward_weekly_retrain_reports_oos": "acsoe.research.training",
+    "skeptic_trains_only_on_predictor_buy_rows": "spec 69",
     "anomaly_and_skeptic_have_both_tests": "test_anomaly.py",
     "tournament_writes_leaderboard_from_oos": "`tournament`",
 }
+
+#: Waiting on the **operator** rather than on an agent, which is a different state and has
+#: a different right answer: nobody is late, and the criterion must say which key it is
+#: waiting for rather than accusing the trainer of not writing a DI it was right not to
+#: write. Spec 59 decision 7.
+WITHHELD = {"di_fitted_on_predictor_training_set": "prediction.di_percentile"}
 
 _NO_PYCACHE = shutil.ignore_patterns("__pycache__", "*.pyc")
 
@@ -165,16 +170,22 @@ def test_every_phase_5_criterion_is_pending_on_an_unbuilt_tree(
         assert_pending(run(verify_module, name, unbuilt_tree), verify_module)
 
 
-def test_the_four_built_criteria_pass_against_the_real_repository(
+def test_the_built_criteria_pass_against_the_real_repository(
     verify_module: ModuleType, repo_root: Path
 ) -> None:
     """The middle observation, and what stops this file being PENDING assertions dressed
-    as a proof."""
+    as a proof.
+
+    Slow: five of these train a predictor over a constructed 140-day dataset. That is the
+    cost of a criterion that judges a model rather than a file, and the alternative — a
+    committed artefact — would be read from `models/`, which is gitignored, so the
+    criterion would pass only on the machine that produced it.
+    """
     for name in BUILT:
         assert_pass(run(verify_module, name, repo_root), verify_module)
 
 
-def test_the_seven_awaited_criteria_name_their_subject_and_never_fail(
+def test_the_awaited_criteria_name_their_subject_and_never_fail(
     verify_module: ModuleType, repo_root: Path
 ) -> None:
     """A PENDING that does not say what to build sends its reader to the task list.
@@ -188,6 +199,24 @@ def test_the_seven_awaited_criteria_name_their_subject_and_never_fail(
         outcome = run(verify_module, name, repo_root)
         assert_pending(outcome, verify_module)
         assert expected in outcome.message, (name, outcome.message)
+
+
+def test_a_criterion_waiting_on_the_operator_names_the_key_and_never_fails(
+    verify_module: ModuleType, repo_root: Path
+) -> None:
+    """Waiting on the operator is not the same state as waiting on an agent.
+
+    `prediction.di_percentile` is absent by ruling until the walk-forward reports, and the
+    trainer correctly fits no DI without it. A criterion that FAILed here would be accusing
+    the trainer of not writing a file it was right not to write — which it did, for one
+    run, because the helper tested `value is None` while an absent key arrives as a
+    sentinel. Absent and present-but-null are two facts and only one of them can happen
+    under this ruling.
+    """
+    for name, key in WITHHELD.items():
+        outcome = run(verify_module, name, repo_root)
+        assert_pending(outcome, verify_module)
+        assert key in outcome.message, (name, outcome.message)
 
 
 def test_no_phase_5_criterion_computes_accuracy(verify_module: ModuleType) -> None:
