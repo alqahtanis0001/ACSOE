@@ -281,6 +281,45 @@ nothing in the send result says which.
 file's dated section is the only lead-to-teammate channel; teammates send to `main` and read
 the file. `ListAgents` after any teammate-originated message that names a bare letter.
 
+### A rehearsal of three engines is more than three rehearsals of one
+
+**Agent:** Lead, from B-2's rehearsal · **Date:** 2026-09-13
+
+**What happened.** B-2 rehearsed engine 5 alone, then engines 5, 6, 7 and 12 together,
+through the real orchestrator against the fake client. Two findings that only the second
+shape could produce. First, "engine 5 returns `PASS` and the chain stops there" had no
+observable consequence while engine 5 was the only registered opportunity engine: nothing
+downstream existed to not-run, so no test could see it, and deleting the orchestrator's
+`PASS` check went red only once three engines sat behind engine 5. Second, a quiet tick and a
+crashed tick publish the same empty payload, so the engine 5 `PASS` mutation was first killed
+by the wrong test; the fix is to assert the absence of a blocker beside the empty payload,
+now a rule in `code-standards.md`.
+
+**Why it matters for the phase.** Registration in spec 77 rests on these rehearsals. The
+ones for engines 13, 8 and 15 must be run as a chain with 7, 10 and 11 in their real
+positions, not one engine at a time, for the same reason.
+
+### Decision: `missing_bars` keeps its union semantics, and the gate's meaning is written down
+
+**Agent:** Lead, from A-2's measurement · **Date:** 2026-09-13
+
+**Options.** Engine 3 publishes a per-pair map beside the union (C-2's request); `data_guard`
+blocks on a per-pair hole; or the union stays and its meaning is stated.
+
+**Chose.** The third, with a no-double seam test.
+
+**Because.** A-2 measured it: with two pairs and one missing bars 2 and 3, the pooled reading
+is empty and the per-pair reading is `[2, 3]`; with 234 pairs the union is empty on
+essentially every tick, so the missing-candle condition is a feed-silence detector, not a
+per-pair one, and has been since Phase 2 without anyone seeing it, because engine 3's gap
+tests use one pair and `data_guard`'s tests build `missing_bars` themselves. A per-pair block
+would stop the whole tick on the ordinary fact that a thin pair did not trade, which is the
+market, not a fault; a per-pair map from engine 3 is a second producer of a fact engine 5
+already derives from the candles. What was wrong was not the arithmetic but the absence of a
+sentence saying what it measures.
+
+**Cost.** The Phase 2 criterion's proof is narrower than its name; the tracker says so.
+
 ### The lead committed through a `tail` pipe and lost two failure names
 
 **Agent:** Lead · **Task:** committing specs 62 and 76 · **Date:** 2026-09-13

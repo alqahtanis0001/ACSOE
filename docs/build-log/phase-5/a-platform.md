@@ -573,3 +573,121 @@ lead pastes the YAML.
 **Consequence.** Worth stating as a habit rather than a fix: when a section lands, add its row
 to the constraint table first and write the interesting test second. The table is mechanical
 and complete; the interesting test is neither.
+
+### Spec 78: the slice streams per pair, and a measurement that printed 0.0 four times
+
+**Agent:** A · **Task:** spec 78 · **Date:** 2026-09-13
+
+**What was changed.** `BacktestEngine.process` no longer builds a list of every labelled
+row of every pair. It asks each pair's frame for its `height` — the counts were all it ever
+needed — and hands the frame straight to a `_SliceWriter` that appends it to the parquet as
+its own row group. One pair is alive at a time; `del labels, series` at the end of each
+iteration is the whole of the fix, and the rest is making that safe.
+
+Three things in it are not obvious and each has a reason:
+
+- **The schema is established by the first pair and every later pair is cast to it.**
+  `label_frame` builds `pl.DataFrame(payload)` per pair, so polars infers dtypes *per pair*,
+  and a column that is entirely null for one thin pair infers as `Null` where another pair
+  has `Int64`. Measured across five real archive pairs and all five agree — evidence about
+  the common case, not a guarantee about the 234th. A parquet file needs one schema, so the
+  choice is cast or crash, and a cast that cannot be done raises naming the pair rather than
+  writing a row group whose types quietly disagree with the rest of the file.
+- **The writer is closed in a `finally`**, so a run that raises part-way leaves a readable
+  parquet of the pairs that finished instead of a file with no footer.
+- **The report and the file are cross-checked.** `slice_writer.rows_written` must equal the
+  sum of the per-pair counts, and a disagreement raises. It can only fire if a later edit
+  lets a pair be counted and not written, or written and not counted — which is exactly the
+  kind of drift that would otherwise be discovered by a trainer reading a dataset whose
+  stated size is a lie.
+
+**Also fixed, in the same function, because it was in the way.** `_write` stamped the slice
+filename with `datetime.now(tz=UTC)` — a direct clock read inside an engine, which invariant 9
+forbids without qualification. It cannot bias a label, it only names a file; but "it is only a
+filename" is the argument that puts the second one somewhere that matters, and reading
+`context.now` makes a replay's output name reproducible from its inputs. The path convention
+is unchanged.
+
+**A mypy override I added and then took back out.** pyarrow ships no `py.typed`, so importing
+it under `--strict` is an `import-untyped` error. I added `"pyarrow.*"` to the ignore list in
+`pyproject.toml`, which turned two lines in B's `clients/store/parquet.py` red — because the
+project runs `warn_unused_ignores` and a global override makes an existing local ignore an
+error rather than removing the need for it. B had written exactly that, in a comment above
+those two lines, explaining why the ignore was deliberately local. **The reason was already on
+disk, two lines above the thing I broke.** Reverted, and the same local ignore used here.
+
+**The measurement, and the mistake in it.** Spec 78 asks for peak memory before and after,
+compared in both orders. The first harness read the peak through
+`ctypes.windll.kernel32.K32GetProcessMemoryInfo` with no `argtypes` and no `restype`, so the
+call failed and returned nothing, and the function reported **0.0 MB** — which it printed,
+four times, for two different implementations, and I read past it. `windll` defaults make a
+failed call indistinguishable from a process that used no memory. Declaring the prototypes and
+raising on a false return gave real numbers:
+
+| run order | accumulate | stream |
+|---|---|---|
+| accumulate first | 792.9 MB | 430.3 MB |
+| stream first | 800.1 MB | 404.1 MB |
+
+24 pairs, 214,511 labelled rows, ~11.5 seconds either way. The order swap moves the numbers by
+under 7% and does not move the conclusion, which is the control this project requires after a
+Phase 4 benchmark that measured a cold cache and reported a fourfold speed-up.
+
+**A zero is the one reading that should never be believed**, and this is the second time in
+two days that the failure mode has been "the harness answered, and the answer was not a
+measurement". The Phase 4 rule was about a wrong answer that is in range; this is the
+complement — an answer so far out of range that it reads as a formatting problem rather than
+as a broken instrument.
+
+**Mutations, restored from byte copies and verified by sha256.** Iterating `report.pairs`
+reversed kills only the new order test — which is the gap it was written for, since every
+other test counts rather than orders. Adding one to each pair's reported height kills four,
+including the report-versus-file cross-check. Writing each table twice kills three. All three
+restored.
+
+### Engine 3's `missing_bars` is not ambiguous across pairs — with more than one pair it is empty
+
+**Agent:** A · **Task:** the engine 3 assessment the lead asked for · **Date:** 2026-09-13
+
+**What happened.** C-2 reported that `state["market_sensor"]["missing_bars"]` pools every pair,
+so no consumer can tell which pair has the hole. That is true, and measuring it against the
+real functions rather than reading them turned up something sharper.
+
+`MarketSensorEngine` calls `missing_bar_timestamps(closed_candles, interval_s=...)` over the
+candles of **every** subscribed pair at once, with no `pair=` argument. That function takes the
+set of timestamps present, spans first to last, and reports the bar openings absent from the
+set. The set is a union, so a bar is only "missing" when **no pair traded in it at all**.
+
+Measured with two pairs, one of them missing bars 2 and 3:
+
+    pooled missing_bars : []
+    per-pair AAAUSD     : []
+    per-pair BBBUSD     : [2, 3]
+
+And with the holes staggered — each pair silent in a bar the other traded in:
+
+    pooled  : []
+    per pair: AAAUSD [2], BBBUSD [1]
+
+**Why that matters more than attribution.** The field does not merely lose *which* pair; past
+a handful of pairs it loses the signal. The archive directory now holds 234 pairs. A live
+system subscribed to anything like that number will have some pair trading in essentially
+every fifteen-minute bar, so `missing_bars` is empty on essentially every tick — and
+`data_guard`'s missing-candle block, one of its three conditions, can then never fire. What
+protects the tick against absent candles in practice is the staleness threshold, alone.
+
+**Why nothing went red.** The seam is tested by neither side, which is a pattern this build log
+has now recorded three times in two phases. Engine 3's gap tests all use a **single pair**
+(`BTC/USD`), where union and per-pair readings are identical, so they cannot see it.
+`data_guard`'s tests construct `missing_bars` themselves as a tuple of timestamps, so they
+prove the gate blocks on a value the test supplied and never ask whether the producer can
+produce one. Each side is correct about itself and the pair of them agrees about nothing.
+
+**Fix.** None written. The lead's instruction was to assess and propose without changing a
+cross-chain key, and the proposal is in the message to `main`: engine 3 should **not** grow a
+per-pair map, because spec 64's amendment already has engine 5 counting each pair's holes from
+that pair's own candles — which engine 3 already publishes, each carrying its `pair` — and a
+second producer of one fact is the thing this project keeps paying for. What is worth deciding
+is separate and is not mine: whether `data_guard`'s missing-candle condition still means
+anything at 234 pairs, and whether the field should say what it actually measures, which is
+"bars in which no subscribed pair traded at all".

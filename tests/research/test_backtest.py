@@ -734,3 +734,111 @@ def test_a_series_long_enough_to_label_produces_rows_and_a_slice(
     assert written.height == result.data["labelled_rows"]
     assert "label_window_end_ts" in written.columns
     assert set(written["label"].to_list()) <= {"target", "stop", "timeout"}
+
+
+# --------------------------------------------------------------------------- #
+# Spec 78 — the slice is streamed, one pair at a time
+# --------------------------------------------------------------------------- #
+#
+# Engine 23 used to accumulate every labelled row of every pair in one Python list
+# and write once at the end. Over the 234-pair archive that is 20,331,237 rows and
+# it peaked at 51.9 GB to produce a 429 MB file. These two tests hold the property
+# that replaced it: the same rows, in the same order, with only one pair's rows
+# alive at a time.
+
+
+def test_the_streamed_slice_holds_the_same_rows_in_the_same_order(
+    tmp_path: Path, engine_context: Any
+) -> None:
+    """The output is unchanged by spec 78, proven against an oracle built here.
+
+    The accumulating implementation is gone, so the comparison cannot be against a
+    previous run of it. It is against what accumulation *means*: call the real
+    labeller per pair in `report.pairs` order, concatenate, and require the parquet
+    to equal that frame exactly — every column, every row, in order.
+
+    Two pairs of different lengths, because a single pair cannot tell "wrote each
+    pair's rows" from "wrote the first pair's rows twice", and equal-length pairs
+    cannot tell a correct order from a swapped one.
+    """
+    import polars as pl
+
+    from acsoe.research.historical import read_archive_rows, to_frame
+    from acsoe.research.labelling import label_frame
+
+    directory = tmp_path / "streamed"
+    write_archive(directory, "AAAUSD_15.csv", list(range(200)))
+    write_archive(directory, "BBBUSD_15.csv", list(range(150)))
+
+    engine = BacktestEngine(archive_dir=directory, derived_dir=tmp_path / "derived")
+    result = engine.process(engine_context, {})
+    assert result.status is EngineStatus.OK
+
+    written = pl.read_parquet(Path(result.data["slice_path"]))
+
+    expected = pl.concat(
+        [
+            label_frame(
+                to_frame(list(read_archive_rows(directory / f"{pair}_15.csv"))),
+                pair=pair,
+                config=engine_context.config,
+                interval_s=INTERVAL_S,
+            )[0]
+            for pair in result.data["pairs"]
+        ]
+    )
+
+    assert written.height == expected.height
+    assert written.columns == expected.columns
+    assert written.schema == expected.schema
+    assert written.equals(expected), "the streamed slice is not the rows accumulation gave"
+    # And the report agrees with the file, which is the other thing that could drift.
+    assert result.data["labelled_rows"] == written.height
+    assert sum(result.data["labelled_rows_by_pair"].values()) == written.height
+
+
+def test_the_writer_never_holds_more_than_one_pair_s_rows(
+    tmp_path: Path, engine_context: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Counted at the seam, because peak memory is not assertable in a unit test.
+
+    What can be asserted is the shape that caused the 51.9 GB: every write carries
+    exactly one pair's rows, never a growing accumulation. So each call's row count
+    is checked against that pair's own reported count, and the largest single write
+    is required to be smaller than the total — which is what fails the moment anyone
+    reinstates a list that spans pairs.
+    """
+    from acsoe.research import backtest as backtest_module
+
+    seen: list[tuple[str, int]] = []
+    original = backtest_module._SliceWriter.write
+
+    def recording(self: Any, pair: str, labels: Any) -> None:
+        seen.append((pair, _height_of(labels)))
+        original(self, pair, labels)
+
+    monkeypatch.setattr(backtest_module._SliceWriter, "write", recording)
+
+    directory = tmp_path / "counted"
+    write_archive(directory, "AAAUSD_15.csv", list(range(200)))
+    write_archive(directory, "BBBUSD_15.csv", list(range(150)))
+
+    engine = BacktestEngine(archive_dir=directory, derived_dir=tmp_path / "derived")
+    result = engine.process(engine_context, {})
+
+    by_pair = result.data["labelled_rows_by_pair"]
+    assert [pair for pair, _ in seen] == list(by_pair), "one write per pair, in order"
+    for pair, rows in seen:
+        assert rows == by_pair[pair], f"{pair} was written with something other than its rows"
+
+    largest = max(rows for _, rows in seen)
+    total = result.data["labelled_rows"]
+    assert largest < total, (
+        "one write carried every row, which is the accumulate-then-write shape spec 78 "
+        "removed"
+    )
+
+
+def _height_of(labels: Any) -> int:
+    height = getattr(labels, "height", None)
+    return int(height) if isinstance(height, int) else len(list(labels))

@@ -152,6 +152,31 @@ as you proposed: one line to `context.now`, with its own entry in the build log 
 that the slice name follows the injected clock, since a direct clock read is a defect
 whether or not it can bias a label.
 
+**To A-2, 11:05 — ruling on `missing_bars`.** Your assessment is accepted and the ruling is
+to change less than C-2 asked and more than nothing. (1) Engine 3 grows no per-pair map;
+engine 5 derives per-pair holes from the candles engine 3 already publishes (spec 64 as
+amended). (2) `data_guard`'s missing-candle condition **stays**, and its meaning is stated
+where it is produced and where it is consumed: `missing_bars` is *bars in which no subscribed
+pair traded at all*, which is a feed-level silence and a genuine data fault; per-pair holes
+are ordinary market behaviour and are the feature layer's to mark. The field is not renamed
+(it is a seam between two of your engines and a rename buys nothing the docstring does not).
+The `data_guard` README, the `market_sensor` README and `contracts.py` docstrings say this in
+one sentence each, and `REASON_PROSE` for the missing-candle code is checked against that
+meaning (C-2's file; if the prose needs to say "the feed went silent", message `main` with the
+wording and C-2 lands it). (3) Write the seam test with no double: engine 3 driven with two
+pairs whose holes differ, asserting `data_guard` does not block on a per-pair hole and does
+block when every pair is silent for a bar. Its two mutations: the union replaced by a
+per-pair reading (blocks on the thin pair), and the condition deleted (never blocks). The
+lead records the finding in the tracker as a gate whose scope changed by measurement. Take it
+after 78's full-run report.
+
+**To B-2, 10:50.** The engines 5, 6, 7, 12 rehearsal is committed at `8fdc275`. Stand by;
+the next request, engines 13, 8 and 15 once C-2 lands 71 to 73, will appear here. Two of
+your findings are recorded for that rehearsal: the fixture must stream under the live
+spelling (`SOL/USD`), never the archive stem (`SOLUSD`), or engine 7's universe is empty for a
+reason unrelated to wiring; and the account must hold spendable quote currency for engine 7
+to choose anything at the committed risk fraction.
+
 **To B-2, 10:10 — rehearsal request.** Engines 6 `macro_context` and 12 `regime` are
 committed at `7dd0f1d`. After the engine 5 rehearsal, extend the same file to drive engines
 5, 6 and 12 together through the real orchestrator against the fake client, two real ticks:
