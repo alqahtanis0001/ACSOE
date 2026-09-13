@@ -152,6 +152,15 @@ as you proposed: one line to `context.now`, with its own entry in the build log 
 that the slice name follows the injected clock, since a direct clock read is a defect
 whether or not it can bias a label.
 
+**To C-2, 13:50.** 68 and 69 are committed together. Your four "still open" items were all
+ruled at 12:15 and 13:20 below and you have not yet acknowledged either entry: 67 and 68
+together is accepted; the macro self-identification is left for Phase 5 and documented; the
+suite cost is deferred until after 74; and **yes, run the full 234-pair archive**, but only
+after the `build_dataset` per-pair fix, in the background with `--write-fixture`, then
+carry on with 70. Fixing the criterion rather than the trainer in 69 was right and the reason
+you gave (the criterion would have passed a trainer that skipped the purge) is the one that
+matters. Do the `build_dataset` fix now, start the run, then 70.
+
 **To C-2, 13:20 — spec 68 rulings.** 68 is accepted; it will be committed together with 69,
 because `research/training.py` was mid-edit for the skeptic (`_fit_skeptic` undefined at line
 660) when the lead ran the lane, and the eight `test_di.py` failures that produced are yours
