@@ -30,6 +30,8 @@ the shared fixtures, not its contents.
 | `soak_digest.json` | A | one unbroken `run_id`, contiguous `cycle_id`s, 7 days | 8 |
 | `labelled_sample.parquet` | C | `labelled_sample_replayed_from_archive` | 4 |
 | `labels_hand_verified.json` | C | `labeller_matches_hand_verified_labels` | 4 |
+| `candles_sample.parquet` | C | `features_reproduce_in_replay` and the Phase 5 training criteria | 5 |
+| `walkforward_digest.json` | C | `walkforward_weekly_retrain_reports_oos` | 5 |
 | `kraken/*.json` | C | recorded responses backing the fake Kraken client | 0 |
 
 `labelled_sample.parquet` carries its own provenance **inside the file**, as parquet
@@ -38,6 +40,23 @@ settings it was labelled under, how many of its labels were decided by the
 both-barriers-touched ruling, and the statement that the source carries no spread and no
 book. A parquet that cannot say where it came from is indistinguishable from one written
 by hand, and `labelled_sample_replayed_from_archive` is written to notice.
+
+`candles_sample.parquet` is the **input** `labelled_sample.parquet` is the output of: the
+OHLCVT slice of the same pair and span, taken from the operator's archive through
+`research/historical.py` and sliced on `ts`, with nothing recomputed and no bar invented. It
+exists because the labelled sample carries no `open`, `high`, `low`, `volume` or `trades`, so
+there was nothing committed for `modelling/features.py` to consume and every Phase 5 training
+criterion had no input. It reaches back `market_sensor.published_bars` bars before the first
+labelled decision bar, so that bar has a full lookback behind it, and forward
+`barriers.timeout_bars` past the last, so every labelled row's window is covered.
+
+**Its one hole is deliberate and load-bearing.** The slice spans 1,209 fifteen-minute slots and
+holds 1,208 bars: the archive records no trades in one of them. Nothing fills it. A lookback
+that is a window of time and a lookback that is a count of rows return the same answer on every
+contiguous series ever written, and differ only across a hole — so a fixture without one cannot
+tell the correct implementation from the defect `feature_lookbacks_are_time_not_rows` exists to
+catch. Its provenance block records `missing_bars`, and a rebuild that smooths the hole away has
+broken the fixture rather than cleaned it.
 
 `labels_hand_verified.json` carries **its own candle windows**. The archive lives under
 `data/historical/`, which is gitignored, so a criterion that read it would pass only on

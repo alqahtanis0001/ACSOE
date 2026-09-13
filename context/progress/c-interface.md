@@ -5,6 +5,114 @@ Never edit the tracker directly.
 
 ## Current Task
 
+### Phase 5 — claimed 2026-09-13, before any code was written
+
+Fourteen specs, claimed here in the order the lead fixed. Each entry names the files it will
+touch. The previous C session for this phase died on a usage limit before writing anything, so
+nothing below is carried over from it.
+
+- **Spec 60 — the Phase 5 exit criteria in `scripts/verify.py`. Claimed, first in the
+  phase**, for the reason specs 00, 16, 33, 45 and 48 were first in theirs: `--phase 5` today
+  registers `docs_vocabulary` and `toolchain_green` alone and prints *"Phase 5 is green"* over
+  a phase in which nothing exists. Eleven criteria, each PENDING until its subject lands.
+  Files: `scripts/verify.py`, `tests/verify/test_phase5_criteria.py`.
+- **Spec 63 — `src/acsoe/modelling/`. Claimed, and DONE.** `__init__.py`, `features.py`,
+  `artefacts.py`, `weights.py`, `di.py`, `expected_move.py`; `tests/modelling/` (82 tests).
+  See "Spec 63 — what landed" below.
+- **Spec 64 — engine 5 `feature`. Claimed.** `engines/feature/`, `tests/engines/test_feature.py`.
+- **Spec 65 — engine 6 `macro_context`. Claimed.** `engines/macro_context/`,
+  `tests/engines/test_macro_context.py`.
+- **Spec 66 — engine 12 `regime`. Claimed.** `engines/regime/`, `tests/engines/test_regime.py`.
+- **Spec 67 — `research/training.py`, the walk-forward predictor. Claimed.**
+  `research/training.py`, `tests/research/test_training.py`,
+  `tests/fixtures/walkforward_digest.json`.
+- **Spec 68 — the Dissimilarity Index. Claimed.** `modelling/di.py`, `research/training.py`,
+  `tests/research/test_di.py`.
+- **Spec 69 — skeptic training on predictor BUY rows. Claimed.** `research/training.py`,
+  `tests/research/test_skeptic_training.py`.
+- **Spec 70 — anomaly detector training. Claimed.** `research/training.py`,
+  `tests/research/test_anomaly_training.py`.
+- **Spec 71 — engine 8 `prediction`. Claimed.** `engines/prediction/`,
+  `tests/engines/test_prediction.py`.
+- **Spec 72 — engine 13 `anomaly`. Claimed.** `engines/anomaly/`,
+  `tests/engines/test_anomaly.py`, `console/format.py`.
+- **Spec 73 — engine 15 `skeptic`. Claimed.** `engines/skeptic/`,
+  `tests/engines/test_skeptic.py`, `console/format.py`.
+- **Spec 74 — engine 20 `tournament`. Claimed.** `engines/tournament/`,
+  `tests/engines/test_tournament.py`.
+- **Spec 75 — the candidate-ranking study. Claimed.** `research/training.py`,
+  `docs/dataset/ranking-study-<date>.json`.
+
+**Not mine and not to be built by me:** spec 61 (A — the config fields, the models root, the
+research runner), spec 62 (B — `StoreClient(models_dir=...)`, `model_run_dir`,
+`new_model_run_dir`), spec 76 (B — `rank_universe`), specs 59 and 77 (the lead).
+`research/walkforward.py` is read, never changed: if a Phase 5 change makes
+`walkforward_trains_on_the_past_only` red, the change is wrong.
+
+### Spec 63 — what landed
+
+`src/acsoe/modelling/`, the leaf package both the live loop and `research/` import. Six
+modules, 82 tests in `tests/modelling/`, nine mutations run.
+
+- **`features.py`** — 38 named, ordered, versioned features (`FEATURE_VERSION = "f1"`) over
+  OHLCVT only. Lookbacks are `(4, 16, 48, 96)` bars and every window is
+  `n * interval_s` **seconds**, so a hole shortens the window rather than stretching it;
+  `bars_in_lookback_<n>` is a feature in its own right and a window below
+  `features.min_lookback_fill` yields NaN for **that window's** features and no others.
+  `MARKET_QUALITY_FEATURES` is the no-spread subset engine 13 is fitted on.
+  `compute` is never told the pair, so no feature can encode pair identity.
+- **`weights.py`** — average uniqueness and `effective_sample_size`, linear in rows via
+  prefix sums. Concurrency is counted on the bars that exist, never on a synthetic
+  contiguous grid, so a hole cannot inflate the uniqueness of the windows spanning it.
+- **`artefacts.py`** — the `models/<run_id>/` layout: manifest, JSON scaler (never a
+  pickle), a sha256 per file, and `identity_digest` over `(pair, decision_ts)`. It never
+  creates a directory; the path comes from B's `new_model_run_dir`.
+- **`di.py`** — leave-one-out fit, mean k-nearest distance, threshold at a supplied
+  percentile, and the reference set's row identity stored in `di.npz` so the Phase 5
+  criterion can check membership rather than a count. `np.load` needs no `allow_pickle`.
+- **`expected_move.py`** — the one expected-move arithmetic the trainer and engine 8 share.
+
+**Mutations: nine applied, nine killed, one survivor found and closed.** Each applied, run,
+restored and the restore verified by sha256 in the same pass before the next was applied.
+The survivor was spec 63's own named mutation — the manifest loader accepting a permuted
+feature list — which survived the **whole** suite because `load_run` checks the order twice
+and the only test reached the second check. Two tests now reach one branch each. Full
+account, both red messages, and a second entry about an M1 that killed seven tests by
+*raising* (which proves nothing, and which I nearly filed as strong evidence) are in
+`docs/build-log/phase-5/c-interface.md`.
+
+**Four commands, run 2026-09-13 after spec 63:**
+
+```
+$ .venv/Scripts/python.exe -m pytest tests/ -q
+2102 passed, 3 skipped in 207.68s (0:03:27)
+
+$ .venv/Scripts/python.exe -m mypy --strict src/ scripts/
+Success: no issues found in 106 source files
+
+$ .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
+scripts\verify.py:8025:24: RUF100 [*] Unused `noqa` directive (non-enabled: `BLE001`)
+Found 1 error.
+
+$ .venv/Scripts/python.exe scripts/verify.py --phase 5
+PASS    docs_vocabulary  14 files scanned, 12 retired terms, no hit
+FAIL    toolchain_green  ruff exit 1: scripts\verify.py:8025:24: RUF100 ...
+2 criteria: 1 PASS, 1 FAIL, 0 PENDING
+```
+
+`ruff check src/acsoe/modelling/ tests/modelling/` is clean. **The one FAIL is not mine and
+I have not touched it**: it is a dead `# noqa: BLE001` in the other C instance's Phase 5
+section of `scripts/verify.py`, reported to that instance with the narrower fix for the
+`except Exception` underneath it. `--phase 5` still registers only `docs_vocabulary` and
+`toolchain_green`, which is spec 60's open half.
+
+**A's numpy fix, recorded because it unblocked me.** `modelling/di.py` was the first module
+in `src/` to import numpy by name, and that aborted `mypy --strict` entirely — numpy 2.5's
+stub uses a PEP 695 `type` statement, a syntax error under `python_version = "3.11"`, and
+`follow_imports = "skip"` silences a module's source but not its stub. I escalated with
+three options, all of which changed the environment. A found a fourth and better one,
+`follow_imports_for_stubs = true`, which keeps the 3.11 floor and needs no dependency change.
+
 ### Phase 4 — claimed 2026-09-11, before any code was written
 
 Seven specs, claimed here in the order the task list fixes:

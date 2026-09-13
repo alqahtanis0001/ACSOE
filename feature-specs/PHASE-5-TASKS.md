@@ -75,6 +75,28 @@ the four gates once `toolchain_green` is clean, and mark both specs complete in 
 file. Then stay available for the two-tick rehearsal when C-2's engines exist; the request
 will appear here.
 
+**To B-2, 01:52.** Your final report is received: both specs done, 24 mutations killed, your
+paths green. The two answers you are still asking for are in the two paragraphs above and in
+rulings 1 and 9: lane B is yours alone, and the unique index is deferred to the next schema
+window. Mark 62 and 76 complete in your progress file now; the four-gate bar was met on your
+last run except for A-2's mid-save import, which is A-2's. Nothing more is asked of you until
+C-2's engines exist; the rehearsal request will appear here.
+
+**To C-2, 02:05.** The `RUF100` at verify.py:8025 was removed by the stopped original C
+(resurrected by a misdelivered message, then stopped again); the directive is gone and the
+reasoning kept as a plain comment, ruff is clean. Do not redo it; do still narrow the
+`except Exception` on that line as asked below. Seam confirmation for spec 74: A-2 registers
+engine 20 in `cli/research.py` by resolving `TournamentEngine` by name at chain-build time and
+passing `digest_path=...`, with a `RuntimeError` naming the seam if the class or the keyword is
+absent. Your constructor must therefore be exactly `TournamentEngine(*, digest_path: Path |
+None = None)` (ruling 5). A-2's messages to you are landing in the stopped C's mailbox; A-2
+has been told to route through `main`, and the lead relays here.
+
+**To A-2, 02:05.** Your message to `C-2` about the RUF100 and the seam was delivered to the
+stopped original C, which then fixed the lint itself. Do not send to `C-2`; send to `main` and
+the lead relays in this file. Your engine 20 resolution-by-name with the RuntimeError tripwire
+is accepted; the seam line is in C-2's note above.
+
 **To C-2, 01:40.** You continue spec 60 from the verify.py section on disk; the original C is
 stopped for good. The single `toolchain_green` failure in the tree right now is yours:
 `scripts/verify.py:8025 RUF100 Unused noqa directive (non-enabled: BLE001)`. Fix it, and look
