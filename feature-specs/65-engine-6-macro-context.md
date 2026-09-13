@@ -23,9 +23,11 @@ out of `state["feature"]`, renamed with a `macro_` prefix, and published under
    with the missing assets named, and returns `OK`. It does not block: what to do about a
    missing context is a judgement for the engines that read it, and engine 8 will find its
    feature vector incomplete and act on that.
-4. The macro feature names are exported from `contracts.py` as a tuple derived from
-   `modelling.features.FEATURE_NAMES` and the configured assets, so the offline builder and the
-   engine cannot disagree about a column name.
+4. The macro feature names live in **`modelling/macro.py`** (amended 2026-09-13: `research/`
+   may not import an engine's `contracts.py` under invariant 5, so the one place both sides
+   can read is `modelling/`), derived from `modelling.features.FEATURE_NAMES` and the
+   configured assets; `engines/macro_context/contracts.py` re-exports them. The offline
+   builder and the engine cannot disagree about a column name.
 5. `tests/engines/test_macro_context.py`, C lane, fixtures taken from engine 5's real output.
 
 ## Scope Limits

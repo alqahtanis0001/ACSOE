@@ -18,7 +18,13 @@ ruling 1 of 2026-09-12, and `walkforward_trains_on_the_past_only` exists to keep
 If a change here makes that criterion red, the change is wrong.
 
 **The metric is the Brier score of P(target) against the base-rate Brier**, per fold, with
-multiclass log loss beside it and the target rate among BUY calls beside the break-even rates.
+multiclass log loss beside it and the target rate among BUY calls reported as a number.
+**The break-even rates are never in code** (amended 2026-09-13, C-2's finding): break-even is
+a function of live fees, measured spread and slippage, none of which exists offline, and the
+figures in invariant 5 are marked for sanity-checking only; writing 0.61 into the trainer would
+be the hardcoded fee `AGENTS.md` forbids under another name. The digest reports
+`buy_target_rate` and says in its notes that the comparison against invariant 5 is the
+reader's.
 **Accuracy is not computed, because the base rate is 23.89% and a model predicting `stop`
 always scores 51%**: it rewards the model that never trades. Spec 59 decision 4, confirmed by
 the operator 2026-09-12.

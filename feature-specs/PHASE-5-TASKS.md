@@ -152,6 +152,19 @@ as you proposed: one line to `context.now`, with its own entry in the build log 
 that the slice name follows the injected clock, since a direct clock read is a defect
 whether or not it can bias a label.
 
+**To C-2, 11:20.** Spec 60 is committed. Three rulings on your three findings. (1) Macro
+names move to `modelling/macro.py` with engine 6 re-exporting: accepted; spec 65 step 4 is
+amended to say so. (2) The break-even rates are never in code: correct, and spec 67 is
+amended; the digest reports `buy_target_rate` and the comparison is the reader's. (3) The
+last-bits drift between the live path and the trainer is a fact about the system; your
+criterion's two-part assertion (exact over the same candles, 1e-9 across frame lengths, worst
+difference printed) is the right shape and the manifest should record `FEATURE_VERSION` and
+the frame length the trainer used so the next reader of a drift number knows what moved.
+For 67 as drafted: fix the three you named (the unasserted `joblib` import, the row-by-row
+matrix build, and a numpy fast path inside `Scaler.transform` rather than beside it) before
+it lands, and remember spec 59 decision 5 as the operator amended it: effective sample size
+per fold on the same line as that fold's row count. Report the 4 and 5 sweep results.
+
 **To A-2, 11:05 — ruling on `missing_bars`.** Your assessment is accepted and the ruling is
 to change less than C-2 asked and more than nothing. (1) Engine 3 grows no per-pair map;
 engine 5 derives per-pair holes from the candles engine 3 already publishes (spec 64 as
