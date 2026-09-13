@@ -100,20 +100,78 @@ def test_no_dependency_outside_the_stack_table() -> None:
     assert declared <= STACK_TABLE, f"outside the stack table: {sorted(declared - STACK_TABLE)}"
 
 
-def test_research_libraries_are_not_base_dependencies() -> None:
-    """Architecture invariant 5: the live loop never imports from research/.
+#: Moved out of the `research` extra on 2026-09-13, spec 61 step 2, on the
+#: operator's confirmation of spec 59 decision 8. Engines 8, 13 and 15 import
+#: them on the live loop path, so an extra a daemon cannot start without is a
+#: base dependency by another name.
+#:
+#: Distribution name to import name, because they differ for one of the three and
+#: asserting only the distribution names would leave the thing that actually has
+#: to work untested.
+LIVE_MODEL_LIBRARIES = {
+    "lightgbm": "lightgbm",
+    "scikit-learn": "sklearn",
+    "shap": "shap",
+}
 
-    The packaging says so too — the model libraries live in the `research`
-    extra, and `dev` pulls that extra in so the README's setup line stays true.
-    """
+#: What is left offline. `hmmlearn` is the optional HMM upgrade spec 66 puts out
+#: of scope; `statsmodels` is Phase 7's attribution, which runs in `research/`.
+OFFLINE_ONLY_LIBRARIES = {"hmmlearn", "statsmodels"}
+
+
+def _dependency_sets() -> tuple[set[str], set[str], set[str]]:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
-
     base = {_requirement_name(spec) for spec in project["dependencies"]}
     research = {_requirement_name(spec) for spec in project["optional-dependencies"]["research"]}
     dev = {_requirement_name(spec) for spec in project["optional-dependencies"]["dev"]}
+    return base, research, dev
 
-    assert research == {"scikit-learn", "lightgbm", "hmmlearn", "shap", "statsmodels"}
+
+def test_the_model_libraries_are_base_dependencies() -> None:
+    """Spec 61 step 2. The split is live-loop versus offline, not ML versus not.
+
+    Engines 8, 13 and 15 run in the opportunity chain and import these at load
+    time: the predictor and the skeptic are LightGBM, the scaler and the anomaly
+    detector are scikit-learn, and engine 8 publishes SHAP attributions on every
+    decision. Left in an extra, a fresh clone that followed the README's base
+    install would start, tick, and discover it at the moment a gate needed to run.
+    """
+    base, research, _ = _dependency_sets()
+    for distribution in LIVE_MODEL_LIBRARIES:
+        assert distribution in base, (
+            f"{distribution} is imported on the live loop path and must be a base "
+            "dependency, not an extra"
+        )
+        assert distribution not in research
+
+
+@pytest.mark.parametrize(("distribution", "module"), sorted(LIVE_MODEL_LIBRARIES.items()))
+def test_a_base_model_library_actually_imports(distribution: str, module: str) -> None:
+    """Imported for real, and deliberately **not** through `pytest.importorskip`.
+
+    `importorskip` re-raises an `ImportError` from inside a module but *skips* a
+    `ModuleNotFoundError` — so a dependency moving back into an extra would turn
+    every test behind it green-by-absence, under a reason string that is no longer
+    true. That is the exact failure mode `code-standards.md` records. A missing
+    base dependency has to be a failure here, because it is a failure in the
+    daemon.
+    """
+    assert importlib.import_module(module) is not None, distribution
+
+
+def test_the_research_extra_is_exactly_the_offline_libraries() -> None:
+    """The extra still exists and still means something, which is the other half.
+
+    Architecture invariant 5 is what it expresses: the live loop never imports
+    from `research/`. A name belongs here when no engine in the guard, opportunity
+    or manage chain can reach it. Asserted as an exact set so that moving a fourth
+    library up into the base install is a decision somebody makes rather than a
+    line somebody deletes.
+    """
+    base, research, dev = _dependency_sets()
+
+    assert research == OFFLINE_ONLY_LIBRARIES
     assert not (base & research)
     assert "acsoe" in dev, "dev must include the research extra so [dev] installs everything"
 

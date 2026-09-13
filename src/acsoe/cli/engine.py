@@ -96,7 +96,13 @@ def build_clients(config: Config, clock: Clock, paths: RuntimePaths) -> Clients:
         credentials=load_credentials(),
     )
     stream = KrakenWebSocketClient(clock=clock, pairs=(), depth=BOOK_DEPTH)
-    store = StoreClient(paths.db / DB_FILENAME)
+    # `models_dir` is spec 62's seam: engines 8, 13 and 15 reach a trained
+    # artefact only through `store.model_run_dir(run_id)`, because contract rule 4
+    # forbids an engine touching the filesystem. The root is created by
+    # `ensure_runtime_directories` before this runs, so the store is never handed
+    # a path that does not exist — and B's client still refuses a missing root,
+    # because tests and scripts construct it directly rather than through here.
+    store = StoreClient(paths.db / DB_FILENAME, models_dir=paths.models)
     store.migrate()
     return Clients(
         kraken=KrakenClient(rest=rest, stream=stream),

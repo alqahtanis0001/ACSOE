@@ -66,7 +66,13 @@ from acsoe.cli.engine import (
 )
 from acsoe.clients.recorder.writer import JsonlRecorder
 from acsoe.clients.store.client import StoreClient
-from acsoe.core.contracts import Chains
+from acsoe.core.contracts import (
+    Chains,
+    EngineContext,
+    EngineResult,
+    EngineStatus,
+    State,
+)
 from acsoe.core.orchestrator import Orchestrator
 from acsoe.platform.clock import FixedClock, SystemClock
 from acsoe.platform.config import Config, load_config
@@ -466,6 +472,13 @@ def test_the_daemon_builds_three_real_clients_and_needs_no_credentials(
     assert clients.store.db_path == paths.db / "acsoe.sqlite"
     assert DB_FILENAME == "acsoe.sqlite"
     assert clients.store.db_path.is_file()
+    # Spec 61 step 3, asserted here and not against a hand-built store, because the
+    # question is whether the DAEMON hands the artefact root over — B's client has
+    # its own tests for what it does with one. Engines 8, 13 and 15 reach an
+    # artefact only through `store.model_run_dir(run_id)`, and a store built
+    # without a root refuses every such call.
+    assert clients.store.models_dir == paths.models
+    assert paths.models.is_dir(), "the root exists before the store is handed it"
     close_clients(clients)
 
 
@@ -591,41 +604,208 @@ def test_the_daemon_builds_a_real_utc_clock() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_research_reports_the_registered_offline_chain_and_exits_zero(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Phase 4: the chain is no longer empty and the command no longer says it is.
+class RecordingEngine:
+    """A stand-in offline engine that records the context it was handed.
 
-    The Phase 0 version of this test asserted the "no offline engines are registered"
-    message. That message was true of Phase 0 and is now a wrong answer, so the
-    assertion is replaced rather than relaxed — asserting the *name* of the engine that
-    ran is what an empty chain cannot satisfy.
+    Deliberately **not** a mock of `BaseEngine` with a canned result: the single
+    property these tests exist to demonstrate is that `acsoe research` builds a
+    *real* context — replay mode, the real `Config`, a real store client, an
+    injected UTC clock — and a double that only returned a status could not
+    exhibit it. What it fakes is the work, not the interface.
     """
-    assert cli_main.main(["research"]) == 0
+
+    number = 99
+    is_gate = False
+
+    def __init__(self, name: str = "recorder_engine", status: EngineStatus = EngineStatus.OK,
+                 reason: str | None = None) -> None:
+        self.name = name
+        self._status = status
+        self._reason = reason
+        self.seen: EngineContext | None = None
+        self.seen_state: State | None = None
+
+    def process(self, context: EngineContext, state: State) -> EngineResult:
+        self.seen = context
+        self.seen_state = state
+        return EngineResult(
+            engine=self.name,
+            status=self._status,
+            blocks_trading=self._status is EngineStatus.BLOCK,
+            reason=self._reason,
+            data={"ran": True},
+            duration_ms=0.1,
+        )
+
+
+class ExplodingEngine:
+    """An engine that raises, which is the case with no other way to be tested.
+
+    There is no orchestrator in the offline chain, so contract rule 7 — an uncaught
+    exception becomes `ERROR` rather than taking the run down — is implemented in
+    `cli/research.py` itself, and this is what asks whether it is.
+    """
+
+    name = "exploding_engine"
+    number = 98
+    is_gate = False
+
+    def process(self, context: EngineContext, state: State) -> EngineResult:
+        raise RuntimeError("the labeller module does not exist yet")
+
+
+def test_research_runs_each_engine_against_a_real_replay_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Spec 61 step 4. The command *runs* the chain; it no longer lists it.
+
+    Until today it printed engine names and exited zero, which is a report that
+    cannot tell a chain that works from a chain that raises on every member. What
+    is asserted here is the context each engine actually received, because that is
+    what a stubbed-out runner would get wrong invisibly: `mode` is `replay` and not
+    the config's `paper`, `config` is the parsed `Config` rather than a path or a
+    dict, `clients.store` is a real store client carrying the artefact root, and
+    `now` is timezone-aware.
+    """
+    monkeypatch.chdir(tmp_path)
+    engine = RecordingEngine()
+    monkeypatch.setattr(research_cmd, "build_offline_chain", lambda **_: (engine,))
+
+    assert cli_main.main(["--config", str(DEFAULT_YAML), "research"]) == 0
+
+    context = engine.seen
+    assert context is not None
+    assert context.mode == "replay"
+    assert context.run_id.startswith("research-")
+    assert context.now.tzinfo is not None
+    # The real config, reached the way an engine reaches it.
+    assert context.config.get("timeframes.decision_bar_s") == 900
+    # The real store, carrying the artefact root spec 62 hands out runs from.
+    assert context.clients.store.models_dir == (tmp_path / "models").resolve()
+    assert context.clients.kraken is None, "nothing offline may reach the exchange"
+    assert context.clients.recorder is None, "invariant 11: a replay writes no archive"
+
     out = capsys.readouterr().out
-    assert "no offline engines are registered" not in out
-    assert "backtest" in out
+    assert "recorder_engine" in out
+    assert "OK" in out
 
 
-def test_build_offline_chain_holds_engine_23_and_not_engine_20() -> None:
-    """`scripts/verify.py`'s `is_gate_matches_registry` reaches engine 23 through this
-    function, not through `bootstrap.py`, so it has to exist and be callable without
-    running the CLI — and the engine it finds has to carry the registry's own number
-    and gate flag.
+def test_research_prints_the_reason_of_a_blocking_engine_and_still_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A BLOCK is a result, not a failure of the command.
 
-    Engine 20 `tournament` is Phase 7 and its absence is asserted, not assumed: the
-    phase gate forbids building it here, and a chain that quietly grew it would be
-    later-phase work nobody had decided to start.
+    Only `ERROR` is non-zero. An offline engine that declines to do anything —
+    engine 20 with no digest, engine 23 with a floor no pair meets — has run
+    correctly and reported why, and a research runner that exited non-zero on it
+    would train whoever runs it to ignore the exit code.
+    """
+    monkeypatch.chdir(tmp_path)
+    engine = RecordingEngine(
+        name="blocking_engine", status=EngineStatus.BLOCK, reason="no labelled rows"
+    )
+    monkeypatch.setattr(research_cmd, "build_offline_chain", lambda **_: (engine,))
+
+    assert cli_main.main(["--config", str(DEFAULT_YAML), "research"]) == 0
+    out = capsys.readouterr().out
+    assert "BLOCK" in out
+    assert "no labelled rows" in out
+
+
+def test_research_turns_a_raising_engine_into_error_and_exits_non_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Contract rule 7 without an orchestrator, and the exit code spec 61 asks for.
+
+    The failure this prevents is the quiet one: a research run whose engine raised,
+    whose traceback went to the terminal, and whose exit code was zero because the
+    exception escaped the reporting loop entirely. Anything driving this command
+    from a script would record that as a successful run.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(research_cmd, "build_offline_chain", lambda **_: (ExplodingEngine(),))
+
+    assert cli_main.main(["--config", str(DEFAULT_YAML), "research"]) == 1
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.out
+    # The reason carries the exception, so the printed report is diagnosable on its
+    # own rather than sending the reader to the log for the first line of it.
+    assert "RuntimeError" in captured.out
+    assert "the labeller module does not exist yet" in captured.out
+    assert "exploding_engine" in captured.err
+
+
+def test_research_refuses_to_start_on_an_unset_operator_key(
+    unset_operator_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exit 2, the same code `acsoe engine` uses, and for the same reason: a
+    supervisor has to tell "the operator has not configured this" from "the run
+    failed". Nothing in the offline chain is exempt from the config refusals."""
+    assert cli_main.main(["--config", str(unset_operator_config), "research"]) == 2
+    assert "refusing to start" in capsys.readouterr().err
+
+
+def test_build_offline_chain_holds_engine_23_first_and_engine_20_after_it() -> None:
+    """`scripts/verify.py`'s `is_gate_matches_registry` reaches these engines through
+    this function, not through `bootstrap.py`, so it must be callable without running
+    the CLI, and each engine must carry the registry's own number and gate flag.
+
+    **This is the tripwire for C's engine 20, and it is branched deliberately.**
+    Engine 20 `tournament` moved into Phase 5 by operator ruling (spec 59 decision 1)
+    and is C's to write; `cli/research.py` resolves it by name, so the day
+    `acsoe.engines.tournament.engine` lands it is registered with no edit here. What
+    this asserts is that the two states are the only two: before it exists the chain
+    is engine 23 alone, and once it exists engine 20 is in the chain, **after** engine
+    23, because engine 20 scores what engine 23's run produced.
+
+    It is the "a mock for a module that does not exist yet needs a test that fails
+    once it does" rule, and it is here because A shipped exactly that defect in Phase
+    4: engine 23 was built against a labeller signature agreed by message, C's module
+    landed under a different name, and nothing went red because every test drove a
+    double. If C's constructor does not take `digest_path`, `build_offline_chain`
+    raises and this goes red naming the seam — which is the outcome to want.
     """
     chain = research_cmd.build_offline_chain()
-    assert chain == research_cmd.OFFLINE_CHAIN
     names = [engine.name for engine in chain]
-    assert names == ["backtest"]
-    assert "tournament" not in names
 
-    backtest = chain[0]
-    assert backtest.number == 23
-    assert backtest.is_gate is False
+    assert names[0] == "backtest"
+    assert chain[0].number == 23
+    assert chain[0].is_gate is False
+
+    # Asked of the filesystem rather than of `importlib`, deliberately. The chain
+    # is assembled by an import-machinery lookup, so an oracle built from the same
+    # machinery would agree with the code under test by construction — including
+    # when both are wrong. The engine directory either exists or it does not, and
+    # `context/engine-contracts.md` fixes where it lives.
+    exists = (REPO_ROOT / "src" / "acsoe" / "engines" / "tournament" / "engine.py").is_file()
+    if exists:
+        assert names == ["backtest", "tournament"], (
+            "engine 20 exists and must be registered here, after engine 23, and never "
+            "in bootstrap.py"
+        )
+        assert chain[1].number == 20
+        assert chain[1].is_gate is False
+    else:
+        assert names == ["backtest"], (
+            "the chain grew an engine whose module does not exist; the offline chain "
+            "is engine 23 alone until C's tournament lands"
+        )
+
+
+def test_the_research_clients_satisfy_the_client_protocol() -> None:
+    """Contract rule 4 fixes three client names, and two of them are `None` offline.
+
+    Asserted against the Protocol rather than by reading the attributes, because the
+    Protocol is the contract an engine is written against: an offline engine that
+    reaches for `context.clients.kraken` gets `None` and fails, which is the right
+    answer, and it must fail on the value rather than on the attribute missing.
+    """
+    from acsoe.core.contracts import Clients as ClientsProtocol
+
+    clients = research_cmd.ResearchClients(store=object())
+    assert isinstance(clients, ClientsProtocol)
+    assert clients.kraken is None
+    assert clients.recorder is None
 
 
 def test_the_offline_chain_is_not_in_bootstrap() -> None:

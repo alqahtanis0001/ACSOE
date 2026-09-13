@@ -26,11 +26,23 @@ DB_FILENAME: Final = "acsoe.sqlite"
 
 @dataclass(frozen=True)
 class RuntimePaths:
-    """The five directories the running system writes into.
+    """The six directories the running system writes into.
 
-    ``models/`` is deliberately absent: it is created by the training pipeline in
-    Phase 5, which owns the run-id subdirectory naming, and creating it empty
-    here would suggest a contract that does not exist yet.
+    ``models/`` joined them on 2026-09-13, spec 61 step 3. It was deliberately
+    absent until then — the argument was that the training pipeline owns the
+    run-id subdirectory naming, so creating the root empty would suggest a
+    contract that did not exist yet. That contract exists now: B's
+    :class:`~acsoe.clients.store.client.StoreClient` takes a ``models_dir`` and
+    hands out ``models/<run_id>/`` through ``model_run_dir``, and engines 8, 13
+    and 15 reach an artefact only that way.
+
+    **Creating the root is A's; everything inside it is C's.** The same split as
+    ``data/derived/``, which this module creates and B and C write into. The root
+    is created empty on every start and stays empty on a fresh clone, which is
+    the normal state: the three ``models.*_run_id`` keys are absent, the engines
+    block, and the daemon still records market data. What this removes is the
+    other failure — a store built with an artefact root that does not exist,
+    refusing at the moment a gate needed it rather than at startup.
     """
 
     root: Path
@@ -39,9 +51,10 @@ class RuntimePaths:
     derived: Path
     db: Path
     logs: Path
+    models: Path
 
     def all(self) -> tuple[Path, ...]:
-        return (self.raw, self.historical, self.derived, self.db, self.logs)
+        return (self.raw, self.historical, self.derived, self.db, self.logs, self.models)
 
 
 def runtime_paths(root: Path | None = None) -> RuntimePaths:
@@ -55,6 +68,11 @@ def runtime_paths(root: Path | None = None) -> RuntimePaths:
         derived=data / "derived",
         db=data / "db",
         logs=base / "logs",
+        # A sibling of `data/` and `logs/`, not a child of `data/`. The layout in
+        # `context/architecture-context.md` puts `models/` at the repository root,
+        # and `data/` is what a rebuild may delete — a trained artefact is not
+        # rebuildable from anything the archive holds.
+        models=base / "models",
     )
 
 

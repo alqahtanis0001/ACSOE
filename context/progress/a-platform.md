@@ -35,8 +35,149 @@ has to descend into the `None` — so a reader fails closed during the window. T
 operator leaves inside those sections do **not**: `Config.get` returns `None` for an absent
 leaf, which is the spec 58 finding, and each of them says so in its own docstring.
 
-**Open until the lead pastes:** the sections are optional and the tightening to required is
-outstanding. Tracked under Known gaps I own.
+### SPEC 61 IS COMPLETE — all four parts, 2026-09-13
+
+Written by the instance that routes as `A-2`, which the lead's stand-down notice in
+`feature-specs/PHASE-5-TASKS.md` makes the live one.
+
+**Part 1 — the config fields, and both halves of the landing are closed.** Eight sections on
+`Config` in `src/acsoe/platform/config.py`, every one `extra="forbid"`: `models`, `features`,
+`macro`, `prediction`, `anomaly`, `skeptic`, `regime`, `scout`. They were declared
+`Section | None = None` while the lead's YAML was in flight and are **required** now that it
+has landed, so deleting a section refuses at startup by name instead of surfacing as a
+`ConfigKeyError` from inside a gate three chains into a tick. The cross-section validator
+refuses `features.max_lookback_bars` above `market_sensor.published_bars` — 192 against 200
+today — because a feature wanting more history than engine 3 publishes is NaN live and a
+number in replay, which is a divergence nothing else would show.
+
+**The five keys absent by ruling stay optional leaves**, and every reader has to refuse the
+`None` by name: `prediction.di_percentile`, `anomaly.threshold_percentile`,
+`skeptic.veto_threshold`, the three `models.*_run_id`, and `scout.rank_feature`.
+`Config.get` returns `None` for an absent leaf and *raises* only for a key the model does not
+declare. A leaf read as zero is a gate that has been turned off, not a conservative default.
+
+**A trap worth repeating to whoever next edits the YAML:** those keys must be **absent**, never
+written as `null`. `_refuse_nulls` treats any null in `config/default.yaml` as OPERATOR
+REQUIRED and stops the process naming it. Absent and null are one character apart in a diff and
+behave in opposite directions; there is a test per key.
+
+**Part 2 — dependencies.** `lightgbm`, `scikit-learn` and `shap` are base dependencies in
+`pyproject.toml`; `hmmlearn` and `statsmodels` are what is left in the `research` extra. The
+comment says why the line the extra draws is live-loop-versus-offline rather than
+ML-versus-not: engines 8, 13 and 15 import all three on the opportunity chain, so an extra a
+daemon cannot start without is a base dependency that a fresh clone meets as an `ImportError`
+from inside a gate. `tests/platform/test_packaging.py` asserts the split both ways and imports
+all three for real — deliberately not through `pytest.importorskip`, which *skips* a
+`ModuleNotFoundError` and would turn a regression green under a reason string that is no longer
+true.
+
+**Part 3 — the models root.** `platform/paths.py` creates `models/` beside `data/` and `logs/`,
+and `cli/engine.py` and `cli/research.py` hand it to B's `StoreClient` as
+`models_dir=paths.models` — the seam agreed with B by message before either of us built it, and
+it landed on both sides unchanged. Beside `data/` rather than inside it, because `data/` holds
+rebuildable output and a trained artefact is not rebuildable from anything the archive carries.
+The Phase 0 test asserting `models/` is *not* created is replaced by its opposite, with the
+reason in the docstring rather than in a commit message.
+
+**Part 4 — `acsoe research` runs the chain.** It builds a `SystemClock`, a replay-mode
+`EngineContext` carrying the parsed `Config`, and a real `StoreClient` with the artefact root
+and migrations applied, then runs each offline engine's `process` in registry order and prints
+one flushed line per engine with its status and reason. `ERROR` exits 1, a config refusal exits
+2 like `acsoe engine`, everything else 0. `kraken` and `recorder` are `None` in the offline
+client set on purpose: nothing offline reaches the exchange, and invariant 11 means a replay
+writes no archive line.
+
+**Engine 20 needs no registration line from anyone.** `acsoe research` resolves
+`acsoe.engines.tournament.engine.TournamentEngine` by name when it builds the chain, so C's
+class registers itself after engine 23 the day it lands, and `--digest` is threaded into it as
+`digest_path`. A missing package returns `None` by reading `exc.name`; a *broken* one raises,
+because those are two different facts and answering the second as "not written yet" is how
+engine 20 would vanish from the chain silently. A constructor that does not accept
+`digest_path` raises naming the seam.
+
+### Evidence
+
+- `acsoe research --config config/default.yaml` run for real against a 400-bar archive in a
+  scratch root: `backtest OK`, exit 0, a labelled parquet in `data/derived/`, a migrated
+  database, and an empty `models/` created beside them. The full-archive run over the
+  committed 859,248 bars was still going when this was written and is the slow half of the
+  same evidence, not a different claim.
+- Twelve mutations against `platform/config.py`, three against the packaging split, each
+  restored from a byte copy and verified by sha256 in the same statement. Eleven of twelve
+  killed; **one real survivor**, a default asserted against a fixture that supplied it, fixed
+  and then killed. Every red message is in `docs/build-log/phase-5/a-platform.md`.
+
+### Two things the lead should know that are not mine to change
+
+1. **`config/default.yaml` spells the live BTC macro pair `BTC/USD`.** Kraken's WebSocket v2
+   names it `XBT/USD`; the archive spelling `XBTUSD` beside it is right. Flagged, not touched.
+2. **`mypy --strict src/ scripts/` was checking nothing for several hours today** and saying
+   `Found 1 error`. `follow_imports = "skip"` silences a module's source but not its stub, so
+   the first `import numpy.typing as npt` in `src/` pulled numpy's stubs back in and the PEP 695
+   syntax error in them aborted the whole run. Fixed in `pyproject.toml` with
+   `follow_imports_for_stubs = true`: 106 source files checked, passing, and the 3.11 floor
+   kept. Build log has it.
+
+### Two A sessions are in this lane, and the lane has not been assigned
+
+Recorded by the instance whose messages route as `A`; the claim above is `A-2`'s. Both of us
+read the brief for spec 61 and both started. Nothing is lost and the tree is consistent, but
+the split of the remaining work is the lead's to make and it has been asked for.
+
+**What is on disk right now, so neither of us has to guess again.** Step 1 is complete in
+`src/acsoe/platform/config.py` — one copy of each of the eight sections, no conflict. Its tests
+are in `tests/platform/test_config.py`: there were briefly **two** Phase 5 blocks, one from each
+of us, both declaring a module-level `PHASE_5_SECTIONS`. I deleted mine, lines 839 to 1259, and
+kept the earlier and stronger one. Steps 2, 3 and 4 are untouched by either of us.
+
+**The failure mode is worth carrying forward past this phase.** Duplicated module-level names
+do not collide in Python, they shadow — so the surviving block's tests were being driven by my
+dict and mine by nothing anyone intended, and exactly one assertion out of eighteen was
+sensitive enough to notice. Everything else stayed green while asserting against the wrong
+subject. The next double-landing will look like that rather than like a merge conflict.
+
+### Gate state, measured 2026-09-13, not from a summary line
+
+| Gate | Result | Whose |
+|---|---|---|
+| `pytest tests/ -q` | **green** — 2,100 passed, 3 skipped, 193s | — |
+| `mypy --strict src/ scripts/` | **RED** — aborts, checks nothing | mine to answer, C's trigger |
+| `ruff check src/ tests/ scripts/` | **RED** — 1 error, `RUF100` in `scripts/verify.py:8025` | C's file |
+| `scripts/verify.py --phase 5` | running at the time of writing | — |
+
+The mypy failure is the one that matters and it is not a type error:
+
+```
+.venv\Lib\site-packages\numpy\__init__.pyi:737: error: Type statement is only supported in
+Python 3.12 and greater  [syntax]
+Found 1 error in 1 file (errors prevented further checking)
+```
+
+`errors prevented further checking` — the gate returns **no answer rather than a wrong one**,
+so `src/` is currently unchecked and only the last line says so. Full diagnosis in the build
+log. The bound is `numpy<2.5`, measured against the 2.2.6, 2.3.0 and 2.4.0 stubs rather than
+assumed; C recommended `<2.3`, which is two minor versions stricter than the defect requires.
+
+**It needs a `pip install` in the shared venv, not only a `pyproject.toml` edit**, because mypy
+reads the installed numpy. That lands on B and C mid-run, so it has been put to the lead to
+sequence behind a team stop rather than done underneath them. The file edit is `A-2`'s, since
+it has claimed step 2 and is going into `pyproject.toml` anyway.
+
+### Seams agreed by message, so neither A session re-litigates them
+
+- **B, spec 62.** `StoreClient(db_path, models_dir=...)` — `models_dir` is the second
+  positional-or-keyword parameter, defaulting to `None`, so every existing construction site
+  keeps working. `platform/paths.py` still creates `models/` at startup and both `cli/engine.py`
+  and `cli/research.py` still pass it; the client creating the root in `new_model_run_dir` is a
+  fallback for `python -m acsoe.research.training`, which never goes through A's startup path.
+- **C, spec 74.** `TournamentEngine(*, digest_path: Path | None = None)`, keyword-only, with the
+  engine blocking when the digest is absent. C proposed a **required** argument; refused,
+  because `build_offline_chain()` is called with no arguments by `is_gate_matches_registry` in
+  `scripts/verify.py` and a required argument makes that criterion unable to construct the class
+  to check `name`, `number` and `is_gate`. `build_offline_chain(*, digest_path=None)` on my side.
+- **C, spec 61 step 1.** All eighteen key names confirmed verbatim. The five keys that stay
+  absent by ruling are optional leaves and `Config.get` returns `None` for them; an absent
+  *section* raises instead, and the difference is only the depth of the `None`.
 
 ### HANDOFF TO THE LEAD — `backtest.embargo_bars`, done, the YAML is now safe to paste
 
@@ -822,6 +963,50 @@ Anything touching `core/`, `bootstrap.py`, the engine registry, an invariant, a 
 ## Verification
 
 Paste the real output of your last run. Never report a task complete without it.
+
+### Phase 5, spec 61 complete (2026-09-13)
+
+Every command run by A-2 personally, output redirected to a file and read from the file.
+
+```
+$ .venv/Scripts/python.exe -m pytest tests/ -q
+2102 passed, 3 skipped in 189.04s (0:03:09)
+
+$ .venv/Scripts/python.exe -m mypy --strict src/ scripts/
+Success: no issues found in 106 source files
+
+$ .venv/Scripts/python.exe -m ruff check src/ tests/ scripts/
+All checks passed!
+
+$ .venv/Scripts/python.exe scripts/verify.py --phase 5
+ACSOE verify - phase 5
+repo: C:\Users\saad2\Documents\GitHub\ACSOE
+
+PASS    docs_vocabulary  14 files scanned, 12 retired terms, no hit
+FAIL    toolchain_green  ruff exit 1: src\acsoe\engines\feature\engine.py:123:12: SIM300 [*] Yoda condition detected
+
+2 criteria: 1 PASS, 1 FAIL, 0 PENDING
+```
+
+**The one FAIL is not in A's lane and is reported, not touched.** It is a `SIM300` Yoda
+condition on line 123 of C's engine 5, which landed between my clean `ruff check` four minutes
+earlier and this run; `toolchain_green` runs ruff over the whole tree, so any agent's lint error
+turns the gate red for everyone. Messaged C-2 with the line and the autofix. My own
+`ruff check src/ tests/ scripts/` above is the same command over the same tree and passed, which
+is what dates the two runs either side of that landing.
+
+The `acsoe research` acceptance check, run for real against a 400-bar archive in a scratch root
+so it completes in seconds rather than over the full 859,248-bar archive:
+
+```
+$ .venv/Scripts/python.exe -m acsoe.cli.main --config .../config/default.yaml research
+acsoe research: running 1 offline engine(s) from ...\config\default.yaml: backtest.
+  backtest   OK
+exit=0
+```
+
+It wrote `data/derived/labelled_research-20260913T001726685548_<stamp>.parquet`, migrated
+`data/db/acsoe.sqlite`, and created an empty `models/` beside them.
 
 ### Phase 3, specs 38 and 39 complete (2026-09-10)
 

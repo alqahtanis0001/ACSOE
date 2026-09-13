@@ -63,7 +63,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="override console.port from the configuration",
     )
 
-    subcommands.add_parser("research", help="run the offline chain")
+    research = subcommands.add_parser("research", help="run the offline chain")
+    research.add_argument(
+        "--digest",
+        type=Path,
+        default=None,
+        help=(
+            "path to a training digest for engine 20 (tournament); "
+            "the engine reports that it cannot score without one"
+        ),
+    )
 
     return parser
 

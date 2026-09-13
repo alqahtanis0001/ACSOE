@@ -244,6 +244,7 @@ def test_runtime_directories_are_created(tmp_path: Path) -> None:
     assert paths.derived == tmp_path.resolve() / "data" / "derived"
     assert paths.db == tmp_path.resolve() / "data" / "db"
     assert paths.logs == tmp_path.resolve() / "logs"
+    assert paths.models == tmp_path.resolve() / "models"
 
 
 def test_creating_runtime_directories_is_idempotent(tmp_path: Path) -> None:
@@ -260,8 +261,22 @@ def test_runtime_paths_creates_nothing(tmp_path: Path) -> None:
     assert not paths.raw.exists()
 
 
-def test_models_directory_is_not_created(tmp_path: Path) -> None:
-    """Spec 08 names five directories. `models/` belongs to the Phase 5 training
-    pipeline, which owns its run-id subdirectory naming."""
-    ensure_runtime_directories(tmp_path)
-    assert not (tmp_path / "models").exists()
+def test_the_models_root_is_created_beside_data_and_logs(tmp_path: Path) -> None:
+    """Spec 61 step 3, and this test used to assert the exact opposite.
+
+    Spec 08 named five directories and left `models/` out on the argument that the
+    training pipeline owns the run-id naming, so creating the root empty would
+    suggest a contract that did not exist. The contract exists now: B's
+    `StoreClient` takes a `models_dir` and hands out `models/<run_id>/`, and A's
+    CLI passes it in. Creating the root is A's; everything inside it is C's.
+
+    Beside `data/` rather than inside it, because `data/` holds rebuildable output
+    and a trained artefact is not rebuildable from anything the archive carries.
+
+    Empty is the normal state on a fresh clone: the three `models.*_run_id` keys
+    are absent, the engines block, and the daemon still records.
+    """
+    paths = ensure_runtime_directories(tmp_path)
+    assert paths.models.is_dir()
+    assert paths.models == tmp_path.resolve() / "models"
+    assert not any(paths.models.iterdir()), "the root is created empty; artefacts are C's"
