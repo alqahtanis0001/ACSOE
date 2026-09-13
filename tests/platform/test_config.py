@@ -880,7 +880,38 @@ PHASE_5_SECTIONS: dict[str, Any] = {
     "skeptic": {},
     "regime": {"high_vol_percentile": "0.80", "trend_efficiency": "0.40"},
     "scout": {"rank_descending": True},
+    # Requested by the lead at 02:15 on 2026-09-13 for C's trainer, and the ninth
+    # section. Hyperparameters are config keys rather than module constants because a
+    # run has to be reproducible from its config plus its data, and the manifest
+    # carries the config digest — a tree count in a constant is a number the manifest
+    # cannot prove.
+    "training": {
+        "num_trees": 200,
+        "learning_rate": "0.05",
+        "num_leaves": 31,
+        "min_data_in_leaf": 100,
+    },
 }
+
+#: Every section whose YAML has landed and whose model field is therefore **required**.
+#:
+#: It agrees with `PHASE_5_SECTIONS` again, which is the resting state: a name here is
+#: asserted to be present in the shipped file *and* required on the model, so either
+#: half going missing is a red test that says which half. The tuple exists as a
+#: separate name rather than as `tuple(PHASE_5_SECTIONS)` because it is what a section
+#: mid-landing is temporarily left out of, and the next section to land will want that
+#: back.
+LANDED_SECTIONS: tuple[str, ...] = (
+    "models",
+    "features",
+    "macro",
+    "prediction",
+    "anomaly",
+    "skeptic",
+    "regime",
+    "scout",
+    "training",
+)
 
 #: The three keys the operator supplies after the walk-forward reports, and the
 #: engine that blocks while each is absent. Spec 59 decision 9.
@@ -917,7 +948,7 @@ def test_the_phase_5_landing_is_closed_and_every_section_is_required() -> None:
     records one spec earlier.
     """
     shipped = yaml.safe_load(DEFAULT_YAML.read_text(encoding="utf-8"))
-    for section in PHASE_5_SECTIONS:
+    for section in LANDED_SECTIONS:
         assert section in shipped, (
             f"{section} has been removed from config/default.yaml while the model "
             "field is required, so the shipped config no longer parses. This names "
@@ -931,7 +962,7 @@ def test_the_phase_5_landing_is_closed_and_every_section_is_required() -> None:
         )
 
 
-@pytest.mark.parametrize("section", tuple(PHASE_5_SECTIONS))
+@pytest.mark.parametrize("section", LANDED_SECTIONS)
 def test_removing_a_phase_5_section_is_refused_at_startup(
     tmp_path: Path, section: str
 ) -> None:
@@ -947,6 +978,45 @@ def test_removing_a_phase_5_section_is_refused_at_startup(
     del raw[section]
     with pytest.raises(ConfigError, match="Field required"):
         Config.load(write_config(tmp_path, raw))
+
+
+def test_the_training_hyperparameters_parse_and_bound_their_values(
+    tmp_path: Path,
+) -> None:
+    """The section exists and refuses the values that are mistakes rather than choices.
+
+    `learning_rate` is a `Ratio`, so it arrives as an exact `Decimal` and never as a
+    binary float — the same rule every other ratio in this file follows, and it matters
+    here because the value is written into the artefact manifest that says a run is
+    reproducible.
+    """
+    config = load_phase_5(tmp_path)
+    assert config.training is not None
+    assert config.training.num_trees == 200
+    assert config.training.learning_rate == Decimal("0.05")
+    assert config.training.num_leaves == 31
+    assert config.training.min_data_in_leaf == 100
+    assert config.get("training.num_leaves") == 31
+
+
+def test_a_single_leaf_is_refused_because_it_is_a_model_that_cannot_learn(
+    tmp_path: Path,
+) -> None:
+    """`num_leaves: 1` is the bound worth its own test, because it fails quietly.
+
+    One leaf per tree is a model that returns the base rate for every input. It trains,
+    it scores, and it reports a Brier equal to the fold's base-rate Brier — which is
+    precisely the comparison spec 59 decision 4 chose as the primary metric, and an
+    operator reading that would conclude the strategy has no edge rather than that the
+    model was never allowed to have one. Refusing at startup is the difference between
+    a wrong result and no run.
+    """
+
+    def mutate(raw: dict[str, Any]) -> None:
+        raw["training"]["num_leaves"] = 1
+
+    with pytest.raises(ConfigError, match="Input should be greater than 1"):
+        load_phase_5(tmp_path, mutate)
 
 
 def test_the_shipped_config_loads_with_the_model_sections_in_it() -> None:
@@ -1142,6 +1212,17 @@ BAD_VALUES: tuple[tuple[str, str, Any, str], ...] = (
     ("regime", "trend_efficiency", "0", "Input should be greater than 0"),
     ("scout", "rank_feature", "", "must be a feature name"),
     ("scout", "rank_feature", " realised_vol_24 ", "must be a feature name"),
+    # The training hyperparameters. Added after a mutation survived: loosening
+    # `learning_rate` from (0, 1) to [0, 1] broke nothing, because the section had a
+    # parse test and a `num_leaves` test and no bounds test at all. A field with no
+    # row here is a field whose constraint is a claim.
+    ("training", "num_trees", 0, "Input should be greater than 0"),
+    ("training", "num_trees", -1, "Input should be greater than 0"),
+    ("training", "learning_rate", "0", "Input should be greater than 0"),
+    ("training", "learning_rate", "1", "Input should be less than 1"),
+    ("training", "learning_rate", "1.5", "Input should be less than 1"),
+    ("training", "num_leaves", 0, "Input should be greater than 1"),
+    ("training", "min_data_in_leaf", 0, "Input should be greater than 0"),
 )
 
 

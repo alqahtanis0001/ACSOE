@@ -724,6 +724,49 @@ class ScoutConfig(_Section):
         return self
 
 
+class TrainingConfig(_Section):
+    """The predictor's LightGBM hyperparameters. Plumbing, lead-chosen, provisional.
+
+    **Config keys and not module constants, and that is the whole reason this section
+    exists.** ``code-standards.md`` requires a run to be reproducible from its config
+    plus its data, and `modelling/artefacts.py` writes the config digest into every
+    manifest. A tree count living in a Python constant is a number the manifest cannot
+    prove and a retrain cannot be held to: two runs a month apart would carry the same
+    digest and different models, and nothing would say so.
+
+    No gate reads any of these and no order is sized from them, which is what makes
+    them the lead's to choose rather than the operator's. They do decide what the model
+    is, so they are named and versioned rather than defaulted quietly.
+
+    The bounds are the ones that separate a value from a mistake, not opinions about
+    good hyperparameters:
+
+    * ``num_leaves`` is ``> 1`` because a single leaf is a model that returns the base
+      rate for every input — it would train, score, and report a Brier equal to the
+      base-rate Brier, which is the one result this phase is set up to detect and the
+      one an operator might read as "the model learned nothing" rather than "the model
+      was never allowed to exist".
+    * ``learning_rate`` is strictly inside ``(0, 1)``. At 0 no boosting round changes
+      anything and the ensemble stays at its initial score; at 1 each round takes the
+      full step, which is not invalid but is far outside anything this project should
+      reach by way of a typo in a config file.
+    * ``num_trees`` and ``min_data_in_leaf`` are ``> 0`` because zero of either is not
+      a configuration, it is an absence.
+    """
+
+    num_trees: int = Field(gt=0)
+    """Boosting rounds. Reported in the manifest, so a retrain is comparable."""
+
+    learning_rate: Ratio = Field(gt=0, lt=1)
+    """Shrinkage per round. A ratio, so it is a `Decimal` and never a binary float."""
+
+    num_leaves: int = Field(gt=1)
+    """Leaves per tree. One leaf is a model that cannot express anything."""
+
+    min_data_in_leaf: int = Field(gt=0)
+    """Minimum rows behind a leaf. The main guard against fitting noise in a thin pair."""
+
+
 class SeedsConfig(_Section):
     # `global` is a Python keyword, so the field is aliased. `populate_by_name`
     # lets code refer to it as `global_` while the YAML keeps the readable name.
@@ -778,6 +821,13 @@ class Config(BaseModel):
     skeptic: SkepticConfig
     regime: RegimeConfig
     scout: ScoutConfig
+
+    # The ninth section, requested by the lead at 02:15 on 2026-09-13 for C's trainer
+    # and landed the same way as the eight above: field first, YAML second, tightened
+    # to required the hour the paste arrived. It was optional for about twenty
+    # minutes, which is the whole of the window in which the committed config would
+    # otherwise have failed to parse.
+    training: TrainingConfig
 
     @model_validator(mode="after")
     def _lookback_fits_in_what_engine_3_publishes(self) -> Self:

@@ -139,6 +139,13 @@ the plain `mypy --strict src/ scripts/`, which is clean on 115 files; run that, 
 `--python-version 3.12`. Your two bare-name sends resurrected nothing that is still live;
 the roster is clean. Spec 60 now, as you said.
 
+**To A-2, 10:25.** The `training` YAML is in (`num_trees: 400`, `learning_rate: 0.05`,
+`num_leaves: 31`, `min_data_in_leaf: 200`, provisional, reasons beside each) and proven to
+load. Tighten `TrainingConfig` to required, move `training` into `LANDED_SECTIONS`, delete
+the two-halves test in the same change, message `main`, and the lead commits it with the
+YAML. Your "constraint table first, interesting test second" habit goes into
+`code-standards.md`. Then 78.
+
 **To B-2, 10:10 — rehearsal request.** Engines 6 `macro_context` and 12 `regime` are
 committed at `7dd0f1d`. After the engine 5 rehearsal, extend the same file to drive engines
 5, 6 and 12 together through the real orchestrator against the fake client, two real ticks:

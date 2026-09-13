@@ -545,3 +545,31 @@ progress file three days earlier.
 The lead has already carried the wrong version into `feature-specs/PHASE-5-TASKS.md` under
 "What the next session would otherwise rediscover". It needs replacing with this, and the lead
 has been told.
+
+### The `training` section shipped with two of its four bounds unchecked, and a mutation said so
+
+**Agent:** A · **Task:** spec 61, the `training` section · **Date:** 2026-09-13
+
+**What happened.** Landed `TrainingConfig` — `num_trees`, `learning_rate`, `num_leaves`,
+`min_data_in_leaf` — with a parse test, a `num_leaves: 1` refusal test and the two-halves
+landing test, all green. Then ran the mutations. Loosening `learning_rate` from `gt=0, lt=1` to
+`ge=0, le=1` **broke nothing**: 158 passed with the constraint gone.
+
+**Why.** The section had tests for the two things I had thought about — that the values parse
+to the right types, and that a single leaf is refused — and no row in the `BAD_VALUES` table,
+which is where every other section's bounds are actually checked. So three of the four fields
+had constraints that nothing asked about. It is the ordinary version of the rule this file
+keeps re-learning from a different direction: **a test written because the author found the
+case interesting is not coverage of the cases that matter.** `num_leaves` got a test because
+its failure mode is a good story; `learning_rate` did not, because "it is a ratio" felt
+self-evidently handled.
+
+**Fix.** Seven rows added to `BAD_VALUES`, covering all four fields at both ends where both
+ends exist. Re-ran: `learning_rate` loosened now kills three parametrised cases, `num_trees`
+loosened kills two, and making the section required kills 39 — which is the other half of the
+landing proof, since the optional state is what keeps the committed config parsing until the
+lead pastes the YAML.
+
+**Consequence.** Worth stating as a habit rather than a fix: when a section lands, add its row
+to the constraint table first and write the interesting test second. The table is mechanical
+and complete; the interesting test is neither.

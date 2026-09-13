@@ -279,6 +279,23 @@ regime:                          # Engine 12, spec 66. Percentile-relative rules
   trend_efficiency: 0.3          # Net move over path length above 0.3 reads as
                                  # trending; below, choppy.
 
+training:                        # research/training.py, spec 67. LightGBM hyperparameters
+                                 # as CONFIG rather than module constants, because a run
+                                 # must be reproducible from its config plus its data and a
+                                 # tree count in a constant is a number the manifest cannot
+                                 # prove. Plumbing the lead chooses, PROVISIONAL, and written
+                                 # into every manifest: no gate reads them and no order is
+                                 # sized from them. Lead-chosen 2026-09-13.
+  num_trees: 400                 # Boosting rounds per fold.
+  learning_rate: 0.05            # Shrinkage per round; strictly inside 0 and 1.
+  num_leaves: 31                 # LightGBM's default; must exceed 1, because a single leaf
+                                 # is a model that returns the base rate and would report a
+                                 # Brier equal to the base-rate Brier, reading as "no edge"
+                                 # when the truth is "never allowed one" (A-2's bound).
+  min_data_in_leaf: 200          # Rows per leaf; large, because rows overlap at a 48-bar
+                                 # horizon and the effective sample is far smaller than the
+                                 # row count (uniqueness weights, spec 59 decision 5).
+
 scout:                           # Engine 7's ranking, spec 76.
   rank_descending: true          # Direction for rank_feature when it is set.
   # rank_feature: OPERATOR, absent until spec 75's study reports. Alphabetical until

@@ -150,6 +150,12 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   sends the next person to write a test for a case that cannot fail and makes the real
   survivors look less urgent; filed as a checked negative alongside the non-equivalent form of
   the same claim, it is evidence.
+- **`state[engine] == {}` is the payload of both the engine that had nothing to do and the
+  engine that raised.** Contract rule 7 turns an uncaught exception into `ERROR` with empty
+  `data`, so a quiet-tick assertion on an empty payload is true of a crashed tick too. B-2's
+  Phase 5 rehearsal of engine 5 found its `PASS` mutation killed by the wrong test for exactly
+  this reason. Assert the absence of `trading_blocked_by` beside the empty payload, or assert
+  the status directly, and ask of every kill *which* test killed it.
 - **Restore a mutation from a byte copy you took before applying it, never from git.**
   Teammates do not commit, so a teammate's working tree is the only copy of its work, and
   `git checkout --` on that file restores the *committed* version and deletes everything the
@@ -385,6 +391,12 @@ exclusion, so anyone "fixing" it meets a red first and a decision rather than an
 - No engine reads an environment variable directly except through the config layer.
 - Every threshold is named and configurable. No magic numbers inside engines.
 - Config is validated at startup and the process refuses to start if it is invalid.
+- **Fill in the constraint table first, write the interesting test second.** A-2 landed the
+  `training` section with a parse test and the one test whose failure mode made a good story
+  (a single leaf reporting the base-rate Brier as "no edge"), and the `learning_rate` bound
+  mutation survived: three of four fields had constraints nothing asked about. The mechanical
+  `BAD_VALUES` row per bound is where a section's constraints actually live; the story test is
+  the extra, not the substitute.
 - **A key and its model field land in one change**, field first, then YAML. Every section sets
   `extra="forbid"`, so whichever half lands alone breaks every test that reads the committed
   config.
