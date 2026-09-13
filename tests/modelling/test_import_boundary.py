@@ -87,6 +87,7 @@ def test_modelling_exists_where_this_test_thinks_it_does() -> None:
     assert sorted(p.name for p in PACKAGE.glob("*.py")) == [
         "__init__.py",
         "artefacts.py",
+        "calibration.py",
         "di.py",
         "expected_move.py",
         "features.py",
@@ -123,6 +124,49 @@ def test_the_detector_goes_red_when_a_forbidden_import_is_added(tmp_path: Path) 
 
     assert offenders(clean) == []
     assert offenders(mutated) == ["features.py: acsoe.clients.store.client"]
+
+
+def test_research_imports_no_engine() -> None:
+    """The other half of invariant 5, and the rule both of this phase's near-misses broke.
+
+    `research/` never imports the live loop path, and `engines/` is the live loop path. Two
+    functions were written into an engine's `contracts.py` and then needed by
+    `research/training.py` — the macro column names and the calibration application — and
+    both had to move to `modelling/` before the trainer could use them. Neither would have
+    raised: the offline builder would simply have grown its own copy, the two would have
+    agreed for months, and the first divergence would have surfaced as a live probability
+    differing from a backtested one with nothing pointing at the cause.
+
+    `research/backtest.py` is engine 23 and legitimately imports `acsoe.core`; that is a
+    different boundary and `tests/research/test_backtest.py` already pins it.
+    """
+    research = SRC / "acsoe" / "research"
+    offenders = [
+        f"{filename}: {module}"
+        for filename, module in imported_acsoe_modules(research)
+        if module == "acsoe.engines" or module.startswith("acsoe.engines.")
+    ]
+    assert offenders == [], offenders
+
+
+def test_that_assertion_goes_red_when_an_engine_import_is_added(tmp_path: Path) -> None:
+    """Proof the check above can fail, against a copy rather than the real tree.
+
+    Three agents share this checkout, so a transient mutation of a real source file is a
+    hazard to whoever else is running the suite — a spurious failure in their run reads as
+    KILLED and hides a survivor.
+    """
+    copied = tmp_path / "research"
+    copied.mkdir()
+    (copied / "training.py").write_bytes(
+        b"from acsoe.engines.macro_context.contracts import macro_column\n"
+    )
+    offenders = [
+        module
+        for _filename, module in imported_acsoe_modules(copied)
+        if module.startswith("acsoe.engines")
+    ]
+    assert offenders == ["acsoe.engines.macro_context.contracts"]
 
 
 def test_modelling_opens_no_client_reads_no_clock_and_holds_no_engine() -> None:

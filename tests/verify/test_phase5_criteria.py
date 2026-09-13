@@ -16,13 +16,13 @@ raises proves nothing about the criterion watching it. One mutation in the spec 
 was rejected for exactly that: it killed seven tests by raising a polars error, which is a
 body count rather than a result.
 
-**Where this file is honestly incomplete, stated rather than implied.** Four criteria have
-subjects today and carry all three observations. Seven judge `research/training.py`
-(spec 67), engines 13, 15 and 20 (specs 72, 73, 74), and they carry the PENDING
-observation plus an assertion that their PENDING names the module or engine that owes
-them. Their PASS and FAIL halves are observed when those subjects land, which is the same
-sequencing every phase has used, and the criteria are written now so that each spec is
-told what to build by the failure rather than by a message.
+**Where this file is honestly incomplete, stated rather than implied.** Eight criteria have
+subjects today and carry all three observations. Two await engines 13, 15 and 20 (specs 72,
+73, 74) and one awaits the operator; each carries the PENDING observation plus an assertion
+that its PENDING names the module, engine or config key that owes it. Their PASS and FAIL
+halves are observed when those subjects land, which is the same sequencing every phase has
+used, and the criteria are written now so that each spec is told what to build by the
+failure rather than by a message.
 """
 
 from __future__ import annotations
@@ -61,6 +61,7 @@ BUILT = (
     "feature_lookbacks_are_time_not_rows",
     "predictor_trains_and_calibrates",
     "training_is_reproducible_from_config_and_data",
+    "skeptic_trains_only_on_predictor_buy_rows",
     "walkforward_weekly_retrain_reports_oos",
     "scout_ranks_by_feature_not_arrival",
     "walkforward_trains_on_the_past_only",
@@ -68,7 +69,6 @@ BUILT = (
 
 #: Still waiting on a spec, each with the module or engine its PENDING line must name.
 AWAITED = {
-    "skeptic_trains_only_on_predictor_buy_rows": "spec 69",
     "anomaly_and_skeptic_have_both_tests": "test_anomaly.py",
     "tournament_writes_leaderboard_from_oos": "`tournament`",
 }
@@ -447,6 +447,101 @@ def test_a_configured_rank_feature_is_a_fail_until_the_operator_rules(
     outcome = run(verify_module, "scout_ranks_by_feature_not_arrival", phase5_tree)
     assert_fail(outcome, verify_module)
     assert "spec 75" in outcome.message
+
+
+# --------------------------------------------------------------------------- #
+# skeptic_trains_only_on_predictor_buy_rows
+# --------------------------------------------------------------------------- #
+#
+# Spec 69 names three exclusions and two of them are mutated below. The third — a call
+# from this fold or later — is **deliberately not mutated here**, and the reason is worth
+# stating rather than leaving as a gap. `train_walkforward` builds `previous_oos` by
+# concatenating the folds it has already finished, so the current fold's rows are not in
+# the frame `_skeptic_training_rows` is handed and its `fold_index <` filter is
+# belt-and-braces. Flipping that comparison to `<=` changes nothing observable, and a
+# mutation that cannot change behaviour is not a survivor — it is not a mutation, and
+# recording it as a kill would be recording a coincidence. The guard is proved live
+# instead by `test_a_call_from_this_fold_is_excluded_even_if_it_is_handed_one` in
+# tests/research/test_skeptic_training.py, which calls the function directly with a frame
+# that does contain them.
+
+
+def test_a_skeptic_trained_on_non_buy_rows_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """Spec 69's named mutation: a `stop`-labelled row the predictor never called.
+
+    The plausible way to write it is to filter the out-of-sample frame by fold and forget
+    that it holds every scored row rather than only the calls — the file is the
+    predictor's output, so "everything in it is something the predictor said" is an easy
+    thing to assume. The result is not a broken skeptic. It is a second predictor wearing
+    a veto: trained mostly on rows nobody proposed trading, it learns which bars go up
+    rather than which of the predictor's calls are wrong, and its veto rate looks
+    perfectly reasonable.
+    """
+    patch(
+        phase5_tree,
+        "src/acsoe/research/training.py",
+        '    eligible = previous_oos.filter(\n        pl.col("is_buy")\n        & (pl.col("fold_index")',
+        "    eligible = previous_oos.filter(\n        (pl.col(\"fold_index\")",
+    )
+    outcome = run(verify_module, "skeptic_trains_only_on_predictor_buy_rows", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "second predictor" in outcome.message
+
+
+def test_a_skeptic_trained_on_rows_the_purge_would_remove_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """The leak this criterion was itself blind to until 2026-09-13, now asserted in both
+    directions.
+
+    A BUY call from an earlier fold whose label window reaches into *this* fold's test
+    window already knows how that window turned out. Training the skeptic on it is the
+    same leak the purge exists to prevent for the predictor, and it is worse here: the
+    skeptic's out-of-sample numbers are what an operator reads to decide whether the veto
+    is worth keeping, so a flattered skeptic costs real opportunities rather than a line
+    in a report.
+
+    The mutation is the plausible one — an author who applied the purge to the predictor
+    and thought of the skeptic's rows as "already out of sample, therefore already safe".
+    For a while the criterion agreed with that author, which is why it FAILed the correct
+    trainer and would have passed this one.
+    """
+    patch(
+        phase5_tree,
+        "src/acsoe/research/training.py",
+        '        & (pl.col("label_window_end_ts") < int(fold.test_start_ts))\n'
+        '        & (pl.col("decision_ts") < embargo_start)\n',
+        "",
+    )
+    outcome = run(verify_module, "skeptic_trains_only_on_predictor_buy_rows", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "label window" in outcome.message
+
+
+def test_a_skeptic_that_reports_no_training_identity_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """Ruling 7, in the form it would actually be broken: a trainer that fits a skeptic and
+    records only how many rows it used.
+
+    A count is not an identity. On a fold where most scored rows are BUY calls, the correct
+    set and a contaminated one are nearly the same size, so a criterion reading the count
+    would agree with both.
+    """
+    patch(
+        phase5_tree,
+        "src/acsoe/research/training.py",
+        '    report["skeptic_training_identity"] = identity_digest(\n'
+        '        [str(value) for value in rows["pair"]],\n'
+        '        [int(value) for value in rows["decision_ts"]],\n'
+        "    )\n",
+        "",
+    )
+    outcome = run(verify_module, "skeptic_trains_only_on_predictor_buy_rows", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "row count passes whenever" in outcome.message
 
 
 # --------------------------------------------------------------------------- #

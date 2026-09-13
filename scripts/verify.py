@@ -8728,6 +8728,7 @@ DATASET_COLUMNS: Final[tuple[str, ...]] = (
 OOS_COLUMNS: Final[tuple[str, ...]] = (
     "pair",
     "decision_ts",
+    "label_window_end_ts",
     "fold_index",
     "p_target",
     "p_stop",
@@ -9381,10 +9382,22 @@ def check_skeptic_trains_only_on_predictor_buy_rows(ctx: VerifyContext) -> Outco
       often than it is right live, so a skeptic trained on those calls learns the
       predictor's overfit rather than its mistakes, and vetoes almost nothing.
     * **a call from fold `k` or later.** That is the test window it will be judged on.
+    * **a row the purge or the embargo would have removed.** A label window reaching into
+      the test window is the same leak whichever model reads the row, and it is worse here
+      than in the predictor: the skeptic's out-of-sample numbers are what an operator
+      would use to decide whether the veto is worth keeping.
 
     The identity is recomputed here from the out-of-sample file rather than read back from
     the artefact, ruling 7: the whole point is to check which rows the skeptic saw, and a
-    number the skeptic reported about itself is not evidence of that.
+    number the skeptic reported about itself is not evidence of that. The **test window**
+    is recomputed too, from `purged_walk_forward` over the same rows, so a trainer that
+    misreported its own fold bounds cannot purge against them and agree with itself.
+
+    Both counts go into the PASS line — the eligible set and the naive "all earlier BUY
+    calls" set — because if the purge and embargo remove nothing on this dataset the two
+    are identical and this criterion cannot tell a trainer that applies them from one that
+    does not. `test_the_purge_and_embargo_remove_rows_rather_than_nothing` asserts the gap
+    is real; the PASS line lets a reader see it.
     """
     with tempfile.TemporaryDirectory(prefix="acsoe-verify-skeptic-") as raw_tmp:
         tmp = Path(raw_tmp)
@@ -9392,7 +9405,7 @@ def check_skeptic_trains_only_on_predictor_buy_rows(ctx: VerifyContext) -> Outco
             trained, problem = _trained(ctx, tmp, max_folds=3)
             if trained is None:
                 return problem or pending("acsoe.research.training does not exist yet")
-            report, _dataset, _engine_config = trained
+            report, dataset, engine_config = trained
             polars, problem = _polars()
             if polars is None:
                 return problem or pending("polars is unavailable")
@@ -9425,10 +9438,32 @@ def check_skeptic_trains_only_on_predictor_buy_rows(ctx: VerifyContext) -> Outco
                     "69, 74 and 75 read this file and nothing else."
                 )
 
-            eligible = oos.filter(
+            interval_s = int(engine_config.get(KEY_DECISION_BAR_S))
+            embargo_s = int(engine_config.get(KEY_EMBARGO_BARS)) * interval_s
+            folds, problem = _fold_indices(dataset, engine_config, interval_s=interval_s)
+            if folds is None:
+                return problem or pending("the splitter could not be run")
+            recomputed = [f for f in folds if int(f.fold_index) == fold_index]
+            if not recomputed:
+                return failed(
+                    "the digest reports a fold "
+                    + str(fold_index)
+                    + " that `purged_walk_forward` does not produce over the same rows. The "
+                    "criterion recomputes the test window rather than reading it back, "
+                    "because a trainer that misreported its own window would otherwise agree "
+                    "with itself."
+                )
+            test_start_ts = int(recomputed[0].test_start_ts)
+
+            earlier_buys = oos.filter(
                 polars.col("is_buy") & (polars.col("fold_index") < fold_index)
             )
+            eligible = earlier_buys.filter(
+                (polars.col("label_window_end_ts") < test_start_ts)
+                & (polars.col("decision_ts") < test_start_ts - embargo_s)
+            )
             expected = _identity_of(eligible, polars)
+            naive = _identity_of(earlier_buys, polars)
             every_buy = _identity_of(oos.filter(polars.col("is_buy")), polars)
             non_buy = _identity_of(oos.filter(~polars.col("is_buy")), polars)
 
@@ -9461,15 +9496,18 @@ def check_skeptic_trains_only_on_predictor_buy_rows(ctx: VerifyContext) -> Outco
         return failed(
             "the skeptic's training identity for fold "
             + str(fold_index)
-            + " does not match the out-of-sample BUY calls from folds strictly before it. "
-            "Recomputed over "
+            + " does not match the out-of-sample BUY calls from folds strictly before it "
+            "that survive this fold's purge and embargo. Recomputed over "
             + str(len(expected))
-            + " eligible rows; the artefact records a different set. Rows that would "
-            "contaminate it look like "
+            + " eligible rows, from "
+            + str(len(naive))
+            + " earlier BUY calls before the purge; the artefact records a different set. "
+            "Rows that would contaminate it look like "
             + repr(contaminating)
             + ": an in-sample BUY call teaches the predictor's overfit rather than its "
-            "mistakes, a non-BUY row makes the skeptic a second predictor, and a call "
-            "from this fold or later is the window it is about to be judged on."
+            "mistakes, a non-BUY row makes the skeptic a second predictor, a call from "
+            "this fold or later is the window it is about to be judged on, and a row "
+            "whose label window reaches into that window already knows how it ended."
         )
 
     return passed(
@@ -9477,8 +9515,13 @@ def check_skeptic_trains_only_on_predictor_buy_rows(ctx: VerifyContext) -> Outco
         + str(fold_index)
         + "'s skeptic trained on exactly the "
         + str(len(expected))
-        + " out-of-sample BUY calls from earlier folds, by (pair, decision_ts) identity "
-        "recomputed from the out-of-sample file; "
+        + " out-of-sample BUY calls from earlier folds that survive its purge and embargo, "
+        "by (pair, decision_ts) identity recomputed from the out-of-sample file against a "
+        "test window recomputed from the splitter; the purge and embargo removed "
+        + str(len(naive) - len(expected))
+        + " of "
+        + str(len(naive))
+        + " earlier BUY calls, and "
         + str(len(non_buy))
         + " non-BUY rows and every in-sample call are outside that set"
     )

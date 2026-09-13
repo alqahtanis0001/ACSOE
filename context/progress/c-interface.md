@@ -44,10 +44,22 @@ nothing below is carried over from it.
   attempts. See "Spec 67 — what landed" below. **Original claim line, for the record:**
   `research/training.py`, `tests/research/test_training.py`,
   `tests/fixtures/walkforward_digest.json`.
-- **Spec 68 — the Dissimilarity Index. Claimed.** `modelling/di.py`, `research/training.py`,
-  `tests/research/test_di.py`.
-- **Spec 69 — skeptic training on predictor BUY rows. Claimed.** `research/training.py`,
-  `tests/research/test_skeptic_training.py`.
+- **Spec 68 — the Dissimilarity Index. Claimed, and DONE.** `modelling/di.py` (landed with
+  spec 63), the fit hook in `research/training.py`, `tests/research/test_di.py` (8 tests).
+  Four mutations, four killed, including **FAIL both ways**: the fit pointed at the test
+  rows and the fit pointed at the BUY subset. **Landed together with spec 67** against 67's
+  scope limit, which says the DI belongs to 68 — the fit is one helper inside the fold loop
+  and a stub would have been a scaffold nobody could test. Flagged to the lead.
+  The DI is **inert today**: `prediction.di_percentile` is the operator's and is absent, so
+  every fold reports `di_rows: null`, no `di.npz` is written, and
+  `di_fitted_on_predictor_training_set` reports PENDING naming the key. The tests supply a
+  percentile through a config wrapper so the arithmetic is exercised without anybody
+  inventing the number.
+- **Spec 69 — skeptic training on predictor BUY rows. Claimed, and DONE.**
+  `research/training.py`, `tests/research/test_skeptic_training.py` (12 tests), plus
+  `scripts/verify.py` and `tests/verify/test_phase5_criteria.py` — the criterion was the
+  other half of this seam and it was wrong. Three mutations, three killed.
+  `skeptic_trains_only_on_predictor_buy_rows` now PASSes. See "Spec 69 — what landed" below.
 - **Spec 70 — anomaly detector training. Claimed.** `research/training.py`,
   `tests/research/test_anomaly_training.py`.
 - **Spec 71 — engine 8 `prediction`. Claimed.** `engines/prediction/`,
@@ -66,6 +78,62 @@ research runner), spec 62 (B — `StoreClient(models_dir=...)`, `model_run_dir`,
 `new_model_run_dir`), spec 76 (B — `rank_universe`), specs 59 and 77 (the lead).
 `research/walkforward.py` is read, never changed: if a Phase 5 change makes
 `walkforward_trains_on_the_past_only` red, the change is wrong.
+
+### Spec 69 — what landed
+
+Meta-labelling inside the fold loop: `wrong = label != "target"`, inputs are the scaled
+feature vector plus the predictor's own three probabilities and its expected move, recorded
+in the manifest in that order because engine 15 rebuilds the same vector live. **It can only
+veto** — there is no output of this path that makes a trade more likely, and a test asserts
+that on the source, because the behaviour itself only appears in engine 15.
+
+Over four folds of the constructed dataset:
+
+| fold | skeptic rows | effective |
+|---|---|---|
+| 0 | 0 | — |
+| 1 | 612 | 53.09 |
+| 2 | 1,295 | 108.39 |
+| 3 | 2,037 | 167.70 |
+
+Fold 0 correctly produces none: there are no earlier out-of-sample calls for it to learn
+from, the digest says `skeptic_rows: 0`, no `skeptic.txt` is written, and engine 15 will
+block with `skeptic_unavailable` for a model version without one. That is a reported absence,
+not an omission.
+
+**The veto numbers wait for the operator.** `skeptic.veto_threshold` is absent by ruling
+until the walk-forward reports, so `skeptic_veto_rate` and `skeptic_surviving_target_rate`
+are `null`. `skeptic_all_buy_target_rate` is reported regardless — it needs no threshold, and
+it is half of the only comparison that says whether the skeptic is worth having. The tests
+supply a threshold through a config wrapper so the arithmetic is exercised without anybody
+inventing the number.
+
+**The criterion and the trainer disagreed, and the criterion was wrong.** `verify.py`
+recomputed the eligible set as earlier out-of-sample BUY calls and stopped there; the trainer
+also applies this fold's purge and embargo. 647 rows against 612. Spec 69 says the skeptic's
+rows are subject to the same purge and embargo as the predictor's, and the reason is not
+symmetry: a row whose label window reaches into the test window already knows how that window
+ended, and the skeptic's out-of-sample numbers are what an operator would read to decide
+whether to keep the veto. The criterion was wrong in the direction that hides a defect — it
+would have passed a trainer that skipped the purge and it FAILed the one that applies it. Both
+halves are mine; `label_window_end_ts` joined `OOS_COLUMNS` in both files and the criterion now
+recomputes with both filters, against a test window recomputed from `purged_walk_forward`
+rather than read back from the digest. Flagged to the lead in advance as a seam I expected to
+have to close.
+
+**Three mutations, three killed:** the `is_buy` filter dropped (FAIL naming a second predictor
+wearing a veto), the purge and embargo dropped (FAIL naming the label window), the training
+identity not recorded (FAIL naming the row count). **The fourth exclusion has no mutation and
+that is deliberate** — `train_walkforward` builds `previous_oos` from folds already finished,
+so the `fold_index <` filter is belt-and-braces and flipping it to `<=` changes nothing
+observable. A mutation that cannot change behaviour is not a survivor. The guard is proved live
+one level down by a test that calls `_skeptic_training_rows` directly with a frame that *does*
+contain this fold's calls.
+
+**The vacuity trap this opens.** Once the criterion applies the same two filters the trainer
+applies, a trainer that applied neither is caught only if those filters actually remove rows on
+this dataset. `test_the_purge_and_embargo_remove_rows_rather_than_nothing` asserts the gap is
+real, and the criterion's PASS line prints it: 35 of 647 earlier BUY calls removed.
 
 ### Spec 67 — what landed
 
@@ -132,7 +200,7 @@ package, three engines and B-2's ranking function.
 | `predictor_trains_and_calibrates` | PENDING — spec 67 |
 | `training_is_reproducible_from_config_and_data` | PENDING — spec 67 |
 | `di_fitted_on_predictor_training_set` | PENDING — spec 67/68 |
-| `skeptic_trains_only_on_predictor_buy_rows` | PENDING — spec 67/69 |
+| `skeptic_trains_only_on_predictor_buy_rows` | PENDING — spec 67/69 (now **PASS**, spec 69) |
 | `walkforward_weekly_retrain_reports_oos` | PENDING — spec 67 |
 | `anomaly_and_skeptic_have_both_tests` | PENDING — specs 72, 73 |
 | `scout_ranks_by_feature_not_arrival` | PASS |

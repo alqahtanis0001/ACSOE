@@ -37,6 +37,7 @@ from __future__ import annotations
 
 __all__ = [
     "artefacts",
+    "calibration",
     "di",
     "expected_move",
     "features",

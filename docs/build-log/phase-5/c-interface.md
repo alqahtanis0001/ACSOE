@@ -606,6 +606,173 @@ came from a variable, and it missed an `os.path.join`; the new one follows the o
 than the spelling. Both directions proved — the real tree passes, and a criterion given
 `ctx.root / "models"` in a copied tree is caught.
 
+### The out-of-sample file carries what the predictor said, not what it saw, and I forgot that in one of two places
+
+**Agent:** C-2 · **Task:** spec 69 · **Date:** 2026-09-13
+
+**What happened.** The skeptic's veto-rate report asked polars for `bar_range_pct` in a frame
+that does not have it:
+
+```
+polars.exceptions.ColumnNotFoundError: unable to find column "bar_range_pct";
+valid columns: ["pair", "decision_ts", "label_window_end_ts", "fold_index", "p_target",
+"p_stop", "p_timeout", "expected_move_pct", "is_buy", "di", "di_refused", "label",
+"return_pct", "weight"]
+```
+
+**Why.** The out-of-sample file records what the predictor **said** — three probabilities, an
+expected move, a BUY flag, a DI — and not what it **saw**. The skeptic needs both: the feature
+vector plus the predictor's own call. `_skeptic_training_rows` joins the features back from the
+dataset for exactly that reason, and its docstring says so in as many words. I wrote that join,
+then wrote the scoring path an hour later and did not.
+
+The shape is worth a line: the two halves of one model's inputs were assembled in two functions,
+one of which knew the join was needed and one of which did not, and nothing connected them
+because they were written at different times by the same person for the same reason. The fix
+makes both go through `_skeptic_matrix`, which is now the only place the skeptic's input vector
+is built, so fitting and scoring cannot disagree about the column order either.
+
+**Fix.** The veto report joins the features from the dataset before scoring, and it takes the
+dataset as an argument to do it — the join is visible in the signature rather than assumed. It
+would have gone unnoticed until the operator supplied `skeptic.veto_threshold`, because that
+path does not run without it, which is the second reason to be glad it was a test that found it
+rather than a run.
+
+### The calibration arithmetic is in `research/` and engine 8 will not be able to import it
+
+**Agent:** C-2 · **Task:** specs 67 and 71 · **Date:** 2026-09-13
+
+**What happened.** Re-reading spec 71 before starting engine 8: it loads the artefact, predicts,
+**calibrates**, and computes the expected move. The calibration step is `_calibrate` in
+`research/training.py` — apply the per-class isotonic step function, clip, renormalise — and
+`engines/prediction/` may not import `research/`. Architecture invariant 5.
+
+The same finding as the macro column names, two hours later and one module over, and this one is
+worse. A column name spelled two ways fails loudly at the artefact's feature-order check. A
+*calibration* applied two ways fails silently: engine 8 would reimplement "read `calibrators.json`,
+interpolate, renormalise", the two would agree on almost every vector, and where they disagreed
+the live probability would differ from the backtested one by a few per cent — which lands
+directly on `expected_move_pct`, which is what the cost gate prices the hurdle against.
+
+**Why the first pass missed it.** I put `_calibrate` beside `_fit_calibrators` because fitting
+and applying read as one job. They are not: fitting happens once, offline, in `research/`;
+applying happens on every tick, live, in an engine. `modelling/`'s own docstring already states
+the test — "the arithmetic that must **agree** between live and replay" — and applying a
+calibrator is exactly that while fitting one is not.
+
+**Fix, before engine 8 rather than during it.** `modelling/calibration.py` holds the isotonic
+representation (the two threshold arrays), `apply(raw, calibrators)` and the renormalisation;
+`research/training.py` imports it to score its own out-of-sample rows, and engine 8 imports it to
+score a live vector. Fitting stays in `research/` because nothing live fits anything.
+
+**The cheap generalisation, since this is twice in one day.** The question to ask of every
+function I write in `research/` from here is not "does this feel like research" but "**will an
+engine need to do this too**". Both misses answered the first question correctly and the second
+one not at all. Two more candidates by that test, both still in `training.py` today: the feature
+matrix assembly, which engine 8 does per tick for one row, and `_codes`, which engine 8 never
+needs because it reads probabilities rather than labels. The first moves; the second stays.
+
+### Phase 5 made the suite two and a half minutes slower, and the gate pays it six times
+
+**Agent:** C-2 · **Task:** spec 67 · **Date:** 2026-09-13
+
+**What happened.** `pytest tests/ -q` went from **173s to 330s** across this phase, while the
+test count went from 2,206 to 2,238. Thirty-two new tests cost two and a half minutes, because
+most of them train a model.
+
+**Why it matters more than it looks.** `toolchain_green` is registered for **every** phase, so a
+full `--phase 0` through `--phase 5` sweep runs the whole suite six times. The sweep went from
+about twenty minutes to about forty, and the lead runs one at every commit boundary. The cost is
+not the tests being slow; it is that the slowest thing in the project is now multiplied by six
+by a design decision made in Phase 1 for a good reason.
+
+**Where it actually goes.** `tests/research/test_training.py` is 75s of it. Twelve of its twenty
+tests call `train_walkforward` separately, most of them to make a read-only assertion about the
+artefact or the digest that any of the other eleven runs would have supported equally well. The
+Phase 5 criteria add about 28s on top, and those are load-bearing — a criterion that shared a
+cached model with another criterion would be the cross-contamination `root_import_path` exists
+to prevent.
+
+**Not fixed yet, and the fix has a cost of its own.** Sharing one module-scoped training run
+across the read-only tests would take most of the 75s back. It also couples tests to each other,
+which is the thing that lets one test's mutation hide in another's fixture, so it is worth doing
+deliberately rather than as a speed reflex: the runs that must stay separate are the
+reproducibility pair, the empty-fold case, and anything a mutation is aimed at. Recorded now
+because a measurement taken before the optimisation is the only way to know whether the
+optimisation did anything — and because the Phase 4 entry about a benchmark that reported a
+fourfold speed-up it had not achieved is the reason I will run that comparison in both
+directions.
+
+### A pair can identify itself from its own macro columns, and "no pair identity" does not quite hold
+
+**Agent:** C-2 · **Task:** spec 67 · **Date:** 2026-09-13 · **Open, for the lead**
+
+**What happened.** Spec 63's constraint is that no feature encodes which pair a row belongs to,
+and every individual feature honours it: they are returns, ratios, z-scores, positions within a
+pair's own window, and clock fields. But the macro join puts BTC's and ETH's feature rows beside
+every pair's own — and **on a BTC row, `macro_btc_log_return_4` is exactly `log_return_4`**. The
+pair identity is not in any one feature; it is in the *coincidence* of two.
+
+**Why it is worth recording rather than shrugging at.** A tree cannot compute `a == b` directly,
+so this is not the trivially exploitable leak it would be in a linear model. What it can learn
+is the region of feature space where the two happen to coincide, which is a proxy for "this row
+is BTC" available on roughly 2 of 234 pairs — under 1% of rows in the full dataset, and 33% in a
+three-pair smoke run, which is the case to be careful about when reading smoke-run numbers.
+
+It also cuts the other way and that is the part I would not want lost: the macro columns are
+*supposed* to be a market backdrop, and for BTC the backdrop and the subject are the same
+market. A model that learns "when this pair is the market, the backdrop says nothing extra" has
+learned something true.
+
+**Not fixed, and the options are the lead's rather than mine**, because every one of them
+changes what the dataset is:
+
+1. **Leave it.** Under 1% of rows in the real run, documented here and in the module.
+2. **Null the macro columns on a row whose own pair is that macro asset.** Honest — "there is no
+   separate backdrop for this pair" — but it gives BTC rows a different missingness pattern from
+   every other pair's, which is itself a pair signal, and a stronger one.
+3. **Exclude the macro pairs from the candidate set.** Clean, and it throws away the two most
+   liquid pairs on the exchange, which is a trading decision rather than a modelling one.
+
+My reading is that option 1 is right for Phase 5 and that option 3 would need the operator, but
+I have not acted on any of them. Flagged now rather than after a leaderboard exists, because the
+moment engine 20 has rows it stops being a modelling question and becomes a question about
+numbers somebody has already read.
+
+### The first real training run, and the two numbers in it that matter
+
+**Agent:** C-2 · **Task:** spec 67 · **Date:** 2026-09-13
+
+Not a defect entry. The measurement, recorded because it is the first time this system has
+produced one and because two of its numbers will be quoted for the rest of the project.
+
+`python -m acsoe.research.training --pairs SOLUSD --start 1640995200 --max-folds 3`, eight
+minutes, SOLUSD plus both macro pairs, 420,081 labelled rows, three weekly folds:
+
+| fold | test rows | effective | Brier | base-rate Brier | BUY calls | BUY target rate |
+|---|---|---|---|---|---|---|
+| 0 | 2,016 | 101.0 | 0.1470 | 0.1345 | 1,894 | 0.168 |
+| 1 | 2,016 | 92.1 | 0.0992 | 0.0945 | 1,286 | 0.103 |
+| 2 | 2,016 | 65.7 | 0.1200 | 0.1318 | 365 | 0.247 |
+
+**The effective sample size is about five per cent of the row count.** Two thousand test rows
+are roughly a hundred independent observations, because at a 48-bar horizon consecutive
+decision bars share almost all of their label window. That is the number the operator asked to
+see beside every row count, and this is why: a confidence interval computed from 2,016 is
+wrong by a factor of four and a half, and nothing about the fold's appearance says so.
+
+**The model is at or slightly worse than the base rate on two folds of three.** That is the
+honest first-pass result. It is also the shape that proves there is no leak: a leaked feature or
+a mis-joined label produces a Brier near zero, which is exactly what the deterministic
+constructed series produces and what the random walk does not. `project-overview.md` says a
+negative result is a valid result, and this is the first time that sentence has had a number
+attached to it.
+
+The BUY-call target rates (10% to 25%) sit far below the break-even rates invariant 5 records
+for reference (61% at tier 1, 48% at tier 3). That comparison is the reader's rather than the
+digest's, for the reason in the module docstring: break-even is a function of live friction and
+none of it exists offline.
+
 ### The calibrator fitted on the test window survived every test, and the metric can never catch it
 
 **Agent:** C-2 · **Task:** spec 67 · **Date:** 2026-09-13
@@ -900,3 +1067,87 @@ reconstruction did not rebuild the archive's bars, every other test in the file 
 against a price series nobody chose. `test_engine_3s_candles_reproduce_the_archive_bars_they_were_built_from`
 compares all five money fields as `Decimal` across more than a hundred bars, which is the check
 that keeps the rest of the file meaningful.
+
+### Criterion 6 and the trainer disagreed about the skeptic's eligible rows
+
+**Agent:** C-2 · **Task:** spec 69 · **Date:** 2026-09-13
+
+**What happened.** With spec 69's skeptic implemented and its eleven unit tests green,
+`python scripts/verify.py --phase 5` reported:
+
+> FAIL - the skeptic's training identity for fold 1 does not match the out-of-sample BUY calls
+> from folds strictly before it. Recomputed over 647 eligible rows; the artefact records a
+> different set. Rows that would contaminate it look like
+> `['AAAUSD|1711843200', 'AAAUSD|1711844100', 'AAAUSD|1711845000']`
+
+The trainer reports 612 rows for that fold. The criterion recomputed 647. The thirty-five rows
+between the two are the last few hours of the previous fold's out-of-sample calls.
+
+**Why.** `_skeptic_training_rows` applies the purge and the embargo against the fold it is
+about to be judged on — `label_window_end_ts < test_start_ts` and
+`decision_ts < test_start_ts - embargo_bars * interval_s`. `check_skeptic_trains_only_on_predictor_buy_rows`
+recomputed its eligible set as BUY calls from earlier folds and nothing more. Both halves of
+this seam are mine, so the disagreement is mine to resolve rather than a defect in either file
+alone; the question is which of the two is right.
+
+The trainer is. Spec 69 says the skeptic's rows are subject to the same purge and embargo as the
+predictor's, and the reason is not symmetry for its own sake. A row whose label window reaches
+into the test window is the same leak whichever model reads it: the skeptic trained on it knows
+how that bar resolved, and the resolution happened inside the window the fold is scored on. An
+unpurged skeptic would look better out of sample than it is, and the whole point of the meta-label
+is to say whether the predictor's calls can be trusted — a leak there is worth more than a leak
+in the predictor, because it is the number the operator would use to decide whether to keep the
+veto.
+
+So the criterion was the wrong half, and it was wrong in the direction that hides a defect: it
+would have passed a trainer that skipped the purge entirely, and failed the one that applies it.
+A criterion that disagrees with the spec is worse than no criterion, because it converts the
+correct implementation into a red gate and invites the fix to be made in the subject.
+
+**What the fix needed.** The purge is on the label window end, so the out-of-sample file has to
+carry `label_window_end_ts`. That column joined `OOS_COLUMNS` in `training.py` and in
+`verify.py` before the criterion body changed, and the criterion now filters on it and on the
+embargo, reading `timeframes.decision_bar_s` and `backtest.embargo_bars` from the same config
+the trainer read. `eligible_rows()` in `tests/research/test_skeptic_training.py` already computed
+the set this way and agreed with the trainer, which is how the disagreement was localised to the
+criterion rather than left as a mystery between three files.
+
+**The vacuity trap this opens, and what closes it.** Once the criterion applies the same two
+filters the trainer applies, the two computations are close enough in shape that a trainer which
+applied *neither* would be caught only if the filters actually remove rows on this dataset. On a
+dataset where the purge removed nothing, the strict set and the naive set are identical and the
+identity check cannot tell the two trainers apart. `test_the_purge_and_embargo_remove_rows_rather_than_nothing`
+asserts the difference is real on at least one fold, and the criterion's PASS line now reports
+both counts so a reader can see the gap rather than take it on trust.
+
+### Spec 69's mutation sweep, and the one exclusion that cannot be mutated
+
+**Agent:** C-2 · **Task:** spec 69 · **Date:** 2026-09-13
+
+Three mutations applied to a copied tree, each run and each restored inside the copy's own
+lifetime, and all three killed `skeptic_trains_only_on_predictor_buy_rows`:
+
+* **the `is_buy` filter dropped.** FAIL naming a second predictor wearing a veto. The
+  out-of-sample file holds every scored row, not only the calls, so "everything in this file
+  is something the predictor said" is the easy assumption and it admits mostly `stop` rows.
+* **the purge and embargo dropped.** FAIL naming the label window. This is the defect the
+  criterion itself had until today, in the subject rather than in the checker, so it is now
+  asserted from both sides.
+* **the training identity not recorded.** FAIL naming the row count. Ruling 7 in the form it
+  would actually be broken: a trainer that reports how many rows it used and not which.
+
+**The third exclusion has no mutation and that is deliberate.** Spec 69 also forbids a call
+from this fold or later, and `train_walkforward` builds `previous_oos` by concatenating the
+folds it has already finished — so the current fold's rows are never in the frame
+`_skeptic_training_rows` is handed, and its `fold_index <` filter is belt-and-braces.
+Flipping it to `<=` changes nothing observable. A mutation that cannot change behaviour is
+not a survivor; it is not a mutation, and recording it as a kill would be recording a
+coincidence. But belt-and-braces is also how a guard comes to be deleted by someone tidying
+a redundant condition, so it is proved live one level down instead:
+`test_a_call_from_this_fold_is_excluded_even_if_it_is_handed_one` calls the function
+directly with a frame that *does* contain this fold's calls — what a future caller
+assembling the out-of-sample file differently would hand it — and asserts they are left out.
+
+`skeptic_trains_only_on_predictor_buy_rows` moved from `AWAITED` to `BUILT` in
+`tests/verify/test_phase5_criteria.py`, which is what turned `toolchain_green` red for one
+run: that file asserts an awaited criterion never passes, and this one had just started to.

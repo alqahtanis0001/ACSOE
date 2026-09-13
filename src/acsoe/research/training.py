@@ -61,6 +61,14 @@ from acsoe.modelling.artefacts import (
     identity_digest,
     write_run,
 )
+from acsoe.modelling.calibration import (
+    CALIBRATORS_NAME,
+    apply_calibration,
+    from_sklearn,
+)
+from acsoe.modelling.calibration import (
+    to_json as calibration_to_json,
+)
 from acsoe.modelling.expected_move import expected_move_pct, is_buy_call
 from acsoe.modelling.features import FEATURE_NAMES, FEATURE_VERSION, compute
 from acsoe.modelling.macro import (
@@ -109,6 +117,7 @@ DATASET_COLUMNS: Final[tuple[str, ...]] = (
 OOS_COLUMNS: Final[tuple[str, ...]] = (
     "pair",
     "decision_ts",
+    "label_window_end_ts",
     "fold_index",
     "p_target",
     "p_stop",
@@ -428,6 +437,13 @@ def train_walkforward(
             now=now,
             store=store,
             assets=assets,
+            # Every out-of-sample row produced **so far**, which is folds strictly before
+            # this one. The skeptic for fold k may learn only from calls the predictor made
+            # out of sample and earlier: a skeptic trained on the predictor's own
+            # training-set calls learns its overfit rather than its mistakes and vetoes
+            # almost nothing, and one trained on this fold's calls has seen the window it
+            # is about to be judged on.
+            previous_oos=pl.concat(oos_parts, how="vertical") if oos_parts else None,
         )
         entries.append(entry)
         fold_runs.append(fold_run)
@@ -535,6 +551,7 @@ def _train_one_fold(
     now: datetime,
     store: Any,
     assets: Sequence[str],
+    previous_oos: pl.DataFrame | None = None,
 ) -> tuple[dict[str, Any], pl.DataFrame, str]:
     """Train, calibrate, score and write one fold. Returns its digest entry and its OOS rows."""
     import lightgbm as lgb
@@ -600,7 +617,7 @@ def _train_one_fold(
     calibrators, calibration_identity, calibration_end_ts = _fit_calibrators(
         model.predict_proba(x_cal), calibration_rows, IsotonicRegression
     )
-    probabilities = _calibrate(model.predict_proba(x_test), calibrators)
+    probabilities = apply_calibration(model.predict_proba(x_test), calibrators)
 
     target_pct = float(_required(config, "barriers.target_pct"))
     stop_pct = float(_required(config, "barriers.stop_pct"))
@@ -622,7 +639,14 @@ def _train_one_fold(
         config, train, test, scaler, names, seed, x_test
     )
 
-    oos = test.select(["pair", "decision_ts", "label", "return_pct", "weight"]).with_columns(
+    # `label_window_end_ts` travels with every out-of-sample row because the skeptic's
+    # training rows are subject to the same purge as the predictor's (spec 69), and the
+    # purge is on the label window end rather than on the decision bar — a row whose
+    # outcome was built from bars inside a later fold's test window is the same leak
+    # whichever model reads it.
+    oos = test.select(
+        ["pair", "decision_ts", "label_window_end_ts", "label", "return_pct", "weight"]
+    ).with_columns(
         pl.lit(int(fold.fold_index)).alias("fold_index"),
         pl.Series("p_target", probabilities[:, 0], dtype=pl.Float64),
         pl.Series("p_stop", probabilities[:, 1], dtype=pl.Float64),
@@ -633,6 +657,18 @@ def _train_one_fold(
         pl.Series("di_refused", di_refusals, dtype=pl.Boolean),
     ).select(OOS_COLUMNS)
 
+    skeptic, skeptic_report = _fit_skeptic(
+        previous_oos,
+        dataset,
+        fold,
+        config=config,
+        names=names,
+        seed=seed,
+        scaler=scaler,
+        oos=oos,
+        buys=buys,
+    )
+
     entry = _fold_entry(
         fold,
         train=train,
@@ -641,6 +677,7 @@ def _train_one_fold(
         buys=buys,
         di_fit=di_fit,
         di_refusals=di_refusals,
+        skeptic_report=skeptic_report,
     )
 
     fold_run_id = f"{run_id}-f{fold.fold_index}"
@@ -664,6 +701,8 @@ def _train_one_fold(
         assets=assets,
         mean_timeout=mean_timeout,
         scaler_rows=scaler_rows,
+        skeptic=skeptic,
+        skeptic_report=skeptic_report,
         calibration_identity=calibration_identity,
         calibration_rows=int(calibration_rows.height),
         calibration_end_ts=calibration_end_ts,
@@ -759,25 +798,13 @@ def _fit_calibrators(
         [str(value) for value in rows["pair"]],
         [int(value) for value in rows["decision_ts"]],
     )
-    return fitted, identity, int(rows["decision_ts"].max() or 0)
-
-
-def _calibrate(raw: np.ndarray[Any, Any], calibrators: Sequence[Any]) -> np.ndarray[Any, Any]:
-    """Apply the per-class calibrators and **renormalise**.
-
-    The renormalisation is not tidiness. Three independently calibrated probabilities do
-    not sum to one, and an unrenormalised set scales every expected move by an unknown
-    factor: the ranking between candidates survives it, so the BUY boundary moves while
-    everything still looks internally consistent. `modelling.expected_move` refuses a set
-    that does not sum to one, which is the assertion that keeps this line honest.
-    """
-    out = np.empty_like(raw, dtype=np.float64)
-    for index, calibrator in enumerate(calibrators):
-        column = raw[:, index]
-        out[:, index] = column if calibrator is None else calibrator.predict(column)
-    np.clip(out, 1e-9, 1.0, out=out)
-    totals = out.sum(axis=1, keepdims=True)
-    return out / totals
+    # Converted here, at the boundary, so that **this module scores its own out-of-sample
+    # rows through exactly the code engine 8 will use live**. Keeping the scikit-learn
+    # objects and calling `.predict` here while the engine interpolated two arrays would be
+    # two implementations of one arithmetic, which is the drift `modelling/` exists to
+    # prevent — and it would differ only in the third decimal, on the input the cost gate
+    # prices a trade against.
+    return from_sklearn(fitted), identity, int(rows["decision_ts"].max() or 0)
 
 
 def _brier_of_target(probabilities: np.ndarray[Any, Any], labels: Sequence[str]) -> float:
@@ -892,6 +919,233 @@ def _di_reference_rows(train: pl.DataFrame, window_days: int) -> pl.DataFrame:
         for (_pair,), group in train.group_by(["pair"], maintain_order=True)
     ]
     return pl.concat(parts, how="vertical") if parts else train
+
+
+# --------------------------------------------------------------------------- #
+# The skeptic - spec 69
+# --------------------------------------------------------------------------- #
+
+#: What the skeptic sees beyond the feature vector: the predictor's own call, so it can
+#: learn *when that call is wrong* rather than re-learn the market. Recorded in the
+#: manifest in this order, because engine 15 builds the same vector live and a permuted
+#: order there is the same confident nonsense it is for the predictor.
+SKEPTIC_EXTRA_INPUTS: Final[tuple[str, ...]] = (
+    "p_target",
+    "p_stop",
+    "p_timeout",
+    "expected_move_pct",
+)
+
+#: Below this many eligible rows, the fold produces no skeptic. Not a tuned threshold: a
+#: binary model fitted on a handful of rows is a coin flip with a manifest, and engine 15
+#: blocking with `skeptic_unavailable` is the honest answer for a model version that has
+#: none. The early folds have no earlier out-of-sample calls at all and correctly produce
+#: nothing, which the digest says per fold.
+MIN_SKEPTIC_ROWS: Final = 150
+
+
+def _skeptic_training_rows(
+    previous_oos: pl.DataFrame | None,
+    dataset: pl.DataFrame,
+    fold: Fold,
+    *,
+    names: Sequence[str],
+    interval_s: int,
+    embargo_bars: int,
+) -> pl.DataFrame:
+    """The BUY calls this fold's skeptic may learn from, and nothing else.
+
+    Four exclusions, and every one of them is silent if it is missed:
+
+    * **non-BUY rows.** The skeptic grades the predictor's BUY calls. Trained on rows the
+      predictor never called, it is a second predictor wearing a veto.
+    * **in-sample calls.** The predictor is right about its own training set far more often
+      than it is right live, so a skeptic trained on those calls learns the predictor's
+      overfit rather than its mistakes and vetoes almost nothing. Only the out-of-sample
+      file qualifies.
+    * **this fold and later.** That is the window the skeptic is about to be judged on.
+    * **rows the purge and embargo would have removed**, against this fold's test window.
+      A label window reaching into it is the same leak whichever model reads the row, so
+      the skeptic's rows are subject to exactly what the predictor's are.
+
+    The features come from the dataset rather than from the out-of-sample file: that file
+    carries what the predictor *said*, and the skeptic needs what it *saw* as well.
+    """
+    if previous_oos is None or previous_oos.height == 0:
+        return dataset.head(0)
+    embargo_start = int(fold.test_start_ts) - embargo_bars * interval_s
+    eligible = previous_oos.filter(
+        pl.col("is_buy")
+        & (pl.col("fold_index") < int(fold.fold_index))
+        & (pl.col("label_window_end_ts") < int(fold.test_start_ts))
+        & (pl.col("decision_ts") < embargo_start)
+    )
+    if eligible.height == 0:
+        return dataset.head(0)
+    return eligible.join(
+        dataset.select(["pair", "decision_ts", *names]),
+        on=["pair", "decision_ts"],
+        how="inner",
+    ).sort(["decision_ts", "pair"])
+
+
+def _fit_skeptic(
+    previous_oos: pl.DataFrame | None,
+    dataset: pl.DataFrame,
+    fold: Fold,
+    *,
+    config: _Config,
+    names: Sequence[str],
+    seed: int,
+    scaler: Scaler,
+    oos: pl.DataFrame,
+    buys: Sequence[bool],
+) -> tuple[Any, dict[str, Any]]:
+    """Meta-labelling: how likely is this BUY call to be wrong.
+
+    The label is ``wrong = label != "target"`` and the inputs are the feature vector plus
+    the predictor's own three probabilities and its expected move. **It can only veto.**
+    Nothing here produces an output that makes a trade more likely, which is invariant 4
+    and is why engine 15 turns a probability into a veto or into nothing at all.
+
+    Returns the fitted model (or `None`) and the report that goes into the digest and the
+    manifest. The identity in that report is computed from the rows this function was
+    handed, so a caller that passed the wrong ones says so in the artefact.
+    """
+    import lightgbm as lgb
+
+    interval_s = int(_required(config, "timeframes.decision_bar_s"))
+    embargo_bars = int(_required(config, "backtest.embargo_bars"))
+    rows = _skeptic_training_rows(
+        previous_oos,
+        dataset,
+        fold,
+        names=names,
+        interval_s=interval_s,
+        embargo_bars=embargo_bars,
+    )
+    report: dict[str, Any] = {
+        "skeptic_rows": int(rows.height),
+        "skeptic_effective_sample_size": 0.0,
+        "skeptic_training_identity": None,
+        "skeptic_input_names": None,
+        "skeptic_veto_rate": None,
+        "skeptic_surviving_target_rate": None,
+        "skeptic_all_buy_target_rate": None,
+    }
+    if rows.height < MIN_SKEPTIC_ROWS:
+        return None, report
+
+    wrong = np.asarray(
+        [0 if label == LABEL_TARGET else 1 for label in rows["label"]], dtype=np.int64
+    )
+    if len(set(wrong.tolist())) < 2:
+        # Every earlier BUY call went the same way. A binary model fitted on one class
+        # predicts that class for everything, which would veto everything or nothing;
+        # reported as no skeptic rather than as a model with a manifest.
+        return None, report
+
+    inputs = [*names, *SKEPTIC_EXTRA_INPUTS]
+    features = _skeptic_matrix(rows, scaler, names)
+    weights = np.asarray([float(value) for value in rows["weight"]], dtype=np.float64)
+
+    model = lgb.LGBMClassifier(
+        objective="binary",
+        n_estimators=int(_required(config, "training.num_trees")),
+        learning_rate=float(_required(config, "training.learning_rate")),
+        num_leaves=int(_required(config, "training.num_leaves")),
+        min_child_samples=int(_required(config, "training.min_data_in_leaf")),
+        random_state=seed,
+        deterministic=True,
+        force_row_wise=True,
+        n_jobs=int(_required(config, "prediction.threads")),
+        verbose=-1,
+    )
+    model.fit(features, wrong, sample_weight=weights)
+
+    report["skeptic_effective_sample_size"] = effective_sample_size(
+        [float(value) for value in rows["weight"]]
+    )
+    report["skeptic_training_identity"] = identity_digest(
+        [str(value) for value in rows["pair"]],
+        [int(value) for value in rows["decision_ts"]],
+    )
+    report["skeptic_input_names"] = list(inputs)
+    report.update(
+        _skeptic_veto_report(config, model, scaler, names, dataset, oos, buys)
+    )
+    return model, report
+
+
+def _skeptic_matrix(
+    rows: pl.DataFrame, scaler: Scaler, names: Sequence[str]
+) -> np.ndarray[Any, Any]:
+    """The skeptic's input matrix: scaled features, then the predictor's own call.
+
+    One function, used to fit and to score, so the two halves cannot disagree about the
+    column order. Engine 15 builds the same vector from the manifest's recorded
+    `skeptic_input_names`.
+    """
+    scaled = np.asarray(scaler.transform(_matrix(rows, names)), dtype=np.float64)
+    extras = rows.select(
+        [pl.col(name).cast(pl.Float64).fill_null(math.nan) for name in SKEPTIC_EXTRA_INPUTS]
+    ).to_numpy()
+    return np.hstack([scaled, extras])
+
+
+def _skeptic_veto_report(
+    config: _Config,
+    model: Any,
+    scaler: Scaler,
+    names: Sequence[str],
+    dataset: pl.DataFrame,
+    oos: pl.DataFrame,
+    buys: Sequence[bool],
+) -> dict[str, Any]:
+    """The numbers that say whether the skeptic helps, on this fold's own BUY calls.
+
+    **The second pair is the only thing that answers the question.** A veto rate alone says
+    how often it fires; the target rate among the calls that survive the veto, beside the
+    target rate among *all* BUY calls, says whether firing was worth anything. A skeptic
+    that vetoes a third of the calls and leaves the target rate unchanged has cost a third
+    of the opportunities for nothing.
+
+    `skeptic.veto_threshold` is the operator's and is absent until the walk-forward
+    reports, so these are `None` while it is. Training still runs; only the numbers that
+    need a threshold wait for one.
+    """
+    buy_rows = oos.filter(pl.Series(values=list(buys), dtype=pl.Boolean))
+    all_buy_rate = (
+        float((buy_rows["label"] == LABEL_TARGET).mean() or 0.0) if buy_rows.height else None
+    )
+    threshold = config.get("skeptic.veto_threshold")
+    if threshold is None or buy_rows.height == 0:
+        return {"skeptic_all_buy_target_rate": all_buy_rate}
+
+    # **The out-of-sample frame carries what the predictor *said*, not what it *saw*.**
+    # The skeptic's inputs are both, so the features are joined back from the dataset —
+    # the same join `_skeptic_training_rows` makes, and forgetting it here is what made
+    # this function ask polars for `bar_range_pct` in a frame of probabilities.
+    scored = buy_rows.join(
+        dataset.select(["pair", "decision_ts", *names]),
+        on=["pair", "decision_ts"],
+        how="inner",
+    )
+    if scored.height == 0:
+        return {"skeptic_all_buy_target_rate": all_buy_rate}
+    wrongness = model.predict_proba(_skeptic_matrix(scored, scaler, names))[:, 1]
+    survives = wrongness <= float(threshold)
+    surviving = scored.filter(pl.Series(values=survives.tolist(), dtype=pl.Boolean))
+    return {
+        "skeptic_veto_rate": float(1.0 - survives.mean()),
+        "skeptic_surviving_target_rate": (
+            float((surviving["label"] == LABEL_TARGET).mean() or 0.0)
+            if surviving.height
+            else None
+        ),
+        "skeptic_all_buy_target_rate": all_buy_rate,
+    }
+
 # --------------------------------------------------------------------------- #
 # The digest entry, and the artefacts
 # --------------------------------------------------------------------------- #
@@ -940,6 +1194,7 @@ def _fold_entry(
     buys: Sequence[bool],
     di_fit: Any,
     di_refusals: Sequence[bool],
+    skeptic_report: Mapping[str, Any],
 ) -> dict[str, Any]:
     """One fold's line in the digest.
 
@@ -988,7 +1243,7 @@ def _fold_entry(
             if di_fit is None
             else sum(1 for value in di_refusals if value) / max(len(di_refusals), 1)
         ),
-        "skeptic_rows": 0,
+        **dict(skeptic_report),
         "is_empty": False,
     }
 
@@ -1031,6 +1286,8 @@ def _write_fold_artefacts(
     assets: Sequence[str],
     mean_timeout: float,
     scaler_rows: pl.DataFrame,
+    skeptic: Any,
+    skeptic_report: Mapping[str, Any],
     calibration_identity: str,
     calibration_rows: int,
     calibration_end_ts: int,
@@ -1045,25 +1302,18 @@ def _write_fold_artefacts(
     (directory / "model.txt").write_bytes(
         model.booster_.model_to_string().encode("utf-8")
     )
-    (directory / "calibrators.json").write_bytes(
-        json.dumps(
-            [
-                None
-                if calibrator is None
-                else {
-                    "x": [float(value) for value in calibrator.X_thresholds_],
-                    "y": [float(value) for value in calibrator.y_thresholds_],
-                }
-                for calibrator in calibrators
-            ],
-            sort_keys=True,
-        ).encode("utf-8")
-        + b"\n"
-    )
+    (directory / CALIBRATORS_NAME).write_bytes(calibration_to_json(calibrators))
     if di_fit is not None:
         from acsoe.modelling import di as di_module
 
         di_module.save(di_fit, directory / "di.npz")
+    if skeptic is not None:
+        # Text rather than a pickle, for the same reason the predictor is: a pickle in an
+        # artefact directory is code that runs when a model is loaded, inside the process
+        # that places orders.
+        (directory / "skeptic.txt").write_bytes(
+            skeptic.booster_.model_to_string().encode("utf-8")
+        )
 
     training_identity = identity_digest(
         [str(value) for value in train["pair"]],
@@ -1114,6 +1364,15 @@ def _write_fold_artefacts(
             # the whole suite as mutations until these two digests existed. Ruling 7 of
             # 2026-09-13: prove which rows a thing saw, never take a number it reported
             # about itself.
+            "skeptic": None
+            if skeptic is None
+            else {
+                "file": "skeptic.txt",
+                "rows": int(skeptic_report["skeptic_rows"]),
+                "input_names": list(skeptic_report["skeptic_input_names"] or []),
+                "training_identity": skeptic_report["skeptic_training_identity"],
+                "label": "wrong = label != 'target'",
+            },
             "calibration_identity": calibration_identity,
             "calibration_rows": calibration_rows,
             "calibration_end_ts": calibration_end_ts,
