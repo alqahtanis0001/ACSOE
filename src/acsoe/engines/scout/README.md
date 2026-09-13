@@ -37,10 +37,16 @@ override — and that absence is the property being protected rather than a coin
 | Per-currency spendable balance | `state["exchange"]["balances"]` | 1 `exchange` (A) |
 | `bid`, `ask` | `state["market_sensor"]["quotes"][pair]` | 3 `market_sensor` (A) |
 | Total account equity | `store.latest_equity_snapshot()` | 19 `memory`, Phase 4 |
+| The feature vector per pair | `state["feature"]["pairs"][pair]` | 5 `feature` (C), Phase 5 |
 
 Configuration: `trading.risk_fraction_per_trade`, `barriers.stop_pct`, `barriers.target_pct`,
 `trading.allow_crypto_quoted`, `trading.base_reporting_currency`,
-`trading.stable_quote_currencies`.
+`trading.stable_quote_currencies`, `scout.rank_feature`, `scout.rank_descending`.
+
+**`state["feature"]` is read only when `scout.rank_feature` names a feature.** With no
+feature configured the engine never touches it and its absence is not a fault — which is
+what lets engine 7 run unchanged on a tree where engine 5 does not exist. With one
+configured and engine 5 silent, the engine blocks; see the ordering section.
 
 **Equity comes from the store, not from a balance**, for the reason engine 11 gives:
 invariant 6 sizes against cash plus the value of open positions, and only engine 19 computes
@@ -163,11 +169,46 @@ quiet days is a breaker nobody can leave switched on.
 the data to compute a universe at all — no pair rules, no equity snapshot, no quotes for any
 pair.
 
-## The ordering is alphabetical, and that is a recorded absence rather than a design
+## The ordering is a feature named in config, and alphabetical until one is named
 
-**RULED by the operator on 2026-09-10.** Invariant 4 describes engine 7's ranking as "a
-deterministic score over features". There are no features in Phase 3, and the operator's
-reasoning is worth quoting rather than summarising:
+**Spec 76, Phase 5.** The universe is ordered by the feature at `scout.rank_feature`, in the
+direction at `scout.rank_descending`, read from `state["feature"]["pairs"]` as engine 5
+publishes it. Invariant 4: a deterministic score over features, with no model in it and
+therefore nothing here for a model to override.
+
+The rules, in full, because each of them is a decision and not an implementation detail:
+
+- **One feature, one direction, one tie-break.** No composite, no normalisation, no formula.
+  Spec 59 decision 7 made the ranking a *named feature* rather than a score precisely so that
+  the choice is the operator's and is visible in one config key.
+- **The tie-break is the pair name ascending, in both directions.** Two pairs the feature
+  rates equally order by name whichever end of the feature is being taken. `reverse=True`
+  would reverse the tie-break with the feature, so the pair taken would move on a flag that
+  is meant to order by the feature alone.
+- **A pair with no value sorts last and is never dropped.** Null, absent from the feature
+  map, and NaN are one fact — this pair has no value for this feature — and it sorts after
+  every pair that has one, alphabetically among themselves. A pair with no feature is still
+  tradable, and dropping it would silently shrink the universe the filter just computed.
+  NaN is included because `modelling/features.py` yields it for an unfilled lookback and it
+  compares false against everything including itself, so a NaN left in a sort key orders
+  unpredictably rather than loudly.
+- **A configured feature with no engine 5 output blocks**, with `scout_inputs_unavailable`.
+  Falling back to alphabetical would report a ranking that did not happen, and would be right
+  on exactly the ticks where alphabetical agreed — see the history below for why that shape
+  is the one thing this engine may not do.
+- **The engine publishes what it used**: `rank_feature` and `rank_descending` in
+  `state["scout"]`. `rank_feature` is **null rather than omitted** when nothing is
+  configured, because null is the answer — the ordering was alphabetical for want of a key —
+  and the spec 75 study's alphabetical control is exactly that distinction.
+- **`pairs` stays in scan order and carries no ranking.** The ranking is expressed by
+  `pair` and `rank_feature`, in one place. Two expressions of one ordering disagree silently
+  the first time a consumer reads `pairs[0]`.
+
+### The history, because the next reader will look for a score
+
+From Phase 3 until spec 76 this ordering was **alphabetical and recorded as an absence
+rather than a design.** The operator ruled on 2026-09-10, and the reasoning is worth quoting
+rather than summarising, because it is what shaped the rule above about blocking:
 
 > A deterministic score over features is meaningless before features exist, and a
 > placeholder score would be a check whose output resembles the claim while the claim is
@@ -175,27 +216,23 @@ reasoning is worth quoting rather than summarising:
 > ranking one candidate out of a filtered set is a Phase 5 decision made with real features
 > in front of us.
 
-So the ordering is the **tie-break alone**: pair name, ascending, over the *whole* universe
-rather than applied to pairs some score already rated equal. Not a score that happens to be
-constant, not a score over spread or volume, not a `TODO` returning zero.
+Phase 5 closed it. The mechanism is here; **the feature itself is not chosen by this engine
+and is not chosen by B.** It arrives in `config/default.yaml` from the operator's ruling on
+the spec 75 ranking study, and the committed config carries `scout.rank_descending` with no
+`scout.rank_feature` — so on every tick today the ordering is alphabetical and the engine
+publishes `rank_feature: null`. That is the same recorded absence as before, now with the
+mechanism behind it built and tested.
 
-**Nobody should read this as a choice anyone defended.** Equal treatment of every pair in the
-universe is the honest behaviour when nothing yet distinguishes them, and alphabetical order
-is how equal treatment is spelled. **Phase 5 closes it**, with real features; it is carried
-as an open question in `context/progress/b-store.md` and belongs in the tracker.
+### One thing to know before trusting any ordering test here
 
-It is isolated as **one named function**, `rank_universe` in `contracts.py`, the way
-`EXCLUSION_REASONS` is a named table — so Phase 5 fixing it is one edit against a named seam
-rather than a hunt through the engine.
-
-**One thing to know before trusting the ordering tests**, because it was found by mutation
-rather than by reading: replacing `rank_universe`'s `sorted(pairs)` with `tuple(pairs)`
-leaves every *behavioural* ordering test green. The engine builds its scan set as
-`sorted(...)`, so `rank_universe` is handed an already-ordered sequence and a ranking that
-merely preserved arrival order still answers alphabetically. The two sorts are defence in
-depth in the engine and a blind spot in the behavioural tests.
-`test_rank_universe_orders_by_name_and_not_by_arrival` calls it directly with
-reverse-alphabetical input and is what actually pins alphabetical-by-construction.
+Found by mutation rather than by reading, in Phase 3, and it is why spec 76's central test is
+a direct one: the engine builds its scan set as `sorted(...)`, so `rank_universe` is always
+handed an already-ordered sequence. A ranking that merely returned `tuple(pairs)` therefore
+answers alphabetically end to end and leaves every *behavioural* ordering test green. Only a
+direct call on input whose arrival order and intended order disagree on **every** element can
+tell "orders by the feature" from "preserves what it was given".
+`test_rank_universe_orders_by_the_named_feature_and_not_by_arrival` is that call, and
+`feature-specs/PHASE-5-TASKS.md` names the seam directly and calls the test not optional.
 
 ## The sizing arithmetic exists twice, on purpose
 

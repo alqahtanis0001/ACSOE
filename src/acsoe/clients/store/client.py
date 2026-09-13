@@ -18,12 +18,13 @@ what a drawdown or a loss streak means; this file only knows how to fetch one.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from decimal import Decimal
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import TracebackType
 from typing import Any, Final, Self
 
@@ -153,14 +154,57 @@ class StoreError(RuntimeError):
     """The store could not do what was asked."""
 
 
+def _validated_run_id(run_id: str) -> str:
+    """A training run id that is safe to use as one directory name, or a refusal.
+
+    **Checked before any path is built**, which is the point rather than a nicety: a
+    run id is a string that arrives from a config key, a CLI flag or a manifest, and
+    `Path("models") / "../../etc"` is a perfectly well-formed path that reads and writes
+    outside the artefact root. Joining first and validating the result afterwards is the
+    version of this check that has been wrong in every system that has ever had it.
+
+    Each refusal carries its own message, because `StoreError` has one type and several
+    causes and a caller — or a test — cannot tell them apart from the type alone.
+
+    A leading dot is legal: `.` and `..` are refused by name, but a run id may start with
+    one, and inventing a rule against it would refuse ids the trainer is entitled to mint.
+    """
+    if run_id.strip() == "":
+        raise StoreError("refusing an empty run id: an artefact directory needs a name")
+    if run_id != run_id.strip():
+        raise StoreError(
+            f"refusing run id {run_id!r}: it has leading or trailing whitespace, which "
+            "would make two ids that print identically name two directories"
+        )
+    if "\x00" in run_id:
+        raise StoreError(f"refusing run id {run_id!r}: it contains a null byte")
+    if run_id in {os.curdir, os.pardir}:
+        raise StoreError(
+            f"refusing run id {run_id!r}: it names a directory relative to the artefact "
+            "root rather than a run inside it"
+        )
+    if "/" in run_id or "\\" in run_id:
+        raise StoreError(
+            f"refusing run id {run_id!r}: a run id is one directory name, not a path. "
+            "A separator here would put an artefact outside the artefact root."
+        )
+    if PureWindowsPath(run_id).drive or PureWindowsPath(run_id).is_absolute():
+        raise StoreError(
+            f"refusing run id {run_id!r}: it is absolute or carries a drive, so joining "
+            "it to the artefact root would discard the root entirely"
+        )
+    return run_id
+
+
 class StoreClient:
     """SQLite and Parquet access for the whole system.
 
     Satisfies the `store` member of the `Clients` Protocol declared in `core/`.
     """
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, *, models_dir: Path | None = None) -> None:
         self._db_path = Path(db_path)
+        self._models_dir = None if models_dir is None else Path(models_dir)
         self._conn: sqlite3.Connection | None = None
 
     # ------------------------------------------------------------------
@@ -170,6 +214,18 @@ class StoreClient:
     @property
     def db_path(self) -> Path:
         return self._db_path
+
+    @property
+    def models_dir(self) -> Path | None:
+        """The artefact root, or `None` when this client was built without one.
+
+        `None` is not an error at construction time and must not become one: a fresh
+        clone has no `models/`, the console builds a store to render rows and never asks
+        for an artefact, and the seed generator writes no model at all. The refusal
+        belongs at the moment someone asks for a run directory, which is where it can
+        name the run id nobody can serve.
+        """
+        return self._models_dir
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -931,3 +987,157 @@ class StoreClient:
             (int(limit),),
         ).fetchall()
         return tuple(LeaderboardRow(**_row_to_dict(row)) for row in rows)
+
+    def leaderboard_entries(
+        self, *, model_id: str, model_version: str, fold: str | None
+    ) -> tuple[LeaderboardRow, ...]:
+        """Every leaderboard row for one model version and one fold, oldest first.
+
+        **The existence read engine 20 `tournament` needs, and the one thing spec 62's
+        audit found missing.** Spec 74 requires engine 20 to be idempotent on
+        `(model_id, model_version, fold)` and to report how many rows it wrote and how
+        many it found. The only read that existed was :meth:`leaderboard`, which is the
+        console's: newest 50 by `trained_at`. Deciding "have I written this fold already"
+        from a truncating window is the rows-versus-ticks defect of spec 51 again — a
+        walk-forward with more folds than the limit would silently start writing
+        duplicates, and the duplicate looks exactly like a second training run.
+
+        **It returns every match rather than the first**, because nothing stops there
+        being two. There is no unique index on those three columns; adding one is a
+        schema change and spec 62 forbids one this phase. So idempotency here is the
+        caller's to enforce and this method's to make enforceable, and a reader that
+        collapsed two rows into one would hide the very state that proves the convention
+        was broken. Raised for the lead in `context/progress/b-store.md`.
+
+        `fold IS ?` and never `fold = ?`. `fold` is nullable, SQL equality against NULL
+        is NULL rather than true, and `fold = NULL` therefore matches nothing at all —
+        so the aggregate row every model version has, the one with no fold, would look
+        absent on every check and be rewritten on every run.
+        """
+        rows = self.connection.execute(
+            "SELECT * FROM leaderboard WHERE model_id = ? AND model_version = ? "
+            "AND fold IS ? ORDER BY id ASC",
+            (str(model_id), str(model_version), fold),
+        ).fetchall()
+        return tuple(LeaderboardRow(**_row_to_dict(row)) for row in rows)
+
+    # ------------------------------------------------------------------
+    # Trained artefacts — `models/<run_id>/`
+    #
+    # Contract rule 4: an engine never touches the filesystem directly, so engines 8,
+    # 13 and 15 reach a trained artefact through here and never by building a path.
+    # This client hands back a **path and nothing else**. It does not open the
+    # manifest, does not verify a hash and does not know what a scaler is: the layout
+    # is `modelling/artefacts.py`'s (C's), and a store that also parsed artefacts would
+    # be two owners in one file.
+    #
+    # There is deliberately no listing, no wildcard and no "latest". A run id is
+    # configured — `models.prediction_run_id` and its two siblings — and an engine that
+    # could ask for "the newest artefact" would silently change model between two ticks
+    # of the same daemon, which is the opposite of a result anyone can reproduce.
+    # ------------------------------------------------------------------
+
+    def _artefact_root(self, run_id: str, *, create: bool) -> Path:
+        """The configured artefact root, or a refusal naming the run nobody can serve.
+
+        **`create` is the whole difference between the two public methods**, and it is a
+        parameter rather than two copies of this because the `models_dir is None` refusal
+        below is common to both and must stay common: no configured root is a
+        misconfiguration in either direction, and a writer that invented one would put
+        artefacts wherever the process happened to be running.
+
+        A *reader* refuses a missing root. A *writer* creates it. Ruled by the lead on
+        2026-09-13 after B raised it: `platform/paths.py` creates `models/` at startup
+        beside `data/` and `logs/`, but C's trainer runs as
+        `python -m acsoe.research.training`, which never goes through A's startup path —
+        so a writer that demanded the root already exist would refuse the first training
+        run on every fresh clone, reporting a misconfiguration where there was only an
+        empty tree.
+
+        The asymmetry is deliberate and the two must not drift into agreement. For a
+        reader, a missing root and a missing run are different facts with the same
+        remedy only by coincidence: on a fresh clone the root is absent because nothing
+        has trained, and creating it to then report the run missing inside it would turn
+        a true message into a less true one and leave an empty directory behind.
+        """
+        root = self._models_dir
+        if root is None:
+            raise StoreError(
+                f"cannot reach model run {run_id!r}: this store was built with no "
+                "models_dir, so there is no artefact root to look in"
+            )
+        if root.is_dir():
+            return root
+        if not create:
+            raise StoreError(
+                f"cannot reach model run {run_id!r}: the artefact root {root} does not "
+                "exist. A fresh clone has no models/ until something trains."
+            )
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise StoreError(
+                f"could not create the artefact root {root} for model run {run_id!r}: {exc}"
+            ) from exc
+        return root
+
+    def model_run_dir(self, run_id: str) -> Path:
+        """The directory holding one training run's artefacts. Read-only access.
+
+        Raises :class:`StoreError` — naming the run id and the root — when the run id is
+        unusable, when no artefact root was configured, when the root does not exist, or
+        when that run has never been trained. The last is the ordinary case on a fresh
+        clone and is what makes engines 8, 13 and 15 block rather than predict, per
+        spec 59 decision 9.
+        """
+        name = _validated_run_id(run_id)
+        root = self._artefact_root(run_id, create=False)
+        path = root / name
+        if not path.is_dir():
+            raise StoreError(
+                f"model run {run_id!r} is not in the artefact root {root}: no directory "
+                f"{path}. Train it, or point models.*_run_id at a run that exists."
+            )
+        return path
+
+    def new_model_run_dir(self, run_id: str) -> Path:
+        """Create the directory for a training run that has not been written yet.
+
+        **An existing directory is refused, never reused and never overwritten.**
+        `code-standards.md`: every trained artefact is written to `models/<run_id>/` and
+        never overwritten, because a model whose files came from two runs cannot be
+        reproduced from its config plus its data and is therefore not a result. The
+        refusal is the whole safety property of this method; a caller that wants to
+        retrain mints a new run id.
+
+        The refusal is `mkdir(exist_ok=False)` itself rather than a prior `exists()`
+        check, so it is atomic: two trainers racing for one run id cannot both be told
+        the directory is free. That is the one property here worth protecting, and a
+        `path.exists()` guard in front of it would quietly throw it away.
+
+        **A missing artefact root is created; a missing run directory is not reused.**
+        Those are the two halves of this method and they pull in opposite directions on
+        purpose. The lead ruled on 2026-09-13 that the root is created, because C's
+        trainer runs as `python -m acsoe.research.training` and never touches A's startup
+        path, so demanding the root already exist would refuse the first training run on
+        every fresh clone. `parents=False` stays on this `mkdir` even so: the root is
+        created deliberately, by :meth:`_artefact_root`, and letting this call create it
+        as a side effect of `parents=True` would also silently create any *other* missing
+        ancestor — which is only reachable through a run id shaped like a path, and
+        `_validated_run_id` refuses those precisely so this line never has to.
+        """
+        name = _validated_run_id(run_id)
+        root = self._artefact_root(run_id, create=True)
+        path = root / name
+        try:
+            path.mkdir(parents=False, exist_ok=False)
+        except FileExistsError as exc:
+            raise StoreError(
+                f"refusing to write model run {run_id!r}: {path} already exists. A "
+                "trained artefact is never overwritten; mint a new run id."
+            ) from exc
+        except OSError as exc:
+            raise StoreError(
+                f"could not create the directory for model run {run_id!r} under {root}: {exc}"
+            ) from exc
+        return path

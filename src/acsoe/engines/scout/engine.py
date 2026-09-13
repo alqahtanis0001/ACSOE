@@ -54,6 +54,8 @@ from acsoe.engines.scout.contracts import (
     EXCHANGE_BALANCES_KEY,
     EXCHANGE_KEY,
     EXCHANGE_PAIR_RULES_KEY,
+    FEATURE_KEY,
+    FEATURE_PAIRS_KEY,
     MARKET_SENSOR_KEY,
     MARKET_SENSOR_QUOTES_KEY,
     PAIR_BASE_FIELD,
@@ -92,6 +94,12 @@ REPORTING_CURRENCY_KEY = "trading.base_reporting_currency"
 #: The operator's set of quote currencies that are not a second directional bet. **Absent
 #: is not empty** — see :meth:`ScoutEngine._stable_quotes`.
 STABLE_QUOTES_KEY = "trading.stable_quote_currencies"
+
+#: The feature the universe is ranked by, and which end of it to take. **Absent until the
+#: operator rules on the spec 75 ranking study**; alphabetical meanwhile. Spec 59
+#: decision 7 — the ranking is a config-named feature, never a formula written here.
+RANK_FEATURE_KEY = "scout.rank_feature"
+RANK_DESCENDING_KEY = "scout.rank_descending"
 
 __all__ = ["MissingInputError", "ScoutEngine"]
 
@@ -188,6 +196,14 @@ class ScoutEngine(BaseEngine):
         allow_crypto = bool(context.config.get(ALLOW_CRYPTO_QUOTED_KEY))
         stable = self._stable_quotes(context)
 
+        # Read before the filter runs, not after, because a configured feature with no
+        # engine 5 output is a tick-level block and the whole tick is unanswerable. Doing
+        # the work first and discovering it afterwards would publish nothing either way
+        # and burn the scan.
+        rank_feature = self._rank_feature(context)
+        rank_descending = self._rank_descending(context)
+        features = self._features(state, rank_feature)
+
         # The notional this account's equity would put behind any one position. Computed
         # once: it is a property of the account, not of a pair. Invariant 6 sizes against
         # total equity, so this is the same number engine 11 arrives at.
@@ -216,9 +232,12 @@ class ScoutEngine(BaseEngine):
                 excluded[reason] = excluded.get(reason, 0) + 1
 
         # One candidate leaves this engine, never several: the judgement chain considers
-        # one. In Phase 3 the ordering is alphabetical and nothing else — see
-        # `rank_universe`, where the operator's ruling and its reasoning live.
-        candidate = select_candidate(pairs)
+        # one. The ordering lives in `rank_universe` — one named seam, so the ranking is
+        # one edit and not a hunt through this engine — and it is alphabetical while no
+        # feature is configured.
+        candidate = select_candidate(
+            pairs, features=features, feature=rank_feature, descending=rank_descending
+        )
 
         return ScoutUniverse(
             pairs=tuple(pairs),
@@ -227,6 +246,8 @@ class ScoutEngine(BaseEngine):
             equity=equity,
             candidate=candidate,
             reason_code=None if candidate is not None else REASON_EMPTY_UNIVERSE,
+            rank_feature=rank_feature,
+            rank_descending=rank_descending,
         )
 
     def _exclusion(
@@ -412,6 +433,84 @@ class ScoutEngine(BaseEngine):
             )
         equity: Decimal = snapshot.equity
         return equity
+
+    def _rank_feature(self, context: EngineContext) -> str | None:
+        """`scout.rank_feature`, or `None` while the operator has not ruled.
+
+        **Absent and null are the same fact for this key**, and that is a statement about
+        this key rather than a shortcut. `code-standards.md` warns that catching `KeyError`
+        over a config read conflates "absent" with "present and null" — two facts
+        `Config.get` reports differently on purpose, and for
+        `trading.stable_quote_currencies` they genuinely differ. Here they do not: spec 59
+        decision 7 keeps the key out of the YAML until the operator rules on the spec 75
+        study, and spec 61 types the field `str | None = None`, so "no feature chosen yet"
+        reaches this method as absence from a tree without the key and as null from one
+        with it. Both mean alphabetical, and `rank_feature: null` is published either way.
+
+        An empty or whitespace name is **not** the same fact and is refused. It is a key
+        somebody set to nothing, and ranking by a feature named `""` would find no value
+        for any pair, order them alphabetically under the null rule, and report a ranking
+        it never performed — the placeholder score the operator refused, arriving through
+        a typo instead of a design.
+        """
+        try:
+            value = context.config.get(RANK_FEATURE_KEY)
+        except KeyError:
+            # `KeyError` and not `Exception`: `platform/config.py`'s `ConfigKeyError`
+            # subclasses it, so this catches exactly "no such key" and lets a genuine
+            # fault in the config layer reach the orchestrator as the ERROR it is.
+            return None
+        if value is None:
+            return None
+        name = str(value)
+        if name.strip() == "":
+            raise MissingInputError(f"config {RANK_FEATURE_KEY} is set to an empty feature name")
+        return name
+
+    def _rank_descending(self, context: EngineContext) -> bool:
+        """`scout.rank_descending`, defaulting to `True`.
+
+        **Not a trading threshold, so a default is legitimate here** where it would not be
+        for a barrier or a risk fraction. It decides which end of a feature is interesting,
+        it is only ever read once a feature has been named, and spec 61 gives the field the
+        same default on the config model. A wrong direction produces a different candidate,
+        never a trade the gates would otherwise have refused.
+        """
+        try:
+            value = context.config.get(RANK_DESCENDING_KEY)
+        except KeyError:
+            return True
+        return True if value is None else bool(value)
+
+    def _features(self, state: State, feature: str | None) -> Mapping[str, Any] | None:
+        """`state["feature"]["pairs"]`, or a tick-level block when a feature is configured
+        and engine 5 published nothing.
+
+        **A configured ranking that silently fell back to alphabetical would be the
+        placeholder score the operator refused in Phase 3.** The engine would report a
+        ranking it did not perform, and the candidate would be right only on the ticks
+        where alphabetical happened to agree — which is the worst shape a defect can take
+        here, because it is correct often enough to look fine. Invariant 3: a gate that
+        cannot reach its data blocks.
+
+        With no feature configured, engine 5's absence is not a fault at all and nothing is
+        read. That is what lets this engine run unchanged on a tree where engine 5 does not
+        exist yet, which is the tree it is being written on.
+        """
+        if feature is None:
+            return None
+        published = state.get(FEATURE_KEY)
+        if not isinstance(published, dict):
+            raise MissingInputError(
+                f"{FEATURE_KEY} is absent while {RANK_FEATURE_KEY} names {feature!r}"
+            )
+        pairs = published.get(FEATURE_PAIRS_KEY)
+        if not isinstance(pairs, dict):
+            raise MissingInputError(
+                f"{FEATURE_KEY}.{FEATURE_PAIRS_KEY} is absent while "
+                f"{RANK_FEATURE_KEY} names {feature!r}"
+            )
+        return pairs
 
     def _stable_quotes(self, context: EngineContext) -> frozenset[str] | None:
         """`trading.stable_quote_currencies`, or `None` when the operator has not set it.

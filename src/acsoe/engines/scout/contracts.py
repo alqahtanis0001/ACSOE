@@ -45,6 +45,7 @@ somebody needs to fix.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from decimal import ROUND_DOWN, Decimal
 from typing import Any, Final
@@ -59,6 +60,8 @@ __all__ = [
     "EXCHANGE_KEY",
     "EXCHANGE_PAIR_RULES_KEY",
     "EXCLUSION_REASONS",
+    "FEATURE_KEY",
+    "FEATURE_PAIRS_KEY",
     "MARKET_SENSOR_KEY",
     "MARKET_SENSOR_QUOTES_KEY",
     "PAIRS_FIELD",
@@ -71,6 +74,8 @@ __all__ = [
     "PAIR_TICK_SIZE_FIELD",
     "QUOTE_ASK_FIELD",
     "QUOTE_BID_FIELD",
+    "RANK_DESCENDING_FIELD",
+    "RANK_FEATURE_FIELD",
     "REASON_BELOW_COSTMIN",
     "REASON_BELOW_ORDERMIN",
     "REASON_CRYPTO_QUOTED",
@@ -145,6 +150,26 @@ EXCHANGE_BALANCES_KEY: Final = "balances"
 #: Engine 3 `market_sensor` (A). The market-data engine, and the publisher of the live book.
 MARKET_SENSOR_KEY: Final = "market_sensor"
 MARKET_SENSOR_QUOTES_KEY: Final = "quotes"
+
+#: Engine 5 `feature` (C). The feature vector for every pair engine 3 published candles
+#: for, keyed by pair inside `pairs`, floats with `null` where a lookback was unfilled.
+#:
+#: **Read only by the ranking, and only when a feature is configured.** It is fixed by the
+#: cross-chain key table in `engine-contracts.md` — `state["feature"]["pairs"][pair]`,
+#: written by C, read here — and it is present only on a tick where a decision bar closed,
+#: which is the only tick engine 7 runs on anyway: engine 5 is first in the opportunity
+#: chain and returns `PASS` on every other tick, stopping the chain before this engine.
+FEATURE_KEY: Final = "feature"
+FEATURE_PAIRS_KEY: Final = "pairs"
+
+#: What this engine publishes about the ranking it performed, inside `state["scout"]`.
+#: **Null is the answer rather than the absence of one** — it says the ordering was
+#: alphabetical because no feature is configured, which the console and the spec 75
+#: ranking study need to tell apart from a feature that rated every pair equally. That is
+#: the opposite of :data:`CANDIDATE_FIELD`, which is absent rather than null, and the
+#: difference is which fact the reader is entitled to draw from it.
+RANK_FEATURE_FIELD: Final = "rank_feature"
+RANK_DESCENDING_FIELD: Final = "rank_descending"
 
 #: The two sides of the book. The ask prices the entry and the bid values the position, the
 #: same way round as engine 11 — the lead's ruling of 2026-09-10, and the reason the two
@@ -282,37 +307,106 @@ EXCLUSION_REASONS: Final[tuple[str, ...]] = (
 # --------------------------------------------------------------------------- #
 
 
-def rank_universe(pairs: Iterable[str]) -> tuple[str, ...]:
-    """The universe in the order the candidate is taken from. **Alphabetical, and that is
-    the whole of it in Phase 3.**
+def _feature_value(features: Mapping[str, Any] | None, pair: str, feature: str) -> float | None:
+    """One pair's value for the named feature, or `None` when it has none.
 
-    **RULED by the operator on 2026-09-10, and the reasoning belongs here as much as in
-    spec 44**, because the next agent to read this will be looking for the score:
+    **Four situations arrive here and three of them are the same fact.** No feature map at
+    all, a pair absent from the map, and a pair present with a null value all mean "this
+    pair has no value for this feature", and spec 76 gives them one answer: sort after
+    every pair that has one, and never drop the pair. The fourth is a usable number.
 
-        A deterministic score over features is meaningless before features exist, and a
-        placeholder score would be a check whose output resembles the claim while the claim
-        is untrue — this phase has produced enough of those. The universe filter is the
-        contribution; ranking one candidate out of a filtered set is a Phase 5 decision made
-        with real features in front of us.
-
-    So this is the **tie-break alone**: pair name, ascending. Not a score that happens to be
-    constant, not a score over spread or volume, not a `TODO` returning zero. Invariant 4
-    describes engine 7's ranking as "a deterministic score over features"; in Phase 3 there
-    are no features, so equal treatment of every pair in the universe is the honest
-    behaviour and alphabetical order is how equal treatment is spelled.
-
-    **This is a recorded absence, not a design.** It is isolated here — one named function,
-    the way :data:`EXCLUSION_REASONS` is a named table — so that Phase 5 fixing it is one
-    edit against a named seam rather than a hunt through the engine. Nobody should read
-    alphabetical ordering as a choice anyone defended.
-
-    `sorted` over the names is deliberately not `sorted(..., key=something)`: a key function
-    is where a score would arrive by accident, and there is nothing here for one to hide in.
+    **NaN counts as no value.** `modelling/features.py` yields NaN for a lookback whose
+    fill is below `features.min_lookback_fill` and engine 5 publishes those as null, but a
+    float NaN is one `orjson` setting away from crossing `state` intact — and NaN compares
+    false against everything including itself, so a NaN left in a sort key orders
+    unpredictably and can order differently between two runs over the same data. Treating
+    it as absent is the only reading that keeps this ordering deterministic, which is the
+    property invariant 4 protects.
     """
-    return tuple(sorted(pairs))
+    if not isinstance(features, Mapping):
+        return None
+    row = features.get(pair)
+    if not isinstance(row, Mapping):
+        return None
+    value = row.get(feature)
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        return float(value)
+    return None
 
 
-def select_candidate(pairs: Iterable[str]) -> str | None:
+def rank_universe(
+    pairs: Iterable[str],
+    *,
+    features: Mapping[str, Any] | None = None,
+    feature: str | None = None,
+    descending: bool = True,
+) -> tuple[str, ...]:
+    """The universe in the order the candidate is taken from.
+
+    **One named feature, one direction, one tie-break.** `feature` is `scout.rank_feature`,
+    `descending` is `scout.rank_descending`, and `features` is `state["feature"]["pairs"]`
+    exactly as engine 5 publishes it. Invariant 4: a deterministic score over features,
+    with no model in it and therefore nothing here for a model to override.
+
+    With `feature` `None` the ordering is alphabetical and nothing else — see the history
+    below — and that is what the system does until the operator rules on the spec 75 study.
+
+    With a feature: by that value, then **by pair name ascending** as the tie-break, in
+    both directions. A pair with no value for it sorts after every pair that has one,
+    alphabetically among themselves, and is **never dropped**: a pair with no feature is
+    still in the universe, and dropping it would silently shrink the universe the rest of
+    this module spent the tick computing.
+
+    ## History, because the next reader will come here looking for a score
+
+    From Phase 3 to Phase 5 this function was alphabetical and carried a recorded absence
+    in place of a ranking. The operator ruled on 2026-09-10 that a placeholder score would
+    be a check whose output resembles the claim while the claim is untrue, and that
+    ranking one candidate out of a filtered set was a Phase 5 decision to be made with real
+    features in front of us. Spec 59 decision 7 then made it **a config-named feature
+    rather than a formula**: the mechanism is here now, the feature itself arrives in
+    `config/default.yaml` from the operator's ruling on the spec 75 ranking study, and
+    while `scout.rank_feature` is absent the ordering stays alphabetical and the engine
+    publishes `rank_feature: null`.
+
+    ## Why the test for this is a direct one and an end-to-end test cannot replace it
+
+    The engine builds its scan set with `sorted`, so this function is always handed an
+    already-ordered sequence, and a ranking that merely preserved arrival order would
+    still answer alphabetically end to end. Only a direct call on input where arrival
+    order and intended order disagree on **every** element separates "orders by the
+    feature" from "preserves what it was given". `feature-specs/PHASE-5-TASKS.md` names
+    this seam directly and calls that test not optional.
+    """
+    names = list(pairs)
+    if feature is None:
+        # Deliberately not `sorted(..., key=...)`. With nothing configured there is
+        # nothing to key on, and a key function is where a score arrives by accident.
+        return tuple(sorted(names))
+
+    def ordering(pair: str) -> tuple[int, float, str]:
+        value = _feature_value(features, pair, feature)
+        if value is None:
+            # 1 sorts after 0 in **both** directions, so "no value last" is a property of
+            # the ordering rather than of the direction. The 0.0 is never compared against
+            # anything: it exists only because every key must have the same shape.
+            return (1, 0.0, pair)
+        # Negating for descending keeps the tie-break ascending by name in both
+        # directions. `reverse=True` would reverse the tie-break too, so two pairs with
+        # equal values would swap places when the direction flipped and the candidate
+        # would move on a config flag that is supposed to order by the feature alone.
+        return (0, -value if descending else value, pair)
+
+    return tuple(sorted(names, key=ordering))
+
+
+def select_candidate(
+    pairs: Iterable[str],
+    *,
+    features: Mapping[str, Any] | None = None,
+    feature: str | None = None,
+    descending: bool = True,
+) -> str | None:
     """The one pair the judgement chain will consider, or `None` when the universe is empty.
 
     One candidate leaves this engine, never several: the judgement chain considers one, and
@@ -321,8 +415,11 @@ def select_candidate(pairs: Iterable[str]) -> str | None:
     `None` is a routine answer rather than a failure — nothing qualifying is this system's
     honest default state on a small account — and the engine turns it into `PASS`, not
     `BLOCK`. See the engine's module docstring for why that distinction is load-bearing.
+
+    Every ranking argument is passed straight through to :func:`rank_universe`. This
+    function holds no ordering of its own, so there is one seam and not two.
     """
-    ordered = rank_universe(pairs)
+    ordered = rank_universe(pairs, features=features, feature=feature, descending=descending)
     return ordered[0] if ordered else None
 
 
@@ -370,8 +467,14 @@ class ScoutUniverse(BaseModel):
 
     `pairs` is the universe — every pair the account could legitimately trade *right now*,
     recomputed from scratch every tick. It is a sorted tuple rather than a set so the
-    payload is deterministic and JSON-safe; the ordering here carries no ranking, which is
-    spec 44's subject and is deliberately absent from this one.
+    payload is deterministic and JSON-safe.
+
+    **`pairs` is in scan order and carries no ranking, deliberately, and that is still
+    true now that a ranking exists.** The ranking is expressed by :attr:`candidate` and by
+    :attr:`rank_feature`, which say which pair was taken and on what basis. Sorting the
+    published universe by the feature as well would put the same ordering in two places,
+    and the day they disagreed — a consumer reading `pairs[0]` instead of `pair` — the
+    disagreement would be silent. One expression of the ranking, not two.
 
     **The counts are not decoration.** `scanned`, `entered` and `excluded` are what the
     console's empty state renders, and they are required to add up.
@@ -387,10 +490,26 @@ class ScoutUniverse(BaseModel):
     candidate: str | None = None
     """The one pair the judgement chain will consider, or `None` when nothing qualified.
 
-    Chosen by :func:`select_candidate` over :func:`rank_universe`, which in Phase 3 is
-    alphabetical and nothing else. It is published under :data:`CANDIDATE_FIELD` and is
-    **absent from the payload** rather than null when there is none.
+    Chosen by :func:`select_candidate` over :func:`rank_universe`. It is published under
+    :data:`CANDIDATE_FIELD` and is **absent from the payload** rather than null when there
+    is none.
     """
+
+    rank_feature: str | None = None
+    """The feature the universe was ordered by, or `None` for alphabetical.
+
+    Published as **null and not omitted**, unlike `candidate`. Null is the answer here
+    rather than the absence of one: it says the ordering was alphabetical because nothing
+    is configured, which is what separates "no ranking was asked for" from "the ranking
+    rated every pair equally". The spec 75 study's alphabetical control is exactly that
+    distinction, and a reader that could not draw it would be comparing a ranking against
+    itself.
+    """
+
+    rank_descending: bool = True
+    """Which end of :attr:`rank_feature` was taken. Published even when no feature is
+    configured, because it is the configured direction and not a property of this tick —
+    an operator reading the console should see what the ranking *would* do."""
 
     reason_code: str | None = None
     """Why there is no candidate, or `None` when there is one.
@@ -429,6 +548,8 @@ class ScoutUniverse(BaseModel):
             "excluded": dict(self.excluded),
             "equity": None if self.equity is None else format(self.equity, "f"),
             "reason_code": self.reason_code,
+            RANK_FEATURE_FIELD: self.rank_feature,
+            RANK_DESCENDING_FIELD: self.rank_descending,
         }
         if self.candidate is not None:
             payload[CANDIDATE_FIELD] = self.candidate

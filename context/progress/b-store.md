@@ -222,6 +222,166 @@ enter the universe without being shown affordable, which is the *over*-including
 and the wrong one for `scout`. Unreachable today, reachable the moment
 `allow_crypto_quoted` is enabled — and my own crypto-quoted test flips exactly that flag.
 
+### Phase 5 — claimed 2026-09-13
+
+- **Spec 62** — the store surface for model artefacts. `src/acsoe/clients/store/client.py`,
+  `tests/clients/store/test_store.py`. *Claimed 2026-09-13, in progress.* `StoreClient`
+  gains `models_dir`, `model_run_dir(run_id)` and `new_model_run_dir(run_id)`, the last
+  refusing an existing directory because a trained artefact is never overwritten. Plus the
+  audit of `write_leaderboard_entry` and `leaderboard()` against what spec 74 needs. **No
+  schema change, no migration, no artefact parsing** — the store hands back a path and C's
+  `modelling/artefacts.py` decides what is in it.
+- **Spec 76** — engine 7 `scout`, ranking by a config-named feature. `src/acsoe/engines/scout/`
+  (`contracts.py`, `engine.py`, `README.md`), `tests/engines/test_scout.py`. ***Built and green
+  in my own lane 2026-09-13; not reportable as complete, because two of the four shared gates
+  are red in other agents' lanes — see Gates below.*** 16 new tests (60 in the file, 1 skipped
+  until C's engine 5 exists), 13 mutations run and all 13 killed by tests in this file,
+  including the four spec 76 names by hand. `scout.rank_feature` is **absent** in the committed
+  config, so the ordering is alphabetical today and the engine publishes `rank_feature: null`;
+  the mechanism is built and waits on the operator's ruling from C's spec 75 study.
+
+#### Spec 76 — what landed
+
+- `rank_universe(pairs, *, features, feature, descending)` and `select_candidate` with the same
+  keywords, in `engines/scout/contracts.py`. One feature, one direction, one tie-break — pair
+  name ascending, in **both** directions, which is why the key negates the value instead of
+  sorting in reverse. A pair with no value sorts after every pair with one, alphabetically
+  among themselves, and is never dropped.
+- **NaN is a third way of having no value**, alongside null and absent. Spec 76 names two; the
+  third arrives from `modelling/features.py`'s unfilled lookbacks. NaN compares false against
+  everything including itself, so one left in a sort key orders *unpredictably* rather than
+  badly — a direct hit on the determinism invariant 4 protects in this engine. Decision and
+  reasoning in the build log; C told by message, so it no longer matters whether engine 5
+  publishes null or NaN across `state`.
+- The engine reads `scout.rank_feature` and `scout.rank_descending` through `context.config`
+  and `state["feature"]["pairs"]` through named constants with C's ownership beside them.
+  **Absent and null are deliberately the same fact for `rank_feature`** and the call site says
+  why — the general rule in `code-standards.md` is that they are not, and this is the exception
+  rather than an oversight. An empty or whitespace feature name is refused.
+- **A configured feature with no engine 5 output blocks** with `scout_inputs_unavailable`.
+  Falling back to alphabetical would publish `rank_feature: "<name>"` on a tick that ranked by
+  nothing, and would be right on most ticks by coincidence — the placeholder score the operator
+  refused, arriving through a fallback instead of a formula.
+- `state["scout"]` gains `rank_feature` and `rank_descending`. `rank_feature` is **null rather
+  than omitted**, the opposite of `pair`, because null is the answer here: it says the ordering
+  was alphabetical for want of a key, which is exactly what spec 75's alphabetical control
+  needs to be distinguishable from a feature that rated everything equal.
+- `pairs` stays in scan order and still carries no ranking. One expression of the ordering, not
+  two, so a consumer reading `pairs[0]` instead of `pair` cannot silently disagree.
+- `README.md`'s recorded-absence section is rewritten as history, with the ruling dates and the
+  reason the "rank if you can, otherwise alphabetical" reading is forbidden.
+
+#### Spec 62 — what landed, and the audit it asked for
+
+`StoreClient(db_path, models_dir=None)`, `models_dir`, `model_run_dir(run_id)` and
+`new_model_run_dir(run_id)`. The run id is validated **before any path is built** — empty,
+whitespace-padded, `.`/`..`, separator-bearing, drive-bearing and null-byte ids each refused
+with their own message, because `StoreError` has one type and this surface now has six causes.
+`new_model_run_dir` refuses an existing directory through `mkdir(exist_ok=False)` itself rather
+than a prior `exists()` check, so two trainers racing for one run id cannot both be told it is
+free. **A trained artefact is never overwritten** is the whole safety property of the method.
+
+**The audit found one gap and it is now `leaderboard_entries(model_id=, model_version=,
+fold=)`.** Every field spec 74 names already existed in `LeaderboardRow` and the 0001 schema
+and nothing needed adding — asserted, not claimed, in
+`test_a_leaderboard_row_round_trips_every_field_engine_20_writes`. What was missing was any way
+to *read* one back: `leaderboard(limit=50)` is the console's truncating window, and deciding
+"have I written this fold already" from it is spec 51's rows-versus-ticks defect a second time.
+`fold IS ?` and never `fold = ?`, because SQL equality against NULL matches nothing and the
+no-fold row would be rewritten on every run.
+
+**For the lead, a schema question I did not act on:** nothing in the database enforces what
+spec 74 calls idempotent — there is no unique index on `(model_id, model_version, fold)`, and
+adding one is a schema change spec 62 forbids this phase. A partial index would be needed for
+the null-fold row, the same shape as `ux_block_records_primary`.
+
+#### Gates, run 2026-09-13, and what is red is not mine
+
+**My own lane is green.** `tests/clients/store/test_store.py` and `tests/engines/test_scout.py`
+together: **151 passed, 1 skipped** — the skip is the engine 5 seam test, which names
+`acsoe.engines.feature.engine` and starts running the day C lands it rather than staying
+quietly skipped. `ruff check src/acsoe/engines/scout/ tests/engines/test_scout.py
+tests/clients/store/ src/acsoe/clients/store/` clean. `mypy --strict
+src/acsoe/engines/scout/ src/acsoe/clients/store/` clean, 10 files.
+
+**Two shared gates are red in other lanes and I have not touched them.**
+
+- `mypy --strict src/ scripts/` now reports `numpy/__init__.pyi:737: Type statement is only
+  supported in Python 3.12 and greater` and then **stops checking anything at all**. Clean on
+  100 files forty minutes earlier; the difference is C's `modelling/di.py` importing
+  `numpy.typing`, which `pyproject.toml`'s `follow_imports = "skip"` override does not save.
+  No answer at all, in the check the definition of done leans on. C's and A's.
+- `pytest tests/ -q` and therefore `verify --phase 5`'s `toolchain_green`: six failures, in
+  `tests/cli/test_entrypoints.py` (2), `tests/modelling/test_features.py` (2),
+  `tests/research/test_backtest.py` (1) and `tests/verify/test_phase0_criteria.py` (1), plus 12
+  ruff findings under `tests/modelling/`. A's spec 61 and C's specs 60 and 63, mid-save. None
+  names a file of mine, none is in a path of mine, and my two files pass on their own.
+
+`--phase 5` currently registers **2 criteria** — `docs_vocabulary` PASS and `toolchain_green`
+FAIL — because C's spec 60 criteria are not landed yet.
+
+#### STOPPED AND ESCALATED — two B sessions wrote `clients/store/` at once, and the other one is right
+
+**2026-09-13.** The entry below this one is the other B session's account, written from the
+other side of the same collision, and it is accurate about the collision. The 175 lines of
+spec 62 it found on disk are mine. It is wrong on two details, both corrected in the build log
+rather than by editing it: the tests **did** exist (it looked at a file mid-write), and the
+CRLF in `test_store.py` is **pre-existing** rather than a conversion anybody performed —
+`client.py` is LF and was written as bytes throughout.
+
+**Its `parents=False` objection was right and is now the behaviour.** A writer creates the
+artefact root and a reader refuses a missing one: C's trainer runs as
+`python -m acsoe.research.training` and never touches A's startup path, so a writer demanding
+an existing root would refuse the first training run on every fresh clone. I had reasoned the
+other way and had told A so by message; A has been corrected.
+
+**The split now in force, proposed by me and messaged to both the lead and the other session:**
+it keeps `clients/store/` and `tests/clients/store/`, I take `engines/scout/` and
+`tests/engines/test_scout.py`. The one exception I made afterwards is two `RUF043` findings on
+lines I had written in `test_store.py` — `match="artefact root .* does not exist"` needed to be
+a raw string — which I fixed rather than leave the `ruff` gate red on my own lines.
+
+**Still open for the lead:** which session owns lane B. The notice at the top of
+`feature-specs/PHASE-5-TASKS.md` says the `-2` sessions do and that bare-letter sessions are
+stood down; my sends arrive as `B-2`. I did not treat that as settling it, because the other
+session is the one acting on a ruling of 2026-09-13 I never received.
+
+#### STOPPED AND ESCALATED — two B sessions are writing `clients/store/` at once
+
+**2026-09-13, 00:36.** Not a code defect and not mine to fix. I read
+`src/acsoe/clients/store/client.py` at the start of spec 62 and got 933 lines with no
+`models_dir` in them; my first edit was refused as stale, and `git diff` showed all 175 lines
+of spec 62 already on disk — `_validated_run_id`, `models_dir`, `_artefact_root`,
+`model_run_dir`, `new_model_run_dir`, and a `leaderboard_entries` read as the step-3 audit gap.
+`client.py` was written at 00:36:13, seven seconds after I wrote my own phase-5 build-log
+header, so it is not a leftover from a session that ended before mine. Then
+`tests/clients/store/test_store.py` moved at 00:36:51 — after a `git status` that showed it
+unmodified — with one added import. That is a second B session mid-save.
+
+**I have written no byte into `client.py` or `test_store.py`,** per the conflict procedure in
+`ownership.md`: stop, record, escalate with the path and both intents, the lead decides. The
+ownership map is the only concurrency control this project has and it assumes one agent per
+path; two writers in one file is silent, last-save-wins, with nothing red. Escalated to the
+lead by `SendMessage` with the timestamps and the sha256 of the file as I found it,
+`4163b72c146a6cf5059a32b5b348795d5354e1bf7a8efc03f332160e20e83d00`, snapshotted to the session
+scratchpad first so the state at detection is recoverable either way.
+
+**The implementation on disk reads as correct and complete against spec 62**; tests do not
+exist yet. Two things I would change whoever finishes it, both raised with the lead: the
+constructor takes `models_dir` positionally where I had told A it would be keyword-only, and
+`new_model_run_dir` uses `parents=False`, so a trainer started as
+`python -m acsoe.research.training` — which never touches A's startup path — meets "the
+artefact root does not exist" rather than having it created. The second is a defensible
+decision and should be a ruling rather than two agents assuming opposite things.
+
+**One symptom worth keeping separately:** `test_store.py` now has CRLF line terminators and
+`git diff` warns on it, where it did not before. That is the text-mode round trip
+`code-standards.md` describes — the whole file's endings rewritten, invisible in `git status`
+because `.gitattributes` normalises on the way into the index.
+
+Waiting on the lead for which session continues. Spec 76 is in `engines/scout/`, a disjoint
+path, and can start the moment the lead says so.
+
 ## CLOSED — engine 17's `CONDITION_ACTION`, ruled 2026-09-10
 
 **The operator ruled on 2026-09-10 and spec 37 wrote it into invariant 14.** The table is

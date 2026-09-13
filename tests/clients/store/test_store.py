@@ -8,7 +8,9 @@ strings is that approximate equality is what kills an equity series.
 
 from __future__ import annotations
 
+import re
 import sqlite3
+from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from acsoe.clients.store.contracts import (
     CommandRow,
     CommandSource,
     EquitySnapshotRow,
+    LeaderboardRow,
     OrderIntent,
     OrderRow,
     OrderSide,
@@ -1210,3 +1213,335 @@ def test_a_transaction_rolls_back_on_failure(store: StoreClient) -> None:
 def test_the_store_reads_and_writes_nothing_under_data(store: StoreClient, tmp_path: Path) -> None:
     """`data/` is gitignored, so no test or criterion may depend on anything inside it."""
     assert tmp_path in store.db_path.parents
+
+
+# --------------------------------------------------------------------------- #
+# Spec 62 — the store surface for model artefacts
+#
+# Every assertion below is on the **message**, never on the type. `StoreError` has one
+# type and, in this surface alone, six causes: no root configured, the root missing, the
+# run never trained, the run already written, and two shapes of unusable run id. A bare
+# `pytest.raises(StoreError)` cannot tell the failure the test induced from one that
+# happened first, which is exactly the defect `code-standards.md` records for
+# `KrakenUnavailableError`.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def artefact_store(tmp_path: Path) -> Iterator[StoreClient]:
+    """A store with a real artefact root beside its database.
+
+    The root is created here rather than by the client, because creating `models/` at
+    startup is A's (spec 61 item 3). The client creates it only when a training run asks
+    to write into it — the lead's ruling of 2026-09-13 — and never when a reader asks.
+    """
+    root = tmp_path / "models"
+    root.mkdir()
+    client = StoreClient(tmp_path / "artefacts.sqlite", models_dir=root)
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+def make_leaderboard(
+    *,
+    model_version: str = "run-1",
+    fold: str | None = "fold-0",
+    model_id: str = "predictor",
+    trained_at: int = 1_000,
+    n_trades: int = 7,
+    brier: float | None = 0.18,
+    win_rate: float | None = 0.25,
+    training_run_id: str | None = "train-1",
+    net_pnl: str | None = "12.34",
+    promoted: bool = False,
+) -> LeaderboardRow:
+    return LeaderboardRow(
+        model_id=model_id,
+        model_version=model_version,
+        training_run_id=training_run_id,
+        trained_at=trained_at,
+        fold=fold,
+        n_trades=n_trades,
+        win_rate=win_rate,
+        brier=brier,
+        net_pnl=None if net_pnl is None else Decimal(net_pnl),
+        reporting_currency="USD",
+        promoted=promoted,
+        updated_at=trained_at,
+    )
+
+
+def test_a_store_built_without_a_models_dir_reports_none(tmp_path: Path) -> None:
+    """The default is not an oversight: the console, the seed and every Phase 0 to 4
+    caller build a store that never asks for an artefact, and none of them may be made
+    to pass a path they have no use for."""
+    with StoreClient(tmp_path / "no-models.sqlite") as client:
+        assert client.models_dir is None
+
+
+def test_model_run_dir_returns_the_run_directory_and_reads_nothing_inside_it(
+    artefact_store: StoreClient,
+) -> None:
+    root = artefact_store.models_dir
+    assert root is not None
+    (root / "run-7").mkdir()
+    # Deliberately not a manifest. The store hands back a path; what is in it is C's
+    # `modelling/artefacts.py`, and a client that validated the contents would be two
+    # owners in one file. A directory holding nothing but junk must still resolve.
+    (root / "run-7" / "not-a-manifest.txt").write_bytes(b"junk\n")
+
+    assert artefact_store.model_run_dir("run-7") == root / "run-7"
+
+
+def test_model_run_dir_refuses_when_no_artefact_root_was_configured(tmp_path: Path) -> None:
+    with StoreClient(tmp_path / "no-models.sqlite") as client, pytest.raises(
+        StoreError, match="built with no models_dir"
+    ):
+        client.model_run_dir("run-7")
+
+
+def test_model_run_dir_refuses_when_the_artefact_root_does_not_exist(tmp_path: Path) -> None:
+    """A fresh clone: `models/` is gitignored, so it is absent until something trains."""
+    with StoreClient(tmp_path / "db.sqlite", models_dir=tmp_path / "models") as client, pytest.raises(
+        StoreError, match=r"artefact root .* does not exist"
+    ):
+        client.model_run_dir("run-7")
+
+
+def test_model_run_dir_refuses_a_run_that_was_never_trained(artefact_store: StoreClient) -> None:
+    """What engines 8, 13 and 15 hit when `models.*_run_id` names a run nobody trained.
+    They block on it; spec 59 decision 9."""
+    with pytest.raises(StoreError, match="model run 'run-7' is not in the artefact root"):
+        artefact_store.model_run_dir("run-7")
+
+
+def test_model_run_dir_refuses_a_file_standing_where_the_run_directory_should_be(
+    artefact_store: StoreClient,
+) -> None:
+    """`exists()` would accept this and hand back a path that cannot hold a manifest."""
+    root = artefact_store.models_dir
+    assert root is not None
+    (root / "run-7").write_bytes(b"not a directory\n")
+
+    with pytest.raises(StoreError, match="is not in the artefact root"):
+        artefact_store.model_run_dir("run-7")
+
+
+def test_new_model_run_dir_creates_the_directory(artefact_store: StoreClient) -> None:
+    created = artefact_store.new_model_run_dir("run-7")
+
+    assert created.is_dir()
+    assert created == artefact_store.models_dir / "run-7"  # type: ignore[operator]
+    assert artefact_store.model_run_dir("run-7") == created
+
+
+def test_new_model_run_dir_refuses_an_existing_directory(artefact_store: StoreClient) -> None:
+    """The safety property of the whole spec. `code-standards.md`, Models: a trained
+    artefact is never overwritten, because a directory whose files came from two runs
+    cannot be reproduced from its config plus its data and is not a result."""
+    first = artefact_store.new_model_run_dir("run-7")
+    (first / "manifest.json").write_bytes(b"{}\n")
+
+    with pytest.raises(StoreError, match="already exists"):
+        artefact_store.new_model_run_dir("run-7")
+
+    assert (first / "manifest.json").read_bytes() == b"{}\n", "the first run was disturbed"
+
+
+def test_new_model_run_dir_refuses_a_file_of_the_same_name(artefact_store: StoreClient) -> None:
+    root = artefact_store.models_dir
+    assert root is not None
+    (root / "run-7").write_bytes(b"squatting\n")
+
+    with pytest.raises(StoreError, match="already exists"):
+        artefact_store.new_model_run_dir("run-7")
+
+
+def test_new_model_run_dir_creates_a_missing_artefact_root(tmp_path: Path) -> None:
+    """A writer creates the root. The lead's ruling of 2026-09-13, after B raised it.
+
+    `platform/paths.py` creates `models/` at startup beside `data/` and `logs/`, but C's
+    trainer runs as `python -m acsoe.research.training` and never goes through A's
+    startup path. A writer that demanded the root already exist would therefore refuse
+    the first training run on every fresh clone, reporting a misconfiguration where
+    there was only an empty tree.
+    """
+    root = tmp_path / "models"
+    assert not root.exists(), "the fixture no longer starts from a fresh clone"
+
+    with StoreClient(tmp_path / "db.sqlite", models_dir=root) as client:
+        created = client.new_model_run_dir("run-7")
+
+    assert root.is_dir(), "the writer did not create the artefact root"
+    assert created == root / "run-7"
+    assert created.is_dir()
+
+
+def test_a_reader_never_creates_the_artefact_root(tmp_path: Path) -> None:
+    """The other half of the same ruling, and the half that can rot silently.
+
+    `model_run_dir` is a read, and the two methods now disagree about a missing root on
+    purpose. Nothing stops someone "tidying" them back into one path — and the tidy
+    direction is towards creating it, because that is what makes the writer work. This
+    test is what should stop them: a reader that created the root would report the run
+    missing *inside a directory it had just invented*, turning a true message into a
+    less true one and leaving an empty tree behind on every failed engine startup.
+    """
+    root = tmp_path / "models"
+    with StoreClient(tmp_path / "db.sqlite", models_dir=root) as client, pytest.raises(
+        StoreError, match=r"artefact root .* does not exist"
+    ):
+        client.model_run_dir("run-7")
+
+    assert not root.exists(), "the reader invented the artefact root"
+
+
+@pytest.mark.parametrize(
+    ("run_id", "expected"),
+    [
+        ("", "refusing an empty run id"),
+        ("   ", "refusing an empty run id"),
+        (" run-7", "leading or trailing whitespace"),
+        ("run-7 ", "leading or trailing whitespace"),
+        ("..", "names a directory relative to the artefact root"),
+        (".", "names a directory relative to the artefact root"),
+        ("../evil", "a run id is one directory name"),
+        ("..\\evil", "a run id is one directory name"),
+        ("nested/run", "a run id is one directory name"),
+        ("nested\\run", "a run id is one directory name"),
+        ("/abs", "a run id is one directory name"),
+        ("C:run", "absolute or carries a drive"),
+        ("C:\\abs", "a run id is one directory name"),
+        ("run\x00null", "null byte"),
+    ],
+)
+def test_an_unusable_run_id_is_refused_by_both_methods(
+    artefact_store: StoreClient, run_id: str, expected: str
+) -> None:
+    """Each cause has its own message. Matching on `StoreError` alone would pass for any
+    of them, including one raised before the check under test ran."""
+    with pytest.raises(StoreError, match=re.escape(expected)):
+        artefact_store.model_run_dir(run_id)
+    with pytest.raises(StoreError, match=re.escape(expected)):
+        artefact_store.new_model_run_dir(run_id)
+
+
+def test_a_traversal_run_id_writes_nothing_outside_the_artefact_root(
+    artefact_store: StoreClient, tmp_path: Path
+) -> None:
+    """The refusal is checked for its effect and not only for its message: `models/` and
+    its parent are both inspected afterwards, so a future implementation that validated
+    the joined path instead of the run id would be caught here as well."""
+    root = artefact_store.models_dir
+    assert root is not None
+    before = sorted(p.name for p in tmp_path.iterdir())
+
+    with pytest.raises(StoreError):
+        artefact_store.new_model_run_dir("../escaped")
+
+    assert list(root.iterdir()) == []
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+    assert not (tmp_path / "escaped").exists()
+
+
+def test_the_run_id_is_checked_before_any_path_is_built(tmp_path: Path) -> None:
+    """Both faults are present at once: no artefact root, and a traversal-shaped run id.
+    The run-id message is the one that comes back, which is what "raises before any path
+    is built" means — an implementation that resolved the root first would report the
+    missing root and would have joined the string by the time it noticed."""
+    with StoreClient(tmp_path / "db.sqlite") as client, pytest.raises(
+        StoreError, match="a run id is one directory name"
+    ):
+        client.new_model_run_dir("../escaped")
+
+
+# --------------------------------------------------------------------------- #
+# Spec 62 item 3 — the leaderboard audit, and the one gap it found
+# --------------------------------------------------------------------------- #
+
+
+def test_a_leaderboard_row_round_trips_every_field_engine_20_writes(
+    store: StoreClient,
+) -> None:
+    """The audit, executable. Spec 74 names `brier`, `n_trades`, `win_rate`,
+    `training_run_id`, `fold` and `promoted`; the row also carries `model_id`,
+    `model_version`, `trained_at` and `net_pnl`, which engine 20 sets. Nothing was added
+    to the schema — this asserts that nothing needed to be."""
+    store.write_leaderboard_entry(make_leaderboard())
+
+    (row,) = store.leaderboard()
+
+    assert row.model_id == "predictor"
+    assert row.model_version == "run-1"
+    assert row.training_run_id == "train-1"
+    assert row.fold == "fold-0"
+    assert row.n_trades == 7
+    assert row.win_rate == 0.25
+    assert row.brier == 0.18
+    assert row.net_pnl == Decimal("12.34")
+    assert row.promoted is False
+    assert type(row.promoted) is bool, "a truthy int is not a bool; the conversion was dropped"
+    # Phase 7's, and null here on purpose: a number written now would be read as one.
+    assert (row.sharpe, row.deflated_sharpe, row.alpha, row.beta) == (None, None, None, None)
+
+
+def test_leaderboard_entries_finds_one_version_and_fold(store: StoreClient) -> None:
+    store.write_leaderboard_entry(make_leaderboard(model_version="run-1", fold="fold-0"))
+    store.write_leaderboard_entry(make_leaderboard(model_version="run-1", fold="fold-1"))
+    store.write_leaderboard_entry(make_leaderboard(model_version="run-2", fold="fold-0"))
+
+    found = store.leaderboard_entries(
+        model_id="predictor", model_version="run-1", fold="fold-0"
+    )
+
+    assert [(r.model_version, r.fold) for r in found] == [("run-1", "fold-0")]
+    assert store.leaderboard_entries(model_id="predictor", model_version="run-3", fold="fold-0") == ()
+
+
+def test_leaderboard_entries_finds_the_row_whose_fold_is_null(store: StoreClient) -> None:
+    """`fold IS ?`, never `fold = ?`. SQL equality against NULL is NULL rather than true,
+    so the aggregate row with no fold would look absent on every idempotency check and be
+    rewritten on every run — a duplicate that looks exactly like a second training run."""
+    store.write_leaderboard_entry(make_leaderboard(model_version="run-1", fold=None))
+    store.write_leaderboard_entry(make_leaderboard(model_version="run-1", fold="fold-0"))
+
+    found = store.leaderboard_entries(model_id="predictor", model_version="run-1", fold=None)
+
+    assert [r.fold for r in found] == [None]
+
+
+def test_leaderboard_entries_returns_every_duplicate_rather_than_the_first(
+    store: StoreClient,
+) -> None:
+    """There is no unique index on `(model_id, model_version, fold)` and spec 62 forbids
+    a schema change, so idempotency is the caller's convention. A read that collapsed two
+    rows into one would hide the state that proves the convention was broken."""
+    store.write_leaderboard_entry(make_leaderboard(brier=0.18))
+    store.write_leaderboard_entry(make_leaderboard(brier=0.19))
+
+    found = store.leaderboard_entries(
+        model_id="predictor", model_version="run-1", fold="fold-0"
+    )
+
+    assert [r.brier for r in found] == [0.18, 0.19]
+
+
+def test_leaderboard_entries_sees_a_fold_the_console_read_would_have_truncated(
+    store: StoreClient,
+) -> None:
+    """Why this method exists at all. `leaderboard()` is the console's read: the newest 50
+    by `trained_at`. Deciding "have I written this fold already" from a truncating window
+    is spec 51's rows-versus-ticks defect again, and a walk-forward with more folds than
+    the limit would silently start writing duplicates."""
+    for index in range(60):
+        store.write_leaderboard_entry(
+            make_leaderboard(fold=f"fold-{index}", trained_at=1_000 + index)
+        )
+
+    oldest = "fold-0"
+    assert oldest not in {row.fold for row in store.leaderboard()}, "fixture no longer truncates"
+    assert len(store.leaderboard_entries(
+        model_id="predictor", model_version="run-1", fold=oldest
+    )) == 1

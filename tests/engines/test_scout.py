@@ -1261,3 +1261,381 @@ def test_the_published_payload_is_json_serialisable(scout: ScoutEngine, account:
 
     assert json.loads(json.dumps(data))["pairs"] == data["pairs"]
     assert isinstance(data["equity"], str)
+
+
+# --------------------------------------------------------------------------- #
+# Spec 76 — the ranking, as a config-named feature
+#
+# `feature-specs/PHASE-5-TASKS.md` names this seam directly: `rank_universe` is always
+# handed an already-sorted sequence, because the engine builds its scan set with `sorted`.
+# So a ranking that merely preserved arrival order would still answer alphabetically end
+# to end, and **an end-to-end fixture cannot see the difference**. Every ordering claim
+# below is therefore made by a direct call on input whose arrival order and intended order
+# disagree on every element, and the end-to-end tests exist to prove the wiring, not the
+# ordering.
+# --------------------------------------------------------------------------- #
+
+#: A five-pair feature map. The values are deliberately not in pair-name order and not in
+#: arrival order, so alphabetical, arrival and ranked are three different answers.
+RANKED_FEATURE = "volatility_24h"
+RANKED_VALUES = {
+    "AAA/USD": 0.1,
+    "BBB/USD": 0.5,
+    "CCC/USD": 0.3,
+    "DDD/USD": 0.9,
+    "EEE/USD": 0.7,
+}
+RANKED_FEATURES = {pair: {RANKED_FEATURE: value} for pair, value in RANKED_VALUES.items()}
+
+#: Reverse-alphabetical arrival, so arrival order disagrees with the intended order on
+#: **every** element in both directions rather than on one.
+ARRIVAL = tuple(sorted(RANKED_VALUES, reverse=True))
+
+DESCENDING_ORDER = ("DDD/USD", "EEE/USD", "BBB/USD", "CCC/USD", "AAA/USD")
+ASCENDING_ORDER = tuple(reversed(DESCENDING_ORDER))
+
+
+def with_scout_config(context: Any, **overrides: Any) -> Any:
+    """The same context with `scout.*` keys overridden, `_ABSENT` to remove one.
+
+    Separate from `with_config`, which reaches `trading.*`. The ranking keys live under
+    `scout`, and the committed `config/default.yaml` carries `scout.rank_descending` with
+    **no `rank_feature`** — spec 59 decision 7 keeps it out until the operator rules on the
+    spec 75 study — so removing the key is the committed state and not an edge case.
+    """
+    import dataclasses
+
+    data = context.config.as_dict()
+    section = dict(data.get("scout", {}))
+    for key, value in overrides.items():
+        if value is _ABSENT:
+            section.pop(key, None)
+        else:
+            section[key] = value
+    data["scout"] = section
+    return dataclasses.replace(context, config=MappingConfig(data))
+
+
+def test_rank_universe_orders_by_the_named_feature_and_not_by_arrival() -> None:
+    """**The test the Phase 5 task list calls not optional**, in its feature form.
+
+    Arrival order is the exact reverse of pair-name order, and the intended order agrees
+    with neither: a ranking that returned `tuple(pairs)` gets reverse-alphabetical, one
+    that ignored the feature and sorted gets alphabetical, and both differ from the answer
+    on every element. The assertion is on the whole tuple rather than on the head, because
+    a ranking that produced the right first pair for the wrong reason would satisfy the
+    weaker form.
+    """
+    descending = rank_universe(
+        ARRIVAL, features=RANKED_FEATURES, feature=RANKED_FEATURE, descending=True
+    )
+    ascending = rank_universe(
+        ARRIVAL, features=RANKED_FEATURES, feature=RANKED_FEATURE, descending=False
+    )
+
+    assert descending == DESCENDING_ORDER
+    assert ascending == ASCENDING_ORDER
+    # The three answers are genuinely different, so none of the assertions above could be
+    # satisfied by arrival order or by the alphabetical ordering this replaces.
+    assert descending != ARRIVAL and descending != tuple(sorted(ARRIVAL))
+    assert ascending != ARRIVAL and ascending != tuple(sorted(ARRIVAL))
+
+    assert select_candidate(
+        ARRIVAL, features=RANKED_FEATURES, feature=RANKED_FEATURE, descending=True
+    ) == "DDD/USD"
+    assert select_candidate(
+        ARRIVAL, features=RANKED_FEATURES, feature=RANKED_FEATURE, descending=False
+    ) == "AAA/USD"
+
+    # Idempotent: ranking an already-ranked universe changes nothing. A ranking that
+    # reversed on each call would satisfy every assertion above on one invocation.
+    assert (
+        rank_universe(descending, features=RANKED_FEATURES, feature=RANKED_FEATURE)
+        == descending
+    )
+
+
+def test_rank_universe_is_still_alphabetical_when_no_feature_is_configured() -> None:
+    """The committed state, and it must not become "whatever order the caller had".
+
+    `feature=None` is what the engine passes while `scout.rank_feature` is absent, which is
+    every tick until the operator rules on the spec 75 study. The input is again
+    reverse-alphabetical so `tuple(pairs)` cannot pass.
+    """
+    assert rank_universe(ARRIVAL) == tuple(sorted(ARRIVAL))
+    assert rank_universe(ARRIVAL, features=RANKED_FEATURES, feature=None) == tuple(sorted(ARRIVAL))
+    assert select_candidate(ARRIVAL, features=RANKED_FEATURES, feature=None) == "AAA/USD"
+
+
+@pytest.mark.parametrize("descending", [True, False])
+def test_a_pair_with_no_value_sorts_last_and_is_never_dropped(descending: bool) -> None:
+    """Four ways to have no value, one answer, and the pair stays in the universe.
+
+    Spec 76: a pair whose value is null or absent sorts **after** every pair with a value,
+    alphabetically among themselves, and is never dropped — a pair with no feature is still
+    tradable, and dropping it would silently shrink the universe the filter just computed.
+
+    The four are: an explicit null, a pair missing from the feature map, a row that is not
+    a mapping at all, and NaN. NaN is here because `modelling/features.py` yields it for an
+    unfilled lookback and it compares false against everything including itself, so a NaN
+    left in a sort key orders unpredictably rather than loudly.
+    """
+    features: dict[str, Any] = {
+        "AAA/USD": {RANKED_FEATURE: 0.1},
+        "DDD/USD": {RANKED_FEATURE: 0.9},
+        "BBB/USD": {RANKED_FEATURE: None},
+        "CCC/USD": None,
+        "EEE/USD": {RANKED_FEATURE: float("nan")},
+        # "FFF/USD" is absent from the map entirely.
+    }
+    arrival = ("FFF/USD", "EEE/USD", "DDD/USD", "CCC/USD", "BBB/USD", "AAA/USD")
+
+    ordered = rank_universe(
+        arrival, features=features, feature=RANKED_FEATURE, descending=descending
+    )
+
+    valued = ("DDD/USD", "AAA/USD") if descending else ("AAA/USD", "DDD/USD")
+    assert ordered[:2] == valued
+    assert ordered[2:] == ("BBB/USD", "CCC/USD", "EEE/USD", "FFF/USD")
+    assert set(ordered) == set(arrival), "a pair was dropped from the universe"
+    assert len(ordered) == len(arrival)
+
+
+@pytest.mark.parametrize("descending", [True, False])
+def test_the_tie_break_is_the_pair_name_ascending_in_both_directions(descending: bool) -> None:
+    """Equal values order by name ascending whichever way the feature is read.
+
+    `sorted(..., reverse=True)` would reverse the tie-break along with the feature, so two
+    equally-rated pairs would swap places when the direction flipped and the candidate
+    would move on a flag that is supposed to order by the feature alone. Negating the value
+    instead is what keeps the tie-break fixed, and this is the test that says so.
+    """
+    features = {pair: {RANKED_FEATURE: 0.5} for pair in ("AAA/USD", "BBB/USD", "CCC/USD")}
+
+    ordered = rank_universe(
+        ("CCC/USD", "BBB/USD", "AAA/USD"),
+        features=features,
+        feature=RANKED_FEATURE,
+        descending=descending,
+    )
+
+    assert ordered == ("AAA/USD", "BBB/USD", "CCC/USD")
+
+
+def test_rank_universe_handles_an_empty_universe_in_both_modes() -> None:
+    assert rank_universe(()) == ()
+    assert rank_universe((), features=RANKED_FEATURES, feature=RANKED_FEATURE) == ()
+    assert select_candidate((), features=RANKED_FEATURES, feature=RANKED_FEATURE) is None
+
+
+# --------------------------------------------------------------------------- #
+# The engine's half: the config reads, the block, and what it publishes
+# --------------------------------------------------------------------------- #
+
+
+def test_the_engine_publishes_the_ranking_it_used(scout: ScoutEngine, account: Any) -> None:
+    """Against the committed config, which has no `scout.rank_feature`.
+
+    `rank_feature` is published as **null rather than omitted**, unlike `pair`: null is the
+    answer here — the ordering was alphabetical because nothing is configured — and the
+    spec 75 study's alphabetical control is exactly the distinction between that and a
+    feature that rated every pair equally.
+    """
+    data = universe(scout, account)
+
+    assert "rank_feature" in data, "null is the answer, so the key is published"
+    assert data["rank_feature"] is None
+    assert data["rank_descending"] is True
+    assert data[CANDIDATE_FIELD] == min(data["pairs"]), "alphabetical while nothing is configured"
+
+
+def test_the_engine_ranks_by_the_configured_feature(scout: ScoutEngine, account: Any) -> None:
+    """The wiring, end to end through the real engine: the candidate follows the config key.
+
+    The universe here is the fixture's three USD pairs, and the feature map is fabricated
+    because engine 5 is C's and is not written yet. That is what the direct `rank_universe`
+    tests above are for — this one proves the engine reads the two keys and `state["feature"]`
+    and passes them to the seam, which no direct call can show.
+    """
+    features = {
+        "feature": {
+            "pairs": {"BTC/USD": {RANKED_FEATURE: 0.1}, "ETH/USD": {RANKED_FEATURE: 0.9}}
+        }
+    }
+
+    descending = with_scout_config(account, rank_feature=RANKED_FEATURE, rank_descending=True)
+    state = build_state(descending) | features
+    published = scout.process(descending, state).data
+
+    assert published["rank_feature"] == RANKED_FEATURE
+    assert published["rank_descending"] is True
+    assert published[CANDIDATE_FIELD] == "ETH/USD"
+    # SOL/USD has no value at all and still enters the universe, behind both.
+    assert "SOL/USD" in published["pairs"]
+
+    ascending = with_scout_config(account, rank_feature=RANKED_FEATURE, rank_descending=False)
+    flipped = scout.process(ascending, build_state(ascending) | features).data
+
+    assert flipped[CANDIDATE_FIELD] == "BTC/USD"
+    assert flipped["rank_descending"] is False
+
+
+def test_the_candidate_moves_when_only_the_config_key_changes(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """One input changed, one answer changed. The same state, the same universe, the same
+    feature map — only `scout.rank_feature` differs, and the candidate follows it.
+
+    This is what separates "the engine ranks" from "the engine happens to agree with
+    alphabetical on this fixture": the alphabetically first pair is BTC/USD and neither
+    configured feature chooses it.
+    """
+    features = {
+        "feature": {
+            "pairs": {
+                "BTC/USD": {"a": 0.1, "b": 0.9},
+                "ETH/USD": {"a": 0.9, "b": 0.5},
+                "SOL/USD": {"a": 0.5, "b": 0.1},
+            }
+        }
+    }
+
+    by_a = with_scout_config(account, rank_feature="a")
+    by_b = with_scout_config(account, rank_feature="b")
+
+    first = scout.process(by_a, build_state(by_a) | features).data
+    second = scout.process(by_b, build_state(by_b) | features).data
+
+    assert first[CANDIDATE_FIELD] == "ETH/USD"
+    assert second[CANDIDATE_FIELD] == "BTC/USD"
+    assert first[CANDIDATE_FIELD] != second[CANDIDATE_FIELD]
+
+
+def test_a_configured_feature_with_no_engine_5_output_blocks(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """Fail closed, and this is the case the spec singles out.
+
+    A configured ranking that silently fell back to alphabetical would be the placeholder
+    score the operator refused in Phase 3: the engine would report a ranking it did not
+    perform, and the candidate would be right only on the ticks where alphabetical happened
+    to agree. Invariant 3 — a gate that cannot reach its data blocks.
+    """
+    context = with_scout_config(account, rank_feature=RANKED_FEATURE)
+
+    result = scout.process(context, build_state(context))
+
+    assert result.status is EngineStatus.BLOCK
+    assert result.blocks_trading is True
+    assert result.data["reason_code"] == REASON_INPUTS_UNAVAILABLE
+    assert result.reason is not None
+    # On the message, not the status: this engine blocks for many reasons and they share a
+    # code. The reason names the key and the engine whose output was missing.
+    assert "feature is absent" in result.reason
+    assert RANKED_FEATURE in result.reason
+
+
+def test_a_feature_payload_without_pairs_blocks_rather_than_ranking_nothing(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """Engine 5 present and `pairs` missing is a different fault from engine 5 absent, and
+    both block. Reading it as an empty map would rank every pair as having no value and
+    answer alphabetically — the silent fallback again, one level down."""
+    context = with_scout_config(account, rank_feature=RANKED_FEATURE)
+
+    result = scout.process(context, build_state(context) | {"feature": {"bar_ts": 1}})
+
+    assert result.status is EngineStatus.BLOCK
+    assert result.reason is not None
+    assert "feature.pairs is absent" in result.reason
+
+
+def test_engine_5_absent_is_not_a_fault_while_no_feature_is_configured(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """The committed state on every tick today: engine 5 is unwritten, nothing is
+    configured, and engine 7 neither reads `state["feature"]` nor cares that it is missing.
+
+    The pass half of the gate's pair. Without it, the block above could be satisfied by an
+    engine that blocked whenever `state["feature"]` was absent, which would stop every tick
+    in the tree as it stands.
+    """
+    result = scout.process(account, build_state(account))
+
+    assert result.status is EngineStatus.OK
+    assert result.blocks_trading is False
+    assert result.data["rank_feature"] is None
+
+
+def test_an_empty_rank_feature_name_is_refused(scout: ScoutEngine, account: Any) -> None:
+    """A key set to nothing is not the same fact as a key nobody set.
+
+    Ranking by a feature named `""` would find no value for any pair, order them
+    alphabetically under the null rule, and publish `rank_feature: ""` — a ranking claimed
+    and not performed. That is the placeholder score arriving through a typo, so it blocks.
+    """
+    for empty in ("", "   "):
+        context = with_scout_config(account, rank_feature=empty)
+
+        result = scout.process(context, build_state(context))
+
+        assert result.status is EngineStatus.BLOCK
+        assert result.reason is not None
+        assert "empty feature name" in result.reason
+
+
+def test_the_two_ranking_keys_are_read_through_config_and_not_defaulted_in_the_engine(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """Absent and null both mean alphabetical, and neither may mean "pick something".
+
+    `scout.rank_feature` is absent from the committed YAML and spec 61 types the field
+    `str | None`, so both states occur on real trees. `Config.get` reports them differently
+    — a raise and a `None` — and this asserts the engine collapses them *to the same
+    answer*, which is the one place in this engine where collapsing them is correct and is
+    argued for at the call site.
+    """
+    absent = with_scout_config(account, rank_feature=_ABSENT)
+    null = with_scout_config(account, rank_feature=None)
+
+    for context in (absent, null):
+        data = scout.process(context, build_state(context)).data
+        assert data["rank_feature"] is None
+        assert data[CANDIDATE_FIELD] == min(data["pairs"])
+
+    # And the direction still reaches the payload from config rather than from a literal.
+    flipped = with_scout_config(account, rank_descending=False)
+    assert scout.process(flipped, build_state(flipped)).data["rank_descending"] is False
+
+
+def test_the_ranking_runs_on_engine_5s_real_output_once_it_exists(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """The seam with no double in it, which is the half a fabricated map cannot cover.
+
+    Every other ranking test above hands engine 7 a feature map this file wrote. Phase 4's
+    standing finding is that a seam agreed between two agents and driven only by doubles is
+    a test of the double: A's labeller tests were green against a `label_bars(...)` that
+    never existed. So this one drives C's real engine 5 through the real orchestrator and
+    ranks by a name out of its own `feature_names`, and it **skips only while
+    `acsoe.engines.feature.engine` does not exist** — `require_module` re-raises if anything
+    else is missing, so the day C lands engine 5 this test starts running rather than
+    staying quietly skipped.
+    """
+    from tests.conftest import require_module
+
+    module = require_module(
+        "acsoe.engines.feature.engine", reason="engine 5 `feature` (C, spec 64) does not exist yet"
+    )
+    feature_engine = module.FeatureEngine()
+
+    state = build_state(account)
+    state["feature"] = feature_engine.process(account, state).data
+    names = state["feature"].get("feature_names") or []
+    assert names, "engine 5 published no feature names; the ranking has nothing to read"
+
+    context = with_scout_config(account, rank_feature=str(names[0]))
+    published = scout.process(context, build_state(context) | {"feature": state["feature"]}).data
+
+    assert published["rank_feature"] == str(names[0])
+    assert published[CANDIDATE_FIELD] in published["pairs"]

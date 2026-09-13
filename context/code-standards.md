@@ -150,6 +150,13 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   sends the next person to write a test for a case that cannot fail and makes the real
   survivors look less urgent; filed as a checked negative alongside the non-equivalent form of
   the same claim, it is evidence.
+- **Restore a mutation from a byte copy you took before applying it, never from git.**
+  Teammates do not commit, so a teammate's working tree is the only copy of its work, and
+  `git checkout --` on that file restores the *committed* version and deletes everything the
+  teammate has written since. A-2 did exactly that in Phase 5 while restoring a mutation and
+  destroyed spec 61 step 1 for several minutes; it was re-applied from the transcript. The
+  restore mechanism was the thing that did the damage. Copy the bytes to the scratchpad,
+  mutate, run, write the bytes back, compare the hash.
 - **Verify a cross-lane mutation restored, by hash, in the same statement that applied it.**
   A file that is not yet tracked by git has no `git checkout --` behind it, and Phase 4's
   mutations ran against `engines/memory/engine.py` and `core/orchestrator.py` while both were
@@ -343,6 +350,16 @@ A second defect surfaced the same hour, in `scripts/build_archive.py`: a `no-any
 looked like a typing complaint and was a crash — `json.loads` is `Any`, and a recorded line
 parsing to a list while carrying the trade marker reached `.get` and raised. Two defects in two
 days, both in files the gate could not see.
+
+**`mypy` type-checks at `python_version = "3.12"` from Phase 5; the 3.11 floor is ruff's
+to guard.** Lead ruling 2026-09-13. numpy 2.5's stub uses a PEP 695 `type` statement, which
+mypy at 3.11 reports as a syntax error and then checks nothing, so the first `import numpy`
+under `src/` made the gate return no answer. `requires-python` and `architecture-context.md`
+still say 3.11, and that promise is checked by `ruff` with `target-version = "py311"`, which
+reports *"Cannot use `type` alias statement on Python 3.11"* and still catches the Phase 4
+f-string defect. Pinning numpy below 2.3 was rejected: a downgrade in the shared venv lands on
+every agent mid-work and ties the project to an ageing line for a stub quirk. A test pins the
+ruff target so nobody raises it to match mypy.
 
 **`mypy --strict` is deliberately NOT widened to `tests/`.** Roughly 1,680 test functions would
 each need a return annotation. The hole that leaves is real and is stated rather than implied:

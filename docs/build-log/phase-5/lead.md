@@ -193,6 +193,36 @@ three duplicated pieces of work. The rule for the lead, added to the one above: 
 failed agent might come back, stop it before spawning its replacement, and check the roster
 before and after.**
 
+### Decision: mypy at 3.12, the floor at 3.11, because the third option stopped being free
+
+**Agent:** Lead, from C-2's escalation · **Task:** spec 61 step 2, spec 63 · **Date:** 2026-09-13
+
+**Options.** C-2 found that a direct `import numpy` under `src/` makes `mypy --strict src/
+scripts/` abort: numpy 2.5's stub carries a PEP 695 `type` statement, a syntax error at
+`python_version = "3.11"`, and *"errors prevented further checking"* means the gate returns no
+answer at all. The `follow_imports = "skip"` override A wrote in Phase 2 only governs modules
+mypy reaches by following an import; a module named outright is parsed regardless. A's own
+comment listed the three ways out: raise the declared floor to 3.12, pin `numpy<2.3`, or keep
+the override and never import numpy by name. C-2 recommended the pin, on the argument that
+raising mypy's version stops checking the 3.11 promise, which is the hole that let a 3.11
+`SyntaxError` ship in Phase 4.
+
+**Chose.** `python_version = "3.12"` for mypy only. `requires-python` stays 3.11.
+
+**Because.** The premise of the objection was checked rather than accepted. The Phase 4 defect
+was caught by **ruff**, not mypy (the red message was ruff's), and ruff with
+`target-version = "py311"` was run on a probe carrying both a `type` alias statement and the
+f-string backslash: *"Cannot use `type` alias statement on Python 3.11 (syntax was added in
+Python 3.12)"* and the f-string error, four findings. So the floor is guarded by a tool that
+still guards it. With mypy at 3.12 the gate reaches C-2's code and reports two ordinary
+annotation errors in `di.py`, which is what a gate is for. The pin was rejected because a
+downgrade in the shared venv lands on three agents mid-work and ties the project to an ageing
+numpy line for a stub quirk.
+
+**Cost.** mypy would accept 3.12-only syntax in `src/` if ruff did not exist; a test now pins
+the ruff target so the two cannot be raised together by accident. numpy and polars stay `Any`
+to mypy until someone asks to drop the skip.
+
 ### Spec 60 reached for a fixture that was the labeller's output, not its input
 
 **Agent:** Lead, from C's finding · **Task:** spec 60 · **Date:** 2026-09-13
