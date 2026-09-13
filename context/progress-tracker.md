@@ -738,5 +738,12 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
 
 ## Session Notes
 
+- 2026-09-13 — Phase 5 opened and run for one session, then wound down by the operator at
+  the session limit. Done and committed: specs 59, 61, 62, 63, 76. Half-finished and
+  uncommitted: 60 (helper block only) and 64 (engine 5 landed, one lint finding); untouched:
+  65 to 75, 77. The full handoff, the rulings made after spec 59, and the agent-team incident
+  (a revived team, two writers per lane, sends by name reaching the wrong session) are at the
+  top of `feature-specs/PHASE-5-TASKS.md` and in `docs/build-log/phase-5/lead.md`. The three
+  operator thresholds are deliberately absent from config until the walk-forward reports.
 - 2026-09-12 — full-archive rebuild (234 pairs), dataset measured, three operator rulings applied (past-only walk-forward, 2017 cutoff, thin-pair floor as a named knob). Phase 5 not started. The Phase 4 gate was not re-run in full after the new criterion landed; every Phase 4 criterion was run directly and the full pytest suite was run — see the lead's build log for the outputs.
 - Project starts from scratch. Any earlier ACSOE code was throwaway scaffolding and must not be carried over or referenced.

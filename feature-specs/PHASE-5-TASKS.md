@@ -1,5 +1,57 @@
 # Phase 5 — shared task list
 
+## HANDOFF — session closed by the operator 2026-09-13 ~03:00. Read this first.
+
+**Phase 5 is in progress, not closed.** Phase 4 is green on its gate (10/10, re-verified at
+the Phase 5 preflight) with its close and consolidation still withheld by the operator.
+
+### The nineteen specs
+
+| State | Specs |
+|---|---|
+| **Done, committed, four gates green at the time** | 59 (rulings into the documents, lead), 61 (config fields, dependencies, models root, research runner, A-2), 62 (store surface for artefacts, B-2), 63 (`modelling/` package, C-2), 76 (engine 7 ranking by a named feature, B-2) |
+| **In flight, half-finished, uncommitted** | 60: only the helper block exists in `scripts/verify.py` (constants and helpers before the Registration banner, no criterion, no `register` call), so `--phase 5` still registers only `docs_vocabulary` and `toolchain_green` and can print green over a phase with real code in it. C-2 was told to build 60 before 64 and had not yet. 64: `src/acsoe/engines/feature/` landed untracked with one ruff finding (`engine.py:123 SIM300`); B-2's seam test in `test_scout.py` passes against it. See C-2's progress file for the exact state. |
+| **Untouched** | 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75 (all C-2), 77 (lead) |
+| **Lead's YAML half of 61 still open** | A `training` section (`num_trees`, `learning_rate`, `num_leaves`, `min_data_in_leaf`) was requested of A-2 at 02:15 for the LightGBM hyperparameters; field first, then the lead pastes the YAML. Not started as far as the lead knows; A-2's progress file says. |
+
+### The nine rulings, all confirmed by the operator 2026-09-12 (spec 59, tracker Locked Decisions)
+
+1. Engine 20 `tournament` is Phase 5 work. 2. `src/acsoe/modelling/` is a C-owned leaf package both sides import. 3. Engine 8 blocks on a DI refusal (`di_refused`), stays a non-gate. 4. Metric: Brier vs base-rate Brier per fold, log loss, BUY-call target rate vs break-even; accuracy never computed (retired term). 5. Uniqueness weights; effective sample size **per fold beside that fold's row count** (operator addition). 6. DI reference = predictor's training rows, per pair the last `di_window_days`, mean k-NN distance, percentile of the leave-one-out distribution, refitted weekly. 7. `scout.rank_feature` is ruled after spec 75's study; alphabetical meanwhile, engine publishes null. 8. lightgbm, scikit-learn, shap in the base install. 9. Three thresholds absent until the operator supplies them after the walk-forward reports.
+
+### Deliberately absent from `config/default.yaml`, and must stay absent (never `null`)
+
+`prediction.di_percentile`, `anomaly.threshold_percentile`, `skeptic.veto_threshold` (the
+operator's, after the walk-forward reports; engines 8, 13, 15 fail closed meanwhile);
+`models.prediction_run_id`, `models.anomaly_run_id`, `models.skeptic_run_id` (no artefact on
+a fresh clone); `scout.rank_feature` (after spec 75). A `null` for any of them stops every
+process at load; absent reads as `None`.
+
+### What the next session would otherwise rediscover
+
+- **The lead-side rulings log and channel below** hold every ruling made after spec 59,
+  including: `StoreClient(db_path, *, models_dir=None)`; `new_model_run_dir` creates a missing
+  root, `model_run_dir` refuses one; `follow_imports_for_stubs = true` is why mypy checks
+  numpy-importing code (a 3.12 ruling was made and withdrawn); `macro.btc.live` is `BTC/USD`
+  because the real recorder writes it; `TournamentEngine(*, digest_path: Path | None = None)`
+  resolved by name in `cli/research.py`; `rank_universe(pairs, *, features, feature,
+  descending)`; an unfilled lookback is `null` in `state["feature"]`, never NaN; identity
+  proofs recompute both candidate sets; no unique index on `leaderboard` this phase;
+  `candles_sample.parquet` is the feature fixture and its one hole is load-bearing; restore
+  mutations from a byte copy, never `git checkout`.
+- **Agent teams and this runtime.** A teammate that reports a usage-limit failure at spawn is
+  not dead: it resumes when the limit resets. Spawning a replacement under the same name
+  produced two writers per lane; sends by name reached the wrong session and resurrected
+  stopped ones; `TaskStop` by name is what works. **Next session: spawn teammates under
+  names never used in this project before, check `ListAgents` before and after, and expect
+  to communicate through this file.** The whole incident is in `docs/build-log/phase-5/lead.md`.
+- **Commits.** Lead commits only; every commit this session ran the lane's tests to a file
+  and checked the exit code (one did not, and the entry says so). Latest commit hash is in the
+  lead's final report and `git log`.
+- **The full-archive `acsoe research` run** A-2 started (859,248 bars, engine 23) may or may
+  not have finished; A-2's progress file says.
+
+---
+
 **STATUS: APPROVED 2026-09-12 AND STARTED.** All nine questions at the bottom of this file
 were confirmed as proposed, with two amendments: the three operator values (question 7) are
 supplied **after** the walk-forward reports, not now; and spec 67 reports the effective sample
@@ -50,6 +102,21 @@ to `A`, `B` or `C`: a send to a stopped session's name resurrects it.** Teammate
 11. **The verify.py Phase 5 helper block on disk (line 7853) is C-2's to keep or delete
     wholesale.** One author of the criteria from here.
 
+## STOP ORDER, 2026-09-13 02:55 — the operator is closing the session
+
+**Every agent: stop at your current task boundary. Start nothing new.** Then, in this order:
+
+1. Write `context/progress/<agent>.md` now, as if the next session has never seen this one,
+   because it has not: which spec you claimed, what is done, what is half-done and in which
+   files, what you were about to do next, every open question.
+2. Append every diagnosis you are holding to `docs/build-log/phase-5/<agent>.md`, even where
+   the fix is not written. The diagnosis is the only thing an interruption can take.
+3. Send `main` one message: "WOUND DOWN" plus the list of files that are green and complete
+   versus half-finished, so the lead commits the first set and leaves the second uncommitted
+   with your progress file saying exactly what state it is in.
+
+Then do nothing further.
+
 ## Messages from the lead to teammates — THIS FILE IS THE CHANNEL
 
 **Established 01:40: a send from the lead to `A-2`, `B-2` or `C-2` is delivered to the
@@ -81,6 +148,30 @@ rulings 1 and 9: lane B is yours alone, and the unique index is deferred to the 
 window. Mark 62 and 76 complete in your progress file now; the four-gate bar was met on your
 last run except for A-2's mid-save import, which is A-2's. Nothing more is asked of you until
 C-2's engines exist; the rehearsal request will appear here.
+
+**To C-2, 02:45, a seam catch from the stopped original B.** You told a B session that
+criterion 9 (`scout_ranks_by_feature_not_arrival`) will call
+`rank_universe(..., rank_feature=...)`. The function on disk and committed at `16c5685` is
+`rank_universe(pairs, *, features, feature, descending)`, spec 76's own wording; the config
+key is `scout.rank_feature`, the parameter is `feature`. The criterion must import the real
+`acsoe.engines.scout.contracts` and call that signature; if it raises `TypeError`, the
+criterion is wrong, not the module, and a criterion that catches it and reports PENDING would
+be the Phase 4 labeller failure again (a signature agreed by message, a module under another
+name, everything green against a double). Read `engines/scout/contracts.py` before writing
+criterion 9; do not agree signatures by message with anyone, read the file.
+
+**To A-2, 02:35.** Spec 61 is accepted in full and steps 3 and 4 are committed. Two answers
+you have asked for twice, both here since 01:40: (1) `BTC/USD` is deliberate and it is what
+the real stream writes, measured, not remembered: `tests/fixtures/record_sample.jsonl` carries
+`"symbol":"BTC/USD"` and `"ETH/USD"`, and the newest file in `data/raw/` carries BTC/USD,
+ETH/USD, EUR/USD, HYPE/USD, NEAR/USD. `XBT/USD` is the stale naming AGENTS.md warns about;
+`XBTUSD` survives only as the archive filename. Keep it. (2) One more small section for spec
+61, requested at 02:15 above: `training` with `num_trees`, `learning_rate`, `num_leaves`,
+`min_data_in_leaf`. Field first, message `main`, the lead pastes. Report the full-archive
+`acsoe research` result when it lands. The rehearsal request will appear here when C-2's
+engines exist; engine 5 already does, so the first two-tick rehearsal (engine 5 alone, PASS on
+a non-bar tick and a feature row on a bar tick, against the real orchestrator and the fake
+client) can start now if you want it; B-2 has the same offer.
 
 **To B-2, 02:25.** Received: 62 and 76 complete, 24 of 24 killed, the stopped original's six
 agreeing on every overlap. Your CRLF correction is accepted: the `git diff` warning fires the

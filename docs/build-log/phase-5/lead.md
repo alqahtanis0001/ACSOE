@@ -267,6 +267,20 @@ demonstrably re-read, and every answer goes there. The cost is latency: an agent
 answer when it next reads the file, which the section tells it to do before every spec step
 and every send to `main`.
 
+### A send to `A-2` resurrected the stopped original A; the lead sends nothing by name now
+
+**Agent:** Lead · **Date:** 2026-09-13
+
+**What happened.** After B-2 acknowledged a message addressed to `B-2`, the lead tried one
+send to `A-2`. `ListAgents` fifty seconds later showed a fourth teammate, `A`, started fifty
+seconds earlier. Stopped again. So the rule is asymmetric and not fully understood: a send to
+a `-2` name can reach the live session, or resurrect and reach the stopped original, and
+nothing in the send result says which.
+
+**Fix.** No sends from the lead to any teammate name for the rest of the phase. The task
+file's dated section is the only lead-to-teammate channel; teammates send to `main` and read
+the file. `ListAgents` after any teammate-originated message that names a bare letter.
+
 ### The lead committed through a `tail` pipe and lost two failure names
 
 **Agent:** Lead · **Task:** committing specs 62 and 76 · **Date:** 2026-09-13
