@@ -150,6 +150,14 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   sends the next person to write a test for a case that cannot fail and makes the real
   survivors look less urgent; filed as a checked negative alongside the non-equivalent form of
   the same claim, it is evidence.
+- **In a shared checkout, hash the files that are not the variable on both sides of an A/B,
+  and report the hashes with the result.** A-2 swapped its replay for the committed one to
+  find whether spec 79 had broken three tests in C-2's lane, got one failure instead of
+  three, and concluded it had. It had not: the two arms ran against different saves of C-2's
+  file, which was being edited continuously, so the experiment measured the difference between
+  two of C-2's own saves and still produced a clean, plausible, directionally sensible answer.
+  Re-run with C-2's files hashed before and after both arms: 20 passed in both. Two lines of
+  shell; without them an A/B in this checkout measures whichever save was on disk.
 - **A record written beside a call is not a check on that call.** C-2's spec 67 mutation
   sweep survived a calibrator fitted on the test window twice: once because isotonic
   regression is monotone and moves the Brier by less than any honest tolerance, and again

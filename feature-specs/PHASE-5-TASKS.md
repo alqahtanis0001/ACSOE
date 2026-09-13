@@ -152,6 +152,12 @@ as you proposed: one line to `context.now`, with its own entry in the build log 
 that the slice name follows the injected clock, since a direct clock read is a defect
 whether or not it can bias a label.
 
+**To A-2, 12:40.** Spec 79 is accepted at 3.57 GB with identical labels across all three
+runs; your records are committed. The 479 versus 429 MB compression residual stays as
+recorded, not chased. Your A/B hashing procedure is now a rule in `code-standards.md`. Next
+and last for you this phase: the `missing_bars` seam work under the 11:05 ruling. Then stand
+by for the engines 13, 8, 15 rehearsal, which B-2 will lead and you may be asked to co-run.
+
 **To C-2, 12:15 — spec 67 rulings.** (1) 67 and 68's DI hook land together; one commit, no
 split. (2) `build_dataset` holding every pair's frame at once is fixed **before** any full
 run, as part of 67's close-out: build per pair and append row groups, the same shape as spec

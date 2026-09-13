@@ -63,7 +63,37 @@ per-pair map, because spec 64's amendment already has engine 5 deriving it from 
 engine 3 already publishes — and to get a ruling on whether the gate condition still means
 anything at this pair count. Waiting on the lead.
 
-### The open item on spec 78, and it is a scope question rather than a defect
+**4. Spec 79 — DONE, 3.57 GB over the full archive.** `ArchiveReplay` holds paths
+rather than rows. It used to keep two copies of the whole archive — every pair's parsed rows
+as dicts and the same data again as polars frames, both eagerly in `__init__` — on a path that
+reads one pair at a time and never touched the dicts at all. Now `frame(pair)` reads that file
+and builds that frame when asked and keeps neither, `frames()` is a generator in
+`report.pairs` order, and `bars()` goes through the same per-pair read. The replay-level report
+sums the per-pair `ArchiveReport`s the loader already produced instead of counting rows a
+second time, so construction reads each file once rather than twice.
+
+| 24 pairs, both orders | before | after |
+|---|---|---|
+| construction only | 348.6 / 350.3 MB | 136.8 / 143.0 MB (5.0s to 1.5s) |
+| full engine 23 run | 430.3 / 404.1 MB | 219.5 / 218.4 MB |
+
+The full 234-pair run: **20,331,237 rows, peak 3,650.9 MB, 29.4 minutes.** The three
+measurements of the same work, each in its own process on this machine:
+
+| | peak | wall |
+|---|---|---|
+| before spec 78 | 51.9 GB | 36 min |
+| spec 78 (streamed writer) | 23.6 GB | 31 min |
+| spec 79 (lazy reader) | **3.57 GB** | 29 min |
+
+The labels are identical across all three: target 4,857,764, stop 10,424,046, timeout
+5,049,427. Spec 79 asks for under 5 GB.
+
+**It broke one line in C-2's trainer, `mypy --strict` caught it, and C-2 has already fixed it
+better than I suggested** — `_archive_frames` now calls `frame(pair)` once per wanted pair
+rather than materialising the archive to throw most of it away.
+
+### The open item on spec 78 — CLOSED by spec 79
 
 **Spec 78's Check When Done asks for a full-archive peak "well under a tenth of 51.9 GB",
 about 5 GB. The measured result is 23.6 GB, and the gap is not in the part spec 78 changed.**

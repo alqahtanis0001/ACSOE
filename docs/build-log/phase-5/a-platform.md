@@ -830,3 +830,73 @@ whole suite is green with that call broken — the seam pattern again. It fails 
 second is the bad one: without `--pairs` it raises `AttributeError` loudly, and with `--pairs`
 it reports "the archive has no XBTUSD" for a pair that is right there, because `pair not in
 generator` compares a string against `(pair, frame)` tuples.
+
+### Spec 79's result: 3.57 GB over the full archive, identical rows and labels
+
+**Agent:** A · **Task:** spec 79 · **Date:** 2026-09-13
+
+**The full 234-pair run through the lazy reader:** 20,331,237 rows, peak **3,650.9 MB**, 29.4
+minutes. The three measurements of the same work, each on this machine, each in its own
+process:
+
+| | peak | wall |
+|---|---|---|
+| before spec 78 — accumulate rows, hold the whole archive | 51.9 GB | 36 min |
+| spec 78 — stream the writer, hold the whole archive | 23.6 GB | 31 min |
+| spec 79 — stream the writer, hold one pair | **3.57 GB** | 29 min |
+
+The labels are identical across all three, not merely the totals: 20,331,237 rows, target
+4,857,764, stop 10,424,046, timeout 5,049,427. Spec 79's Check When Done asks for under 5 GB
+and this is 3.57.
+
+**One residual difference, measured rather than assumed.** The slice is 479 MB where the
+pre-spec-78 polars writer produced 429 MB for identical rows. Both are zstd — the codec was
+pinned in spec 78 after pyarrow's snappy default produced 667 MB — and the remainder is
+compression *level*: writing the same 400,000-row frame four ways gives polars 7.46 MB,
+pyarrow at its zstd default 8.11 MB, level 3 7.87 MB and level 5 7.72 MB. So pyarrow's default
+is level 1 and polars compresses harder than level 5. Left alone: it is 12% of a gitignored
+research artefact, and matching it exactly would mean tuning a magic number by trial. Recorded
+so the next reader of the two file sizes does not go looking for a missing row.
+
+**What made this cheap to do safely** was that the property is observable without measuring
+memory. Two tests carry it: one counts the files opened when a single pair is asked for — one
+pair, one file, and asking twice reads twice, because not caching *is* the property — and one
+compares the report's `bar_count` against a second reader's row count, since the count moved
+from counting rows to summing the loader's own totals and those are two ways of measuring one
+thing. A test that asserted "the peak was small" would have measured the machine.
+
+### I concluded my change broke two tests by comparing two runs of a file somebody was editing
+
+**Agent:** A · **Task:** spec 79 · **Date:** 2026-09-13
+
+**What happened.** After spec 79 landed, `pytest tests/research/ -q` reported three failures in
+`tests/research/test_training.py`, C-2's file. The project's rule is that another agent's red is
+theirs unless it names my file and reproduces, so I checked rather than assumed: I swapped my
+lazy `replay.py` for the committed eager one and re-ran, and got **one** failure instead of
+three. Two fewer with my change reverted is as clear a signal as that check produces, and I
+wrote in my notes that spec 79 had caused two failures in another lane.
+
+It had not. Re-running a few minutes later, with my change in place, gave **20 passed**.
+
+**Why the check was worthless.** The two arms ran against **different versions of C-2's file**.
+C-2 was mid-spec-67 and editing `training.py` and its tests continuously; each of my runs was a
+snapshot of a moving target, and the difference I attributed to my replay was the difference
+between two of C-2's own saves. The comparison had no control, and the fact that it produced a
+clean, plausible, directionally sensible answer is exactly what made it convincing.
+
+This is the Phase 4 lesson — *"it is in another agent's path" is evidence, not a verdict* —
+arriving from the opposite side. That rule warns against dismissing a red as someone else's.
+The failure here was the mirror image: **claiming** a red as mine, on a comparison that could
+not support it. Both mistakes come from the same missing step, which is fixing what is not
+under test before changing what is.
+
+**Fix.** Re-ran the comparison properly once C-2's files were still: hash both of C-2's files,
+run the trainer tests against the committed replay, run them against mine, hash again and
+require the two hashes to match. Result: **20 passed in both arms, C-2's files provably stable
+across both**. My change does not alter the trainer's results.
+
+**Consequence, and it is a procedure rather than a sentiment.** In a shared checkout, any A/B
+over another agent's tests must **hash the files that are not the variable, on both sides of
+the comparison**, and report the hashes with the result. Without that the experiment measures
+whichever save happened to be on disk. Two lines of shell, and it is the difference between a
+finding and a coincidence.
