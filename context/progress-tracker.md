@@ -455,6 +455,34 @@ the reason in the YAML comment and in `DatasetConfig`.
   drives engine 3 with two pairs whose holes differ and asserts what `data_guard` does. The
   operator may overturn in favour of a per-pair block, which would block the whole tick on
   the ordinary fact that a thin pair did not trade.
+- **OPEN AND BLOCKING THE PHASE, for the operator: the full 234-pair walk-forward projects
+  to 22.2 hours and has deliberately not been started.** Measured by C-2 against the lead's
+  three-hour guard, not estimated: one fold timed at 2, 4 and 8 pairs (6.76s, 8.46s, 12.42s),
+  linear in training rows with the middle point predicted within 2%, fitting 4.87s plus
+  109.74s per million training rows. The archive gives 2,021,760 training rows per fold and
+  352 weekly folds, so 226.7s per fold and 22.2 hours. **It is a floor**: it excludes the
+  dataset build over 47 GB of CSVs, excludes the skeptic's training set growing with every
+  fold, and ignores LightGBM's cost per row rising as the data outgrows cache. The suspected
+  culprit was cleared by measurement: `purged_walk_forward`'s per-row dicts cost 272ns per row
+  per fold, about half an hour in total. **The 352 gradient-boosting fits are the cost, and
+  they are the methodology rather than a defect** — retraining at the live cadence is what
+  makes the walk-forward honest.
+
+  **Lead's recommendation: cap to the most recent 52 folds, all 234 pairs.** That is one year
+  of weekly retraining, about 3.3 hours plus the dataset build, and it preserves the two
+  properties the withheld thresholds actually need — the full cross-section, because a DI or
+  anomaly percentile fitted on a handful of pairs would refuse most of the universe the system
+  trades, and the weekly cadence, which is a Locked Decision. It yields roughly 8 million
+  out-of-sample rows across 234 pairs, far more than percentile estimation needs.
+  **Rejected: widening `backtest.retrain_interval_days` for the offline run**, which would cut
+  folds proportionally but changes the cadence the walk-forward exists to mirror, so it is a
+  methodology change wearing a scheduling costume. **Rejected: bounding the pair set**, which
+  keeps the time span and destroys the cross-section, which is the wrong half to keep.
+  **Available: accept the day and schedule it**, which is the only option that satisfies the
+  Phase 5 criterion's word "full" without qualification.
+
+  Whichever is chosen, the digest says what it covers, and the full 352-fold run is named as
+  Phase 7 work where the deflated metric wants the whole trial history.
 - **RULED by the lead 2026-09-13, flagged to the operator as overturnable: engine 8 blocks
   when an artefact's baked-in DI percentile disagrees with the config.** Found by B-2 while
   rehearsing engines 13 and 8. The DI threshold travels *inside* the artefact, and engine 8
