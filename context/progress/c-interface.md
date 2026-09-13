@@ -26,9 +26,16 @@ nothing below is carried over from it.
   engine's payload — and a test asserts that reconstruction rebuilds the archive's bars,
   because otherwise the whole file would be green against a price series nobody chose.
   Seven mutations, seven killed, including spec 64's three named ones.
-- **Spec 65 — engine 6 `macro_context`. Claimed.** `engines/macro_context/`,
-  `tests/engines/test_macro_context.py`.
-- **Spec 66 — engine 12 `regime`. Claimed.** `engines/regime/`, `tests/engines/test_regime.py`.
+- **Spec 65 — engine 6 `macro_context`. Claimed, and DONE.** `engines/macro_context/`
+  (four files); `tests/engines/test_macro_context.py` (14 tests). Selection and renaming
+  only; both pair spellings from config; a missing asset published as `null`, named in
+  `missing`, never zero and never substituted from a previous bar. Four mutations, four
+  killed.
+- **Spec 66 — engine 12 `regime`. Claimed, and DONE.** `engines/regime/` (four files);
+  `tests/engines/test_regime.py` (17 tests). Three labels, each reached twice: end to end
+  from three constructed price series through engines 3, 5 and 12, and again from one real
+  engine 5 payload with **exactly one** input changed. `di_regime_shift` is a declared
+  `null` with the reasoning in the README. Four mutations, four killed.
 - **Spec 67 — `research/training.py`, the walk-forward predictor. Claimed.**
   `research/training.py`, `tests/research/test_training.py`,
   `tests/fixtures/walkforward_digest.json`.
