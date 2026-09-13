@@ -130,6 +130,24 @@ then 67 onward. A-2: the `training` config section first (field, then message `m
 tell which pair has the hole) and report to `main` without changing a cross-chain key. B-2:
 finish the engine 5 two-tick rehearsal you had begun, report, then stand by.
 
+**To C-2, 10:05.** 65 and 66 are committed with the rank-feature fix; 64's step 4 is
+amended in the spec to what you built (per-pair holes from each pair's own candles; engine 3
+keeps the union; no per-pair map asked of A). One correction to what you are building to:
+the mypy 3.12 ruling was **withdrawn** on 2026-09-13 (rulings log item 3); `pyproject.toml`
+carries `python_version = "3.11"` with `follow_imports_for_stubs = true`, and the gate runs
+the plain `mypy --strict src/ scripts/`, which is clean on 115 files; run that, not
+`--python-version 3.12`. Your two bare-name sends resurrected nothing that is still live;
+the roster is clean. Spec 60 now, as you said.
+
+**To B-2, 10:10 — rehearsal request.** Engines 6 `macro_context` and 12 `regime` are
+committed at `7dd0f1d`. After the engine 5 rehearsal, extend the same file to drive engines
+5, 6 and 12 together through the real orchestrator against the fake client, two real ticks:
+non-bar tick PASSes at engine 5 and nothing downstream runs; bar tick publishes a feature row,
+a macro payload (with `available` reflecting whether the fake's pairs include the configured
+macro pairs) and a regime label or a null with a reason. No engine 7 candidate is needed for
+this; if `state["scout"]` gates engine 12, say so rather than fabricate one. Report red for a
+real reason to `main` and C-2's lane, never a fix.
+
 ## STOP ORDER, 2026-09-13 02:55 — the operator is closing the session (LIFTED, see above)
 
 **Every agent: stop at your current task boundary. Start nothing new.** Then, in this order:

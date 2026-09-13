@@ -25,8 +25,13 @@ cadence mechanism in `engine-contracts.md`.
    "pairs": {pair: {name: float | null}}, "pairs_with_short_history": [...]}`. A pair whose
    candles cover less than `MAX_LOOKBACK_BARS` of time is published with NaN-as-null features
    and listed, never dropped: engine 7 must be able to see it was considered.
-4. `missing_bars` from engine 3 is reported through as `gaps_in_range` per pair, so a
-   downstream reader knows the fill without recomputing it.
+4. ~~`missing_bars` from engine 3 is reported through as `gaps_in_range` per pair.~~
+   **Amended 2026-09-13.** Engine 3's `missing_bars` is a union across pairs, and that is
+   correct for its only consumer, `data_guard`: a per-pair reading would block permanently on
+   the ordinary fact that a thin pair did not trade. Engine 5 therefore counts each pair's
+   holes **from that pair's own candles** and publishes them per pair; a test asserts two
+   pairs get different counts so a later read-through of the union goes red. Engine 3 is not
+   asked to publish a per-pair map.
 5. Every read of another engine's key is a named constant in `contracts.py` with the owning
    engine beside it, the pattern `engines/memory/contracts.py` set.
 6. `tests/engines/test_feature.py`, C lane. The fixtures are **engine 3's real output**: drive
