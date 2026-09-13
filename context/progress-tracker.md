@@ -455,6 +455,15 @@ the reason in the YAML comment and in `DatasetConfig`.
   drives engine 3 with two pairs whose holes differ and asserts what `data_guard` does. The
   operator may overturn in favour of a per-pair block, which would block the whole tick on
   the ordinary fact that a thin pair did not trade.
+- **OPEN, Phase 5, for the operator, and it bears on `anomaly.threshold_percentile`: the
+  anomaly detector as built does not flag a ten-sigma volume spike at any high percentile.**
+  Measured by C-2 in spec 70: the spiked bar scores at the 0.904 quantile of training scores,
+  under both 0.99 and 0.95, because the rolling z-score caps an outlier before the model sees
+  it and an isolation forest over 21 columns dilutes a spike extreme in 8. Blocking it needs
+  roughly a 0.90 percentile, which also blocks one ordinary bar in ten. Options: a lower
+  percentile, a narrower velocity-and-volume input set for engine 13, or a different model.
+  Lead's recommendation: the narrower input set. Nothing was tuned to make the spec's check
+  pass; the spec's acceptance line is amended to the measurement.
 - **OPEN, Phase 5, for the operator, a modelling decision: a macro pair's own rows can
   identify themselves.** On a BTC row, `macro_btc_log_return_4` equals `log_return_4`
   exactly, so the coincidence of two features encodes pair identity although no single

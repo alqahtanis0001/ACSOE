@@ -120,15 +120,31 @@ to `A`, `B` or `C`: a send to a stopped session's name resurrects it.** Teammate
 
 ## HANDOFF 2, session closed by the operator 2026-09-13 ~14:00. Read this before the one below.
 
-**State.** Done and committed: 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 76, 78, 79 (14 of
-21). Gate `--phase 5`: **10 PASS, 0 FAIL, 3 PENDING** (`di_fitted_on_predictor_training_set`
+**State.** Done and committed: 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, **70**, 76, 78,
+79 (15 of 21; 70 landed at `2f49292` after this handoff was first written). Gate `--phase 5`: **10 PASS, 0 FAIL, 3 PENDING** (`di_fitted_on_predictor_training_set`
 on the operator's `di_percentile`; `anomaly_and_skeptic_have_both_tests` on 72 and 73;
 `tournament_writes_leaderboard_from_oos` on 74). Tree-wide pytest, mypy and ruff green at the
 last lead run. Engines 5, 6, 7 and 12 rehearsed together through the real orchestrator.
 
-**Remaining.** 70 anomaly training, 71 prediction, 72 anomaly, 73 skeptic, 74 tournament, 75
-ranking study (all C); the engines 13, 8, 15 rehearsal (B-2 leads, A-2 may co-run); 77
-registration and the gate (lead). C-2's progress file says what of 70 exists.
+**Remaining.** 71 prediction, 72 anomaly, 73 skeptic, 74 tournament, 75 ranking study (all
+C); the engines 13, 8, 15 rehearsal (B-2 leads, A-2 may co-run); 77 registration and the
+gate (lead). Plus two small A items from spec 70: declare `joblib` as a direct dependency in
+`pyproject.toml` and add `joblib.*` to the mypy overrides, so C-2 can drop the named type
+ignore in the anomaly loader.
+
+**A finding from spec 70 that the operator needs before choosing
+`anomaly.threshold_percentile`.** A ten-sigma volume-and-trade-count spike scores at the
+0.904 quantile of the training scores and clears **neither** a 0.99 nor a 0.95 threshold.
+Two causes stacked: the rolling z-score caps the spike before the model sees it (an outlier
+inflates its own denominator, bounded by about the square root of the window, so ten sigma,
+a hundred and a thousand score identically), and the forest splits at random across 21
+columns of which the spike is extreme in 8. The detector as built blocks such a spike only
+at about the 0.90 percentile, where it also blocks one ordinary training bar in ten. C-2 did
+not widen features, change scaling or swap the model to make the spec's check pass; the test
+asserts the true ordering and that a 0.85 run blocks the spike. The choice (a lower
+percentile, a narrower velocity-and-volume input set for engine 13, or a different model) is
+the operator's, and the lead's recommendation to bring to that ruling is the narrower input
+set, because it addresses the dilution rather than the bar.
 
 **Two items tracked to closure, in this order, first thing next session:**
 

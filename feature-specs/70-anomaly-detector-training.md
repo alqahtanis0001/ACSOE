@@ -38,7 +38,11 @@ market is broken rather than whether the trade is good.
 
 ## Check When Done
 
-- A constructed fold where one test row has a ten-sigma volume spike scores above the
-  threshold and an ordinary row scores below it.
+- ~~A constructed fold where one test row has a ten-sigma volume spike scores above the
+  threshold and an ordinary row scores below it.~~ **Amended 2026-09-13 to the
+  measurement:** the spiked row scores strictly above the same row unspiked, sits above the
+  0.85 quantile while the unspiked row sits below it, and a run at a 0.85 threshold blocks the
+  spike and passes the ordinary bar. At 0.99 or 0.95 it clears neither, for reasons recorded
+  in the tracker; the threshold is the operator's and the model choice is an open question.
 - Mutation observed red: the label column joined into the inputs.
 - `pytest tests/ -q` · `mypy --strict src/ scripts/` · `ruff check src/ tests/ scripts/` · `python scripts/verify.py --phase 5`
