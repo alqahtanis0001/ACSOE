@@ -47,8 +47,20 @@ process at load; absent reads as `None`.
 - **Commits.** Lead commits only; every commit this session ran the lane's tests to a file
   and checked the exit code (one did not, and the entry says so). Latest commit hash is in the
   lead's final report and `git log`.
-- **The full-archive `acsoe research` run** A-2 started (859,248 bars, engine 23) may or may
-  not have finished; A-2's progress file says.
+- **The full-archive `acsoe research` run is a finding, not just a run.** A-2 started it
+  over the committed 859,248-bar archive (three pairs): at 33 minutes it held **39.6 GB
+  resident and climbing**, CPU-bound, nothing failed. A-2 measured the single-pair path and
+  found it linear (about 0.44 ms and 3 KB per bar, controlled by running the comparison in
+  reverse order), which projects to six minutes and 2.5 GB, so the divergence is in the
+  multi-pair path: the merged replay stream across pairs, or the accumulation of every labelled
+  row before one parquet write, with most of the memory outside Python's allocator (polars and
+  arrow buffers). A-2 did not widen spec 61 to fix it. **It must be fixed before spec 67**,
+  because the dataset every model trains on comes out of this command, and on a machine
+  smaller than this one's 96 GB the failure is a killed process, not a message. Open it as its
+  own A spec (`research/replay.py` and `research/backtest.py`, A's). A-2's measurement harness
+  is in its scratchpad, not the repo. The process (PID 42016 at the time) was still running
+  when the session closed; A-2 was refused permission to stop it and the lead did not kill it
+  either; the operator may.
 
 ---
 
@@ -116,6 +128,14 @@ to `A`, `B` or `C`: a send to a stopped session's name resurrects it.** Teammate
    with your progress file saying exactly what state it is in.
 
 Then do nothing further.
+
+**To B-2, at wind-down.** Your spec 76 defect (a misspelt `scout.rank_feature` silently
+ranking alphabetically while publishing the name; fixed by checking the name against
+`state["feature"]["feature_names"]` and blocking with `scout_inputs_unavailable`; three tests,
+N14 killed by the new test alone) is committed at `7a64d88`. Credit to C-2 for finding it from
+the consumer side while writing criterion 9. The `row_ts` staleness demotion stays unused: a
+ranking decision nobody asked for, for the operator later. The engine 5 rehearsal is **not
+started** this session; the next session assigns it to one agent by name in this file.
 
 ## Messages from the lead to teammates — THIS FILE IS THE CHANNEL
 

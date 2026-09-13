@@ -413,3 +413,50 @@ agrees with the implementation by construction — including when both are wrong
 what had just happened: implementation and test raised the same exception for the same reason,
 and the test could never have caught it. This is the "a seam exercised only through something the
 author also wrote is not tested" rule arriving in a form that looks like an ordinary helper.
+
+### `acsoe research` over the full archive holds 39 GB and takes six times as long as one pair predicts
+
+**Agent:** A · **Task:** spec 61 step 4 · **Date:** 2026-09-13
+
+**What happened.** Spec 61's acceptance check is `acsoe research --config config/default.yaml`,
+so I ran it against the committed 859,248-bar archive. It is correct — it runs, it is CPU-bound
+at 98%, nothing has failed — but at 33 minutes elapsed it had used 1,945 CPU-seconds and held
+**39.6 GB** of resident memory, still climbing. The same command against a 400-bar scratch
+archive finishes in seconds and exits 0, which is the bounded evidence the spec asks for; this
+entry is about the other run.
+
+**Why — as far as measurement goes, and no further.** I measured rather than guessed, because
+the obvious suspect was C's labelling seam and blaming it would have been wrong:
+
+| subject | bars | peak tracked memory | per bar | time |
+|---|---|---|---|---|
+| `label_frame` (C) | 5,000 / 10,000 / 20,000 | 9.4 / 18.6 / 37.1 MB | ~1.95 KB | — |
+| engine 23 `process` (A) | 10,000 / 20,000 / 40,000 | 33 / 56 / 112 MB | ~2.9 KB | 2.6 / 8.2 / 16.9 s |
+| engine 23 `process` (A) | 80,000 then 40,000 | 229 / 112 MB | ~3.0 KB | 35.6 / 16.9 s |
+
+Both are **linear per pair**, in memory and in time: doubling 40,000 to 80,000 doubles both.
+The third row is the same measurement **run in reverse order**, which is the control this project
+requires of a benchmark after a Phase 4 result that reported a fourfold speed-up and was really
+measuring a cold cache: 40,000 bars came back at 16.87 s against 16.94 s forward, so the numbers
+are the change and not the machine.
+
+That linearity is what makes the full run a finding. At 0.44 ms and 3 KB per bar, 859,248 bars
+projects to **about six minutes and 2.5 GB**. The real run is at 33 minutes and 39.6 GB. So the
+difference is not in labelling one pair and it is not in scale alone — something in the
+multi-pair path diverges from the single-pair path, and the candidates are the merged replay
+stream across three pairs and the accumulation of every labelled row before the single parquet
+write. Also worth noting: `tracemalloc` accounts for ~2.5 GB of an order of magnitude more
+resident, so most of what is held is allocated outside Python's own allocator — polars and
+arrow buffers — which is where I would look first.
+
+**Fix.** None here, deliberately. Engine 23 is mine, from Phase 4, and spec 61's scope is the
+config fields, the dependencies, the models root and a research runner that runs; rewriting the
+replay's memory behaviour inside a spec about wiring is exactly the widening the Scope Limits
+section exists to stop. Reported to the lead with these numbers so it can be scheduled, and
+recorded here so the next person does not start from "it feels slow".
+
+**Consequence, and it is the part that matters for Phase 5 rather than for me.** The dataset
+every model in this phase trains on comes out of this command. A run that holds 39 GB and grows
+is one an operator can start on a smaller machine and lose an hour to, and the failure mode when
+it runs out is a killed process rather than a message. Worth knowing before spec 67's
+walk-forward is run for real, not after.

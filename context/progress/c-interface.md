@@ -19,7 +19,13 @@ nothing below is carried over from it.
 - **Spec 63 — `src/acsoe/modelling/`. Claimed, and DONE.** `__init__.py`, `features.py`,
   `artefacts.py`, `weights.py`, `di.py`, `expected_move.py`; `tests/modelling/` (82 tests).
   See "Spec 63 — what landed" below.
-- **Spec 64 — engine 5 `feature`. Claimed.** `engines/feature/`, `tests/engines/test_feature.py`.
+- **Spec 64 — engine 5 `feature`. Claimed, and DONE.** `engines/feature/engine.py`,
+  `contracts.py`, `README.md`, `__init__.py`; `tests/engines/test_feature.py` (20 tests).
+  Every fixture is engine 3's **real** output, driven over a trade stream reconstructed
+  from `candles_sample.parquet`, per the Phase 3 ruling that no test hand-builds another
+  engine's payload — and a test asserts that reconstruction rebuilds the archive's bars,
+  because otherwise the whole file would be green against a price series nobody chose.
+  Seven mutations, seven killed, including spec 64's three named ones.
 - **Spec 65 — engine 6 `macro_context`. Claimed.** `engines/macro_context/`,
   `tests/engines/test_macro_context.py`.
 - **Spec 66 — engine 12 `regime`. Claimed.** `engines/regime/`, `tests/engines/test_regime.py`.

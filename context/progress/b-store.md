@@ -243,6 +243,44 @@ and the wrong one for `scout`. Unreachable today, reachable the moment
   today and the engine publishes `rank_feature: null`; the mechanism is built and waits on the
   operator's ruling from C's spec 75 study. Committed by the lead at `16c5685`.
 
+#### Spec 76 — a third refusal, found by C and not by any of my thirteen mutations
+
+**2026-09-13, after both specs were marked complete.** Spec 76 names two ways of being unable
+to rank and I built both; there is a third and I missed it. **`scout.rank_feature` naming a
+feature that does not exist** found no value for any pair, the no-value rule then ordered every
+pair alphabetically among themselves, and the engine published the misspelt name beside a
+ranking it never performed. No exception, no null, and a candidate that is a real pair from the
+real universe — the silent fallback my own README forbids in general terms, left open in its
+commonest instance. Demonstrated against the real function before a line was written:
+`feature='volatilty_24h'` returned exactly `tuple(sorted(pairs))`.
+
+The per-pair question — does *this pair* have a value — and the whole-universe question — does
+this *feature* exist — are different, and `_feature_value` returning `None` was answering both.
+The empty feature name is the same defect at length zero and was refused from the start.
+
+`_features` now reads `feature_names` from `state["feature"]`, a required field of C's
+`FeatureState`, and blocks when the configured name is not among them. Three new tests, three
+new mutations, all three killed. **N14, which deletes the check, is killed by the new test and
+by nothing else** — which is the honest measure of how invisible this was: thirteen mutations
+had already passed over it, because a mutation can only ask about behaviour somebody thought of.
+
+**Found by C-2 reviewing the seam while writing spec 60's criterion for it**, and relayed. That
+is a consumer reasoning about a producer, and it is the one review this project keeps proving
+no amount of self-testing replaces.
+
+#### CLAIMED 2026-09-13 — the two-tick orchestrator rehearsal of engine 5
+
+The lead's offer of 02:35 in `feature-specs/PHASE-5-TASKS.md`: engine 5 alone, `PASS` on a
+non-bar tick and a feature row on a bar tick, through the real orchestrator against the fake
+client. **A-2 was given the same offer, so this note is the claim** — ownership rule 5, and the
+only way to avoid two agents writing one rehearsal file when we cannot message each other.
+`tests/engines/test_feature_chain_rehearsal.py`, a new file in my lane, following
+`test_manage_chain_rehearsal.py` from Phase 4 and A's `test_guard_chain_rehearsal.py`.
+
+Reading and driving another agent's engine through the real orchestrator is allowed; **editing
+it is not.** If it goes red for a real reason I report it to the lead and to C-2 rather than fix
+it.
+
 #### Spec 76 — what landed
 
 - `rank_universe(pairs, *, features, feature, descending)` and `select_candidate` with the same

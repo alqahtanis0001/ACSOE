@@ -281,6 +281,55 @@ are clean. Recorded here so the next reader who meets that warning does not go h
 bare `write_text` that does not exist, which is the second time this phase that a phantom
 defect has cost somebody a search.
 
+### A feature name that does not exist ranked alphabetically and said it had ranked
+
+**Agent:** B · **Task:** spec 76 · **Date:** 2026-09-13
+
+**What happened.** Spec 76 blocks two ways of being unable to rank — `state["feature"]` absent,
+and its `pairs` map absent — and I built both. It does not mention a third, and I missed it:
+**`scout.rank_feature` naming a feature that does not exist.** Demonstrated against the real
+function before writing anything:
+
+```
+known  : ('BBB/USD', 'CCC/USD', 'AAA/USD')     # feature='volatility_24h'
+TYPO   : ('AAA/USD', 'BBB/USD', 'CCC/USD')     # feature='volatilty_24h'
+alphabetical for comparison: ('AAA/USD', 'BBB/USD', 'CCC/USD')
+```
+
+**Why.** `_feature_value` answers `None` for a pair whose row has no such key, which is correct
+per-pair and is what makes "null, absent and NaN are one fact" work. When **no** pair has the
+key, every pair is a no-value pair, the no-value rule orders them all alphabetically among
+themselves, and the engine publishes `rank_feature: "volatilty_24h"` beside a result it did not
+produce. Nothing raises and nothing is null, so there is no signal anywhere: the answer is a
+real pair from the real universe, the payload names a feature, and the ordering is the one the
+system has used since Phase 3.
+
+This is precisely the failure I argued against twice in the same file — for the empty feature
+name, and for the missing `state["feature"]` — and I wrote the general form into the README
+("a configured ranking that silently fell back to alphabetical would be the placeholder score
+the operator refused") while leaving the commonest instance of it open. The empty-name case is
+the *typo of length zero*; a typo of length fourteen behaved differently for no reason anyone
+would defend. **The per-pair rule and the whole-universe rule are different questions, and one
+answer was serving both.**
+
+**How it was found**, because that matters more than the defect: not by a test and not by
+reading. C, building spec 60's criterion for this seam, said in passing that an unknown feature
+name should be a refusal to rank rather than a crash into alphabetical. That is a consumer of
+the seam reasoning about the producer, which is the one review this project keeps proving no
+amount of self-testing replaces — the thirteen mutations I ran all mutate behaviour I had
+already thought of.
+
+**Fix.** `_features` now reads `feature_names` from `state["feature"]` — a required field of
+C's `FeatureState`, so it is present whenever engine 5 published at all — and blocks with
+`scout_inputs_unavailable` when the configured name is not in it, naming the feature and how
+many names were published. A malformed or absent `feature_names` blocks on the same path, for
+the same reason a missing `pairs` does. The engine still reads nothing at all when no feature
+is configured.
+
+**Consequence.** The mutation that proves it is the one that deletes the membership check, and
+it survives every test written before today — which is the honest measure of how invisible this
+was. Three ways of being unable to rank now block and none falls back.
+
 ### The no-double seam test went from skipped to passing the moment engine 5 landed
 
 **Agent:** B · **Task:** spec 76 · **Date:** 2026-09-13

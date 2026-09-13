@@ -375,3 +375,131 @@ the sha256 matching the value recorded before the sweep, but a spurious failure 
 else's run reads as KILLED and hides a survivor, which is the direction that costs most. The
 rule forbids deferring restores to the end of a *sweep*; it does not forbid a `finally` around a
 *single* mutation, and that is what the capture script uses now.
+
+### Engine 3's `missing_bars` pools every pair's timestamps, so it cannot say which pair has a hole
+
+**Agent:** C (second instance) · **Task:** spec 64 · **Date:** 2026-09-13
+
+**What happened.** Spec 64 step 4 says engine 5 reports engine 3's `missing_bars` through as
+`gaps_in_range` **per pair**, "so a downstream reader knows the fill without recomputing it".
+It cannot: `state["market_sensor"]["missing_bars"]` is a flat tuple of bar timestamps with no
+pair attached, and it is computed over every pair's candles pooled together.
+
+**Why that makes it unusable per pair, and nearly unusable at all.**
+`missing_bar_timestamps(closed_candles, interval_s=...)` takes the set of timestamps present
+across **all** pairs, bounds it by the overall first and last, and reports the slots absent from
+that union. A slot is therefore only "missing" when *no pair anywhere* traded in it. With one
+pair the answer is exact, which is the case every Phase 2 test exercises. With 234 pairs it is
+almost always empty, and whatever it does report is the same number for every pair — so engine 5
+reading it through would publish an identical, near-zero gap count for a thin pair with a
+six-hour hole and for XBTUSD.
+
+The function itself is not wrong: it takes a `pair` argument and filters on it, and engine 3
+simply calls it without one. So this is a call site rather than a defect in the arithmetic, and
+it is A's to decide about. It has cost nothing so far because engine 4 `data_guard` reads
+`missing_bars` as "was there a decision bar with no candle at all", which the union answers
+correctly.
+
+**Fix.** Engine 5 counts each pair's holes from that pair's own candle timestamps, bounded by
+that pair's own first and last candle — the same rule `missing_bar_timestamps` uses, applied per
+pair. `gaps_in_range` is therefore computed, not read through, and the README says so beside the
+field. A mutation that reads it through from engine 3 instead is killed by
+`test_gaps_are_counted_per_pair_from_that_pairs_own_candles`, which asserts the two pairs get
+*different* counts — an assertion that a read-through cannot satisfy by construction.
+
+Reported to A rather than worked around silently, because the alternative fix is one argument in
+engine 3 and that would make the spec's wording true.
+
+### Spec 64 mutation sweep: seven mutations, seven killed, and one test that was fabricating a contract
+
+**Agent:** C (second instance) · **Task:** spec 64 · **Date:** 2026-09-13
+
+Seven mutations on `engines/feature/engine.py`, each applied, run, restored and the restore
+verified by sha256, with the restore in a `finally` around that single mutation.
+
+| # | Mutation | Verdict |
+|---|---|---|
+| N1 | `bar_closed` ignored — features on every tick | KILLED — 3 tests |
+| N2 | a short-history pair dropped instead of listed | KILLED — 2 tests |
+| N3 | the candle grouping keyed on a constant instead of the pair | KILLED — 7 tests |
+| N4 | the in-progress bar cut-off removed | KILLED — 1 test |
+| N5 | gaps read through from engine 3 instead of counted per pair | KILLED — 1 test |
+| N6 | NaN published as zero instead of null | KILLED — 3 tests |
+| N7 | `row_ts` always reported as the closed bar | KILLED — 1 test |
+
+N1, N2 and N3 are spec 64's three named mutations. The sweep was run narrowly, against the test
+file that owns the engine; no mutation survived, so none needed the whole-suite re-run.
+
+**The sweep found a test that was fabricating a contract, which is the real result here.** N1
+was killed partly by `test_a_non_bar_tick_is_a_pass_with_no_data`, and that test was building
+`state["market_sensor"]` by hand as `{"bar_closed": False, "interval_s": 900}`. That is precisely
+the shape the Phase 3 audit ruled against: three engines were green against a `state["exchange"]`
+payload engine 1 does not publish, because every test built the payload by hand in the shape the
+engine expected. My hand-built version was wrong in a way that mattered — engine 3 on a non-bar
+tick publishes `closed_bar_ts: None` **while still carrying candles**, and my fabrication carried
+neither. The test now drives the real `MarketSensorEngine` at a mid-bar moment and asserts those
+two facts about its output before asserting anything about engine 5.
+
+Worth naming because the sweep's own verdict would not have found it: N1 was KILLED either way.
+What surfaced it was reading *how* it was killed — the mutated engine raised rather than failing
+an assertion, and asking why led to the payload.
+
+### `vol_regime_rank` was decided by floating-point noise on a flat market, and would have called it high volatility one time in ten
+
+**Agent:** C (second instance) · **Task:** specs 63 and 66 · **Date:** 2026-09-13
+
+**What happened.** Engine 12's third end-to-end test drives a perfectly alternating price
+series — `+0.2%`, `-0.2%`, repeating — through engines 3, 5 and 12 and expects `choppy`: the
+market goes nowhere and its volatility is constant. It came back **`high_volatility`**, with
+`vol_regime_rank = 0.9896` against a `regime.high_vol_percentile` of 0.9.
+
+**Why.** The rank is where this bar's short-window realised volatility sits inside the long
+window's distribution. On that series the true standard deviation of the log returns is exactly
+the same on every bar — computed in plain Python over the same numbers, all 397 windows give one
+identical value. polars' `rolling_std_by` does not: it returns **four** distinct values differing
+at the 1e-16 level, a relative spread of about 3e-13, which is what a streaming variance
+algorithm does when the window slides.
+
+Those differences are meaningless and the rank is not robust to them. A rank has no tolerance:
+it asks only which value is larger, so on a window whose values are all equal to thirteen decimal
+places the answer is decided entirely by the last bit. Two runs of essentially the same test
+landed on 0.99 and on 0.21.
+
+The consequence in the live system is small but it is exactly this phase's failure shape: **a
+wrong answer that is in range and that nobody downstream could question.** In a genuinely quiet,
+tightly-ranged market — a real condition, not a synthetic one — the rank becomes noise, and at a
+0.9 cutoff roughly one such bar in ten is labelled `high_volatility`. Nothing crashes and no test
+goes red; engine 14's router in Phase 6 would simply weight a model differently on a tenth of the
+quietest bars in the dataset, for no reason.
+
+It also would not have been found on real data. Real volatility never repeats to thirteen
+decimal places, so every fixture built from the archive would have passed, for ever. It took a
+constructed series whose right answer was known by construction.
+
+**Fix.** Rank the short-window volatility **rounded to ten significant figures**. Genuine ties
+then tie exactly, and `rolling_rank_by`'s `average` method gives them the middle rank — which is
+the honest percentile of a value in a constant distribution, and 0.5 cannot cross any cutoff a
+reasonable operator would set above it. Real differences between bars are many orders of
+magnitude larger than the tenth significant figure, so nothing that matters is collapsed: the
+observed noise is at the thirteenth.
+
+Not a tolerance on the comparison, deliberately. A tolerance would have to be chosen in the units
+of the thing compared, and realised volatility spans orders of magnitude across 234 pairs;
+significant figures are scale-free and are the only spelling of "these two numbers are the same
+measurement" that means the same thing on a $0.30 pair and a $60,000 one.
+
+`test_an_oscillation_that_goes_nowhere_is_choppy` is the test that found it and is the test that
+keeps it fixed. A second test pins the mechanism directly: a constructed window of exactly equal
+volatilities must rank 0.5, not 0 and not 1.
+
+### The spec 64 fixture's premise is asserted, not assumed
+
+**Agent:** C (second instance) · **Task:** spec 64 · **Date:** 2026-09-13
+
+Engine 3 builds candles from *trades*, so
+the tests feed it four trades per bar — open, high, low, close, with the bar's volume split so
+the four quantities sum to it exactly — derived from `candles_sample.parquet`. If that
+reconstruction did not rebuild the archive's bars, every other test in the file would still pass,
+against a price series nobody chose. `test_engine_3s_candles_reproduce_the_archive_bars_they_were_built_from`
+compares all five money fields as `Decimal` across more than a hundred bars, which is the check
+that keeps the rest of the file meaningful.
