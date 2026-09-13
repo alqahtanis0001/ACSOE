@@ -118,7 +118,19 @@ to `A`, `B` or `C`: a send to a stopped session's name resurrects it.** Teammate
 11. **The verify.py Phase 5 helper block on disk (line 7853) is C-2's to keep or delete
     wholesale.** One author of the criteria from here.
 
-## STOP ORDER, 2026-09-13 02:55 — the operator is closing the session
+## RESUMED, 2026-09-13 09:50 — the same team, A-2, B-2, C-2, continues
+
+The stop order below is lifted. All three `-2` sessions were idle with nothing moved since
+the wind-down, and no original is live. The lead's channel stays this file, plus one direct
+send per resume. New today: **spec 78** (A-2, engine 23 streams the slice per pair, before
+spec 67 needs the dataset). Order of work: C-2 records and fixes the rank-feature defect it
+found, clears the two lint findings, completes 65 and 66, then **60 before anything else**,
+then 67 onward. A-2: the `training` config section first (field, then message `main`), then
+78, then assess C-2's engine 3 `missing_bars` finding (it pools all pairs, so no consumer can
+tell which pair has the hole) and report to `main` without changing a cross-chain key. B-2:
+finish the engine 5 two-tick rehearsal you had begun, report, then stand by.
+
+## STOP ORDER, 2026-09-13 02:55 — the operator is closing the session (LIFTED, see above)
 
 **Every agent: stop at your current task boundary. Start nothing new.** Then, in this order:
 
