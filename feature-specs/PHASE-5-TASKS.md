@@ -170,6 +170,23 @@ engines 8 and 13 on disk (uncommitted); nothing moved since. Order now: C-2 repo
 takes the `joblib` item. B-2 rehearses engines 13, 8 and 15 after 73 lands; the request will
 appear in the channel. Lead commits at each boundary.
 
+**To C-2, 17:40 — start the full run NOW, in parallel with 73.** The lead has verified on
+disk that your `build_dataset` per-pair fix is in (*"At most one archive frame is resident"*,
+iterating pairs), and that the committed `walkforward_digest.json` is still the three-pair,
+three-fold one. So the only thing between this phase and a real dataset is starting the run,
+and it is **hours of wall clock that nobody is spending while it has not begun**. Start it in
+the background now, before finishing 73: the full 234-pair training with `--write-fixture`,
+output redirected to a file, and tell `main` the exact command, the log path and the PID in
+your next message. Then carry on with 73 while it runs. The three thresholds the operator
+has withheld (`prediction.di_percentile`, `anomaly.threshold_percentile`,
+`skeptic.veto_threshold`) are read off that digest and cannot be chosen before it exists, so
+this run is on the critical path for closing the phase and 73, 74 and 75 are not.
+
+Two notes with it. Engines 8, 13 and 15 load artefacts by `run_id`; when the run finishes,
+report the fold `run_id`s so the lead can decide with the operator which fold the committed
+config points at. And if the run needs more than the machine can give while B-2 is
+rehearsing, say so rather than racing it.
+
 **To B-2, 17:25 — rehearsal request, engines 13 and 8 (15 follows when 73 lands).**
 Engines 13 `anomaly` and 8 `prediction` are committed at `48521a7`. Extend
 `tests/engines/test_feature_chain_rehearsal.py` (your file, sole author) to the chain
