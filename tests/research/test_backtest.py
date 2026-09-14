@@ -165,10 +165,27 @@ def test_the_engine_carries_the_registry_s_number_and_gate_flag() -> None:
     assert BacktestEngine.is_gate is False
 
 
-def test_the_engine_is_registered_in_the_offline_chain() -> None:
+def test_the_engine_is_registered_in_the_offline_chain_and_runs_first() -> None:
+    """Engine 23 is in the chain and is **first**, which is the property, not the list.
+
+    This asserted the exact chain — `== ["backtest"]` — until engine 20 `tournament`
+    landed and `cli/research.py` picked it up by name, which is that module's design
+    working rather than a regression. Pinning the list made a correct addition look like
+    a break, and would do it again for a third offline engine.
+
+    What actually has to hold is **order**: engine 20 scores what engine 23's run
+    produced, so 23 runs first. `context/engine-contracts.md` fixes it, and asserting
+    the position rather than the membership is what keeps the test honest as the chain
+    grows — a chain that lost engine 23, or ran it second, still fails here.
+
+    C-2's suggestion after its engine 20 turned this red, and it is the better assertion.
+    """
     from acsoe.cli.research import OFFLINE_CHAIN, build_offline_chain
 
-    assert [engine.name for engine in build_offline_chain()] == ["backtest"]
+    names = [engine.name for engine in build_offline_chain()]
+    assert "backtest" in names, "engine 23 is not in the offline chain at all"
+    assert names[0] == "backtest", f"engine 23 must run first; the chain is {names}"
+    assert names.index("backtest") == 0
     assert isinstance(OFFLINE_CHAIN[0], BacktestEngine)
 
 

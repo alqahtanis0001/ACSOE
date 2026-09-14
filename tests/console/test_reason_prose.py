@@ -238,6 +238,37 @@ def test_the_anomaly_block_says_market_rather_than_trade() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Engine 20 `tournament` — spec 74
+# --------------------------------------------------------------------------- #
+
+
+def test_every_reason_code_tournament_declares_has_prose() -> None:
+    """Engine 20 is offline, and its codes still need sentences.
+
+    An operator meets them in a research run's output rather than on the live screen, and
+    `operator_reason` is the one thing that turns a code into a sentence wherever it is read.
+    Leaving them out would give the same silence in a place nobody is watching for it.
+    """
+    from acsoe.engines.tournament import contracts as tournament_contracts
+
+    assert unmapped(tournament_contracts) == {}
+
+
+def test_the_four_tournament_refusals_name_four_different_fixes() -> None:
+    """Supply a digest, re-run the training, open a database, find which of the run's two
+    files is wrong. One sentence across them would send a reader to do the wrong one."""
+    from acsoe.engines.tournament import contracts as tournament_contracts
+
+    sentences = {
+        REASON_PROSE[tournament_contracts.REASON_NO_DIGEST],
+        REASON_PROSE[tournament_contracts.REASON_NO_OOS],
+        REASON_PROSE[tournament_contracts.REASON_NO_STORE],
+        REASON_PROSE[tournament_contracts.REASON_DIGEST_MISMATCH],
+    }
+    assert len(sentences) == 4
+
+
+# --------------------------------------------------------------------------- #
 # The enumeration itself, broken on purpose
 # --------------------------------------------------------------------------- #
 

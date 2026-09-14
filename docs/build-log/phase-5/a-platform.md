@@ -978,3 +978,39 @@ proves the bytes are the ones this project wrote, so it catches corruption and s
 after the fact. It is not a sandbox and it does not make loading an artefact from an untrusted
 source safe. The distinction matters because the hash check *looks* like a security control for
 the second case and is only a control for the first.
+
+### The offline-chain test pinned a list, and a correct addition read as a break
+
+**Agent:** A · **Task:** the lead's blocking item · **Date:** 2026-09-13
+
+**What happened.** C-2 landed engine 20 `tournament`. `cli/research.py` resolves it by name at
+chain-build time, so it joined `OFFLINE_CHAIN` with no edit from anyone — which is that
+module's design working. It turned one of my tests red:
+
+    assert [engine.name for engine in build_offline_chain()] == ["backtest"]
+    E  AssertionError: assert ['backtest', 'tournament'] == ['backtest']
+
+**Why the test was wrong rather than the code.** It pinned the **membership** of a list that
+was always going to grow, when the property it needed was **position**: engine 20 scores what
+engine 23's run produced, so 23 runs first, and `context/engine-contracts.md` fixes that. A
+third offline engine would have reopened the same question. This is the same shape as the note
+already in this log about `test_the_offline_chain_is_not_in_bootstrap`, which carried three
+`== ()` assertions that were facts about Phase 0 rather than the invariant, and went red for the
+right reason at the wrong assertion.
+
+**Fix.** Assert that `backtest` is in the chain and is at index 0. A chain that lost engine 23,
+or ran it second, still fails; a chain that gains a fourth engine does not. C-2's suggestion
+after its own engine turned the test red, and it is the better assertion — worth recording that
+the improvement came from the lane that was inconvenienced by the old one.
+
+**Proven capable of failing.** Registering engine 20 *before* engine 23 turns both this test and
+its counterpart in `tests/cli/test_entrypoints.py` red. Restored from a byte copy, sha256
+verified.
+
+**And the seam it has been waiting on is closed.** This is the first time engine 20 has ever
+been constructed through `_tournament_engine`, which was an open question in my progress file:
+the resolution-by-name found C-2's class, `TournamentEngine(*, digest_path=...)` accepted the
+keyword, and `build_offline_chain(digest_path=Path(...))` returns `['backtest', 'tournament']`
+without raising the `RuntimeError` that stands guard on that signature. The tripwire never
+fired, which is the outcome it was built for — and unlike Phase 4's labeller, this one was
+checked against the real class rather than against a double.

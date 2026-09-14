@@ -224,11 +224,11 @@ def test_the_engine_count_says_which_engines_it_counted(
 
     `orchestrator_empty_registry` counts `acsoe.bootstrap`'s three **runtime** chains.
     `is_gate_matches_registry` counts those *plus* the offline chain in
-    `cli/research.py`, where engine 23 `backtest` lives and is deliberately never
-    registered in `bootstrap.py`. Nine and ten, adjacent, in the report somebody reads
-    to decide whether a phase closes — which invites either a hunt for a bug that does
-    not exist, or a shrug that trains the reader past the day the numbers genuinely
-    disagree.
+    `cli/research.py`, where engine 23 `backtest` and engine 20 `tournament` live and are
+    deliberately never registered in `bootstrap.py`. Nine and eleven, adjacent, in the
+    report somebody reads to decide whether a phase closes — which invites either a hunt
+    for a bug that does not exist, or a shrug that trains the reader past the day the
+    numbers genuinely disagree.
 
     One word fixes it and one word is easy to tidy away, so it is pinned here rather
     than left to the comment at the call site. **This is a separate claim from the
@@ -247,9 +247,25 @@ def test_the_engine_count_says_which_engines_it_counted(
 
     # The premise: the two counts really do differ, so the disambiguation is load
     # bearing rather than a precaution. If they ever coincide this test should be
-    # reconsidered, not deleted - it would mean engine 23 had moved.
+    # reconsidered, not deleted - it would mean the offline chain had emptied.
     assert reported_engine_count(empty.message) != reported_engine_count(total.message)
-    assert reported_engine_count(empty.message) + 1 == reported_engine_count(total.message)
+
+    # **The difference is asked of the offline chain rather than written down here.** It
+    # was a literal `1`, standing for engine 23 alone, and it went red the day engine 20
+    # joined the chain - correctly, but for a reason that has nothing to do with what this
+    # test is about. Replacing the 1 with a 2 would be the same mistake with a different
+    # number; `cli/research.py` is the thing that knows, so it is the thing asked.
+    from acsoe.cli.research import build_offline_chain
+
+    offline = len(build_offline_chain())
+    assert offline >= 1, "the offline chain is empty, so there is nothing to disambiguate"
+    assert reported_engine_count(empty.message) + offline == reported_engine_count(
+        total.message
+    ), (
+        "the two counts no longer differ by the size of the offline chain. One of them has "
+        "started counting a set the other does not, and the report's two totals would then "
+        "disagree for a reason nobody could name."
+    )
 
     assert "runtime engines" in empty.message, (
         "the smaller count no longer says which engines it counted; beside "

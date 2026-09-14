@@ -1407,3 +1407,781 @@ I also deleted a test I had written asserting that no single feature column can 
 gate. It was true of the bar I measured and false of the next one — `realised_vol_48` trips
 it from a live base row — and a characterisation test that depends on which bar you started
 from is a test that will go red for no reason somebody can act on.
+
+### One stale loop variable held an archive frame for the whole streaming loop
+
+**Agent:** C-2 · **Task:** spec 67 close-out · **Date:** 2026-09-13
+
+**What happened.** `build_dataset` is now streamed: `_archive_frames` is a generator of
+`(pair, frame)` with the `--pairs` filter inside it, `build_dataset_to_parquet` turns one
+pair at a time into rows and appends a row group, and `main()` reads the finished parquet
+back. The test that says so counts live frames rather than measuring memory —
+`ArchiveReplay.frame` is wrapped so every frame it returns registers its own death through a
+weakref, and the high-water mark is asserted. It reported **three**.
+
+**Why.** `main()` read the two macro pairs in a loop before the streaming loop, to reduce
+them to feature frames. Python keeps a `for` target bound after the loop ends, so the second
+macro pair's Decimal frame stayed alive from the first streamed pair to the last. Two frames
+live at the generator's yield point plus that one makes three.
+
+On a three-pair archive that is invisible. On the real one it is one archive frame held for
+the whole of 234 iterations, which is precisely the retention this whole change exists to
+remove — and it would have survived a memory measurement too, because one extra frame out of
+a build that no longer holds 234 does not move a resident-size number anybody would notice.
+
+**The fix** is a function: `_macro_features(archive, interval_s, macro, config)`. Its locals
+die on return. Not a `del`, because a `del` is a line somebody deletes while tidying and
+nothing goes red for three sessions.
+
+**Why the assertion is `<= 2` and not `<= 1`.** A generator-driven loop has two frames live
+at the hand-over: the generator calls `replay.frame(pair)` for the next pair before the
+caller's loop variable is rebound off the current one. One is not reachable without giving up
+the generator, and the property that matters — not 234 — is what the test states in its own
+failure message.
+
+**What it cost to find.** The seam was reported by A-2 through the lead: under spec 79
+`ArchiveReplay.frames()` became a generator while `main()` still subscripted it as a dict,
+and **no test drove `main()` at all**, so the suite was green with that path broken. With
+`--pairs` it failed as "the archive has no XBTUSD", blaming the operator's argument.
+`tests/research/test_training_main.py` now drives `main()` with and without `--pairs`, with
+no double anywhere: real CSVs in the archive's layout, the committed config with two paths
+redirected, and the real replay, labeller, feature builder and trainer.
+
+**One thing about that fixture worth stating plainly.** The committed candles sample is 1,208
+bars, about 12.5 days, and the walk-forward needs more than `training_window_days` plus one
+retrain interval — 97 days — before its first fold opens. So the sample's **returns** are
+cycled to build a 110-day path, each lap continuing from the last close. Every bar-to-bar
+return is real; the series is not. Nothing in that file asserts a model number, because a
+Brier over a tiled series means nothing, and the docstring says so rather than leaving the
+next reader to work out whether it was meant to.
+
+### A surviving mutation found a defect in the engine, not in the test
+
+**Agent:** C-2 · **Task:** spec 73 · **Date:** 2026-09-13
+
+**What happened.** Five mutations against engine 15. Four killed. The survivor was "the input
+vector built from the state row's own order" — `for name in skeptic.feature_names` replaced by
+`for name in row` — and the whole file stayed green.
+
+**Why it survived, and the answer is not what the mutation was asking about.** Iterating the
+published row gives the same vector as iterating the manifest **when the row holds exactly the
+manifest's names in exactly its order**, and in this fixture it does. So the mutation is
+undetectable here — and chasing that would have missed the thing it actually exposed.
+
+**The real defect: engine 15 never reads the macro columns at all.** `_vector` looked every
+name up in the pair's feature row, and the macro columns are not there — engine 6 publishes
+them under `state["macro_context"]["features"]`, which engine 8 reads and engine 15 did not.
+Live, against an artefact trained on the real archive, engine 15 would have blocked **every
+call** with `skeptic_unavailable` naming thirty-nine macro columns.
+
+**Why no test caught it.** `tests/research/test_training.py`'s `dataset_for` builds its
+dataset with no `macro_archive`, so the fixture's manifest names 39 features and no macro
+columns at all. The macro half of engine 8's vector builder has therefore never executed
+either, and engine 8's order test — which reverses both the row and the macro mapping — has
+been reversing an empty dict for as long as it has existed.
+
+That is the more useful finding than the mutation. A fixture that trains without macro
+columns makes three engines' macro handling unreachable, and every one of them looks tested.
+
+**What I changed.** Engine 15 reads `state["macro_context"]["features"]` the way engine 8
+does. The fixture now trains **with** a macro asset, so the manifest names macro columns and
+both engines' macro paths execute. The asset is the candidate pair itself, which is not a
+convenience: it is exactly the macro self-identification case the lead ruled on at 13:20 —
+a BTC row whose `macro_btc_*` equals its own features — left for Phase 5 and documented. Using
+it here means the fixture's macro values are real feature values in the trained range rather
+than zeros, so the Dissimilarity Index still accepts the bar and the tests past it stay
+reachable.
+
+With macro columns present the order mutation is killable, because the vector is then built
+from two sources and the row's own order cannot reproduce it.
+
+### Two mutation readings taken against a red baseline
+
+**Agent:** C-2 · **Task:** spec 73 · **Date:** 2026-09-13
+
+**What happened.** The spec 73 sweep reported two mutations KILLED with output that did not
+look like a kill: seven failures and six fixture errors, the same seven for both, including
+tests neither mutation could plausibly touch. Running the file unmutated gave the same seven
+failures. **The baseline was red**, so "the tests failed under the mutation" was true and
+meant nothing.
+
+**Why.** `ArtefactError: a row has 39 values against 78 feature names`. The fixture had just
+been changed to train with a macro asset, taking the manifest from 39 features to 78, and one
+of the two test files that share the fixture had not yet been given the same argument. The
+sweep ran in that window.
+
+**The process lesson, which is the point of writing this down.** A mutation script that
+reports a non-zero exit as KILLED is measuring the exit code, not the mutation. Mine did. Two
+readings went into a report draft before the baseline was checked, and the only reason they
+did not go to the lead is that the failure list looked wrong for the mutation named beside it.
+That is a weak signal to be relying on.
+
+**Fix.** The sweep was re-run from a green baseline: five mutations, five killed, each naming
+the one or two tests it should, and the file restored byte-identical by sha256. A pre-flight
+baseline run belongs in the sweep script itself and is not there yet — recorded as a known
+gap rather than quietly fixed, because the next sweep is the one that matters.
+
+### The idempotence assertion in criterion 10 could not fail
+
+**Agent:** C-2 · **Task:** spec 74 · **Date:** 2026-09-13
+
+**What happened.** The mutation that makes engine 20 write its rows a second time was caught,
+but by the wrong assertion: the criterion reported *"engine 20 wrote 4 leaderboard rows for a
+digest carrying 2 model versions"* rather than its idempotence message.
+
+**Why.** The criterion ran the engine twice and then read the table twice:
+
+```
+first = engine.process(context, {})
+again  = engine.process(context, {})
+rows        = _leaderboard_rows(db_path)
+after_second = _leaderboard_rows(db_path)
+if len(after_second) != len(rows):   # two reads of the same moment
+```
+
+Both reads are taken after both runs, so the two counts are equal by construction. **The
+idempotence check has never been able to fail**, from the day it was written — a criterion I
+wrote under spec 60 with a docstring claiming it proves idempotence. The row-count check
+caught the mutation instead, and it caught it for the wrong reason: it would have reported the
+same message for an engine that wrote four distinct correct rows.
+
+That is the shape ruling 2 of this phase exists for. The criterion was proved PENDING and then
+PASS; it was never proved FAIL, because engine 20 did not exist until today, and a first FAIL
+observation is exactly the moment an assertion like this is found.
+
+**Fix.** The table is read after the **first** run, then the engine runs again, then the table
+is read once more. The count check uses the first read — so it answers "did one run write one
+row per version" rather than "did two runs write two" — and the idempotence check compares two
+moments that can actually differ.
+
+**Two handles were leaking beside it**, found in the same run. The criterion built a
+`StoreClient` inside a `TemporaryDirectory` and never closed it, and `_leaderboard_rows`
+opened `sqlite3.connect(...)` in a `with` block — which commits a transaction and does **not**
+close the connection. On Windows an open handle stops the directory being removed, and the
+criterion reported `raised - PermissionError` after it had already answered its own question.
+Both are closed in a `finally` now.
+
+### Spec 74's hand check: the console rendering engine 20's own rows
+
+**Agent:** C-2 · **Task:** spec 74 · **Date:** 2026-09-13
+
+Nothing seeded, nothing hand-written: a real training run wrote the digest and the
+out-of-sample file, the real engine 20 scored them into a real migrated database through the
+real `StoreClient`, and the real `ConsoleReader.research()` rendered the screen.
+
+```
+engine 20: OK rows_written 3, rows_skipped 0, folds 3,
+           best fold 0 brier 1.73e-05 against base-rate 0.2446,
+           worst fold 2 brier 0.0014881 against base-rate 0.2498, currency USD
+
+version                              fold  trades   win rate     brier        net pnl  promoted
+train-20260913T120000-8b12f900-f2       2     742     0.9299   0.0014881   21.17841...     False
+train-20260913T120000-8b12f900-f1       1     743     0.9260   0.0010155   21.11107...     False
+train-20260913T120000-8b12f900-f0       0     650     0.8815   0.0000173   17.93570...     False
+
+rows rendered: 3
+```
+
+Three rows, newest first, `promoted` false on every one. The Briers are near zero because the
+constructed series is learnable by construction — that is the fixture's design, not a result,
+and the base-rate Brier beside each is what says so.
+
+**One thing that stopped being true, found by reading the screen rather than by a test.** The
+SHAP pane read *"Per-decision feature attribution arrives with the predictor in Phase 5.
+Nothing has been trained and nothing has been explained yet."* Engine 8 now computes
+attributions on every prediction, so the second sentence is false the moment the operator
+points `models.prediction_run_id` at a run — and an operator told "nothing has been explained"
+would go looking for a broken predictor rather than for a table nobody has built. What is
+actually absent is the storage: nothing writes them to Parquet and nothing fills
+`rejections.shap_ref`, which is Phase 7 (spec 71, step 6). The pane now names both phases and
+says which of the two it is, and its test asserts both numbers with the reason in a comment.
+
+That is worth recording as a shape: the pane's own test asserted only that the message
+contained the phase number it was built from, so it could not notice that the sentence around
+the number had become wrong.
+
+### Spec 75 — the candidate-ranking study, and why its numbers are not evidence yet
+
+**Agent:** C-2 · **Task:** spec 75 · **Date:** 2026-09-13
+
+`docs/dataset/ranking-study-2026-09-13.json`: 79 rows over 2,688 decision bars — the
+alphabetical control plus every one of the 39 features in both directions, which is spec 75's
+acceptance check.
+
+**The five highest and five lowest target rates, and the control:**
+
+| feature | direction | target rate | mean return | BUY bars | BUY target rate |
+|---|---|---|---|---|---|
+| *(alphabetical control)* | — | 0.4907 | — | 1,441 | 0.9153 |
+| `bar_range_pct` | ascending | 0.4952 | +0.00833 | 1,450 | 0.9179 |
+| `bar_body_pct` | ascending | 0.4952 | +0.00833 | 1,450 | 0.9179 |
+| `log_return_96` | descending | 0.4952 | +0.00838 | 1,455 | 0.9148 |
+| `high_low_position_4` | ascending | 0.4944 | +0.00836 | 1,455 | 0.9134 |
+| `range_atr_4` | ascending | 0.4937 | +0.00825 | 1,444 | 0.9190 |
+| `range_atr_4` | descending | 0.4888 | +0.00815 | 1,443 | 0.9106 |
+| `high_low_position_4` | descending | 0.4881 | +0.00803 | 1,432 | 0.9162 |
+| `bar_range_pct` | descending | 0.4874 | +0.00806 | 1,437 | 0.9116 |
+| `bar_body_pct` | descending | 0.4874 | +0.00806 | 1,437 | 0.9116 |
+| `log_return_96` | ascending | 0.4874 | +0.00802 | 1,432 | 0.9148 |
+
+**Read the spread before reading the ordering.** Best to worst is 0.4952 against 0.4874 — 78
+basis points across the entire feature set, with the control sitting in the middle of it. That
+is not a ranking signal; it is what a binary choice between two pairs from one generator looks
+like. **This run is the constructed 140-day two-pair series, not the 234-pair archive**, and
+the report's own provenance says so in a `limitation` field rather than leaving a reader to
+work it out from the pair list.
+
+Two pairs give every bar exactly one choice, so a feature can only ever be right or wrong
+about a coin, and the series is constructed rather than real. **Nobody should rule on this
+table.** It is the demonstration that the table can be produced and read; the evidence is the
+same study over the full archive's out-of-sample file, which is the first thing to re-run
+after the full training run lands.
+
+**The report recommends nothing and its rows are in feature order**, not sorted by outcome —
+an ordering by outcome is a recommendation with the word left off. The five-and-five above is
+mine, for this log, and the JSON is not ordered that way.
+
+**The break-even column is a formula, not a number, and that is a deliberate deviation from
+spec 75 step 2.** The step asks for the BUY-conditioned target rate "beside the break-even
+rates". Break-even is `(stop_pct + friction) / (target_pct + stop_pct)` and friction is live
+fees plus the measured spread plus slippage — none of which is in `config/default.yaml`, by
+design, because nothing the exchange can tell us belongs in that file. The reference figures
+in `trading-invariants.md` are marked for sanity-checking only and never for use in code. So
+the report carries the formula, the two barrier sizes, and `friction: null`. Writing a number
+there would be the hardcoded fee `AGENTS.md` forbids in its first paragraph wearing a
+different name. **This is the same wall spec 67 hit and the lead amended that spec for it; it
+is flagged rather than assumed.**
+
+**One thing the arithmetic gets right that a table cannot show.** A null feature value sorts
+**last** in both directions, so a pair whose lookback has not filled is never taken by
+default. The alternative ranks exactly the pairs with no history first in ascending order, and
+the resulting table would be a study of which pairs are new.
+
+### The `--ranking-study` branch got its test in the same change
+
+**Agent:** C-2 · **Task:** spec 75 · **Date:** 2026-09-13
+
+Spec 75 adds a second branch to `main()`, and a branch nothing runs is a branch that is green
+while broken. That is not a hypothetical here: it is exactly how `ArchiveReplay.frames()`
+becoming a generator went unnoticed under spec 79 — `main()` still subscripted it as a dict,
+no test drove `main()` at all, and with `--pairs` the failure read as "the archive has no
+XBTUSD", blaming the operator's argument.
+
+So `tests/research/test_training_main.py` gained two tests in the same change rather than in
+the next session: one drives `main(["--ranking-study", ..., "--dataset", ...])` end to end and
+asserts the report is written, recommends nothing, carries a null friction, and — the part a
+reader would not think to check — that **no second dataset parquet appears**, because the
+study is a reading of a run that already happened and must train nothing. The other drives it
+without `--dataset` and asserts the refusal names the missing argument.
+
+### Engine 20 joining the offline chain turned two older tests red, and both were right to go
+
+**Agent:** C-2 · **Task:** spec 74 · **Date:** 2026-09-13
+
+**What happened.** With `engines/tournament/` on disk, two tests written long before it went
+red across the tree:
+
+```
+FAILED tests/research/test_backtest.py::test_the_engine_is_registered_in_the_offline_chain
+  assert ['backtest', 'tournament'] == ['backtest']
+FAILED tests/verify/test_phase0_criteria.py::test_the_engine_count_says_which_engines_it_counted
+  assert (9 + 1) == 11
+```
+
+**Why.** Both encode "the offline chain has exactly one engine". `cli/research.py` resolves
+engine 20 **by name** and adds it to `OFFLINE_CHAIN` the moment `acsoe.engines.tournament`
+exists — which is A-2's own design, written with the docstring "Engine 20, once C's module
+exists. `None` until then". The seam worked exactly as built; the tests around it asserted the
+state before it.
+
+Neither is a defect in engine 20. `is_gate_matches_registry` counting eleven against
+`orchestrator_empty_registry`'s nine is the correct new answer: nine runtime engines plus two
+offline ones.
+
+**Fix, mine.** `test_the_engine_count_says_which_engines_it_counted` asserted `empty + 1 ==
+total`, with the `1` standing for engine 23 alone. Replacing it with `2` would be the same
+mistake with a different number, so the difference is now **derived from the offline chain
+itself** — the test asks `build_offline_chain()` how many engines are in it. It stays true when
+engine 20 lands, when a third offline engine lands, and it still fails if the two criteria
+start counting the same set.
+
+**Not mine.** `tests/research/test_backtest.py` is A-2's and I have not touched it. The one
+line is `assert [engine.name for engine in build_offline_chain()] == ["backtest"]` and it now
+needs `["backtest", "tournament"]` — or, better and A-2's call, an assertion that `backtest` is
+in the chain and comes first, which is the property engine 20 depends on rather than the
+membership list. **Raised with the lead.**
+
+### What the full run will cost, measured where it can be and named where it cannot
+
+**Agent:** C-2 · **Task:** spec 67 close-out · **Date:** 2026-09-13
+
+Before starting a run nobody would be present to watch, the two costs that scale badly were
+measured rather than guessed.
+
+**`purged_walk_forward` is not the problem, which was the surprise.** It materialises every
+row as a Python dict and then visits every row once per fold, so it looked like the wall.
+Measured over 26,784 rows and 8 folds: **272 ns per row per fold**. Over the archive's
+20,331,237 rows and the 352 weekly folds that 2,555 days at a 90-day window and a 7-day
+retrain produces, that projects to **about half an hour** — real, and not the thing to worry
+about.
+
+**Memory is a number, not a guess.** The dataset is 20,331,237 rows by roughly 85 columns
+(39 features, 39 macro, and the identifiers and labels) at 8 bytes a cell: **13.8 GB
+resident**, plus the splitter's own list of 20.3 million dicts at about **4.1 GB**. Against a
+machine that has already peaked at 51.9 GB on this archive, that fits — and it is the number
+to check first if the run dies.
+
+**What is *not* measured, and it is the dominant cost: the 352 LightGBM fits.** Each fold
+trains on a 90-day window across 234 pairs, roughly 2 million rows by 78 features, with 400
+trees and four threads, plus an isolation forest and a skeptic on top. The three-pair,
+three-fold archive run of spec 67 took eight minutes and most of that was the archive read, so
+it extrapolates to nothing honest: a fold there trained on about 26,000 rows and a fold here
+trains on about 2 million.
+
+So the run is started and the **first folds' actual rate is reported**, rather than a number
+invented in advance. If the per-fold time makes the whole walk-forward a multi-day job, that
+is a `--max-folds` decision for the lead and it is cheaper to make it after three folds than
+after thirty hours.
+
+### The full run is twenty-two hours, measured. It was not started.
+
+**Agent:** C-2 · **Task:** the full 234-pair training run · **Date:** 2026-09-13
+
+The lead's guard of 18:20 overrides the instruction to start it: measure first, report, and
+**stop above about three hours**. Measured, and it is not close.
+
+**One fold, timed at three sizes**, with the pair count varying the training rows — a 90-day
+window at 15-minute bars is 8,640 bars per pair — on the same constructed generator the
+trainer's own tests use, with a macro asset so the frame is the full 85 columns:
+
+| pairs | training rows | one fold |
+|---|---|---|
+| 2 | 17,184 | 6.76 s |
+| 4 | 34,368 | 8.46 s |
+| 8 | 68,736 | 12.42 s |
+
+A straight line through the first and last predicts the middle within **2%**, so LightGBM is
+behaving linearly in rows here as expected: **4.87 s + 109.74 s per million training rows**.
+
+**The archive.** 234 pairs over a 90-day window is 2,021,760 training rows per fold. 2,555
+days at a 90-day window and a 7-day retrain is **352 folds**.
+
+| | |
+|---|---|
+| projected per fold | 226.7 s |
+| projected walk-forward | **22.2 hours** |
+
+**And that is the floor, not the estimate.** It excludes the dataset build entirely — reading
+47 GB of CSVs, labelling and computing features for 234 pairs — and it excludes the skeptic,
+whose training set grows with every fold because it learns from every earlier fold's
+out-of-sample BUY calls. The measurement was also taken with a second full test suite running
+on the machine, which pushes it the other way; a repeat with the machine quieter gave 21.1
+hours, so contention is worth about 5% here and not a factor that changes the answer.
+
+**Two extrapolations are being made and both are stated.** The fit is over 17k to 69k training
+rows and the archive is 2.02M — a 29-fold extrapolation, which is why the middle-point residual
+is quoted: it says the line is right over the measured range, not that it is right thirty times
+beyond it. LightGBM's cost per row is not perfectly flat as a dataset outgrows cache, so the
+real number is more likely above 22 hours than below.
+
+**So it was not started, and this entry exists so nobody starts it without deciding to.** The
+response to a twenty-two-hour job is the lead's and the operator's: cap `--max-folds`, widen
+`backtest.retrain_interval_days` for the offline run, bound the pair set, or accept the day and
+schedule it. Reported and stopped there.
+
+**One number that came out better than feared.** `purged_walk_forward` materialises every row
+as a Python dict and visits every row once per fold, which looked like the wall: measured at
+272 ns per row per fold, it projects to about half an hour over 20.3M rows and 352 folds. It is
+not the problem. The 352 gradient-boosting fits are.
+
+### A threshold the operator can change that the system does not read
+
+**Agent:** C-2 · **Task:** the `di_percentile_mismatch` ruling · **Date:** 2026-09-13
+
+**What happened.** B-2's rehearsal of engines 13 and 8 found a gap in engine 8 as I built it,
+and the lead ruled on it: the DI threshold travels **inside the artefact**, baked into
+`di.npz` at training time, and engine 8 never read `prediction.di_percentile` at all.
+
+**Why that is worse than it sounds.** It is not that the key is ignored — it is that the key
+*looks* live. Once any percentile has been trained in, an operator editing
+`prediction.di_percentile` changes nothing the running system does: the engine goes on
+refusing at the percentile it was fitted at while the config claims another. The operator
+reads a number that is not in use, on the one setting that decides when a model is allowed to
+refuse a trade. Nothing is broken, nothing logs, and the refusal rate is whatever the old
+percentile said it should be.
+
+**Fix.** Engine 8 compares the artefact's own percentile against the config key **when the key
+is present** and blocks with `di_percentile_mismatch`, naming both numbers. Absent — which is
+the committed state — is not a disagreement: it means the operator has not chosen yet, the
+artefact's percentile stands unquestioned, and behaviour is exactly what it was.
+
+The code reads as a sentence rather than a boolean (`_di_percentile_complaint` returns the
+words or `None`) because the caller needs the words either way, and a `bool` would have put
+the explanation somewhere else from the decision.
+
+**Three tests, and the third is the one that would be missed.** A mismatch blocks and the
+reason carries both numbers. A match predicts — without that, the check is satisfied by an
+engine that blocks whenever the key is set at all, which would make supplying the operator's
+own threshold the thing that stops trading. And an absent key predicts, which is the committed
+state and the one a regression would reach first.
+
+`REASON_PROSE` gets a sentence that points at **the setting**, deliberately not a variant of
+`prediction_unavailable`: there is a usable model, it is sitting right there, and an operator
+told "no usable model is loaded" would go looking for a missing artefact.
+
+**Four mutations on the mismatch block, four killed, from a verified green baseline** (23
+passed), the file restored byte-identical by sha256:
+
+* **the check never fires** — the config key goes back to being decorative. Killed by the
+  block test.
+* **an absent key treated as a disagreement** — the committed state stops trading. Killed
+  loudly: six tests and six fixture errors, because absent is the state every other test in
+  the file runs in. That breadth is the point rather than noise; it is what "the default path"
+  failing looks like.
+* **the comparison inverted** — only a *matching* percentile blocks. Killed by both halves,
+  which is what the pass test is there for.
+* **the reason names only the configured number** — killed by the assertion that both numbers
+  appear. "They disagree" without saying which is which leaves the operator unable to tell
+  whether to retrain or to put the key back.
+
+---
+
+## Lead session, specs 74 and 75 (Opus 5, 2026-09-13 evening)
+
+C-2 is gone. The operator assigned the review-to-green of 74 and 75 to this session and 73 to
+a separate one. Everything below is a diagnosis written **before** its fix, per script rule 1;
+each entry gets its **Fix** in a follow-up entry once the change and its mutation proof exist.
+
+### Engine 20 stamps `updated_at` with the training time, so the console never sees its rows arrive
+
+**Agent:** Lead (C lane) · **Task:** spec 74 · **Date:** 2026-09-13
+
+**What happened.** `_write_rows` writes `updated_at=score.trained_at`, which is the digest's
+`created_at`: the moment the training run started, hours or days before `acsoe research`
+scores it, and for an old digest re-scored later, arbitrarily far in the past.
+
+**Why it matters.** `leaderboard` is one of `WATERMARK_TABLES`, and `StoreClient.watermark()`
+says in its own docstring that it is *"monotonic as long as callers stamp `updated_at` from
+`context.now`"*. The console polls that watermark and pushes only when it moves. A row whose
+`updated_at` is older than the current watermark does not move it, so an open console keeps
+rendering the old leaderboard with nothing to say it is stale. Nothing fails; the screen is
+simply wrong until something unrelated writes. `trained_at` is the right value for
+`trained_at` and the wrong one for `updated_at`: they answer different questions, and the
+engine already holds the injected clock that answers the second.
+
+### An empty fold would get a leaderboard row for a model version that was never trained
+
+**Agent:** Lead (C lane) · **Task:** spec 74 · **Date:** 2026-09-13
+
+**What happened.** For a fold the trainer reports as empty (`is_empty: true`, `run_id: null`,
+every metric null, no artefact directory written), `_fold_scores` still builds a score, and
+the version falls back to `f"{run_id}-f{index}"`, an identifier the engine invents. The row is
+written with `n_trades 0`, `brier null`, `net_pnl 0`.
+
+**Why it matters.** The leaderboard is a list of models Phase 6's router may weight and
+Phase 7's gate may promote. That row names a model version with no artefact behind it, so the
+first reader to follow it to `models/<version>/` finds nothing, and a `net_pnl` of exactly zero
+reads as a model that broke even rather than one that does not exist. The same fallback means
+a non-empty fold whose digest entry lost its `run_id` gets a plausible invented version rather
+than a refusal. No committed test produces an empty fold, so this path has never run.
+
+### The leaderboard's Brier is taken on trust from the digest, and criterion 10 never checks a single number against the out-of-sample rows
+
+**Agent:** Lead (C lane) · **Task:** spec 74 · **Date:** 2026-09-13
+
+**What happened.** Two halves of one gap.
+
+1. Engine 20 recomputes `n_trades`, `win_rate` and `net_pnl` from the out-of-sample parquet
+   but copies `brier` from the digest. Its docstring justifies that as *"the trainer is the
+   only thing that saw them calibrated"*. That is false: the out-of-sample file carries
+   `p_target`, written from the **calibrated** probability array the digest's Brier was
+   computed from (`_train_one_fold`, `probabilities[:, 0]` feeds both). So the engine scores
+   the trade columns from one source and the headline metric from another, and nothing
+   compares them.
+2. `tournament_writes_leaderboard_from_oos` asserts the row count, `promoted` false, three
+   fields non-null and idempotence. It asserts **no value**. An engine that counted every
+   out-of-sample row as a trade, or assigned rows to folds by an inclusive timestamp window
+   instead of by `fold_index`, or wrote the Brier from anywhere at all, passes it. Its own
+   fixture already holds the boundary row that would expose the inclusive window (fold 1's
+   first row sits exactly on fold 0's `test_end_ts` and is a BUY that hit its target), and
+   the criterion never reads the result. Its fabricated digest Briers (0.18, 0.19) bear no
+   relation to its fabricated rows, which is why nothing noticed.
+
+**Why it matters.** This is the operator's named failure mode for spec 74: a wrong boundary
+inflates every score and nothing goes red. The unit test that recomputes the trade numbers
+does it with the engine's own `fold_index` filter, so it moves with the engine. The criterion
+is the independent check, and it checks nothing a scorer could get wrong.
+
+### The ranking study takes a pair with no value first in every descending ranking
+
+**Agent:** Lead (C lane) · **Task:** spec 75 · **Date:** 2026-09-13
+
+**What happened.** `_row` sorts with `nulls_last=True` and says *"a null feature value sorts
+last in both directions, so a pair whose lookback has not filled is never taken by default"*.
+That is true of a **null**. The dataset does not carry nulls for an unfilled lookback:
+`modelling/features.compute` writes **NaN** (`.otherwise(float("nan"))`), and
+`research/training.py` stores what it computes. polars orders NaN as the largest float, so
+`nulls_last` does not touch it. Measured on polars 1.44.1, one bar, three pairs:
+
+```
+x = [A: 1.0, B: NaN, C: null]
+ascending  -> ['A', 'B', 'C']
+descending -> ['B', 'A', 'C']     # the NaN pair is taken
+```
+
+**Why it matters.** On the real archive a NaN is a pair with too little history: a new listing,
+a thin pair with holes, a z-score over a window with no dispersion. So every descending row of
+the study would have measured "take the pair we know least about" and labelled it with a
+feature's name, and a feature that goes NaN more often would look more distinctive. Live,
+`engines/scout/contracts.py::_feature_value` treats every non-finite value (NaN, ±inf) as no
+value and sorts it last, so the study was not measuring the choice engine 7 would make either.
+The hand test proves the null case in the ascending direction only, which is the one
+combination where polars happens to agree.
+
+### The study's join can silently drop out-of-sample rows
+
+**Agent:** Lead (C lane) · **Task:** spec 75 · **Date:** 2026-09-13
+
+**What happened.** `_joined` inner-joins the out-of-sample rows to the dataset on
+`(pair, decision_ts)` and never checks the result's size. A `--dataset` from a different build
+(another feature version, a `--pairs` smoke run, another date range) joins a subset, or
+duplicates rows if the dataset repeats a key, and the study reports over whatever survived with
+no sign it lost anything.
+
+**Why it matters.** The operator rules on this table. A table computed over an unknown subset of
+the run it names is a table about some other sample, and the provenance block would still name
+the right files.
+
+### The study reports a 0.0 DI refusal rate for a run in which no DI was fitted
+
+**Agent:** Lead (C lane) · **Task:** spec 75 · **Date:** 2026-09-13
+
+**What happened.** With `prediction.di_percentile` absent (the committed state, and the state
+the full 234-pair run is using) the trainer writes `di: null` and `di_refused: false` on every
+out-of-sample row. The study averages `di_refused` and reports `di_refused_rate: 0.0`.
+
+**Why it matters.** 0.0 reads as "the DI never refused a taken pair", a finding, when nothing
+was measured. The in-range wrong answer `code-standards.md` warns about: the first report the
+operator reads after the full run would carry 79 confident zeros.
+
+### Every row count in the study stands without its effective sample size
+
+**Agent:** Lead (C lane) · **Task:** spec 75 · **Date:** 2026-09-13
+
+**What happened.** The study reports `bars` and `buy_bars` and no effective size. The taken rows
+are consecutive decision bars whose 48-bar label windows overlap almost completely, so a
+difference of 78 basis points over "2,688 bars" is far fewer independent outcomes than the
+count suggests. Also absent, for the same reason: how many bars were actually decided by the
+feature. A bar where the top two pairs tie, or where no pair has a value, falls through to
+alphabetical order, and a feature that ties most of the time is the control under another name.
+
+**Why it matters.** Locked Decision, spec 59 decision 5 as the operator amended it: the effective
+sample size is reported beside **every** row count. The study is where a small difference over a
+large-looking count is most likely to be read as a signal.
+
+### A win rate over every fold row survived both the unit tests and the criterion
+
+**Agent:** Lead (C lane) · **Task:** spec 74 · **Date:** 2026-09-13
+
+**What happened.** In the spec 74 mutation sweep, M14 changed engine 20's `win_rate` numerator
+to count targets over **every** row in the fold while keeping `n_trades` as the BUY calls. All
+29 unit tests passed and `tournament_writes_leaderboard_from_oos` reported PASS.
+
+**Why.** Neither fixture can exhibit the difference. The trained fixture is the constructed
+series the trainer's own tests use, and it is learnable by construction; counted per fold:
+
+```
+(0, False, 'stop', 695)  (0, True, 'stop', 2)  (0, True, 'target', 573)  (0, True, 'timeout', 74)
+(1, False, 'stop', 596)  (1, False, 'timeout', 6)  (1, True, 'target', 688)  (1, True, 'timeout', 54)
+(2, False, 'stop', 602)  (2, True, 'target', 690)  (2, True, 'timeout', 52)
+```
+
+Every target row is a BUY call, so targets over all rows equal targets over BUY calls. The
+criterion's hand fixture had the same property: each fold's non-BUY row was a stop or a
+timeout. A double simpler than the real thing in exactly the dimension under test. On the real
+archive the predictor misses targets all the time, and a leaderboard crediting a model with
+the targets it did not call would report a win rate for trades it never made.
+
+### `no_value_bars` reading the wrong pair survived the spec 75 sweep
+
+**Agent:** Lead (C lane) · **Task:** spec 75 · **Date:** 2026-09-13
+
+**What happened.** Mutation A9 counted a bar as having no value when the **second**-ranked pair
+had none, rather than the first. All 33 tests passed.
+
+**Why.** The only test asserting `no_value_bars` puts no value on every pair, where first and
+second are both null and the two readings agree. The tests that put a value on one pair and none
+on the other assert which pair was taken and never read the count. The count exists so the
+operator can see how many bars a feature actually decided; one that counted a bar whenever the
+runner-up lacked a value would report a large "undecided" figure on exactly the bars where the
+feature did decide, because a thin pair is usually the runner-up.
+
+### Fix, spec 74: every score from the out-of-sample rows, the digest as a cross-check, and the mutation proof
+
+**Agent:** Lead (C lane) · **Task:** spec 74 · **Date:** 2026-09-13
+
+**Fix.** For the four spec 74 diagnoses above:
+
+* `updated_at` is `to_micros(context.now)`; `trained_at` stays the digest's `created_at`.
+* A fold the digest reports `is_empty` gets no row and is counted in `folds_empty`. A trained
+  fold whose entry has no `run_id` is refused (`tournament_no_digest`) rather than named.
+* `brier` and the base-rate Brier are recomputed from the fold's own `p_target` and labels. Per
+  fold, the digest's `rows`, `buy_count`, `brier` and `base_rate_brier` must match what the rows
+  give (Brier to 1e-9); the out-of-sample file may carry no fold the digest does not list; a fold
+  the digest calls empty may have no rows. Any disagreement is the new
+  `tournament_digest_mismatch`, and every fold is checked before any row is written.
+  `REASON_PROSE` has its sentence.
+* `tournament_writes_leaderboard_from_oos` now pins `n_trades`, `win_rate`, `net_pnl` and
+  `brier` per version against arithmetic it does itself over each fold's **half-open** window,
+  on a fixture with a BUY that hit its target exactly on fold 0's `test_end_ts`, a missed target
+  in each fold, varied probabilities and one empty fold. It also runs a second digest whose Brier
+  is off by 0.01 on the last fold and requires nothing written. The now-unused
+  `EngineStatus_ERROR_SENTINEL` constant is deleted.
+* The 74 lane's tests leaned on 73's uncommitted fixture changes (`MACRO_ARCHIVE`,
+  `dataset_for(macro_archive=...)`). Engine 20 reads no macro column, so its trained fixture no
+  longer asks for one, and the lane commits without spec 73.
+
+**Mutation sweep, engine 20.** From a verified green baseline (29 passed), each mutation applied
+from a byte copy, run against `tournament_writes_leaderboard_from_oos` and
+`tests/engines/test_tournament.py`, and restored before the next, sha256 `18c4fe75…42672f2fc` on
+every restore.
+
+| # | Mutation | Criterion | Unit tests (killing test) |
+|---|---|---|---|
+| M1 | `updated_at` = `trained_at` (the original) | PASS | killed: `test_updated_at_is_when_the_row_was_written_and_moves_the_console_watermark` |
+| M2 | empty folds not skipped | FAIL | killed: `test_an_empty_fold_gets_no_row…`, `test_a_fold_the_digest_calls_empty…` |
+| M3 | missing `run_id` given an invented version (the original fallback) | PASS | killed: `test_a_trained_fold_with_no_run_id_is_refused…` |
+| M4 | Brier and base rate not compared with the digest | FAIL | killed: `test_a_digest_that_disagrees…[brier]`, `[base_rate_brier]` |
+| M5 | Brier copied from the digest and never compared (the original) | FAIL | killed: the same two |
+| M6 | fold rows by an inclusive timestamp window | FAIL | killed: 19 tests (the cross-check refuses the run) |
+| M7 | inclusive window **and** every cross-check removed | FAIL on values: `f0 n_trades 3 (expected 2)…` | killed: 9, incl. both fold-window recomputations |
+| M8 | every fold row counted as a trade | FAIL | killed: 19 tests |
+| M9 | stray folds in the OOS file ignored | PASS | killed: `test_rows_for_a_fold_the_digest_does_not_list_are_refused` |
+| M10 | empty-marked fold with rows not refused | PASS | killed: `test_a_fold_the_digest_calls_empty_while_its_rows_exist_is_refused` |
+| M11 | row-count check removed | PASS | killed: `test_a_digest_that_disagrees…[rows]` |
+| M12 | BUY-count check removed | PASS | killed: `test_a_digest_that_disagrees…[buy_count]` |
+| M13 | `promoted` forced true | FAIL | killed: `test_no_row_is_promoted…` |
+| M14 | win rate over every fold row | **PASS, then FAIL after the fixture fix** | **survived (29 passed)**, then killed by `test_the_win_rate_counts_only_the_targets_the_predictor_called` |
+| M15 | C-2's engine as it was before this session, whole | FAIL: `wrote 3 leaderboard rows… one empty fold` | killed: 10 tests |
+
+Fourteen of fifteen killed on the first sweep. M14's survivor is the entry above; it was killed
+after the criterion fixture gained a missed target per fold and the unit tests gained a
+consistent tamper (missed targets added to the copy, the digest's Brier restated from the altered
+rows so the cross-check still agrees). The criterion's PASS on M1, M3 and M9 to M12 is by design,
+not a hole: each is killed by a named unit test, and the criterion carries the claims a
+leaderboard reader needs rather than every refusal branch. `tests/verify/test_phase5_criteria.py`
+gained four FAIL observations for the criterion's new checks (an inclusive window with the
+cross-checks removed, a win rate over every row, a disagreeing digest scored anyway, a row for an
+empty fold), beside C-2's three.
+
+**Consequence.** M15 is the one worth reading twice: the criterion as C-2 left it reported PASS
+over that engine, and the same engine now fails it.
+
+### Fix, spec 75: engine 7's rule restated and held to it, the join checked, every count beside its effective size
+
+**Agent:** Lead (C lane) · **Task:** spec 75 · **Date:** 2026-09-13
+
+**Fix.** For the four spec 75 diagnoses above:
+
+* `_joined` nulls every non-finite feature value (NaN, ±inf) before any sort, so `nulls_last`
+  puts a valueless pair after every valued one in both directions. `rank_universe`'s rule is
+  restated in the module docstring, and
+  `test_the_study_takes_the_pair_rank_universe_would_take_on_every_bar` holds the study's choice
+  to the live function over 400 bars of shuffled arrival order with NaN, ±inf, null, ties at the
+  top and a varying pair set, in both directions and for the control. The test imports both
+  sides, which a test may and `research/` may not. `chosen_pairs` is public for it and goes
+  through the same preparation `build_report` uses.
+* The join must cover every out-of-sample row exactly once, or `RankingStudyError` names both
+  counts.
+* `di_refused_rate` is null on every row when no row carries a DI score, and `meta.di_fitted`
+  says which case the report is.
+* Each row carries `effective_bars` and `buy_effective_bars` (the sum of the taken rows' own
+  uniqueness weights, stated in the report as an upper bound because it does not discount
+  cross-pair correlation), plus `no_value_bars` and `tied_bars`.
+* `docs/dataset/ranking-study-2026-09-13.json` is regenerated by the fixed study over the same
+  constructed two-pair series, with `regenerated` in its provenance saying the earlier file came
+  from the defective study.
+
+**Mutation sweep, the study.** From a green baseline (33 passed), narrowly against
+`tests/research/test_ranking_study.py`, restored from a byte copy before each next mutation,
+sha256 `b66fc300…5ece2c40` on every restore.
+
+| # | Mutation | Result (killing tests) |
+|---|---|---|
+| A1 | non-finite values not nulled (**the NaN-first defect**) | killed: `…no_finite_value…[nan-descending]`, `[inf-descending]`, `[-inf-ascending]`, both no-value-bar tests, the `rank_universe` seam test |
+| A2 | valueless pairs sorted first | killed: all 8 no-finite-value cases and the seam test |
+| A3 | tie-break reversed with the direction | killed: the descending tie and no-value tests, the seam test |
+| A4 | join coverage not checked | killed: both join refusals |
+| A5 | refusal rate reported with no DI fitted | killed: `test_a_run_with_no_dissimilarity_index_reports_no_refusal_rate` |
+| A6 | `effective_bars` is the row count | killed: the effective-size test, the real-run column test |
+| A7 | BUY effective size over every taken row | killed: the effective-size test |
+| A8 | `tied_bars` counts every valued bar | killed: `test_a_tie_below_the_top_is_not_a_tie_that_decided_anything` |
+| A9 | `no_value_bars` reads the runner-up | **survived (33 passed)**, then killed by the assertion added to the eight no-finite-value cases |
+| A10 | single-pair bars counted | killed: both single-pair tests |
+| A11 | direction ignored | killed: 6, incl. the hand direction test and the seam test |
+| A12 | BUY table over every taken row | killed: the BUY table and effective-size tests |
+| A13 | refusal rate replaced by a constant | killed: the taken-pairs refusal-rate test |
+
+One reading is recorded as unexplained rather than explained: A1's first run reported three
+**errors** on the real-run tests in 2.4 s, and the same mutation re-run alone did not reproduce
+them. The verdict does not rest on those three; the named tests above killed A1 both times.
+
+**The table, spec 75 step 3.** Over the regenerated report: the control, then the five highest
+and five lowest target rates, chosen by me for this log. The JSON is in feature order and
+recommends nothing.
+
+| feature | direction | bars | effective | no value | tied | target rate | BUY bars | BUY effective | BUY target rate |
+|---|---|---|---|---|---|---|---|---|---|
+| *(alphabetical control)* | — | 2,688 | 322.0 | — | — | 0.4907 | 1,441 | 123.8 | 0.9153 |
+| `log_return_96` | descending | 2,688 | 323.5 | 0 | 0 | 0.4952 | 1,454 | 125.0 | 0.9154 |
+| `bar_body_pct` | ascending | 2,688 | 299.5 | 0 | 0 | 0.4952 | 1,448 | 121.9 | 0.9192 |
+| `bar_range_pct` | ascending | 2,688 | 299.5 | 0 | 0 | 0.4952 | 1,448 | 121.9 | 0.9192 |
+| `high_low_position_4` | ascending | 2,688 | 305.3 | 0 | 0 | 0.4944 | 1,454 | 124.0 | 0.9140 |
+| `range_atr_4` | ascending | 2,688 | 306.6 | 0 | 0 | 0.4937 | 1,442 | 121.6 | 0.9202 |
+| `bar_range_pct` | descending | 2,688 | 344.5 | 0 | 0 | 0.4874 | 1,437 | 126.0 | 0.9116 |
+| `bar_body_pct` | descending | 2,688 | 344.5 | 0 | 0 | 0.4874 | 1,437 | 126.0 | 0.9116 |
+| `log_return_96` | ascending | 2,688 | 320.5 | 0 | 0 | 0.4874 | 1,431 | 122.8 | 0.9154 |
+| `high_low_position_4` | descending | 2,688 | 338.6 | 0 | 0 | 0.4881 | 1,431 | 123.9 | 0.9168 |
+| `range_atr_4` | descending | 2,688 | 337.4 | 0 | 0 | 0.4888 | 1,443 | 126.3 | 0.9106 |
+
+**Read the new columns before the rates.** Best to worst is still 78 basis points with the
+control inside it, and each row's 2,688 bars stand for roughly **300 to 345 effective outcomes**,
+about one in eight, so the spread is noise at this size. The tie column changes what several rows
+mean: `hour_sin`, `hour_cos`, `weekday_sin`, `weekday_cos` and all four `bars_in_lookback_*`
+columns tie on **every** bar (a calendar feature is the same for every pair on a bar, and a
+constructed series has no holes), so both directions of each are exactly the control, and
+`efficiency_ratio_4` ties on 1,854 of 2,688. Before this column those sixteen rows read as
+measurements that happened to agree with the control. No bar here had a pair without a value;
+the real archive will, which is why that column exists.
+
+**This is still not evidence, and the report says so.** The evidence is this study over the full
+234-pair run's out-of-sample file and dataset, which the job started this session will produce.
+
+### Spec 74's hand check, repeated on the fixed engine, with the watermark this time
+
+**Agent:** Lead (C lane) · **Task:** spec 74 · **Date:** 2026-09-13
+
+C-2's hand check predates the fixes, so it was repeated the same way: a real training run (three
+folds of the constructed series), the real engine 20 into a real migrated database through the
+real `StoreClient`, scored at `context.now` 2026-09-20 09:30 UTC, and the real
+`ConsoleReader` reading the result. What is new is the first two lines of the watermark: the
+console's poll value before and after the engine wrote.
+
+```
+engine 20: OK rows_written 3, rows_skipped 0, folds 3, folds_empty 0,
+           best fold 0 brier 9.71817e-06 against base-rate 0.2446,
+           worst fold 1 brier 0.00238205 against base-rate 0.2499, currency USD
+console watermark before 0, after 1789896600000000 (context.now 1789896600000000)
+
+version                              fold  trades  win rate       brier       net pnl  promoted
+train-20260913T120000-8b12f900-f2       2     742  0.929919  0.00148809  21.178413806  False
+train-20260913T120000-8b12f900-f1       1     742  0.927223  0.00238205  21.086035910  False
+train-20260913T120000-8b12f900-f0       0     649  0.882896  9.718e-06   17.950700768  False
+
+rows rendered: 3
+```
+
+Three rows, newest first, `promoted` false on each, and the watermark moved to exactly the
+injected instant, so an open console pushes. With the old `updated_at` it would have landed on
+2026-09-13 12:00, the training time. The Briers are near zero because the constructed series is
+learnable by construction; the base rate beside each is what says so.

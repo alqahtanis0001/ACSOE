@@ -174,6 +174,18 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # The engine's own code is `market_anomalous`, and its sentence says **market** because
     # this gate has no opinion about the trade and could not form one.
     "market_anomalous": "Trading conditions on this pair look broken",
+    # Engine 20 `tournament`, spec 74. Offline: an operator meets these in a research run's
+    # output rather than on the live screen, and they still go through the same table because
+    # `operator_reason` is the one thing that turns a code into a sentence. Three separate
+    # lines because the fix differs: supply a digest, re-run the training, open a database.
+    "tournament_no_digest": "No training digest was given, so no models were ranked",
+    "tournament_no_oos": "The training run's out-of-sample rows are missing, so no models were ranked",
+    "tournament_no_store": "No database is open, so the rankings could not be saved",
+    # The fourth, and the fix is different again: the run's two output files disagree about
+    # a fold, so the thing to do is find which file is wrong, not re-run anything blindly.
+    "tournament_digest_mismatch": (
+        "The training run's summary and its out-of-sample rows disagree, so no models were ranked"
+    ),
     "anomaly_unavailable": "No market-health model is loaded, so conditions were not checked",
     "anomaly_inputs_incomplete": "Some market-health inputs were missing for this pair",
     # Engine 8 `prediction`, spec 71. **`di_refused`, and `dissimilarity_index` is gone.**

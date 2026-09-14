@@ -64,6 +64,7 @@ BUILT = (
     "skeptic_trains_only_on_predictor_buy_rows",
     "walkforward_weekly_retrain_reports_oos",
     "scout_ranks_by_feature_not_arrival",
+    "tournament_writes_leaderboard_from_oos",
     "walkforward_trains_on_the_past_only",
 )
 
@@ -73,7 +74,6 @@ AWAITED = {
     # outstanding. That is the criterion doing its job: the message is a task list, and a
     # task list that still names finished work sends its reader to look for it.
     "anomaly_and_skeptic_have_both_tests": "test_skeptic.py",
-    "tournament_writes_leaderboard_from_oos": "`tournament`",
 }
 
 #: Waiting on the **operator** rather than on an agent, which is a different state and has
@@ -545,6 +545,197 @@ def test_a_skeptic_that_reports_no_training_identity_is_a_fail(
     outcome = run(verify_module, "skeptic_trains_only_on_predictor_buy_rows", phase5_tree)
     assert_fail(outcome, verify_module)
     assert "row count passes whenever" in outcome.message
+
+
+# --------------------------------------------------------------------------- #
+# tournament_writes_leaderboard_from_oos
+# --------------------------------------------------------------------------- #
+
+
+def test_a_promoted_leaderboard_row_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """Spec 74's first named mutation, and the most plausible wrong line in the engine.
+
+    `promoted=True` is what somebody writes who is thinking "this is the model we trained, so
+    it is the model we are using". Phase 7's promotion gate would then read it as a decision
+    somebody made, behind a deflated metric and a multiple-testing haircut that were never
+    applied.
+    """
+    patch(
+        phase5_tree,
+        "src/acsoe/engines/tournament/engine.py",
+        "                promoted=False,",
+        "                promoted=True,",
+    )
+    outcome = run(verify_module, "tournament_writes_leaderboard_from_oos", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "promoted" in outcome.message
+
+
+def test_a_write_routed_around_the_store_client_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """Spec 74's second named mutation. Contract rule 4, checked on the source.
+
+    **The row looks identical either way**, which is the whole reason this is a source check
+    rather than a behavioural one: an engine with its own `sqlite3` connection writes exactly
+    the row the store would have written, and every assertion about the leaderboard's contents
+    goes on passing. What it loses is the single-writer property — the store client is the one
+    thing that owns the schema, the transaction and the refusals.
+    """
+    patch(
+        phase5_tree,
+        "src/acsoe/engines/tournament/engine.py",
+        "    from acsoe.clients.store.contracts import LeaderboardRow",
+        "    import sqlite3  # noqa: F401\n"
+        "\n"
+        "    from acsoe.clients.store.contracts import LeaderboardRow",
+    )
+    outcome = run(verify_module, "tournament_writes_leaderboard_from_oos", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "contract rule 4" in outcome.message.lower()
+
+
+def test_a_second_run_that_writes_again_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """Not one of spec 74's named mutations, and it is the one that would actually happen.
+
+    `acsoe research` replays the whole chain on every invocation, so a non-idempotent write
+    doubles the leaderboard every time anybody runs it — and a duplicate row is
+    indistinguishable from a second training run. The mutation is the plausible form: an
+    existence check that asks the console's newest-fifty read instead of the store's own,
+    which is correct until a walk-forward has fifty-one folds.
+    """
+    patch(
+        phase5_tree,
+        "src/acsoe/engines/tournament/engine.py",
+        "        existing = store.leaderboard_entries(\n"
+        "            model_id=MODEL_ID, model_version=score.version, fold=score.fold\n"
+        "        )",
+        "        existing = [\n"
+        "            row\n"
+        "            for row in store.leaderboard()\n"
+        "            if row.model_version == score.version\n"
+        "            and row.fold == score.fold\n"
+        "            and False\n"
+        "        ]",
+    )
+    outcome = run(verify_module, "tournament_writes_leaderboard_from_oos", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "idempotent" in outcome.message
+
+
+def test_a_fold_window_drawn_inclusive_at_the_end_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """The operator's named failure for spec 74: a boundary one bar wide inflates every score.
+
+    The mutation draws each fold's rows from its timestamps, inclusive at the end, **and**
+    removes the engine's own cross-checks against the digest, which would otherwise refuse
+    the run and hide whether the criterion reads the numbers at all. The criterion's fixture
+    puts a BUY that hit its target exactly on fold 0's `test_end_ts`, so the row count, the
+    win rate, the P&L and the Brier on fold 0's row all move.
+    """
+    engine = "src/acsoe/engines/tournament/engine.py"
+    patch(
+        phase5_tree,
+        engine,
+        '        fold_rows = frame.filter(pl.col("fold_index") == index)',
+        '        fold_rows = frame.filter((pl.col("decision_ts") >= int(entry["test_start_ts"]))'
+        ' & (pl.col("decision_ts") <= int(entry["test_end_ts"])))',
+    )
+    patch(
+        phase5_tree,
+        engine,
+        "    if reported_rows is None or int(reported_rows) != fold_rows.height:",
+        "    if False:",
+    )
+    patch(
+        phase5_tree,
+        engine,
+        '    for name, recomputed in (("brier", brier), ("base_rate_brier", base_rate_brier)):',
+        "    for name, recomputed in ():",
+    )
+    patch(
+        phase5_tree,
+        engine,
+        "    if reported_buys is not None and int(reported_buys) != buys.height:",
+        "    if False:",
+    )
+    outcome = run(verify_module, "tournament_writes_leaderboard_from_oos", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "train-verify-f0 n_trades 3 (expected 2)" in outcome.message
+    assert "half-open" in outcome.message
+
+
+def test_a_win_rate_over_targets_the_predictor_did_not_call_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """A target the predictor did not call BUY is a trade it never made.
+
+    Survived a mutation sweep once, on a fixture whose every target row was a BUY call; the
+    fixture now carries a missed target in each fold, and this is the observation that the
+    criterion can see it.
+    """
+    patch(
+        phase5_tree,
+        "src/acsoe/engines/tournament/engine.py",
+        "    wins = sum(1 for label in labels if label == _TARGET)",
+        '    wins = sum(1 for label in fold_rows["label"] if str(label) == _TARGET)',
+    )
+    outcome = run(verify_module, "tournament_writes_leaderboard_from_oos", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "win_rate 1.0 (expected 0.5)" in outcome.message
+
+
+def test_a_digest_that_disagrees_with_its_rows_and_is_scored_anyway_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """Two numbers for one fold: one of the run's two files describes rows the other did not
+    score. The mutation keeps the recomputed Brier and stops comparing it with the digest."""
+    patch(
+        phase5_tree,
+        "src/acsoe/engines/tournament/engine.py",
+        '    for name, recomputed in (("brier", brier), ("base_rate_brier", base_rate_brier)):',
+        "    for name, recomputed in ():",
+    )
+    outcome = run(verify_module, "tournament_writes_leaderboard_from_oos", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "scored anyway" in outcome.message
+
+
+def test_a_row_for_an_empty_fold_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """An empty fold trained no model. The mutation is the shape engine 20 had before: no
+    skip, and a version invented from the parent run id when the fold's own is missing."""
+    engine = "src/acsoe/engines/tournament/engine.py"
+    patch(phase5_tree, engine, '        if entry.get("is_empty"):', "        if False:")
+    patch(
+        phase5_tree,
+        engine,
+        "    version = entry.get(DIGEST_RUN_ID_FIELD)\n    if not version:",
+        '    version = entry.get(DIGEST_RUN_ID_FIELD) or f"{run_id}-f{index}"\n'
+        "    if False:",
+    )
+    patch(
+        phase5_tree,
+        engine,
+        "    if reported_rows is None or int(reported_rows) != fold_rows.height:",
+        "    if False:",
+    )
+    patch(
+        phase5_tree,
+        engine,
+        '    for name, recomputed in (("brier", brier), ("base_rate_brier", base_rate_brier)):',
+        "    for name, recomputed in ():",
+    )
+    outcome = run(verify_module, "tournament_writes_leaderboard_from_oos", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "3 leaderboard rows" in outcome.message
+    assert "empty fold" in outcome.message
 
 
 # --------------------------------------------------------------------------- #

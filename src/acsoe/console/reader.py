@@ -145,10 +145,18 @@ _NOT_RECORDED: Final = (
 
 #: The SHAP pane's whole content. Written once, here, so the API payload and the
 #: page cannot disagree about what is missing or about which phase produces it.
+#: **Reworded 2026-09-13, because half of it stopped being true.** Engine 8 now computes
+#: per-decision attributions and publishes them under `state["prediction"]["shap"]`, so
+#: "nothing has been trained and nothing has been explained yet" would be a false sentence
+#: the moment the operator points `models.prediction_run_id` at a run. What is still absent
+#: is the *storage*: nothing writes those attributions to Parquet and nothing fills
+#: `rejections.shap_ref`, which is Phase 7 with the SHAP view (spec 71, step 6). The pane
+#: says which of the two it is, because an operator told "nothing has been explained" would
+#: go looking for a broken predictor rather than for a table nobody has built.
 SHAP_EMPTY_STATE: Final = (
-    "Per-decision feature attribution arrives with the predictor in Phase "
-    f"{SHAP_PRODUCED_IN_PHASE}. Nothing has been trained and nothing has been "
-    "explained yet, so there is nothing here to show."
+    f"Per-decision feature attribution is produced in Phase {SHAP_PRODUCED_IN_PHASE}, on "
+    "every prediction, and is not stored anywhere yet. The view that keeps and renders it "
+    f"arrives in Phase {SHAP_PRODUCED_IN_PHASE + 2}."
 )
 
 

@@ -150,6 +150,13 @@ def test_the_shap_pane_is_unavailable_and_names_the_phase_that_produces_it(
     assert pane.available is False
     assert pane.produced_in_phase == SHAP_PRODUCED_IN_PHASE == 5
     assert str(SHAP_PRODUCED_IN_PHASE) in pane.message
+    # **Two numbers now, and the second is the one an operator needs.** Engine 8 computes
+    # attributions on every prediction from Phase 5, so a message saying only "arrives in
+    # Phase 5" would be false the moment a model is loaded — the operator would go looking
+    # for a broken predictor rather than for a table nobody has built. What is absent is the
+    # storage, and that is Phase 7 with the SHAP view (spec 71, step 6).
+    assert str(SHAP_PRODUCED_IN_PHASE + 2) in pane.message
+    assert "not stored" in pane.message
     assert pane.message == SHAP_EMPTY_STATE
 
 

@@ -9836,19 +9836,27 @@ def check_scout_ranks_by_feature_not_arrival(ctx: VerifyContext) -> Outcome:
 
 
 def check_tournament_writes_leaderboard_from_oos(ctx: VerifyContext) -> Outcome:
-    """Engine 20 writes one leaderboard row per model version, through the store, unpromoted.
+    """Engine 20 writes one leaderboard row per model version, scored from the OOS rows.
 
-    Phase 6's router weights by this table and Phase 7's promotion gate judges it, so an
-    empty leaderboard is two later phases with nothing to read. Three claims:
+    Phase 6's router weights by this table and Phase 7's promotion gate judges it, so a
+    leaderboard whose numbers are wrong is two later phases reasoning from them. Five claims:
 
-    * **one row per model version**, carrying `brier`, `n_trades` and `win_rate`;
-    * **`promoted` is never true.** Promotion is Phase 7's, behind a deflated metric and a
-      multiple-testing haircut. A `promoted` row written in Phase 5 would be read by that
-      gate as a decision somebody made;
-    * **written through `StoreClient`.** Engine 19 `memory` is the single writer of
-      relational rows in the live loop and the store client is the single writer of
-      SQLite; an engine reaching past it with its own `sqlite3` connection is contract
-      rule 4 and it is checked on the source, because the row looks identical either way.
+    * **every number on a row is the out-of-sample rows' number.** `n_trades`, `win_rate`,
+      `net_pnl` and `brier` are checked against arithmetic this criterion does itself, over
+      rows it selects by each fold's **half-open** test window `[test_start_ts,
+      test_end_ts)`, never by the engine's route. The fixture puts fold 1's first row exactly
+      on fold 0's `test_end_ts`, and that row is a BUY that hit its target, so a scorer that
+      drew the window inclusive at the end, counted every row as a trade, or took its Brier
+      from anywhere but these probabilities, writes a different number on the row;
+    * **no row for an empty fold.** The fixture's third fold is the trainer's empty-fold entry;
+      it trained no model, and a row for it would name a version with nothing behind it;
+    * **a digest that disagrees with its rows writes nothing.** The same rows under a digest
+      whose Brier for one fold is wrong must leave the table untouched: two numbers for one
+      fold means one file describes rows the other did not score;
+    * **`promoted` is never true**, and a second run over the same digest writes nothing;
+    * **written through `StoreClient`.** An engine reaching past it with its own `sqlite3`
+      connection is contract rule 4 and is checked on the source, because the row looks
+      identical either way.
 
     The digest and out-of-sample file are constructed here rather than trained, and that is
     safe for one reason worth stating: their **shapes** are pinned by
@@ -9861,6 +9869,106 @@ def check_tournament_writes_leaderboard_from_oos(ctx: VerifyContext) -> Outcome:
     if polars is None:
         return problem or pending("polars is unavailable")
 
+    week = 604_800
+    base = 1_700_000_000
+    versions = ("train-verify-f0", "train-verify-f1")
+    # (label, is_buy, p_target) per row, per trained fold. The probabilities differ between
+    # rows and between folds, so a Brier computed over the wrong rows is a different number.
+    # **Each fold's third row is a target the predictor did not call BUY**: without one, a win
+    # rate counted over every row equals the win rate over the BUY calls and the check below
+    # cannot tell them apart. That survived a mutation sweep once, on a fixture without it.
+    fold_rows = (
+        (("target", True, 0.7), ("stop", True, 0.2), ("target", False, 0.4)),
+        (("target", True, 0.9), ("stop", True, 0.3), ("target", False, 0.2)),
+    )
+    returns = {"target": 0.03, "stop": -0.015, "timeout": 0.004}
+
+    def oos_rows(run_folds: int) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for index in range(run_folds):
+            for position, (label, is_buy, p_target) in enumerate(fold_rows[index]):
+                rows.append(
+                    {
+                        "pair": "AAAUSD" if position % 2 == 0 else "BBBUSD",
+                        # Fold 1's row 0 lands exactly on fold 0's `test_end_ts`.
+                        "decision_ts": base + index * week + position * 900,
+                        "label_window_end_ts": base + index * week + position * 900 + 43_200,
+                        "fold_index": index,
+                        "p_target": p_target,
+                        "p_stop": round(1.0 - p_target - 0.05, 6),
+                        "p_timeout": 0.05,
+                        "expected_move_pct": 0.004 if is_buy else -0.004,
+                        "is_buy": is_buy,
+                        "di": None,
+                        "di_refused": False,
+                        "label": label,
+                        "return_pct": returns[label],
+                        "weight": 0.5,
+                    }
+                )
+        return rows
+
+    rows_in = oos_rows(len(versions))
+
+    def windowed(start: int, end: int) -> list[dict[str, Any]]:
+        return [row for row in rows_in if start <= int(row["decision_ts"]) < end]
+
+    # What each row must say, from the half-open windows and this criterion's own arithmetic.
+    expected: dict[str, dict[str, Any]] = {}
+    folds: list[dict[str, Any]] = []
+    for index, version in enumerate(versions):
+        start, end = base + index * week, base + (index + 1) * week
+        window = windowed(start, end)
+        buys = [row for row in window if row["is_buy"]]
+        hits = [1.0 if row["label"] == "target" else 0.0 for row in window]
+        brier = math.fsum(
+            (float(row["p_target"]) - hit) ** 2 for row, hit in zip(window, hits, strict=True)
+        ) / len(window)
+        rate = math.fsum(hits) / len(window)
+        expected[version] = {
+            "fold": str(index),
+            "n_trades": len(buys),
+            "win_rate": sum(1 for row in buys if row["label"] == "target") / len(buys),
+            "net_pnl": sum((Decimal(repr(row["return_pct"])) for row in buys), Decimal(0)),
+            "brier": brier,
+        }
+        folds.append(
+            {
+                "fold_index": index,
+                "run_id": version,
+                "train_start_ts": start - 90 * 86_400,
+                "train_end_ts": start,
+                "test_start_ts": start,
+                "test_end_ts": end,
+                "rows": len(window),
+                "effective_sample_size": 1.5,
+                "brier": brier,
+                "base_rate_brier": rate * (1.0 - rate),
+                "log_loss": 0.9,
+                "buy_count": len(buys),
+                "buy_target_rate": expected[version]["win_rate"],
+                "is_empty": False,
+            }
+        )
+    # The trainer's own empty-fold entry (`_empty_entry`): no model, no run id, no metrics.
+    empty_index = len(versions)
+    folds.append(
+        {
+            "fold_index": empty_index,
+            "run_id": None,
+            "train_start_ts": base + empty_index * week - 90 * 86_400,
+            "train_end_ts": base + empty_index * week,
+            "test_start_ts": base + empty_index * week,
+            "test_end_ts": base + (empty_index + 1) * week,
+            "rows": 0,
+            "effective_sample_size": 0.0,
+            "brier": None,
+            "base_rate_brier": None,
+            "buy_count": 0,
+            "is_empty": True,
+        }
+    )
+
     with root_import_path(ctx.root):
         engine_cls, problem = _phase5_engine_class("tournament")
         if engine_cls is None:
@@ -9868,55 +9976,41 @@ def check_tournament_writes_leaderboard_from_oos(ctx: VerifyContext) -> Outcome:
 
         with tempfile.TemporaryDirectory(prefix="acsoe-verify-tournament-") as raw_tmp:
             tmp = Path(raw_tmp)
-            digest_path = tmp / "walkforward_digest.json"
-            oos_path = tmp / "oos.parquet"
-            versions = ("train-verify-f0", "train-verify-f1")
-            folds = [
-                {
-                    "fold_index": index,
-                    "run_id": versions[index],
-                    "train_end_ts": 1_700_000_000 + index * 604_800,
-                    "test_start_ts": 1_700_000_000 + index * 604_800,
-                    "test_end_ts": 1_700_604_800 + index * 604_800,
-                    "rows": 400,
-                    "effective_sample_size": 90.5,
-                    "brier": 0.18 + 0.01 * index,
-                    "base_rate_brier": 0.2,
-                    "log_loss": 0.9,
-                    "buy_count": 2,
-                    "buy_target_rate": 0.5,
-                }
-                for index in range(len(versions))
-            ]
-            digest_path.write_bytes(
-                json.dumps(
-                    {"run_id": "train-verify", "folds": folds}, sort_keys=True, indent=2
-                ).encode("utf-8")
-                + b"\n"
-            )
-            oos_rows = []
-            for index in range(len(versions)):
-                for row_index, (label, is_buy) in enumerate(
-                    (("target", True), ("stop", True), ("stop", False))
-                ):
-                    oos_rows.append(
+
+            def deposit(directory: Path, run_id: str, run_folds: list[dict[str, Any]]) -> Path:
+                # **Named the way the trainer names them**, the out-of-sample file beside
+                # the digest and carrying its run id, because engine 20 derives one path
+                # from the other. A fixture spelled differently would test a layout nothing
+                # produces, and the engine would correctly refuse it.
+                directory.mkdir(parents=True, exist_ok=True)
+                digest_path = directory / "walkforward_digest.json"
+                digest_path.write_bytes(
+                    json.dumps(
                         {
-                            "pair": "AAAUSD",
-                            "decision_ts": 1_700_000_000 + index * 604_800 + row_index * 900,
-                            "fold_index": index,
-                            "p_target": 0.4,
-                            "p_stop": 0.4,
-                            "p_timeout": 0.2,
-                            "expected_move_pct": 0.004 if is_buy else -0.004,
-                            "is_buy": is_buy,
-                            "di": 0.1,
-                            "di_refused": False,
-                            "label": label,
-                            "return_pct": 0.03 if label == "target" else -0.015,
-                            "weight": 0.5,
-                        }
-                    )
-            polars.DataFrame(oos_rows).write_parquet(oos_path)
+                            "run_id": run_id,
+                            "created_at": "2026-09-13T12:00:00+00:00",
+                            "folds": run_folds,
+                        },
+                        sort_keys=True,
+                        indent=2,
+                    ).encode("utf-8")
+                    + b"\n"
+                )
+                polars.DataFrame(rows_in).write_parquet(directory / f"oos_{run_id}.parquet")
+                return digest_path
+
+            digest_path = deposit(tmp / "run", "train-verify", folds)
+            # The same rows under a digest whose Brier for the **last** trained fold is off
+            # by a hundredth, so an engine that wrote fold by fold would already have
+            # written fold 0 when it met the disagreement.
+            tampered = [dict(entry) for entry in folds]
+            tampered[1] = {
+                **tampered[1],
+                "run_id": "train-tampered-f1",
+                "brier": float(tampered[1]["brier"]) + 0.01,
+            }
+            tampered[0] = {**tampered[0], "run_id": "train-tampered-f0"}
+            tampered_path = deposit(tmp / "tampered", "train-tampered", tampered)
 
             store_cls, problem = _store_class()
             if store_cls is None:
@@ -9940,16 +10034,30 @@ def check_tournament_writes_leaderboard_from_oos(ctx: VerifyContext) -> Outcome:
 
             try:
                 engine = engine_cls(digest_path=digest_path)
+                tampered_engine = engine_cls(digest_path=tampered_path)
             except TypeError as exc:
                 return failed(
                     "TournamentEngine does not accept `TournamentEngine(*, "
                     "digest_path=...)`, which is the seam `cli/research.py` constructs it "
                     "through: " + str(exc)[:200]
                 )
-            first = engine.process(context, {})
-            again = engine.process(context, {})
-
-            rows = _leaderboard_rows(db_path)
+            try:
+                # **Read between the runs, not after all of them.** An earlier version took
+                # both counts after the engine had run twice, so they were two reads of one
+                # moment and the idempotence check could not fail — which is what a first
+                # FAIL observation is for finding.
+                first = engine.process(context, {})
+                rows = _leaderboard_rows(db_path)
+                again = engine.process(context, {})
+                after_second = _leaderboard_rows(db_path)
+                refused = tampered_engine.process(context, {})
+                after_tampered = _leaderboard_rows(db_path)
+            finally:
+                # The store holds an open connection to a database inside the temporary
+                # directory, and on Windows that stops the directory being removed.
+                closer = getattr(store, "close", None)
+                if callable(closer):
+                    closer()
             source = (
                 ctx.root / "src" / "acsoe" / "engines" / "tournament" / "engine.py"
             )
@@ -9962,7 +10070,6 @@ def check_tournament_writes_leaderboard_from_oos(ctx: VerifyContext) -> Outcome:
                 if source.is_file()
                 else []
             )
-            del oos_path
 
     if direct:
         return failed(
@@ -9972,16 +10079,57 @@ def check_tournament_writes_leaderboard_from_oos(ctx: VerifyContext) -> Outcome:
             "except through `context.clients.store`, and the row it writes looks identical "
             "either way, so nothing but this would notice."
         )
-    if getattr(first, "status", None) is EngineStatus_ERROR_SENTINEL:
-        return failed("engine 20 errored on its first run: " + str(getattr(first, "reason", "")))
+    if str(getattr(first, "status", "")) != "OK":
+        return failed(
+            "engine 20 did not score a digest and out-of-sample file that agree: "
+            + str(getattr(first, "status", None))
+            + " - "
+            + str(getattr(first, "reason", ""))[:300]
+        )
     if len(rows) != len(versions):
         return failed(
             "engine 20 wrote "
             + str(len(rows))
             + " leaderboard rows for a digest carrying "
             + str(len(versions))
-            + " model versions. One row per version is what Phase 6's router weights by "
-            "and Phase 7's promotion gate judges."
+            + " trained model versions and one empty fold. One row per trained version is "
+            "what Phase 6's router weights by; an empty fold trained no model and gets none."
+        )
+    by_version = {str(row.get("model_version")): row for row in rows}
+    if set(by_version) != set(versions):
+        return failed(
+            "leaderboard versions are "
+            + ", ".join(sorted(by_version))
+            + ", expected "
+            + ", ".join(versions)
+            + ". The version is each fold's own artefact run id, never one invented for it."
+        )
+    wrong: list[str] = []
+    for version, want in expected.items():
+        row = by_version[version]
+        if str(row.get("fold")) != want["fold"]:
+            wrong.append(f"{version} fold {row.get('fold')} (expected {want['fold']})")
+        if row.get("n_trades") != want["n_trades"]:
+            wrong.append(f"{version} n_trades {row.get('n_trades')} (expected {want['n_trades']})")
+        win_rate = row.get("win_rate")
+        if win_rate is None or abs(float(win_rate) - want["win_rate"]) > 1e-12:
+            wrong.append(f"{version} win_rate {win_rate} (expected {want['win_rate']})")
+        try:
+            net_pnl = Decimal(str(row.get("net_pnl")))
+        except InvalidOperation:
+            net_pnl = None
+        if net_pnl != want["net_pnl"]:
+            wrong.append(f"{version} net_pnl {row.get('net_pnl')} (expected {want['net_pnl']})")
+        row_brier = row.get("brier")
+        if row_brier is None or abs(float(row_brier) - want["brier"]) > 1e-9:
+            wrong.append(f"{version} brier {row_brier} (expected {want['brier']!r})")
+    if wrong:
+        return failed(
+            "leaderboard numbers are not the out-of-sample rows' numbers, counted over each "
+            "fold's half-open test window: "
+            + "; ".join(wrong)
+            + ". A scorer that drew a fold boundary one bar wide, counted non-BUY rows, or "
+            "took its Brier from anywhere but these probabilities writes exactly this."
         )
     promoted = [row for row in rows if row.get("promoted")]
     if promoted:
@@ -9991,16 +10139,6 @@ def check_tournament_writes_leaderboard_from_oos(ctx: VerifyContext) -> Outcome:
             "deflated metric and a multiple-testing haircut; a promoted row written now "
             "would be read by that gate as a decision somebody made."
         )
-    empty = [
-        field
-        for field in ("brier", "n_trades", "win_rate")
-        if any(row.get(field) is None for row in rows)
-    ]
-    if empty:
-        return failed(
-            "leaderboard rows leave " + ", ".join(empty) + " null; spec 74 fills all three"
-        )
-    after_second = _leaderboard_rows(db_path) if db_path.is_file() else rows
     if len(after_second) != len(rows):
         return failed(
             "a second run over the same digest wrote "
@@ -10010,19 +10148,27 @@ def check_tournament_writes_leaderboard_from_oos(ctx: VerifyContext) -> Outcome:
             "non-idempotent write doubles the leaderboard every time anybody runs it."
         )
     del again
+    if len(after_tampered) != len(after_second) or str(getattr(refused, "status", "")) != (
+        "BLOCK"
+    ):
+        return failed(
+            "a digest whose Brier for one fold disagrees with that fold's out-of-sample rows "
+            "was scored anyway: "
+            + str(len(after_tampered) - len(after_second))
+            + " row(s) written, status "
+            + str(getattr(refused, "status", None))
+            + ". The two files are one run's output, and when they disagree one of them "
+            "describes rows the other did not score; nothing may be written from either."
+        )
 
     return passed(
         str(len(rows))
-        + " leaderboard rows written through the real StoreClient, one per model version, "
-        "with brier, n_trades and win_rate filled and promoted false on every one; a "
-        "second run over the same digest wrote none"
+        + " leaderboard rows written through the real StoreClient, one per trained model "
+        "version and none for the empty fold, with n_trades, win_rate, net_pnl and brier "
+        "equal to the out-of-sample rows counted over each fold's half-open window and "
+        "promoted false on every one; a second run wrote none, and a digest that "
+        "disagreed with its rows wrote nothing"
     )
-
-
-#: `EngineStatus.ERROR` without importing `core/` at module scope. The criterion compares
-#: against the string because `EngineStatus` is a `StrEnum`, which is exactly the property
-#: `engine-contracts.md` chose it for.
-EngineStatus_ERROR_SENTINEL: Final = "ERROR"
 
 
 def _leaderboard_rows(db_path: Path) -> list[dict[str, Any]]:
@@ -10032,13 +10178,20 @@ def _leaderboard_rows(db_path: Path) -> list[dict[str, Any]]:
     returns the newest fifty: a criterion counting rows through a limited read cannot tell
     "engine 20 wrote two" from "engine 20 wrote two hundred and this read showed fifty".
     """
-    with sqlite3.connect(db_path) as conn:
+    conn = sqlite3.connect(db_path)
+    try:
         conn.row_factory = sqlite3.Row
         try:
             cursor = conn.execute("SELECT * FROM leaderboard")
         except sqlite3.Error:
             return []
         return [dict(row) for row in cursor.fetchall()]
+    finally:
+        # **Closed, not left to `with`.** `sqlite3`'s context manager commits or rolls back
+        # a transaction; it does not close the connection. On Windows an open handle stops
+        # `TemporaryDirectory` deleting the file, and the criterion then reports "raised -
+        # PermissionError" long after it had already answered its own question.
+        conn.close()
 
 
 # --------------------------------------------------------------------------- #
