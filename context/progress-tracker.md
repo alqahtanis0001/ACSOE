@@ -483,6 +483,36 @@ the reason in the YAML comment and in `DatasetConfig`.
 
   Whichever is chosen, the digest says what it covers, and the full 352-fold run is named as
   Phase 7 work where the deflated metric wants the whole trial history.
+
+  **OUTCOME, 2026-09-14.** The operator ruled to run it uncapped. It started 2026-09-13 21:46
+  and **died 2026-09-14 21:55 at fold 405 of 457** (not 352: the dataset spans 2017-01-01 to
+  2025-12-31) with `_ArrayMemoryError: Unable to allocate 7.80 GiB` in the skeptic's matrix
+  build (8,950,630 rows by 117 columns). Folds 0 to 404 are on disk with complete manifests;
+  the out-of-sample parquet and the digest were never written because the trainer writes them
+  after the last fold. **Operator ruling 2026-09-14: no rerun, no resume; rebuild the
+  out-of-sample parquet and the digest from the 405 artefacts**, verified fold by fold against
+  each manifest, with the digest stating it covers 405 of 457 folds and why. The 52 missing
+  folds are the 2025 test weeks. Account: `docs/build-log/phase-5/lead.md`.
+- **PHASE 7 PREREQUISITES, recorded by operator ruling 2026-09-14. Phase 7's full walk-forward
+  and its replays pay the same cost again unless all four are fixed first.** Found by the
+  Phase 5 full run (`docs/build-log/phase-5/lead.md`, the entries of 2026-09-13 and 2026-09-14):
+  1. **Cap the skeptic's training set.** Fold k's skeptic trains on every eligible BUY call from
+     every earlier fold, uncapped; by fold 404 that was 8.9M rows, the per-fold memory peak grew
+     from ~66 GB to ~79 GB, and the run died allocating that matrix at fold 405. The cap and its
+     sampling rule are a methodology ruling, not an implementation detail.
+  2. **No eager read-and-sort of the whole dataset.** `main()` reads the 20.3 GB dataset back
+     and sorts it, a second full copy; about 43 GB of the run's memory was committed and idle
+     afterwards. Write the dataset already ordered, or stream the sort.
+  3. **No 20 million Python dicts in the splitter.** `train_walkforward` hands
+     `purged_walk_forward` `to_dicts()` of two columns (~5 GB) and the splitter returns every
+     fold's indices as tuples of Python ints (~10 GB). An index-based splitter over the two
+     int64 columns costs megabytes; `walkforward_trains_on_the_past_only` must stay green.
+  4. **A real memory test.** `test_the_builder_never_holds_two_archive_frames_at_once` counts
+     frames and deliberately not bytes, so none of the above was visible to any test. A bounded
+     peak-memory check over a run large enough to show growth per fold.
+  Also measured, for whoever plans Phase 7: 457 weekly folds, pairs arriving over time (14 in
+  2017, 115 first appearing in 2022), folds ranging from ~25 s (2017) to ~10 min (late 2024)
+  on this machine; the 22.2-hour projection assumed 234 pairs in every fold and was wrong.
 - **RULED by the lead 2026-09-13, flagged to the operator as overturnable: engine 8 blocks
   when an artefact's baked-in DI percentile disagrees with the config.** Found by B-2 while
   rehearsing engines 13 and 8. The DI threshold travels *inside* the artefact, and engine 8

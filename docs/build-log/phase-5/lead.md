@@ -385,3 +385,255 @@ would be a constant and two paths agreeing on a constant agree on nothing.
 extended backwards by `market_sensor.published_bars` and keeping its real gaps; and criterion 7
 as a committed digest from a real run plus the fold machinery over a constructed series long
 enough for several folds, the pattern `walkforward_folds_purged_and_embargoed` set.
+
+
+### The full run holds 70 GB before training starts, and the machine is at its commit limit
+
+**Agent:** Lead (Opus 5 session) · **Task:** the full 234-pair training run · **Date:** 2026-09-13
+
+**What happened.** The full run was started 21:46 from a detached worktree at `6e09881`
+(`../ACSOE-fullrun-6e09881`), cwd the main checkout, `python -m acsoe.research.training --config
+<worktree>/config/default.yaml --write-fixture`, launched through WMI so it is not in any shell's
+job object; log `logs/fullrun-20260913T214616.log` (empty until `main()` prints at the end), cmd
+PID 45492, python worker PID 41504. At 22:38 the phase 5 gate for specs 74 and 75, running in a
+separate worktree, was killed by the harness for low system memory. Measured straight after:
+
+```
+22:38:55  run private 67.9 GB, working set 64.6 GB, physical free 4.4 of 95.7 GB
+22:39:25  dataset parquet 14.74 GB, no longer growing; run private 70.65 GB
+22:44:05  unchanged: 14.74 GB, 70.66 GB private, ~7 GB physical free
+22:44:47  no .tmp beside the parquet (the provenance rewrite has replaced it); CPU +5 min in 6
+          min, so single-threaded: the read-back, sort and per-row dicts before the first fold
+22:46     commit limit 112.9 GB, commit free 0.8-0.9 GB; pagefile system-managed, 17.6 GB
+          allocated; C: 72 GB free
+```
+
+**What is established and what is not.** The dataset build finished and the run is alive. The
+streamed builder (`build_dataset_to_parquet`) holds one archive frame at a time by its test,
+which **counts live frames and deliberately does not measure memory**, so a retention that is not
+a frame (allocator arenas in polars or pyarrow not returned to the OS, or something inside the
+replay) is invisible to it. Which of those holds the ~50 GB beyond the ~14-28 GB the read-back and
+sort need is **not established**; nothing was attached to the process to find out, because the
+run is the thing being protected. Measured before the fact by C-2: 13.8 GB for the frame and
+about 4.1 GB for the splitter's row dicts.
+
+**Why it matters.** At 0.8 GB of commit headroom the run survives only as long as Windows can grow
+the pagefile, and any other large process competes for the same headroom. So no full gate is run
+beside it: `toolchain_green` runs the whole suite, which trains models. The gate for 74 and 75 is
+deferred to a ruling rather than risked. If the run dies with a `MemoryError` before its first
+fold, this entry is where to start: the builder's test proves frames, not bytes.
+
+
+### Correction: the builder does not hold the 70 GB; the read-back, the sort and the splitter's Python objects do
+
+**Agent:** Lead (Opus 5 session) · **Task:** the full 234-pair training run · **Date:** 2026-09-13
+
+**The entry above is wrong in one claim and this corrects it.** It said the streamed builder
+retains the memory. It does not, and the measurement that shows it was already in this session's
+own notes: at **22:10, mid-build, the worker's working set was 3.3 GB** (21.9 CPU-minutes in, the
+dataset parquet at 4.8 GB and growing). The jump to 68-70 GB came between 22:29 and 22:39, which
+is when the build finished, its provenance rewrite replaced the file (mtime 22:38, no `.tmp`), and
+`main()` went on to the next line. Found by reading the code and the numbers, not by running
+anything; nothing was attached to the process.
+
+**What the replay does.** Nothing accumulates. `ArchiveReplay.frame` reads the CSV on every call
+and keeps nothing (`_rows_for`: "Nothing is cached"), `frames()` is a generator, and
+`_archive_frames` is a generator over `replay.frame(pair)`. The 3.3 GB mid-build agrees.
+
+**What the 70 GB is, from the parquet footer (metadata only) and the code.**
+
+* The dataset is **20,331,237 rows by 124 columns** (119 double, 2 int64, 2 string, 1 bool),
+  about **20.3 GB resident**. `main()` does `pl.read_parquet(dataset_path).sort(["decision_ts",
+  "pair"])`: the read materialises it and the sort writes a second full copy, so that line alone
+  peaks around 40 GB, plus whatever the reader's chunking adds before the sort.
+* `train_walkforward` then does `dataset.select(["decision_ts", "label_window_end_ts"]).to_dicts()`,
+  **20.3 million Python dicts**, about 5 GB at roughly 250 bytes each, kept alive for the whole
+  function because `rows` stays in scope.
+* **Measured 23:10: Windows trimmed the working set from 66.0 GB to 27.4 GB while private bytes
+  stayed at 70.8 GB and CPU kept advancing one core per minute.** So about 43 GB is committed and
+  untouched, and the live set is about 27 GB, which is the dataset plus the dicts almost exactly.
+  The untouched 43 GB is consistent with freed polars buffers (the pre-sort copy and the reader's
+  intermediates) held by the allocator rather than returned to the OS. That is **inferred, not
+  proven**: confirming which allocator holds it would mean attaching to the run.
+
+**What is still to come, by the code.** `purged_walk_forward` keeps every fold's `train_index`
+and `test_index` as tuples of Python ints for all folds at once. Each index is a fresh int object
+(`enumerate`), about 36 bytes with its tuple slot. Over this dataset that is about 282 million
+entries, **about 10 GB**, most of it in the later folds because the pair count ramps up (pairs
+first appearing: 14 in 2017, 3 in 2018, 13 in 2019, 26 in 2020, 43 in 2021, 115 in 2022, 20 in
+2023). The flat private bytes from 22:39 to 23:11 (70.65 to 70.82 GB at one core) fit a splitter
+walking its early, thin folds. Per fold after that: a gathered training frame (up to ~2 GB), the
+scaled matrices and LightGBM (~3-5 GB), transient. Growing through the run: the out-of-sample
+parts (~2 GB at the end, plus a concatenated copy each fold for the skeptic) and the skeptic's
+training join over every earlier BUY call, which is uncapped and largest in the last folds.
+
+**The fold count, and the 22.2-hour projection.** The dataset spans 2017-01-01 to 2025-12-31,
+3,286.5 days, which is **457 weekly folds, not 352**. But the projection also assumed 234 pairs
+in every fold's training window (2,021,760 rows); the real sum of training rows across folds is
+about 20.3M x 90/7, roughly 261M row-folds rather than 711M. On C-2's own measured line (4.87 s
+plus 109.74 s per million training rows) the predictor fits come to about 8.6 hours. The splitter
+(457 full scans of 20.3M dicts), the per-row Python loop in `_fit_anomaly`, and the growing
+skeptic are all on top, so the total is **uncertain in both directions** and neither 22.2 hours
+nor 8.6 is a number to plan on.
+
+**Will it survive.** The step the operator was worried about, the read-back and sort, is
+**already behind it**: it is inside the 70 GB. What is ahead is about +10 GB for the splitter's
+tuples and a per-fold transient of perhaps 5-8 GB, rising late in the run with the skeptic.
+Against that: commit limit 115 GB (95.7 RAM plus a system-managed pagefile that has already grown
+from 17.6 to 19.7 GB on its own), about 9-10 GB of commit free, 72 GB free on C:, and 43 GB of the
+run's own memory that is cold and pages out without cost. The projection is roughly 100-110 GB of
+commit at the late-run peak, reachable by pagefile growth. **Likely to survive, not certain**,
+and the margin is what the rest of the machine uses: a second heavy process (a full gate or test
+suite, which trains models) during the late folds is the realistic way to kill it.
+
+**Defects this run exposes, for after it, not during it.** (1) `main()` reads and sorts the full
+dataset eagerly when the builder could write it already ordered or the sort could be streamed.
+(2) The splitter is fed 20.3M Python dicts and returns Python-int index tuples for every fold at
+once; an index-based splitter over the two int64 columns would cost megabytes. (3)
+`test_the_builder_never_holds_two_archive_frames_at_once` counts frames and says so deliberately,
+so none of this was visible to it, and none of it is in the builder. (4) C-2's projection used
+the archive's pair count for every fold. Each is a ruling for the lead and the operator, not a
+fix to make while the run depends on the code as it is.
+
+
+### The full run died at fold 405 of 457 in the skeptic's matrix, out of memory
+
+**Agent:** Lead (Opus 5 session) · **Task:** the full 234-pair training run · **Date:** 2026-09-14
+
+**What happened.** The run started 2026-09-13 21:46 exited at **2026-09-14 21:55** (about 24 h 9 min)
+with folds 0 to 404 written and fold 405 not. The whole log, 2,324 bytes, is one traceback:
+
+```
+train_walkforward -> _train_one_fold (fold 405) -> _fit_skeptic -> _skeptic_matrix
+  scaled = np.asarray(scaler.transform(_matrix(rows, names)), dtype=np.float64)
+modelling/artefacts.py:285 _transform_array
+  scaled = (matrix - low) / safe
+numpy._core._exceptions._ArrayMemoryError: Unable to allocate 7.80 GiB for an array with
+shape (8950630, 117) and data type float64
+```
+
+**Evidence left exactly as found.** Nothing was restarted, deleted, moved or retried.
+
+* `models/train-20260913T205245-067b2b9d-f0` to `-f404`: **405 directories, each with a
+  `manifest.json`**. 404 hold six files (`anomaly.joblib`, `calibrators.json`, `manifest.json`,
+  `model.txt`, `scaler.json`, `skeptic.txt`); fold 0 holds five, with no `skeptic.txt` because no
+  earlier out-of-sample calls exist for it. No partial directory for fold 405: the directory is
+  created after the fits. 2.6 GB in total. The last, fold 404, was written 21:52:16.
+* **No `oos_<run_id>.parquet` and no `walkforward_digest_<run_id>.json`.** The trainer writes both
+  only after the fold loop. `tests/fixtures/walkforward_digest.json` is untouched (2026-09-13
+  11:03, the three-pair digest), because `--write-fixture` runs after the digest.
+* `data/derived/dataset_20260913T205245.parquet`, 14.74 GB, intact, provenance stamped.
+* At 21:56: commit limit 102.3 GB with 79.1 GB free. The pagefile setting reads 50000-80000 MB,
+  but the allocation was 6,759 MB, so Windows did not extend it for this request.
+
+**Why.** The skeptic for fold k trains on every eligible BUY call from folds before k, uncapped.
+By fold 404 that was 8,946,942 rows (from its manifest), and fold 405 asked for 8,950,630 rows by
+117 columns. `_skeptic_matrix` builds the float64 matrix (7.8 GiB) and `Scaler._transform_array`
+computes `(matrix - low) / safe`, which allocates at least one more matrix of the same size and
+transiently a third. Together with the joined polars frame those rows came from, the skeptic step
+alone needed on the order of 25-30 GB at this fold, and it grows every fold. That is the growth
+behind the per-fold peaks recorded above (66 GB private at fold 329, 79 GB at fold 388). The
+single 7.8 GiB request failed at a peak, and the pagefile did not grow in time to meet it.
+
+**What survives, and it matters for the operator's thresholds.** Every fold's digest entry is
+inside that fold's `manifest.json` under `metrics`: `rows`, `effective_sample_size`, `brier`,
+`base_rate_brier`, `buy_count`, `buy_target_rate`, `train_rows`, `skeptic_rows` and the fold
+windows. Read back without writing anything, into
+`<scratchpad>/folds_0_404_metrics.csv`:
+
+* 405 of 405 folds carry metrics; **279 have a Brier below their base-rate Brier, 126 at or above.**
+* Test rows 15,978,803, effective sample size 1,688,207 in total (ratio 0.106).
+* The smallest effective sizes: fold 26, 6,101 rows, **274 effective**; fold 82, 6,655 rows, 294;
+  fold 81, 7,203 rows, 336; fold 2, 3,346 rows, 341; fold 27, 6,178 rows, 356.
+
+| test year | folds | rows | effective | Brier < base | mean(Brier - base) |
+|---|---|---|---|---|---|
+| 2017 | 40 | 255,653 | 33,799 | 34 | -0.00466 |
+| 2018 | 52 | 397,520 | 35,706 | 22 | +0.00403 |
+| 2019 | 52 | 484,402 | 32,480 | 20 | +0.00260 |
+| 2020 | 52 | 961,492 | 82,566 | 40 | -0.00326 |
+| 2021 | 52 | 2,181,238 | 233,329 | 43 | -0.00451 |
+| 2022 | 53 | 3,252,113 | 355,220 | 40 | -0.00229 |
+| 2023 | 52 | 3,785,657 | 402,325 | 44 | -0.00255 |
+| 2024 | 52 | 4,660,728 | 512,782 | 36 | -0.00276 |
+
+The missing folds 405 to 456 are the test weeks from 2025-01-04 to the end of 2025. The
+out-of-sample parquet that specs 74 and 75 read does not exist for this run, so the leaderboard
+and the ranking study cannot be produced from it; the fold artefacts can be loaded by `run_id`.
+
+**Not decided here.** Whether to rerun, resume from fold 405, cap the skeptic's training set, or
+rebuild the out-of-sample file from the 405 artefacts is the operator's and the lead's call.
+
+
+### The gate for specs 74 and 75 went red on `toolchain_green` by timeout, with no test failing
+
+**Agent:** Lead (Opus 5 session) · **Task:** specs 74 and 75, the gate before commit · **Date:** 2026-09-14
+
+**What happened.** `verify.py --phase 5` on the staged tree (worktree `../ACSOE-gate-7475`, tree
+`4099ee24`) reported 10 PASS, 1 FAIL, 2 PENDING. The FAIL was `toolchain_green`: *"pytest timed out
+after 900s"*. Every Phase 5 criterion that ran passed, including the rewritten
+`tournament_writes_leaderboard_from_oos`. The PENDINGs are the operator's `di_percentile` and
+spec 73's missing `test_skeptic.py`, which is not in this tree by design.
+
+**Why.** The pytest log (`logs/verify/toolchain_green/20260914T212820_095468-pytest-attempt1.log`
+in the gate worktree) ends at about 98% of the suite with only dots and two skips: no `FAILED`, no
+`ERROR`, killed by the criterion's 900 s limit. For the whole gate the machine was also running the
+artefact rebuild, which read the 20.3 GB dataset and scored 405 folds through LightGBM. The suite
+took about 340 s on a quiet machine before this phase added its training tests, and these specs
+added roughly another minute. A timeout under contention is not a verdict on the tree, and it is
+not a pass either; the gate is re-run with nothing else of this session's running.
+
+**Fix, gate.** Re-run on a quiet machine (4% CPU, only the recorder, its supervisor and the
+manager running): **11 PASS, 0 FAIL, 2 PENDING**, `toolchain_green` green. The spec-74-only tree
+was then gated the same way with the same result, and the two commits are exactly the two gated
+trees: `d590548` (tree `fb330337`, spec 74) and `531d240` (tree `4099ee24`, spec 75), pushed.
+
+### The out-of-sample file and the digest, rebuilt from 405 fold artefacts and proven identical
+
+**Agent:** Lead (Opus 5 session) · **Task:** operator ruling 2026-09-14 on the dead run · **Date:** 2026-09-14
+
+**Decision, the operator's.** No rerun and no resume. Rebuild the out-of-sample parquet and the
+digest from the 405 saved folds, and have the digest say it covers 405 of 457 and why.
+
+**How.** `docs/dataset/rebuild-walkforward-2026-09-14.py` (sha256
+`63c9c9ef540285f0ef8147d601c6ee9a7bf9389b03c0b1df27dea08fd535ce38`, the same hash the digest
+records), run with `PYTHONPATH` on the `6e09881` worktree that trained the artefacts, so it
+scores through the trainer's own `_matrix`, `Scaler.transform`, LightGBM text model,
+`apply_calibration`, `expected_move_pct`, `is_buy_call`, `_brier_of_target`,
+`_base_rate_brier`, `_log_loss`. Per fold: `load_run` verifies every hash; the test rows are
+the dataset rows in `[test_start_ts, test_end_ts)` ordered `(decision_ts, pair)`, with the
+window start checked against the splitter's own arithmetic; the rows, Brier, base-rate Brier,
+log loss, BUY count, BUY target rate, target rate and effective sample size are recomputed and
+compared with the manifest, and the BUY-row identity digest with `buy_identity`. Any
+disagreement writes nothing. Nothing was trained.
+
+**Result.** All 405 folds reproduced with a largest absolute difference of **0.0** on every
+metric and identical BUY identities. Written: `data/derived/oos_train-20260913T205245-067b2b9d.parquet`
+(15,978,803 rows) and `walkforward_digest_train-20260913T205245-067b2b9d.json`, whose `coverage`
+block reads `complete: false`, 405 of 457 folds, the missing indices and test weeks
+(2025-01-04 to 2025-12-27), the cause and the error line; `notes` opens with `PARTIAL`.
+
+**Proven capable of refusing**, because a comparison that has only ever agreed is not evidence.
+The same comparison on fold 0's test rows:
+
+```
+fold 0 rows, fold 0 artefacts:            rows 3771=3771, brier diff 0,       BUY 2427=2427, identity MATCH   -> ACCEPTED
+fold 0 rows, fold 1 artefacts:            rows 3771=3771, brier diff 0.00396, BUY 2772/2427, identity DIFFERS -> REFUSED
+fold 0 rows, window inclusive at the end: rows 3776/3771, brier diff 2.7e-06, BUY 2430/2427, identity DIFFERS -> REFUSED
+```
+
+**As the committed fixture.** `walkforward_weekly_retrain_reports_oos`, the only reader of
+`tests/fixtures/walkforward_digest.json`, PASSes against it on a worktree at `531d240`: *"405 in
+tests/fixtures/walkforward_digest.json: every fold reports fold_index, … trains only up to its own
+test window (train_end_ts == test_start_ts), and reports an effective sample size below its row
+count"*. The per-fold table is `docs/dataset/walkforward-folds-2026-09-14.md`.
+
+**What the 405 folds say, stated rather than summarised away.** 279 folds have a Brier below
+their base-rate Brier and 126 at or above; the median difference is −0.0033 and the
+effective-size-weighted mean −0.0024. **136 folds have an effective sample size under 1,000**,
+every one of them before July 2020; the worst is fold 26 (week of 2017-09-30), 6,101 rows and 274
+effective, Brier +0.0515 against its base rate. Test rows 15,978,803, effective 1,688,207. And the
+number the operator's thresholds rest on: the predictor made **8,950,912 BUY calls, 56% of every
+test row, and their target rate is 0.2383 against 0.2422 over all test rows** — before any
+friction, the BUY calls hit the target slightly less often than an unselected bar. The Brier edge
+is real in most folds and small; as a selector of trades it shows none.

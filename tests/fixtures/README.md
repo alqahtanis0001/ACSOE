@@ -34,6 +34,8 @@ the shared fixtures, not its contents.
 | `walkforward_digest.json` | C | `walkforward_weekly_retrain_reports_oos` | 5 |
 | `kraken/*.json` | C | recorded responses backing the fake Kraken client | 0 |
 
+`walkforward_digest.json` is the **partial** digest of the full 234-pair run `train-20260913T205245-067b2b9d`: 405 of 457 folds, because the run died in the skeptic's uncapped matrix build at fold 405. It was rebuilt from the 405 fold artefacts by `docs/dataset/rebuild-walkforward-2026-09-14.py`, every fold reproduced against its manifest, and its own `coverage` block says so (operator ruling 2026-09-14).
+
 `labelled_sample.parquet` carries its own provenance **inside the file**, as parquet
 key-value metadata under `acsoe_provenance`: which archive, which span, the barrier
 settings it was labelled under, how many of its labels were decided by the

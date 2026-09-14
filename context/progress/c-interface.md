@@ -17,17 +17,7 @@ proven able to fail; fixes where a boundary is wrong; commit of the 74 and 75 fi
 Diagnoses go in `docs/build-log/phase-5/c-interface.md` under "Lead session, specs 74 and 75"
 before any fix.
 
-**Status 22:40: both specs fixed and proven in the working tree; committing next.** Spec 74:
-four defects (an `updated_at` the console watermark never saw; a leaderboard row for an empty
-fold under an invented version; the Brier taken on trust from the digest; criterion 10 checking
-no value), fixed, 15 mutations with 14 killed first time and the survivor (a win rate over
-targets the predictor never called) killed after the fixtures gained a missed target. Spec 75:
-four defects (NaN taken first in every descending ranking; a join that could silently drop rows;
-a 0.0 DI refusal rate for a run with no DI; no effective size beside any count), fixed, 13
-mutations with 12 killed first time and the survivor (`no_value_bars` reading the runner-up)
-killed after one assertion. The study is now held to `rank_universe` bar by bar. The report JSON
-is regenerated and still says it is not evidence. Every entry and both mutation tables are in
-the build log.
+**Status 2026-09-14 23:10: DONE, gated and committed.** Spec 74 at `d590548`, spec 75 at `531d240`, pushed; `verify.py --phase 5` on each exact tree: 11 PASS, 0 FAIL, 2 PENDING (`di_percentile`, spec 73). The first gate on the combined tree timed out in pytest under contention with the artefact rebuild, no test failing; re-run quiet, green. Spec 74: four defects fixed, 15 mutations killed. Spec 75: four defects fixed, 13 mutations killed. The ranking study over the real run is now possible: the rebuilt out-of-sample file exists (405 of 457 folds). Not run yet.
 
 **Open question for the operator, not acted on:** `n_trades` and `win_rate` count every
 out-of-sample BUY call, including calls the DI refused. Live, engine 8 blocks those before the
