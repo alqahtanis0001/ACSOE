@@ -39,6 +39,8 @@ src/acsoe/
   clients/
     kraken/             REST client, WebSocket client, rate limiter   [AGENT A]
     store/              SQLite and Parquet access                     [AGENT B]
+    paper/              paper broker: the fill simulator and the      [AGENT B]
+                        paper ledger, wrapping kraken in paper mode
     recorder/           append-only raw JSONL writer                  [AGENT A]
   research/             offline only: labelling, training, walk-forward
   modelling/            leaf package: feature arithmetic, artefact manifest,   [AGENT C]
@@ -264,7 +266,7 @@ An unrecognised command is ignored and logged as a warning. It never blocks the 
 
 ## Modes
 
-- **paper** — default. Full pipeline runs, orders go to the fill simulator, no exchange mutation.
+- **paper** — default. Full pipeline runs, orders go to the fill simulator, no exchange mutation. The simulator is the **paper broker** in `clients/paper/` (B), which implements the same order surface the live client does and wraps `clients.kraken` when the mode is paper — so the mode difference stays here in the client layer, engines 18, 21 and 22 run one code path in every mode, and the account those engines read is the paper ledger of invariant 2.
 - **live** — requires all three switches from `trading-invariants.md`.
 - **replay** — offline. Historical data through the same engines with an injected clock.
 

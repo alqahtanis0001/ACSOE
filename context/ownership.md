@@ -10,7 +10,7 @@ Confirm you own a file before editing it. If you do not, escalate.
 |---|---|---|
 | **Lead** | `src/acsoe/core/`, `bootstrap.py`, `config/`, `context/*` except `progress/`, `feature-specs/`, all merges, all schema approvals | All |
 | **A — Platform** | `pyproject.toml`, `src/acsoe/platform/`, `src/acsoe/cli/`, `scripts/` **except `scripts/verify.py`**, `clients/kraken/`, `clients/recorder/`, `logs/`, `data/`, `engines/exchange`, `market_data_recorder`, `market_sensor`, `data_guard`, `research/replay.py`, `research/historical.py`, `research/backtest.py` | 0, 2, 4 |
-| **B — Store and trading** | `clients/store/`, `db/migrations/`, `engines/scout`, `cost`, `risk`, `safety`, `decision`, `execution`, `position_manager`, `exit` | 0, 3, 5, 6, 8 |
+| **B — Store and trading** | `clients/store/`, `clients/paper/` (Phase 6, operator ruling 2026-09-16), `db/migrations/`, `engines/scout`, `cost`, `risk`, `safety`, `decision`, `execution`, `position_manager`, `exit` | 0, 3, 5, 6, 8 |
 | **C — Interface and models** | `console/`, `scripts/verify.py`, `tests/harness/`, `engines/feature`, `macro_context`, `prediction`, `regime`, `anomaly`, `order_book`, `adaptive_router`, `skeptic`, `memory`, `tournament`, `research/labelling.py`, `research/training.py`, `research/walkforward.py`, `src/acsoe/modelling/` (Phase 5, operator ruling 2026-09-12: the leaf package both the engines and `research/` import) | 0, 1, 4, 5, 6, 7, 8 |
 
 Not every phase needs all three. Phase 1 is almost entirely C; Phase 3 is almost entirely B. Run the agents who have real work and let the others sit out — the ownership map is permanent, only the headcount per phase flexes. Never invent filler tasks. Nobody idles mid-phase: if you are waiting on another agent's interface, agree the contract, mock it, and keep building.
@@ -37,6 +37,19 @@ of the roster: A owns `replay.py` and `historical.py` there, C owns `labelling.p
 the offline chain is assembled and where engine 23 is registered — never in `bootstrap.py`.
 The labelling and walk-forward modules it calls stay C's, and that is an ordinary agent seam,
 recorded in the table below.
+
+**The fill simulator.** Named in the Phase 6 scope row since the workflow file was written and in
+no roster row — the same shape as `research/backtest.py`, and found the same way, by an audit
+rather than by anything failing. **Assigned to B**, Phase 6, spec 88, and it lives in the **client
+layer** at `src/acsoe/clients/paper/` with its tests at `tests/clients/paper/`.
+
+The operator first ruled it under `engines/execution/` and **corrected that ruling on 2026-09-16**,
+on finding what the correction rests on: a resting post-only entry fills on a *later* tick, which
+only engine 21 sees, and exits fill in engine 22 — so under that home two engines forbidden by
+contract rule 3 from importing it would each need their own copy of one fill rule. The client
+layer is also where `architecture-context.md` says a mode difference belongs, which is what lets
+engines 18, 21 and 22 run the same code in paper and live. A wraps it around `clients.kraken` in
+`cli/engine.py` when the mode is paper, and never in live.
 
 **Tests.** C owns the `tests/` root scaffolding, `tests/conftest.py`, the *structure* of `tests/fixtures/`, the shared fixtures, and `tests/harness/`. Beyond that, each agent owns `tests/` mirroring the source paths it owns.
 
@@ -109,7 +122,14 @@ Agree the contract first, mock it, build against the mock.
 | The ranking feature, `scout.rank_feature` and `scout.rank_descending`. Absent until the operator rules on spec 75's study; alphabetical meanwhile. | Lead (config) | B (7 `scout`, `rank_universe`) | `config/default.yaml`, `engines/scout/contracts.py` |
 | The one shared arithmetic: features, DI, weights, artefact layout. | C (`modelling/`) | C (engines 5, 8, 13, 15), C (`research/training.py`) | `src/acsoe/modelling/` |
 | Order intent | B | C | `engines/decision/contracts.py` |
-| **Rejection reason codes.** Every gate emits a `reason_code`; the console maps it to operator prose. **A code absent from the map renders "No reason was recorded." — silently, with no error anywhere.** | C (`console/format.py`, `REASON_PROSE`) | B (gates 7, 10, 11, 13, 15), and any future gate | `src/acsoe/console/format.py` |
+| **Rejection reason codes.** Every gate emits a `reason_code`; the console maps it to operator prose. **A code absent from the map renders "No reason was recorded." — silently, with no error anywhere.** Widened 2026-09-16: **every engine that publishes a `reason_code` or a `hold_reason`**, not only the gates — 9, 14, 18, 21 and 22 all do and none of them is a gate, and a test walks every engine's contracts so the next missing code goes red instead of silent (spec 99). | C (`console/format.py`, `REASON_PROSE`) | B (gates 7, 10, 11, 13, 15, 16; engines 18, 21, 22), C (8, 9, 14) | `src/acsoe/console/format.py` |
+| The order surface: place, cancel and query an order, one shape in paper and live. **Produced and consumed in Phase 6; the live half refuses until Phase 8.** | A (84) | B (88 the paper broker, 91, 92, 93) | `clients/kraken/contracts.py` |
+| Per-tick trade range per pair — the low, high and count since the previous tick, which is what a fill and a barrier touch between one-minute ticks are decided on. **Phase 6.** | A (3 `market_sensor`, 85) | B (88, 92, 93) | `engines/market_sensor/contracts.py` |
+| The paper broker's constructor, so the CLI can wrap the Kraken client in paper mode. **Phase 6.** | B (88) | A (86, `cli/engine.py`) | `src/acsoe/clients/paper/` |
+| The rows engines 18 and 22 publish for the single writer to record — placements, exit orders, closed positions. **Phase 6.** | B (91, 93) | C (19 `memory`, 98) | `engines/execution/contracts.py`, `engines/exit/contracts.py`, `engines/memory/contracts.py` |
+| The order intent: one typed record engine 18 reads instead of five engines' keys. **Phase 6.** | B (16 `decision`, 90) | B (18 `execution`, 91), C (console) | `engines/decision/contracts.py` |
+| The committed order-book fixture engine 9 is validated on, cut from the live archive. **Phase 6.** | A (`scripts/cut_book_fixture.py`, 86) cuts, C deposits and owns | C (9 `order_book`, 96) | `tests/fixtures/book_sample.jsonl` |
+| The committed leaderboard fixture carrying at least two models, because `data/db/` is gitignored and engine 20 has written no persisted row. **Phase 6.** | C (97) | C (14 `adaptive_router`, its criterion) | `tests/fixtures/leaderboard_sample.json` |
 
 A seam not in this table probably means the split is wrong. Raise it rather than reaching across.
 

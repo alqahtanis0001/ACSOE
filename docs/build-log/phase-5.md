@@ -63,7 +63,11 @@ test weeks. Six prerequisites for Phase 7 came out of that run and are recorded 
 do.** They are stated in full in `context/progress-tracker.md` under Findings, because a
 finding that lives only in a build log is a finding the next phase will not read.
 
-1. **The predictor's BUY calls show no selection skill on their own.** 8.95M calls at a target
+1. **The predictor's BUY calls show no selection skill on their own.** *(Caveat added 2026-09-16,
+   by operator ruling: every skeptic number below was measured on the **uncapped** skeptic. The
+   skeptic's training set caps to a rolling window of the last 13 folds in Phase 7, so all of them
+   must be re-measured on the capped model before being cited. See the tracker, Finding 1 and
+   prerequisite 1.)* 8.95M calls at a target
    rate of **0.2383**, against **0.2422** over all test rows — before fees. The skeptic's veto
    at 0.50 lifts the survivors to **0.531** against a no-skill band of 0.255 to 0.260, and
    beats ranking by the predictor's own `p_target` at matched survivor counts (+0.058) while

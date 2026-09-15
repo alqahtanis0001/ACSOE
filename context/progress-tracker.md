@@ -4,6 +4,78 @@
 
 ## Current Phase
 
+**Phase 6 — Decision and execution. OPEN 2026-09-16.** Engines 9 `order_book`, 14
+`adaptive_router`, 16 `decision`, 18 `execution`, 21 `position_manager`, 22 `exit` and the fill
+simulator — the Phase 6 row as written, not cut. Preflight: `verify.py --phase 5` re-run on a
+quiet tree at `e75bc26`, **14 criteria, 14 PASS, 0 FAIL, 0 PENDING, exit 0**
+(`logs/verify/phase5-20260916-phase6-preflight-lead.log`). Twenty specs, 80 to 102, approved by
+the operator with **five rulings** (below) and four smaller lead decisions. The shared task list is
+`feature-specs/PHASE-6-TASKS.md`. Two Phase 7 prerequisites are pulled forward — the DI's fitting
+and scoring path (5), and the DI half of a real peak-memory test (4) — and engine 8's `is_buy` is
+fixed here as the operator carried it out of Phase 5.
+
+**The two numbers Phase 6 must not read as defects, stated plainly here because the criteria will
+produce both.**
+
+1. **Tier 1 is a no-trade regime at the current barriers, and that is the project's central
+   economic finding rather than a defect.** `trading.hurdle_multiple: 1.5` means a candidate needs
+   an expected move above **3.125%** at tier-1 friction, and the target barrier is **3.0%**, so
+   nothing can ever clear the cost gate there. Separately, with an empty `.env` the private calls
+   fail, `TradeVolume` returns nothing, and every pair blocks at the cost gate, so a fresh clone
+   can never produce a trade against the real client. **Every Phase 6 criterion that needs a trade
+   therefore runs against the fake client at tier 3** (friction ≈ 0.65%, bar 1.625%) **and says so
+   in its own message** — a criterion passing only at a fee tier the account does not have says
+   less than it appears to, and the message is where that gets recorded. `hurdle_multiple` is
+   unchanged and the cost gate is not weakened. **The Phase 6 criteria therefore prove the
+   machinery, not the economics.**
+2. **Engine 14 `adaptive_router` weights a single real model, so the router is inert in
+   practice** — the walk-forward trained one predictor per fold, not competing models. The same
+   shape as `max_concurrent_positions: 3` being inert at this balance. A criterion asserting that
+   the weights move is asserting a property of the committed leaderboard fixture, and it says so.
+   The structural half is worse than the arithmetic: engines 14 and 16 both sit *after* the cost
+   gate, so nothing either publishes may make the system more willing to trade (invariant 4), and
+   making it less willing is a veto only a gate may issue.
+
+### The operator's five rulings of 2026-09-16
+
+1. **The fill simulator is a client-layer paper broker**, `src/acsoe/clients/paper/`, B-owned,
+   implementing A's order surface and wrapping `clients.kraken` in paper mode. **This corrects the
+   operator's own earlier ruling** that it live under `engines/execution/`: contract rule 3 forbids
+   engines 21 and 22 importing another engine, and a resting post-only entry fills on a later tick
+   that only engine 21 sees. The correction is recorded as the operator's because the earlier
+   ruling was made on a reconnaissance report that found the ownership gap and did not follow an
+   order far enough to find the import one. Ownership row and reasoning in `ownership.md`.
+2. **Engine 16 `decision` stays in the chain and becomes a gate.** Its job is the consistency check
+   nothing performed: every approving engine judged *this* tick's candidate — same pair, same
+   decision bar, an approval carrying a quantity — and it blocks otherwise. It also *composes* the
+   order intent engine 18 reads, which its README calls composition and never decision. `is_gate`
+   is `True`, the registry table's Gate column carries it, and invariants 3 and 4 both name it.
+3. **In paper mode the balance is always the paper ledger** — `paper.starting_balances` adjusted by
+   every recorded fill, whether or not the real fetch succeeded. Invariant 2's table is reworded.
+   Recorded as a **defect found in planning**: the invariant promised an adjustment nothing
+   implemented, so engine 11 would have sized against cash an earlier paper fill had already spent,
+   and engine 19's equity counted that cash twice — in the series that moves the drawdown threshold
+   engine 17 freezes on.
+4. **The execution offset bandit is deferred to Phase 7.** Phase 6 places every entry at the best
+   bid. It is a Locked Decision that is absent from the Phase 6 row, needs a table that does not
+   exist, and learns from a fill history that does not exist either. The fixed rule is a recorded
+   absence in engine 18's README, not a choice anyone defended.
+5. **The skeptic's training set caps to a rolling window of the last 13 folds** (Phase 7
+   prerequisite 1), mirroring the locked past-only 90-day window, bounded by construction and
+   needing no seed. **The cap is Phase 7 work, not Phase 6**: capping changes training, so
+   re-measuring means retraining 405 skeptics. **Finding 1's 0.531 survivor rate was measured on
+   the uncapped skeptic and must be re-measured before it is cited anywhere** — a finding measured
+   on code that no longer exists is a claim, not a measurement.
+
+**Four smaller decisions the lead made and the operator approved**, all overturnable: barriers are
+measured from the **fill price**, because engine 11 sized the quantity against it; a resting entry
+fills only on a trade **strictly below** its limit, because queue position is unknown; a stop and a
+target touched in one tick resolve to **stop**, as the labels do; and engine 9 estimates slippage
+at the whole quote-currency balance as an **upper bound** and never blocks on its own — engine 10
+refuses on the absent estimate, because a non-gate that refuses makes `is_gate` wrong.
+
+*Phase 5, for the record.*
+
 **Phase 5 — Models. GREEN AND CLOSED 2026-09-15** — 14 criteria, **14 PASS, 0 FAIL, 0 PENDING**, with phases 0 to 4 re-gated in order on the same quiet tree and every one exit 0. All twenty-one specs (59 to 79) delivered across A, B, C and the lead; the narrative account is `docs/build-log/phase-5.md`, consolidated from the four per-agent logs at close. The three withheld thresholds are supplied and all three are **provisional** until the chain runs end to end. **Phase 6 — Decision and execution is next**, and it opens carrying the six Phase 7 prerequisites, engine 8's `is_buy`, and the three findings below. 
 
 *The phase as opened, for the record, 2026-09-12.* Phase 4 preflight re-run on the clean tree at `ef8f1f0`: **10 criteria, 10 PASS, 0 FAIL, 0 PENDING**, `replay_full_archive` skipped as `--live`. Nineteen specs (59 to 77) were written from the Phase 5 row and the ownership map and approved by the operator with all nine rulings confirmed (recorded under Locked Decisions) and one addition: the effective sample size is reported per fold beside that fold's row count, not only in aggregate. **Two more were added during the phase** — 78 and 79, A's streaming fixes to the full-archive replay — for twenty-one in total. The shared task list is `feature-specs/PHASE-5-TASKS.md`. The three operator values that opened the phase absent were all supplied before it closed: `skeptic.veto_threshold: 0.50` on 2026-09-14, `anomaly.threshold_percentile: 0.99` and `prediction.di_percentile: 0.99` on 2026-09-15, every one **provisional**. **This is the phase where a mistake looks like success**, so every assertion is proven capable of failing and the proof goes in the build log — and it held: the defects that mattered most this phase were each found by a mutation or a recomputation rather than by a red test.
@@ -56,7 +128,7 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 | 3 — Economics | **Green** | 2026-09-10 — 9 PASS, 0 FAIL, 0 PENDING |
 | 4 — Memory and replay | **Green on its gate; close and consolidation withheld by the operator** | 2026-09-11 — 10 PASS, 0 FAIL, 0 PENDING; re-verified 2026-09-12 at the Phase 5 preflight, same result, `replay_full_archive` skipped as `--live` |
 | 5 — Models | **Green** | 2026-09-15 — 14 PASS, 0 FAIL, 0 PENDING; phases 0 to 4 re-gated in order on the same quiet tree, all exit 0. Specs 59–79: A (61, 78, 79), B (62, 76), C (60, 63–75), Lead (59, 77). Nine rulings confirmed by the operator plus one addition (per-fold effective sample size) |
-| 6 — Decision and execution | **Unblocked, not started** | — |
+| 6 — Decision and execution | **Open, in progress 2026-09-16** | Preflight of phase 5 on a quiet tree: 14 PASS, 0 FAIL, 0 PENDING. Specs 80–102, five operator rulings |
 | 7 — Evaluation | Blocked on 6 | — |
 | 8 — Live readiness | Blocked on 7 | — |
 
@@ -406,6 +478,18 @@ read. All three are measured over the 405 fitted folds of the full-archive run.*
 
 ### FINDING 1: the predictor's BUY calls show no selection skill on their own; the skeptic's veto does
 
+> **CAVEAT ADDED 2026-09-16, and it applies to every number in this finding that involves the
+> skeptic.** The 0.531 survivor target rate, the no-skill band, the +0.058 over `p_target` and the
+> 44% overlap were all measured on the **uncapped** skeptic — the one that trains on every eligible
+> BUY call from every earlier fold. The operator ruled on 2026-09-16 that the skeptic's training
+> set caps to a rolling window of the last 13 folds (Phase 7 prerequisite 1), so that model will
+> not exist once the cap lands. **Every one of these numbers must be re-measured on the capped
+> skeptic before it is cited anywhere, including in the dissertation.** Re-measuring means
+> retraining 405 skeptics, which is Phase 7's full run, and it is deliberately not done in Phase 6.
+> Recorded as a correction beside the finding rather than an edit to it (`script-rules.md` rule 6).
+> The shape is one this project keeps catching: **a finding measured on code that no longer exists
+> is a claim, not a measurement.**
+
 **The BUY rule selects nothing.** Across folds 1 to 404, **8,948,485 out-of-sample BUY calls**
 hit the target at **0.2383**, against **0.2422** over all test rows — *below* the base rate, and
 before any fee is paid. `expected_move_pct > 0` fires on 56% of bars, so the rule is close to
@@ -753,10 +837,16 @@ the reason in the YAML comment and in `DatasetConfig`.
 - **PHASE 7 PREREQUISITES, recorded by operator ruling 2026-09-14. Phase 7's full walk-forward
   and its replays pay the same cost again unless all six are fixed first (the fifth added by the lead and the sixth by operator ruling, both 2026-09-15).** Found by the
   Phase 5 full run (`docs/build-log/phase-5/lead.md`, the entries of 2026-09-13 and 2026-09-14):
-  1. **Cap the skeptic's training set.** Fold k's skeptic trains on every eligible BUY call from
-     every earlier fold, uncapped; by fold 404 that was 8.9M rows, the per-fold memory peak grew
-     from ~66 GB to ~79 GB, and the run died allocating that matrix at fold 405. The cap and its
-     sampling rule are a methodology ruling, not an implementation detail.
+  1. **Cap the skeptic's training set. RULED BY THE OPERATOR 2026-09-16: a rolling window of the
+     last 13 folds**, matching the predictor's locked past-only 90-day window — it mirrors a Locked
+     Decision rather than inventing a second convention, bounds memory by construction rather than
+     by an arbitrary row count, and needs no sampling seed. The purge and embargo are unchanged and
+     apply inside the window. **Implementation is Phase 7, not Phase 6**, because capping changes
+     what the skeptic is trained on and re-measuring means retraining 405 skeptics.
+     **Finding 1 below was measured on the uncapped skeptic** — see the caveat recorded against it.
+     The problem, for the record: fold k's skeptic trained on every eligible BUY call from every
+     earlier fold, uncapped; by fold 404 that was 8.9M rows, the per-fold memory peak grew from
+     ~66 GB to ~79 GB, and the run died allocating that matrix at fold 405.
   2. **No eager read-and-sort of the whole dataset.** `main()` reads the 20.3 GB dataset back
      and sorts it, a second full copy; about 43 GB of the run's memory was committed and idle
      afterwards. Write the dataset already ordered, or stream the sort.

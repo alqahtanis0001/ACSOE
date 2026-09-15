@@ -45,11 +45,23 @@ Discarding on failure would make rule 14 unimplementable at exactly the moment i
 | Failed fetch | Paper-mode fallback |
 |---|---|
 | Fee tier | Block that pair. No fallback — see below |
-| Balance | Use `paper.starting_balances`, a **currency to amount map** in config, adjusted by simulated fills |
+| Balance | The **paper ledger** — see below. It is not a fallback that waits for a failed fetch |
 | Pair rules | Block that pair. No fallback — a wrong `ordermin` produces invalid orders |
 | Spread | Block that pair. No fallback — an assumed spread invalidates the cost gate |
 
-**Balance is the only paper-mode fallback in this system.** Three of the four rows block, and that is the table working rather than an oversight: a fallback is only legitimate where the value it stands in for cannot change the answer to *"can this trade pay for itself"*, and the balance is the only one of the four that qualifies.
+**Balance is the only row of the four that does not block, and since 2026-09-16 it is not a fallback either — it is the paper ledger, below.** Three of the four rows block, and that is the table working rather than an oversight: standing in for a value is only legitimate where it cannot change the answer to *"can this trade pay for itself"*, and the balance is the only one of the four that qualifies.
+
+### The paper ledger, ruled by the operator 2026-09-16
+
+**In paper mode the balance is always `paper.starting_balances` adjusted by every fill the store has recorded — whether or not the real `Balance` fetch succeeded.** It is served by the paper broker in `clients/paper/`, so the mode difference stays in the client layer and no engine branches on mode to get an account.
+
+The row above used to promise a fallback "adjusted by simulated fills" that fired only on a *failed* fetch, and **nothing implemented the adjustment**. Two consequences, both found in Phase 6 planning before any position existed. A simulated fill never touches the fetched cash, so engine 11 would size a second position against cash the first had already spent — invariant 6 says never allocate cash the account does not hold. And engine 19's equity is cash plus positions value, so the same cash was counted twice, in the series that moves the drawdown threshold engine 17 freezes on.
+
+With real credentials in paper mode the fetch *succeeds* and returns the real account's cash, which no simulated fill spends either. A fetched balance plus simulated fills describes no account that exists, which is why the ledger is unconditional in paper rather than a failure path. Live mode is unchanged: it reads the exchange, and a failed fetch blocks.
+
+Every fill in the ledger is one the store recorded, so the ledger a restarted daemon rebuilds is the same one it had.
+
+**A ledger balance is not recorded as a fallback fired.** It is what the account *is* in paper mode, not a substitute for something that failed, and the run's mode already says every figure derived from it is simulated. The rule below — every decision affected by a fallback records which fallback fired — is unchanged for the three rows that block and for live mode.
 
 **The fee-tier row named a tier and told the system to ~~assume~~ it. That is retired, 2026-09-10.**
 It was never implementable.
@@ -76,11 +88,21 @@ These are the paper-mode fallbacks, and rule 14 is the only other exception in t
 
 A gate that errors blocks. A gate that cannot reach its data blocks, subject only to the paper-mode fallbacks in rule 2 and to the emergency liquidation in rule 14. A gate that returns an unparseable result blocks. Absence of a "no" is never a "yes".
 
-Gate engines: 4 (data guard), 7 (scout), 10 (cost), 11 (risk), 13 (anomaly), 15 (skeptic), 17 (safety).
+Gate engines: 4 (data guard), 7 (scout), 10 (cost), 11 (risk), 13 (anomaly), 15 (skeptic), 16 (decision), 17 (safety).
+
+**Engine 16 `decision` became a gate by operator ruling 2026-09-16.** It blocks on exactly one
+condition, and the condition is deterministic arithmetic over `state`: **every approving engine
+judged *this* tick's candidate** — the same pair engine 7 chose and the same decision bar. A pair
+disagreement, a payload carrying a previous bar, an absent input where the chain says the engine
+ran, or an approval carrying no quantity all block. Its other work — composing the order intent
+engine 18 reads — is composition, not decision, and its README says so in those words.
 
 ## 4. No model output may bypass a gate
 
-No confidence score, probability, ensemble weight, or router decision may skip, soften, or override engines 4, 7, 10, 11, 13, or 17. A model may only ever make the system *less* willing to trade, never more.
+No confidence score, probability, ensemble weight, or router decision may skip, soften, or override engines 4, 7, 10, 11, 13, 16, or 17. A model may only ever make the system *less* willing to trade, never more.
+
+Engine 16 joined that list with its gate status on 2026-09-16: it contains no model — its check is
+a comparison of pair names and bar timestamps — so nothing a model publishes may override it.
 
 Rule 14 describes the one override in the system. It is not a model output, and it moves the system towards less exposure, so it does not weaken this rule.
 

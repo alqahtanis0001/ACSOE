@@ -208,7 +208,7 @@ The registry order is non-negotiable. The stage column refers to the runtime loo
 | 11 | `risk` | **Y** | opportunity | 3 |
 | 14 | `adaptive_router` | | opportunity | 3 |
 | 15 | `skeptic` | **Y** | opportunity | 3 |
-| 16 | `decision` | | opportunity | 3 |
+| 16 | `decision` | **Y** | opportunity | 3 |
 | 18 | `execution` | | opportunity | 4 |
 | 21 | `position_manager` | | **manage** | 4 |
 | 22 | `exit` | | **manage** | 4 |
@@ -221,6 +221,16 @@ Engine 23 `backtest` lives in `research/` and is registered only in `OFFLINE_CHA
 Note that 12 and 13 execute before 8 and 9, and that 17 executes before 5. The numbers are identifiers, not execution order.
 
 Engine 6 is named `macro_context`, not `context`, so that it never reads ambiguously against the `context/` documentation directory.
+
+**Engine 16 `decision` is a gate, by operator ruling 2026-09-16.** Three of its four inputs are
+gates, so by the time it runs they have all already said yes — which is why "it combines their
+outputs" was never a job. What it does is the check nothing else performs: **every approving
+engine judged this tick's candidate**, the same pair and the same decision bar, with an approval
+that carries a quantity. That is deterministic, it fails closed, and it can only make the system
+less willing to trade, so it is a gate and is protected by invariant 4. It also *composes* the
+order intent engine 18 reads, so execution depends on one typed contract rather than five engines'
+keys — composition, not decision, and the engine's README says so in those words. Invariant 3
+holds the condition; do not restate it here.
 
 The Dissimilarity Index is not an engine. It lives inside `engines/prediction/` as a fitted artefact alongside the predictor, because it must be fitted on the predictor's training set. Its arithmetic is `modelling/di.py`, so the trainer fits and the engine scores with one implementation. **Engine 8 blocks on a DI refusal** under rule 6, reason code `di_refused`, and stays a non-gate in the table below: `is_gate` is the declaration `verify.py` checks against the Gate column, and rule 6 already lets any engine halt the tick. Operator ruling 2026-09-12; the reasoning is in `feature-specs/59-phase-5-rulings-into-the-documents.md`. The execution offset bandit is likewise not an engine; it lives inside `engines/execution/` with its state in the store.
 

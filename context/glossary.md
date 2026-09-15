@@ -95,7 +95,9 @@ These terms have precise meanings in this codebase. Do not substitute your own.
 
 **Script** — the build log. Each agent writes `docs/build-log/phase-N/<agent>.md`; the lead consolidates into `docs/build-log/phase-N.md` at phase close. When the operator says "update the progress tracker and script", this is the script.
 
-**Execution offset bandit** — not an engine. A small pooled selector inside `engines/execution/` that learns how far below market to place a post-only limit, bucketed by spread tier, with its state in the store.
+**Execution offset bandit** — not an engine. A small pooled selector inside `engines/execution/` that learns how far below market to place a post-only limit, bucketed by spread tier, with its state in the store. **Deferred to Phase 7 by operator ruling 2026-09-16**: it needs a table that does not exist and a fill history that does not exist either. Phase 6 places every entry at the best bid, which is a recorded absence rather than a chosen rule.
+
+**Paper broker** — `clients/paper/`, B's. The fill simulator and the paper ledger, implementing the same order surface the live Kraken client does and wrapping it in paper mode, so a mode difference never reaches an engine. Fills are pessimistic by rule: a resting post-only buy fills only on a trade strictly below its limit, and a market sell walks the bid side of the fetched book.
 
 ## Modes
 
