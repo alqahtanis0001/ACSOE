@@ -41,3 +41,50 @@ than rediscovered:
   exactly as specified, and is not a bug to chase.
 
 ## Entries
+
+### Four things found while writing the Phase 6 specs, before any code
+
+**Agent:** Lead · **Task:** specs 80 to 102 · **Date:** 2026-09-16
+
+Recorded at diagnosis, per rule 1. None is fixed; three need the operator and one is a spec.
+
+**1. The fill simulator cannot live under `engines/execution/` without breaking two rules.**
+*What happened.* The operator ruled the simulator B's, under `engines/execution/`, from my
+reconnaissance finding that it had no owner. Writing its spec, I followed a resting post-only entry
+through its life: it is placed by engine 18 on a bar tick and fills on some *later* tick, which only
+the manage chain sees — engine 21 — and exits fill in engine 22. *Why.* Contract rule 3 forbids 21
+and 22 importing `engines/execution/`, and `architecture-context.md` says mode differences live only
+in the client layer. The reconnaissance report named the owner gap and did not follow the order far
+enough to see the import gap; that is my miss, and the ruling was made on it. *Not fixed* — put to
+the operator with a recommendation (a B-owned paper broker in `clients/paper/` wrapping
+`clients.kraken`), spec 88.
+
+**2. Invariant 6's "one open position per pair" is enforced nowhere.** *What happened.* `grep`
+across `src/` finds no per-pair check; engine 11 counts open positions against
+`max_concurrent_positions` without asking which pair. *Why it has been invisible.* Nothing could
+open a position until this phase, so no test could reach it. *Fix, to be built:* spec 89, a refusal
+in engine 11 that lands before engine 18 does.
+
+**3. `Orchestrator._flag` reads a non-boolean truthy value as "finished".** *What happened.*
+`bool(payload.get(field, False))` turns the string `"false"` into `True`, so a publisher that
+serialised `entry_orders_cancelled` as text would clear `close_intent` with orders still resting.
+*Why it matters now.* Until 21 and 22 exist the flags are always absent and the absent case is the
+only one exercised. *Fix, to be built:* spec 81 — the test first, observed red, then `is True`.
+
+**4. Nothing implements invariant 2's "adjusted by simulated fills", and the unadjusted balance
+double-counts.** *What happened.* Engine 11's paper fallback uses `paper.starting_balances` as a
+constant, and engine 19's equity is fetched cash plus positions value. *Why.* A simulated fill never
+touches either source, so after one paper entry the cash is unspent: sizing allocates it again and
+equity counts it twice. With real credentials the fetch succeeds and returns the real account's
+cash, which no paper fill spends either. *Not fixed* — a money rule, put to the operator with a
+recommendation (paper mode always reads a ledger of starting balances adjusted by recorded fills),
+spec 88.
+
+**Checked and found sound, so the list above is not mistaken for coverage:** engine 19 already reads
+the fields 21 and 22 were always going to publish (`positions`, `orders`, `positions_value`,
+`unrealised_pnl`, `hold_reason`, `closed_trades`), and fails to *nothing* rather than to a zero when
+they are absent; the `close_intent` spy tests in `tests/core/test_orchestrator.py` build their own
+`Chains`, so registering 21 and 22 cannot silently remove their absent case — what they do not cover
+is a present payload (finding 3, spec 81); `TradeOutcome` already carries `liquidation`; the store
+already exposes `resting_orders(intent=...)`, `order_by_userref` and `open_positions`, so specs 89
+and 92 need no migration.
