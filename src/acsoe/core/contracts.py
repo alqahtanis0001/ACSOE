@@ -136,6 +136,25 @@ class EngineContext:
     now: _datetime.datetime
     config: Config
     clients: Clients
+    previous_now: _datetime.datetime | None = None
+    """When the previous tick of **this process** was stamped, or ``None``.
+
+    Added in Phase 6, spec 85, because an engine that measures an *interval* cannot
+    derive one. Engines are stateless across cycles and `state` is fresh every tick, so
+    the only way to say "since the last tick" was `now - timeframes.loop_tick_s` — the
+    previous tick's time *in a loop that ran on time*. `bar_closed_on` has used that
+    device since Phase 2 and it is sound there, because it asks about an index and still
+    fires exactly once when the loop runs late. An interval is different: if the loop
+    overshoots, the trades in the overshoot fall inside **no** range, and a stop touched
+    in that window is missed by engines 21 and 22. Found by A while building engine 3's
+    per-tick trade ranges, and reported rather than worked around.
+
+    ``None`` means there is no previous tick: the first tick of a process, a restart, or
+    a caller that built a context by hand. **It is not zero and not "a moment ago".** A
+    consumer measuring an interval publishes nothing for that tick rather than guessing
+    at its start — the same fail-closed reading the gates use, and the honest description
+    of the gap a restart leaves.
+    """
 
     def __post_init__(self) -> None:
         if self.now.tzinfo is None:
@@ -143,6 +162,19 @@ class EngineContext:
                 "EngineContext.now must be timezone-aware UTC; got a naive datetime. "
                 "A naive clock silently reintroduces look-ahead in replay."
             )
+        if self.previous_now is not None:
+            if self.previous_now.tzinfo is None:
+                raise ValueError(
+                    "EngineContext.previous_now must be timezone-aware UTC; got a naive "
+                    "datetime. A naive clock silently reintroduces look-ahead in replay."
+                )
+            if self.previous_now > self.now:
+                raise ValueError(
+                    f"EngineContext.previous_now ({self.previous_now.isoformat()}) is after "
+                    f"now ({self.now.isoformat()}). An interval that runs backwards is a "
+                    "clock fault, and an engine measuring one would publish a negative span "
+                    "rather than refuse."
+                )
 
 
 def _is_json_scalar(value: Any) -> bool:

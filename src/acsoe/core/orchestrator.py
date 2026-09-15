@@ -96,6 +96,12 @@ class Orchestrator:
         # Interrupted commands are re-applied once, before the first tick's own read.
         self._startup_replayed = False
 
+        # The previous tick's `context.now`, carried so an engine can measure an
+        # interval it has no other way to bound. `None` until the second tick, and
+        # `None` again for the first tick after a restart, which is the truth: nothing
+        # observed the span while the process was down.
+        self._previous_now: datetime | None = None
+
         # The `runs` row is written once, at the top of the first tick rather than in
         # this constructor: a constructor that opens a database makes the object
         # untestable without one, and `ownership.md` only requires the row to exist
@@ -129,14 +135,28 @@ class Orchestrator:
         self._logger.debug(event, run_id=self._run_id, cycle_id=self._cycle_id, **fields)
 
     def _context(self) -> EngineContext:
+        """Stamp this tick's context, carrying the previous tick's stamp with it.
+
+        ``previous_now`` is the one thing an engine cannot derive for itself: it is
+        stateless across cycles and `state` is fresh, so "since the last tick" was
+        otherwise `now - loop_tick_s`, which is the previous tick only in a loop that
+        ran on time. An overshoot would leave the trades inside it in no interval at
+        all, and a stop touched there unseen. It is ``None`` on the first tick of the
+        process — never a fabricated start — and the clock is read exactly once per
+        tick, here, as it always was.
+        """
         mode: Mode = self._system["mode"] if self._system["mode"] != "idle" else self._config.mode
-        return EngineContext(
+        now = self._clock.now()
+        context = EngineContext(
             mode=mode,
             run_id=self._run_id,
-            now=self._clock.now(),
+            now=now,
             config=self._config,
             clients=self._clients,
+            previous_now=self._previous_now,
         )
+        self._previous_now = now
+        return context
 
     def _run(self, engine: BaseEngine, context: EngineContext, state: State) -> EngineResult:
         """Run one engine, converting any uncaught exception into ERROR.

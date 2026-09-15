@@ -165,6 +165,129 @@ def _orch(chains: Chains, store: _Store | None = None) -> Orchestrator:
     )
 
 
+# -------------------------------------------------------------- previous_now
+
+
+class _ContextSpy(BaseEngine):
+    """Records the context object it was handed on each tick."""
+
+    name = "exchange"
+    number = 1
+
+    def __init__(self) -> None:
+        self.contexts: list[EngineContext] = []
+
+    def process(self, context: EngineContext, state: State) -> EngineResult:
+        self.contexts.append(context)
+        return EngineResult(engine=self.name, status=EngineStatus.OK, duration_ms=0.0)
+
+
+def test_the_first_tick_has_no_previous_now() -> None:
+    """`None`, never a fabricated start.
+
+    Spec 85. An engine measuring an interval publishes nothing for this tick rather
+    than inventing where the interval began; the first tick of a process genuinely has
+    no previous one, and so does the first tick after a restart.
+    """
+    spy = _ContextSpy()
+    _orch(Chains(guard=(spy,))).tick()
+    assert spy.contexts[0].previous_now is None
+
+
+def test_previous_now_is_the_previous_ticks_now_not_a_computed_offset() -> None:
+    """Carried from the tick that happened, so an overshoot cannot fall outside it.
+
+    The `_Clock` advances a minute per read, so `now - loop_tick_s` and the real
+    previous stamp coincide on a punctual loop — which is why this asserts **identity
+    with the previous tick's `now`** rather than a difference. A loop that ran late is
+    the case the field exists for, and the next test is it.
+    """
+    spy = _ContextSpy()
+    orchestrator = _orch(Chains(guard=(spy,)))
+    orchestrator.tick()
+    orchestrator.tick()
+    orchestrator.tick()
+    assert spy.contexts[1].previous_now == spy.contexts[0].now
+    assert spy.contexts[2].previous_now == spy.contexts[1].now
+
+
+def test_a_late_tick_still_reports_the_interval_that_actually_elapsed() -> None:
+    """The overshoot is inside the interval, which is the whole point of the field.
+
+    With a clock that jumps five minutes, `now - loop_tick_s` would name a start four
+    minutes after the previous tick, and every trade in those four minutes would fall
+    inside no interval any engine ever published — including the one carrying a stop
+    touch. `previous_now` cannot do that: it is where the last tick actually was.
+    """
+
+    class _HeldClock:
+        """Returns one value until the test moves it.
+
+        Deliberately not the auto-advancing `_Clock` above: the orchestrator reads the
+        clock more than once per tick (the run record and the command stamp), so a
+        per-read step makes the interval under test depend on how many times an
+        unrelated code path looked at the time. The context stamp is the **first** read
+        of each tick, so holding the value steady inside a tick makes this exact.
+        """
+
+        def __init__(self) -> None:
+            self._t = dt.datetime(2026, 9, 8, 12, 0, tzinfo=dt.UTC)
+
+        def advance(self, delta: dt.timedelta) -> None:
+            self._t += delta
+
+        def now(self) -> dt.datetime:
+            return self._t
+
+    clock = _HeldClock()
+    spy = _ContextSpy()
+    # `run_id` is passed so the constructor does not mint one, which would read the
+    # clock and consume the first step before either tick.
+    orchestrator = Orchestrator(
+        config=_Config(),
+        clock=clock,
+        clients=_Clients(None),
+        chains=Chains(guard=(spy,)),
+        run_id="run-late",
+    )
+    orchestrator.tick()
+    clock.advance(dt.timedelta(minutes=5))  # the loop overshot by four minutes
+    orchestrator.tick()
+    elapsed = spy.contexts[1].now - spy.contexts[1].previous_now  # type: ignore[operator]
+    assert elapsed == dt.timedelta(minutes=5), (
+        "the interval must cover the overshoot, not one nominal loop tick"
+    )
+
+
+def test_previous_now_is_refused_when_it_is_after_now() -> None:
+    """An interval that runs backwards is a clock fault, refused at construction."""
+    with pytest.raises(ValueError, match="is after now"):
+        EngineContext(
+            mode="paper",
+            run_id="r",
+            now=dt.datetime(2026, 9, 8, 12, 0, tzinfo=dt.UTC),
+            config=_Config(),  # type: ignore[arg-type]
+            clients=_Clients(None),  # type: ignore[arg-type]
+            previous_now=dt.datetime(2026, 9, 8, 12, 1, tzinfo=dt.UTC),
+        )
+
+
+def test_a_naive_previous_now_is_refused() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        EngineContext(
+            mode="paper",
+            run_id="r",
+            now=dt.datetime(2026, 9, 8, 12, 0, tzinfo=dt.UTC),
+            config=_Config(),  # type: ignore[arg-type]
+            clients=_Clients(None),  # type: ignore[arg-type]
+            # The naive datetime IS the fixture for the refusal under test. Passing a
+            # tzinfo here would make this test pass against the exact value it exists
+            # to reject, which is the standing reason a lint may be suppressed
+            # (code-standards.md, "Suppressing a lint"). Hence the DTZ001 below.
+            previous_now=dt.datetime(2026, 9, 8, 11, 59),  # noqa: DTZ001
+        )
+
+
 # ------------------------------------------------------------------ empty registry
 
 

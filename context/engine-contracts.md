@@ -19,6 +19,7 @@ class EngineContext:
     now: datetime               # UTC, injected. Engines never read the clock.
     config: Config             # a Protocol declared in core/, implemented in platform/
     clients: Clients            # kraken, store, recorder — injected, never constructed
+    previous_now: datetime | None = None   # the previous tick's stamp; None on the first
 
 
 class EngineResult(BaseModel):
@@ -282,3 +283,7 @@ The three money fields are decimal **strings**, per rule 8. None of them may be 
 `entry_orders_cancelled` and `positions_closed` are only meaningful while `close_intent` is set; absent or false always means "not finished", never "finished" — the same fail-closed default the gates use. `hold_reason` is the opposite: it is meaningful on ordinary ticks and is null during a liquidation, because a liquidation never holds. Name these fields when you refer to them; do not point at them by position, because this table gets appended to.
 
 **The orchestrator holds the `Clock`.** It is constructed by the CLI, passed to the orchestrator, and used once per tick to stamp `context.now`. No engine ever sees it.
+
+**`context.previous_now` is where the previous tick was, and it exists because an interval cannot be derived.** Added 2026-09-16, Phase 6, spec 85, by the lead; overturnable by the operator. An engine is stateless across cycles and `state` is fresh every tick, so "since the last tick" could only be written as `now − timeframes.loop_tick_s` — which is the previous tick's time *in a loop that ran on time*. `bar_closed_on` has used that device since Phase 2 and is sound, because it asks about an **index** and still fires exactly once when the loop runs late. An **interval** is not: if the loop overshoots, the trades inside the overshoot fall in no range any engine published, and a stop touched there is missed by engines 21 and 22. Found by A building engine 3's per-tick trade ranges and reported rather than worked around.
+
+`None` means there is no previous tick — the first tick of a process, the first tick after a restart, or a context built by hand. **It is not zero and not "a moment ago."** An engine measuring an interval publishes nothing for that tick rather than guessing where the interval began; that is the fail-closed reading and it is also the honest description of a restart, which observed nothing while the process was down. A `previous_now` after `now`, or a naive one, is refused at construction: an interval running backwards is a clock fault, not a small number.

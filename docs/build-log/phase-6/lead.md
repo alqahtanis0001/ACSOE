@@ -185,3 +185,56 @@ correct in the only state the system has ever been in.** `_flag`'s `bool()` was 
 absent payload, `decimal_field`'s zero is right for a flat account, and engine 11's
 `max_concurrent_positions` check was right while nothing could open a position. All three become
 wrong on the first tick that holds a position, which is what Phase 6 is for.
+
+### An engine can measure an instant but not an interval, and the overshoot fell in neither
+
+**Agent:** Lead · **Task:** spec 85's question, raised by A · **Date:** 2026-09-16
+
+**What happened.** A built engine 3's per-tick trade ranges and stopped to report what it could
+not express: `since_ts` had to be `context.now − timeframes.loop_tick_s`, because an engine is
+stateless across cycles, `state` is fresh every tick, and `EngineContext` carried nothing about
+the previous one. A named the precedent honestly — `bar_closed_on` has used the same device since
+Phase 2 — and then named the difference, which is the part that matters.
+
+**Why the precedent does not carry.** `bar_closed_on` asks about an **index**: which decision bar
+this tick falls in. A late loop still lands in some bar and the question still answers once. A
+**range** is an interval, and `now − loop_tick_s` is the previous tick only in a loop that ran on
+time. Overshoot by four minutes and the interval starts four minutes after the previous tick
+ended: every trade in that gap is inside no range any engine ever published. Engines 21 and 22
+decide a stop touch from exactly those ranges, so the missed window is a missed stop — silent, on
+real money, on precisely the ticks where the machine was busy, which is when a market is moving.
+Nothing would have gone red: each range is internally consistent and the gap is between them.
+
+**Fix.** `EngineContext.previous_now`, the previous tick's stamp, carried by the orchestrator —
+`core/`, so the lead's. `None` on the first tick of a process and after a restart, never a
+fabricated start, and a consumer measuring an interval publishes nothing for that tick rather than
+guessing. A `previous_now` after `now`, or naive, is refused at construction: an interval running
+backwards is a clock fault, not a small number. The clock is still read exactly once per tick.
+A can now drop the `state["cycle_id"]` read it had added for the first-tick case, so engine 3
+returns to reading no `state` at all.
+
+**Mutations**, `tests/core`, each anchored on a literal asserted to occur exactly once and
+restored from a byte copy with the sha256 compared in the same statement (all five
+`restored byte-identical: True`):
+
+| Mutation | Result | Killed by |
+|---|---|---|
+| N1 — `previous_now` is a computed offset, not the previous stamp | 2 failed, 56 passed | `test_previous_now_is_the_previous_ticks_now_not_a_computed_offset`, `test_a_late_tick_still_reports_the_interval_that_actually_elapsed` |
+| N2 — the first tick claims a previous tick | 1 failed, 57 passed | `test_the_first_tick_has_no_previous_now` |
+| N3 — the stamp is never carried forward | 2 failed, 56 passed | the same two as N1 |
+| N4 — a backwards interval is accepted | 1 failed, 57 passed | `test_previous_now_is_refused_when_it_is_after_now` |
+| N5 — a naive `previous_now` is accepted | 1 failed, 57 passed | `test_a_naive_previous_now_is_refused` |
+
+**N1 is the mutation this change exists for**, and only the late-tick test can see it: on a
+punctual loop the offset and the real stamp are the same value, so every test built on the
+auto-advancing `_Clock` passes under N1. A double that advances by exactly one loop tick per read
+cannot exhibit lateness — the property under test — which is the Phase 3 rule about doubles
+arriving in a new place.
+
+**A wrong turn of my own, worth recording.** My first late-clock double stepped the time on every
+`now()` call, and the test failed reporting a seven-minute interval where it expected five. The
+code was right: the orchestrator reads the clock more than once per tick (the run record, the
+command stamp), so a per-read step measures how many times unrelated paths looked at the time. A
+clock the test holds steady and advances explicitly between ticks makes the interval exact. The
+failure looked like the feature and was the instrument — the same shape as the benchmark lesson in
+`code-standards.md`, arriving in a test rather than a measurement.
