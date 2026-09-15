@@ -4,7 +4,9 @@
 
 ## Current Phase
 
-**Phase 5 — Models. OPENED 2026-09-12.** Phase 4 preflight re-run on the clean tree at `ef8f1f0`: **10 criteria, 10 PASS, 0 FAIL, 0 PENDING**, `replay_full_archive` skipped as `--live`. Nineteen specs (59 to 77) written from the Phase 5 row and the ownership map, approved by the operator with all nine rulings confirmed (recorded under Locked Decisions) and one addition: the effective sample size is reported per fold beside that fold's row count, not only in aggregate. The shared task list is `feature-specs/PHASE-5-TASKS.md`. Three operator values stay absent until the walk-forward reports; see Open Questions. **This is the phase where a mistake looks like success**, so every assertion is proven capable of failing and the proof goes in the build log.
+**Phase 5 — Models. GREEN AND CLOSED 2026-09-15** — 14 criteria, **14 PASS, 0 FAIL, 0 PENDING**, with phases 0 to 4 re-gated in order on the same quiet tree and every one exit 0. All twenty-one specs (59 to 79) delivered across A, B, C and the lead; the narrative account is `docs/build-log/phase-5.md`, consolidated from the four per-agent logs at close. The three withheld thresholds are supplied and all three are **provisional** until the chain runs end to end. **Phase 6 — Decision and execution is next**, and it opens carrying the six Phase 7 prerequisites, engine 8's `is_buy`, and the three findings below. 
+
+*The phase as opened, for the record, 2026-09-12.* Phase 4 preflight re-run on the clean tree at `ef8f1f0`: **10 criteria, 10 PASS, 0 FAIL, 0 PENDING**, `replay_full_archive` skipped as `--live`. Nineteen specs (59 to 77) were written from the Phase 5 row and the ownership map and approved by the operator with all nine rulings confirmed (recorded under Locked Decisions) and one addition: the effective sample size is reported per fold beside that fold's row count, not only in aggregate. **Two more were added during the phase** — 78 and 79, A's streaming fixes to the full-archive replay — for twenty-one in total. The shared task list is `feature-specs/PHASE-5-TASKS.md`. The three operator values that opened the phase absent were all supplied before it closed: `skeptic.veto_threshold: 0.50` on 2026-09-14, `anomaly.threshold_percentile: 0.99` and `prediction.di_percentile: 0.99` on 2026-09-15, every one **provisional**. **This is the phase where a mistake looks like success**, so every assertion is proven capable of failing and the proof goes in the build log — and it held: the defects that mattered most this phase were each found by a mutation or a recomputation rather than by a red test.
 
 **Gates re-run 2026-09-15, phases 0 to 5 in order on a quiet tree, every phase exit 0:**
 Phase 0 **7/7**, Phase 1 **10/10**, Phase 2 **9/9**, Phase 3 **9/9**, Phase 4 **10/10**
@@ -53,8 +55,8 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 | 2 — Data spine | **Green** | 2026-09-10 — 9 PASS, 0 FAIL, 0 PENDING; all three phase gates re-run clean at close |
 | 3 — Economics | **Green** | 2026-09-10 — 9 PASS, 0 FAIL, 0 PENDING |
 | 4 — Memory and replay | **Green on its gate; close and consolidation withheld by the operator** | 2026-09-11 — 10 PASS, 0 FAIL, 0 PENDING; re-verified 2026-09-12 at the Phase 5 preflight, same result, `replay_full_archive` skipped as `--live` |
-| 5 — Models | **In progress — opened 2026-09-12** | Specs 59–77, approved by the operator with nine rulings confirmed and one addition (per-fold effective sample size). Team: A (61), B (62, 76), C (60, 63–75), Lead (59, 77) |
-| 6 — Decision and execution | Blocked on 5 | — |
+| 5 — Models | **Green** | 2026-09-15 — 14 PASS, 0 FAIL, 0 PENDING; phases 0 to 4 re-gated in order on the same quiet tree, all exit 0. Specs 59–79: A (61, 78, 79), B (62, 76), C (60, 63–75), Lead (59, 77). Nine rulings confirmed by the operator plus one addition (per-fold effective sample size) |
+| 6 — Decision and execution | **Unblocked, not started** | — |
 | 7 — Evaluation | Blocked on 6 | — |
 | 8 — Live readiness | Blocked on 7 | — |
 
@@ -92,6 +94,38 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 | Lead | — | The `core/` command reader, broken in three places rather than one; the run record at startup and the persisted-mode write; `bootstrap.py` registration of engines 1 to 4; the four config keys; the spec set; and the `recorded_fraction` floor that closed the `recording_span_continuous` defect. |
 
 - **Nothing is outstanding for any agent.** A, B and C all report clear. Two items deliberately survive the close and are carried in Next Up rather than hidden: `cli/engine.py` still passes a `Clients()` of three `None`s, and engine 17's `CONDITION_ACTION` table is unratified.
+
+## Phase 5 — how it closed
+
+*Merged at close from the three progress files, 2026-09-15. Shared task list:
+`feature-specs/PHASE-5-TASKS.md`. Narrative: `docs/build-log/phase-5.md`.*
+
+**All twenty-one specs delivered, and nothing is outstanding for any agent.**
+
+| Agent | Specs | State at close |
+|---|---|---|
+| Lead | 59, 77 | Both done. Plus the nine rulings, the full-archive run and its rebuilt digest, the four threshold studies, the engine 15 review, the registration of 5, 6, 12, 13, 8 and 15, and the close. |
+| A — Platform | 61, 78, 79 | All done. Reports nothing in progress, nothing blocked, no gaps owned. |
+| B — Store and trading | 62, 76 | Both done, plus the rehearsals of engines 5, 6, 12, 13, 8 and 15 through real orchestrator ticks. Reports nothing outstanding and nothing blocked. |
+| C — Interface and models | 60, 63–75 | All fourteen done. The one PENDING it reported — `di_fitted_on_predictor_training_set` — is resolved by the operator's `prediction.di_percentile` ruling and now PASSes. |
+
+**Three things carried out of the teammates' files rather than lost with them.**
+
+1. **A's standing instruction has not expired and does not expire with the phase**:
+   `scripts/record.py` stays running. Order-book and spread history cannot be recovered
+   retroactively, and engine 9 `order_book` — a Phase 6 engine — still has nothing else to read.
+   The recorder has no working graceful shutdown on Windows; a kill costs at most a partial
+   final line, because the archive is append-only and every line is flushed.
+2. **A's two unverifiable items stand and block nothing**: the REST signing scheme and four
+   `map_*` field names in `rest.py` cannot be checked offline, are isolated into single named
+   functions, and surface a renamed field as a `KrakenUnavailableError` naming it rather than as
+   a default.
+3. **C's scan-tally deferral stands.** Engine 7 publishes `scanned`, `entered` and a per-reason
+   `excluded` tally into `state` for exactly one tick and no column holds any of the three, so
+   the console's empty-state tally still cannot be built. Deferred because the obvious fix —
+   one `rejections` row per excluded pair — changes what that table means, and anyone counting
+   refused trades would start counting filtered pairs. Phase 7's attribution is the natural
+   forcing function.
 
 ## Phase 3 — how it closed
 
@@ -363,6 +397,96 @@ runs is the line nobody thinks to assert on.
   would each need a return annotation. The hole is stated rather than implied and a test
   asserts the exclusion, so the next person to "fix" it meets a red and a decision.
 - **A's standing instruction, and it does not expire with the phase:** `scripts/record.py` should be left running from now on. Order-book and spread history cannot be recovered retroactively — Kraken's free archives carry OHLCV and no bid, ask, spread or depth — so every hour the recorder is not running is an hour of cost-model input that money cannot buy back later. Phase 2's criterion is satisfied, which is exactly when the temptation to switch it off appears; engine 9 `order_book` and the spread half of engine 10 `cost` still have nothing else to read. **Note the recorder has no working graceful shutdown on Windows** — `loop.add_signal_handler` raises on the Proactor loop and the exception is suppressed, so the `stop` marker never runs and a kill has to be forced. The archive is append-only and every line is flushed, so a kill costs at most a partial final line.
+
+## Findings — Phase 5
+
+*The three results an examiner should read first. Each is recorded here, and not only in the
+build log, because a finding that lives in a build log is a finding the next phase will not
+read. All three are measured over the 405 fitted folds of the full-archive run.*
+
+### FINDING 1: the predictor's BUY calls show no selection skill on their own; the skeptic's veto does
+
+**The BUY rule selects nothing.** Across folds 1 to 404, **8,948,485 out-of-sample BUY calls**
+hit the target at **0.2383**, against **0.2422** over all test rows — *below* the base rate, and
+before any fee is paid. `expected_move_pct > 0` fires on 56% of bars, so the rule is close to
+taking everything. Whatever the predictor knows, the BUY rule as defined does not extract it.
+
+**The skeptic's veto does select.** At `skeptic.veto_threshold: 0.50` the surviving 154,979
+calls (1.73%, effective sample size 46,616) hit the target at **0.5309**, against a **no-skill
+band of 0.255 to 0.260** — each fold's own scores permuted across its calls over 20 seeds, which
+is the fair comparator rather than the 0.2383 base, because folds differ in how many calls
+survive and in their own target rates. The lift holds in every test year from 2017 to 2024, and
+at 0.50, 0.60 and 0.70.
+
+**It was treated as a leak until shown otherwise**, because a jump from 0.24 to 0.53 is exactly
+the shape this phase exists to distrust. Three checks: the skeptic's training identity was
+recomputed from the out-of-sample file for seven folds and matched each manifest with zero rows
+reaching the scored window (dropping the purge and embargo breaks every match); adjacent folds'
+skeptics differ in one verdict and distant ones in hundreds, which is the right direction; and
+fold 200's calls scored by fold 350's skeptic — which *did* train on them — reach 0.6325 against
+0.5772, so contamination shows up when it is present.
+
+**And it is not just the predictor's own confidence.** Ranking by calibrated `p_target` at
+matched survivor counts gives **+0.058 to the skeptic** at 0.50, with the two sets sharing only
+**44%** of their calls. The margin narrows as the threshold loosens (+0.0049 at 0.70, 68%
+overlap), so the second stage earns its place at the strict end and not at the loose one. Note
+also that `p_target` ranking alone reaches 0.47 at that count: the predictor carries real
+ordering that the BUY rule never uses.
+
+**What this is not.** Every rate here is **before friction**, and friction is the thing this
+system exists to beat — at tier 1 it is ~1.25% round trip against a 3% target. **The chain has
+not run end to end.** Engine 9 does not exist, so engine 10 blocks every candidate and engine 15
+is unreachable in the live chain; these numbers come from applying each fold's trained skeptic
+to that fold's out-of-sample calls offline. **This is evidence about one gate, not about the
+system.** The standard errors are a floor: they ignore correlation between pairs moving together
+and between overlapping folds. Phase 6 is what turns it into evidence about the system.
+Scripts and tables: `docs/dataset/skeptic-veto-sweep-2026-09-14.{py,json,md}` and
+`skeptic-vs-ptarget-2026-09-14.{py,json,md}`.
+
+### FINDING 2: the DI as first ruled measured time elapsed, not distributional distance
+
+**78 of the DI's 117 columns are the BTC and ETH macro features**, which are identical for every
+pair on the same bar, and the calendar columns are shared too. So a reference row's ten nearest
+neighbours were **other pairs at the same moment**, and a leave-one-out that removed only the row
+being scored left every one of them in the reference set. The threshold was therefore a measure
+of *how close in time* a row sits to the reference window, not of how unfamiliar the market is.
+
+**The consequence was extreme and would have been read as a working gate.** At the 0.95
+percentile the DI refused **94.7%** of complete out-of-sample rows; 74.9% at 0.99; 31.1% at
+0.999. A live candidate sits at least the 48-bar embargo after the reference window and has no
+contemporaneous neighbours in it, so it lands above almost the whole distribution *whatever the
+market is doing* — a refusal rate that looks like a cautious gate and is actually a clock.
+
+**The wrong explanation was tested first and rejected**, which is why the right one is trusted:
+excluding the same pair's rows within ±48 bars or ±7 days left the distribution unchanged
+(median 0.632 in all three arms). Excluding **every pair's** rows within ±48 bars moved the
+reference distribution onto the out-of-sample one (median 1.423 against 1.402).
+
+**Fixed by operator ruling 2026-09-15**, amending ruling 6 of 2026-09-12: the leave-one-out
+excludes every reference row within `backtest.embargo_bars` of the row being scored, **across all
+pairs**. Refitted over all 405 folds, the same percentiles now refuse **6.79% (0.95), 3.31%
+(0.99), 2.06% (0.999)**, and the refused rows carry a higher target and stop rate than the kept
+ones — the volatile tail, which is what an out-of-distribution refusal should catch. The
+exclusion was chosen over dropping the macro columns, which would blind the DI to the conditions
+it exists to detect. `di_leave_one_out_excludes_48_bars` proves it is applied, and
+`modelling.di.load` refuses an artefact fitted without it.
+
+### FINDING 3: half of every test week carries an incomplete feature vector, and no threshold can help
+
+**8,025,361 of 15,978,803 out-of-sample rows — 50.2% — carry an unfilled 48- or 96-bar
+lookback**, because the pair did not trade in every bar of the window. It is not uniform and it
+is getting worse as the universe widens: 26% of rows in 2017, **61% in 2023**.
+
+**Engines 8 and 13 refuse an incomplete vector at any threshold**, and correctly: a NaN compared
+against a threshold is False, so scoring one would silently mean "not dissimilar". This is not a
+percentile question and no choice of `di_percentile` or `threshold_percentile` touches it.
+
+**It bounds everything downstream of engine 8.** Half the candidate bars never reach a
+prediction, and the half that do are systematically the more liquid ones — which is also where
+the spread the archive cannot price is smallest, so the surviving population is not a random
+sample of the universe. Any Phase 7 statement about coverage, capacity or opportunity count has
+to carry this number. Recorded as Phase 7 prerequisite 6 by operator ruling 2026-09-15.
+`docs/dataset/di-anomaly-distributions-2026-09-14.md`.
 
 ## Locked Decisions
 
