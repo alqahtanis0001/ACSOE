@@ -364,6 +364,69 @@ def test_close_all_is_not_marked_consumed_on_the_claiming_tick() -> None:
     assert store.consumed == [], "close_all must not be consumed before it finishes"
 
 
+# -- the present-payload shapes, which the absent case cannot stand in for ----
+#
+# Spec 81. Until Phase 6 the manage chain was engine 19 alone, so `position_manager`
+# and `exit` were always *absent* and the absent case was the only one these tests
+# exercised. Once 21 and 22 are registered they are always present, and a present
+# payload has shapes an absent key does not: an engine that raised publishes `{}`
+# (contract rule 7), an engine that tried and failed publishes the flag as False, and
+# an engine serialising through anything text-shaped can publish a string.
+
+
+def test_close_intent_survives_when_the_position_manager_raised() -> None:
+    """`ERROR` with an empty payload is present-and-unfinished, not finished.
+
+    Contract rule 7 turns an uncaught exception into `ERROR` with `data={}`, so this
+    is the one shape where the payload exists and says nothing at all. It reads as
+    *not finished*, which is what stops a crashing engine 21 clearing the kill switch.
+    """
+    store = _close_all_store()
+    pm = _Spy("position_manager", 21, raises=True)
+    ex = _Spy("exit", 22, data={"positions_closed": True})
+    orchestrator = _orch(Chains(manage=(pm, ex)), store)
+    orchestrator.tick()
+    assert orchestrator.system["close_intent"] is True, "a raised engine 21 must not finish a close"
+    assert store.consumed == []
+
+
+@pytest.mark.parametrize("cancelled", [False, None])
+def test_close_intent_survives_a_flag_that_is_present_and_not_true(cancelled: object) -> None:
+    store = _close_all_store()
+    pm = _Spy("position_manager", 21, data={"entry_orders_cancelled": cancelled})
+    ex = _Spy("exit", 22, data={"positions_closed": True})
+    orchestrator = _orch(Chains(manage=(pm, ex)), store)
+    orchestrator.tick()
+    assert orchestrator.system["close_intent"] is True
+    assert store.consumed == []
+
+
+@pytest.mark.parametrize("flag", ["false", "0", [], {}, 0, 1, "true"])
+def test_only_the_boolean_true_clears_the_intent(flag: object) -> None:
+    """A non-boolean flag never finishes a liquidation, whatever it is truthy for.
+
+    `bool("false")` is `True`, and so is `bool([1])` and `bool(1)`. A publisher that
+    serialised `entry_orders_cancelled` through anything text-shaped would therefore
+    have cleared `close_intent` with orders still resting on the book — a fail-open on
+    the kill switch, reached without anybody writing a wrong value, only a wrong type.
+    The contract calls these fields booleans; anything else is a publisher whose shape
+    changed, and the fail-closed reading of a changed shape is "not finished".
+
+    `1` and `"true"` are in the list deliberately: they are the two a reasonable person
+    would argue *should* count, and they must not, because accepting them is what makes
+    the rule unenforceable at the edge that matters.
+    """
+    store = _close_all_store()
+    pm = _Spy("position_manager", 21, data={"entry_orders_cancelled": flag})
+    ex = _Spy("exit", 22, data={"positions_closed": flag})
+    orchestrator = _orch(Chains(manage=(pm, ex)), store)
+    orchestrator.tick()
+    assert orchestrator.system["close_intent"] is True, (
+        f"{flag!r} is not the boolean True and must not clear a liquidation"
+    )
+    assert store.consumed == []
+
+
 @pytest.mark.parametrize(("command", "mode"), [("activate", "running"), ("freeze", "frozen")])
 def test_pure_mode_changes_are_consumed_immediately(command: str, mode: str) -> None:
     store = _Store([{"command": command}])

@@ -500,7 +500,25 @@ class Orchestrator:
 
     @staticmethod
     def _flag(state: State, engine_name: str, field: str) -> bool:
+        """Only the boolean ``True`` means finished. Everything else means not.
+
+        This read `bool(payload.get(field, False))` until spec 81, which is a
+        fail-open on the kill switch: `bool("false")` is `True`, and so is `bool(1)`,
+        so a publisher that serialised ``entry_orders_cancelled`` through anything
+        text-shaped would clear `close_intent` **with entry orders still resting on the
+        book**, and the orchestrator would then mark the `close_all` row consumed. Four
+        of seven present-but-not-`True` shapes cleared a liquidation; the other three
+        (`[]`, `{}`, `0`) happened to be falsy, which is what made the hole easy to read
+        past.
+
+        It was unreachable until Phase 6 because the manage chain was engine 19 alone
+        and both payloads were always absent — the branch stopped being dead on exactly
+        the change that gave it something to be wrong about. `engine-contracts.md` says
+        these two fields are booleans and that absent or false always means "not
+        finished"; a value of any other *type* is a publisher whose shape changed, and
+        the fail-closed reading of a changed shape is also "not finished".
+        """
         payload = state.get(engine_name)
         if not isinstance(payload, dict):
             return False
-        return bool(payload.get(field, False))
+        return payload.get(field) is True
