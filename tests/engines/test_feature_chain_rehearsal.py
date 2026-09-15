@@ -120,6 +120,19 @@ PREDICTION_DI_REFUSED = require_module(
     "acsoe.engines.prediction.contracts", reason="engine 8 `prediction` does not exist yet"
 ).REASON_DI_REFUSED
 
+SkepticEngine = require_module(
+    "acsoe.engines.skeptic.engine", reason="engine 15 `skeptic` (C, spec 73) does not exist yet"
+).SkepticEngine
+
+#: Engine 15's codes and its not-a-BUY sentence, imported from C's contracts for the reason
+#: engine 13's are: a retyped string that drifted would be asserted against nothing.
+skeptic_contracts = require_module(
+    "acsoe.engines.skeptic.contracts", reason="engine 15 `skeptic` does not exist yet"
+)
+SKEPTIC_UNAVAILABLE = skeptic_contracts.REASON_UNAVAILABLE
+SKEPTIC_VETO = skeptic_contracts.REASON_VETO
+NOT_A_BUY_CALL = skeptic_contracts.NOT_A_BUY_CALL
+
 pytestmark = pytest.mark.skipif(
     not FIXTURE.is_file(), reason="tests/fixtures/candles_sample.parquet is not committed"
 )
@@ -923,9 +936,15 @@ def artefact_config(
 
 
 def build_trained(
-    config: Any, clock: Any, clients: Any, bars: list[dict[str, Any]], root: Path
+    config: Any,
+    clock: Any,
+    clients: Any,
+    bars: list[dict[str, Any]],
+    root: Path,
+    *,
+    opportunity: list[Any] | None = None,
 ) -> Orchestrator:
-    """The judgement chain against a store that knows the artefact root."""
+    """The judgement chain, or the chain given, against a store that knows the artefact root."""
     from acsoe.clients.store.client import StoreClient
 
     store = StoreClient(clients.store.db_path, models_dir=root)
@@ -937,7 +956,7 @@ def build_trained(
         clock,
         clients,
         bars,
-        opportunity=judgement_chain(),
+        opportunity=opportunity if opportunity is not None else judgement_chain(),
         stream_pairs=(PAIR, *MACRO_PAIRS),
         quotes=True,
     )
@@ -1207,3 +1226,533 @@ def test_engine_5_returns_pass_and_not_ok_on_a_non_bar_tick(
 
     assert result.status is EngineStatus.PASS
     assert result.blocks_trading is False
+
+
+# --------------------------------------------------------------------------- #
+# 5. Engine 15 `skeptic` behind them
+# --------------------------------------------------------------------------- #
+
+#: Folds the skeptic fixture trains. Spec 69: fold 0 has no earlier out-of-sample BUY calls
+#: and trains no skeptic, so a one-fold run — which is what `trained` above is — can only
+#: ever exercise `skeptic_unavailable`.
+SKEPTIC_FOLDS = 4
+
+#: The macro asset the skeptic fixture joins, spelled as `tests/engines/test_prediction.py`
+#: spells it and written out for this file's standing reason. With it the manifest names
+#: macro columns, so engine 15 assembles its vector from engines 5 **and** 6 the way it does
+#: live; without it the macro half of `_vector` never runs here.
+SKEPTIC_MACRO_ARCHIVE = {"btc": "AAAUSD"}
+
+
+def skeptic_chain() -> list[Any]:
+    """Engines 5, 6, 7, 12, 13, 8 and 15, registry order kept, **10 and 11 omitted**.
+
+    Omitted because engine 10 `cost` blocks for want of engine 9 `order_book` (Phase 6),
+    which `test_engine_10_stops_the_chain_for_want_of_engine_9_and_says_so` asserts and
+    `test_in_the_full_registry_chain_engine_15_is_never_reached_this_phase` repeats with 15
+    registered. In the full chain engine 15 is unreachable, so it is rehearsed here without
+    the two engines that stand between it and engine 8.
+    """
+    return [
+        FeatureEngine(),
+        MacroContextEngine(),
+        ScoutEngine(),
+        RegimeEngine(),
+        AnomalyEngine(),
+        PredictionEngine(),
+        SkepticEngine(),
+    ]
+
+
+@pytest.fixture(scope="module")
+def trained_skeptic(tmp_path_factory: Any) -> tuple[Path, str]:
+    """`(models root, the latest fold run whose manifest records a skeptic)`.
+
+    Both percentiles are the test's numbers, as in `trained`. The run id is chosen by reading
+    each fold's manifest for `extras.skeptic` and `skeptic.txt` on disk, not by trusting the
+    report's row count, and fold 0 is asserted to carry none so the fixture is known to be
+    exercising spec 69's rule rather than a trainer that stopped following it.
+    """
+    import json
+
+    from tests.harness.doubles import load_default_config
+    from tests.research.test_training import NOW, dataset_for
+
+    from acsoe.research import training
+
+    config = load_default_config()
+    root = tmp_path_factory.mktemp("rehearsal-models-skeptic")
+    report = training.train_walkforward(
+        dataset_for(config, random_walk=False, macro_archive=SKEPTIC_MACRO_ARCHIVE),
+        config=Wrapped(
+            config,
+            **{
+                "prediction.di_percentile": TEST_DI_PERCENTILE,
+                "anomaly.threshold_percentile": TEST_ANOMALY_PERCENTILE,
+            },
+        ),
+        models_dir=root / "models",
+        derived_dir=root / "derived",
+        now=NOW,
+        max_folds=SKEPTIC_FOLDS,
+    )
+
+    def has_skeptic(run_id: str) -> bool:
+        directory = report.models_dir / run_id
+        manifest = json.loads((directory / "manifest.json").read_bytes().decode("utf-8"))
+        recorded = (manifest.get("extras") or {}).get("skeptic")
+        return isinstance(recorded, dict) and (directory / "skeptic.txt").is_file()
+
+    assert not has_skeptic(report.fold_runs[0]), "fold 0 trained a skeptic; spec 69 says never"
+    with_skeptic = [run_id for run_id in report.fold_runs if has_skeptic(run_id)]
+    assert with_skeptic, "no fold trained a skeptic, so every veto assertion is unreachable"
+    run_id = with_skeptic[-1]
+    directory = report.models_dir / run_id
+    assert (directory / "di.npz").is_file(), "no DI; engine 8 would block before 15"
+    assert (directory / "anomaly.joblib").is_file(), "no anomaly detector; 13 would block"
+    return report.models_dir, run_id
+
+
+def skeptic_config(base: MappingConfig, root: Path, run_id: str, **overrides: Any) -> Any:
+    """`artefact_config` plus the DI percentile, with the skeptic keys left to the caller."""
+    return artefact_config(
+        base, root, run_id, **{"prediction.di_percentile": TEST_DI_PERCENTILE, **overrides}
+    )
+
+
+#: Where the two market windows below end, in bars before the end of the constructed series.
+#: **Both are the test's choice, found by replaying windows through this same chain**, and
+#: both are asserted on every run rather than trusted: the window ending at the series' end
+#: makes engine 8 call no BUY (`expected_move_pct` -0.015), and the one ending 200 bars
+#: earlier makes it call a BUY (+0.030). A retrained model that moves either answer turns the
+#: test that needs it red by name instead of leaving a vacuous branch green.
+NOT_A_BUY_WINDOW_END = 0
+BUY_WINDOW_END = 200
+
+#: Bars per replayed window, as `trained_bars` uses.
+WINDOW_BARS = 300
+
+
+@pytest.fixture(scope="module")
+def constructed_rows() -> list[dict[str, Any]]:
+    """The whole constructed series `trained_bars` is the tail of, as bar mappings."""
+    from tests.research.test_training import candle_frame
+
+    frame = candle_frame("AAAUSD", interval_s=BAR, random_walk=False, days=140)
+    return [
+        {
+            "ts": int(row["ts"]),
+            "open": row["open"],
+            "high": row["high"],
+            "low": row["low"],
+            "close": row["close"],
+            "volume": row["volume"],
+            "trades": int(row["trades"]),
+        }
+        for row in frame.to_dicts()
+    ]
+
+
+def window(rows: list[dict[str, Any]], bars_before_end: int) -> list[dict[str, Any]]:
+    end = len(rows) - bars_before_end
+    return rows[end - WINDOW_BARS : end]
+
+
+def at_bar_tick(clock: Any, bars: list[dict[str, Any]]) -> Any:
+    """One bar and one second past the window's newest bar: the first bar tick."""
+    clock._now = datetime.fromtimestamp(int(bars[-1]["ts"]) + BAR + 1, tz=UTC)
+    return clock
+
+
+class RecordingSkeptic(SkepticEngine):  # type: ignore[misc, valid-type]
+    """The real engine 15, with every result it returned kept.
+
+    **Not a double**: `process` is the real one, called unchanged. It exists because `state`
+    carries a payload and never a status, and `OK` and `BLOCK` are the two answers this
+    section is about. A payload alone can be matched by an `ERROR` — contract rule 7 — so
+    the status is asserted beside it, from what the engine returned.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.results: list[Any] = []
+
+    def process(self, context: Any, state: Any) -> Any:
+        result = super().process(context, state)
+        self.results.append(result)
+        return result
+
+
+def run_two_ticks(
+    config: Any,
+    clock: Any,
+    clients: Any,
+    bars: list[dict[str, Any]],
+    root: Path,
+    skeptic: RecordingSkeptic,
+    *,
+    first_build: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A bar tick, then a tick sixty seconds later on which no bar closes.
+
+    `first_build=False` reuses a store `build_trained` already seeded, for a test that needs
+    two orchestrators over one bar: the equity snapshot it writes is unique per cycle.
+    """
+    chain = [*skeptic_chain()[:-1], skeptic]
+    if first_build:
+        orchestrator = build_trained(config, clock, clients, bars, root, opportunity=chain)
+    else:
+        orchestrator = build(
+            config,
+            clock,
+            clients,
+            bars,
+            opportunity=chain,
+            stream_pairs=(PAIR, *MACRO_PAIRS),
+            quotes=True,
+        )
+        activate(clients.store, at=2)
+    bar_tick = orchestrator.tick()
+    clock.advance(TICK)
+    quiet_tick = orchestrator.tick()
+    return bar_tick, quiet_tick
+
+
+def the_prediction(state: dict[str, Any]) -> dict[str, Any]:
+    """Engine 8's payload, asserted to be a prediction rather than a refusal or an absence."""
+    assert "prediction" in state, (
+        f"the chain stopped before engine 8: {state.get('trading_blocked_by')} "
+        f"{state.get('block_reason')}"
+    )
+    prediction: dict[str, Any] = state["prediction"]
+    assert prediction.get("reason_code") is None, (prediction.get("reason_code"), prediction)
+    return prediction
+
+
+def assert_quiet_tick(quiet_tick: dict[str, Any], skeptic: RecordingSkeptic) -> None:
+    """Configuration 3: engine 5 passes, and engine 15 neither runs nor leaves a key.
+
+    The empty feature payload is also what an engine 5 that raised would leave, so the
+    absence of a blocker is asserted beside it; and engine 15's own record says it ran on
+    exactly one of the two ticks.
+    """
+    assert quiet_tick["market_sensor"]["bar_closed"] is False
+    assert quiet_tick["feature"] == {}
+    assert "trading_blocked_by" not in quiet_tick, "engine 5 did not pass, it failed"
+    assert "skeptic" not in quiet_tick, "engine 15 ran on a tick where no bar closed"
+    assert len(skeptic.results) == 1, "engine 15 ran on the quiet tick"
+
+
+def recomputed_p_wrong(state: dict[str, Any], root: Path, run_id: str) -> float:
+    """`p_wrong` from the artefact itself, never from what engine 15 published.
+
+    The manifest's recorded input order, the run's own scaler, `skeptic.txt`, and the values
+    engines 5, 6 and 8 put into this tick's `state`. A threshold derived from the engine's
+    own number would move with any mutation of that number — reading P(right), say — and
+    the veto and pass tests would both stay green around it.
+    """
+    import json
+
+    import lightgbm as lgb
+    import numpy as np
+
+    from acsoe.modelling.artefacts import load_run
+
+    directory = root / run_id
+    manifest = json.loads((directory / "manifest.json").read_bytes().decode("utf-8"))
+    feature_names = list(manifest["feature_names"])
+    extras = ["p_target", "p_stop", "p_timeout", "expected_move_pct"]
+    assert list(manifest["extras"]["skeptic"]["input_names"]) == [*feature_names, *extras]
+    assert any(name.startswith("macro_") for name in feature_names), (
+        "the manifest names no macro column, so engine 6's half of the vector is untested"
+    )
+
+    prediction = state["prediction"]
+    row = state["feature"]["pairs"][prediction["pair"]]
+    macro = state["macro_context"]["features"]
+    raw = [float(macro[name]) if name in macro else float(row[name]) for name in feature_names]
+    loaded = load_run(directory, expected_features=tuple(feature_names))
+    vector = [*loaded.scaler.transform([raw])[0], *(float(prediction[name]) for name in extras)]
+    booster = lgb.Booster(model_file=str(directory / "skeptic.txt"))
+    scored = booster.predict(np.asarray([vector], dtype=np.float64))
+    return float(np.asarray(scored, dtype=np.float64).reshape(-1)[0])
+
+
+# --- (a) the full registry chain ------------------------------------------- #
+
+
+def test_in_the_full_registry_chain_engine_15_is_never_reached_this_phase(
+    paper_config: MappingConfig,
+    fixed_clock: Any,
+    fake_clients_with_store: Any,
+    constructed_rows: list[dict[str, Any]],
+    trained_skeptic: tuple[Path, str],
+) -> None:
+    """Engines 5, 6, 7, 12, 13, 8, 10, 11, 15 — the chain spec 77's registration will run.
+
+    **This is why engine 15 is rehearsed below without 10 and 11.** Engine 10 `cost` blocks
+    for want of engine 9 `order_book`, which is Phase 6: invariant 2 gives slippage no
+    fallback. So in registry order the chain stops at `cost` on every bar tick and engine 15
+    is never reached, however well it is configured. Here it is configured fully — a trained
+    skeptic and a threshold of 1.0, the test's number — on a window where engine 8 calls a
+    BUY, so the absence of `skeptic` cannot be blamed on anything but the cost gate.
+
+    When engine 9 lands this goes red, and the rehearsal should then run the full chain.
+    """
+    root, run_id = trained_skeptic
+    bars = window(constructed_rows, BUY_WINDOW_END)
+    config = skeptic_config(
+        paper_config,
+        root,
+        run_id,
+        **{"models.skeptic_run_id": run_id, "skeptic.veto_threshold": 1.0},
+    )
+    skeptic = RecordingSkeptic()
+    orchestrator = build_trained(
+        config,
+        at_bar_tick(fixed_clock, bars),
+        fake_clients_with_store,
+        bars,
+        root,
+        opportunity=[*judgement_chain(), skeptic],
+    )
+
+    bar_tick = orchestrator.tick()
+    fixed_clock.advance(TICK)
+    quiet_tick = orchestrator.tick()
+
+    assert the_prediction(bar_tick)["is_buy"] is True, "the BUY window no longer calls a BUY"
+    assert bar_tick["trading_blocked_by"] == "cost", bar_tick.get("block_reason")
+    for engine in ("risk", "skeptic"):
+        assert engine not in bar_tick, f"{engine} ran after the cost gate blocked"
+    assert skeptic.results == [], "engine 15 was called in a chain the cost gate stopped"
+    assert quiet_tick["feature"] == {}
+    assert "trading_blocked_by" not in quiet_tick
+    assert "skeptic" not in quiet_tick
+
+
+# --- (b1) no threshold, or no skeptic run ----------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("configured", "named_key"),
+    [
+        pytest.param({"models.skeptic_run_id": True}, "skeptic.veto_threshold", id="no-threshold"),
+        pytest.param({"skeptic.veto_threshold": 1.0}, "models.skeptic_run_id", id="no-run-id"),
+        pytest.param({}, "skeptic.veto_threshold", id="neither"),
+    ],
+)
+def test_a_buy_call_with_the_skeptic_unconfigured_blocks_with_skeptic_unavailable(
+    paper_config: MappingConfig,
+    fixed_clock: Any,
+    fake_clients_with_store: Any,
+    constructed_rows: list[dict[str, Any]],
+    trained_skeptic: tuple[Path, str],
+    configured: dict[str, Any],
+    named_key: str,
+) -> None:
+    """Chain 5, 6, 7, 12, 13, 8, 15; engine 8 calls a BUY; a skeptic key is missing.
+
+    Absent means **absent from the committed config**, which is where both keys are today,
+    and the test asserts that rather than assuming it. `True` in the table stands for the
+    trained run id, and a threshold of 1.0 where one is supplied is the test's number. The
+    block must name the key that is missing — with both missing the threshold is checked
+    first, so that is the one named.
+    """
+    for key in ("skeptic.veto_threshold", "models.skeptic_run_id"):
+        assert paper_config.get(key) is None, f"{key} is now committed; this test is void"
+    root, run_id = trained_skeptic
+    overrides = {key: (run_id if value is True else value) for key, value in configured.items()}
+    bars = window(constructed_rows, BUY_WINDOW_END)
+    skeptic = RecordingSkeptic()
+
+    bar_tick, quiet_tick = run_two_ticks(
+        skeptic_config(paper_config, root, run_id, **overrides),
+        at_bar_tick(fixed_clock, bars),
+        fake_clients_with_store,
+        bars,
+        root,
+        skeptic,
+    )
+
+    assert the_prediction(bar_tick)["is_buy"] is True, (
+        "the fixture could not produce a BUY call, so the unavailable block is not reached"
+    )
+    assert bar_tick["trading_blocked_by"] == "skeptic", bar_tick.get("block_reason")
+    published = bar_tick["skeptic"]
+    assert published["reason_code"] == SKEPTIC_UNAVAILABLE, published
+    assert published["vetoed"] is False, "an unavailable skeptic recorded a veto it never made"
+    assert published["p_wrong"] is None
+    assert named_key in str(bar_tick["block_reason"]), bar_tick["block_reason"]
+    assert [result.status for result in skeptic.results] == [EngineStatus.BLOCK]
+    assert_quiet_tick(quiet_tick, skeptic)
+
+
+def test_a_call_that_is_not_a_buy_is_ok_with_the_skeptic_unconfigured(
+    paper_config: MappingConfig,
+    fixed_clock: Any,
+    fake_clients_with_store: Any,
+    constructed_rows: list[dict[str, Any]],
+    trained_skeptic: tuple[Path, str],
+) -> None:
+    """The same chain with neither skeptic key, on a window where engine 8 calls no BUY.
+
+    `OK`, `vetoed: false`, the not-a-BUY sentence and **no blocker**: a `BLOCK` here would
+    record a veto of a call nobody made, and turning a non-BUY into no trade is Phase 6's
+    decision engine. It is `OK` *before* the missing threshold is looked at, which is why an
+    unconfigured skeptic does not block this tick.
+    """
+    root, run_id = trained_skeptic
+    bars = window(constructed_rows, NOT_A_BUY_WINDOW_END)
+    skeptic = RecordingSkeptic()
+
+    bar_tick, quiet_tick = run_two_ticks(
+        skeptic_config(paper_config, root, run_id),
+        at_bar_tick(fixed_clock, bars),
+        fake_clients_with_store,
+        bars,
+        root,
+        skeptic,
+    )
+
+    assert the_prediction(bar_tick)["is_buy"] is False, (
+        "the fixture could not produce a non-BUY call, so the not-a-BUY path is not reached"
+    )
+    assert "trading_blocked_by" not in bar_tick, bar_tick.get("block_reason")
+    published = bar_tick["skeptic"]
+    assert published["pair"] == bar_tick["prediction"]["pair"]
+    assert published["vetoed"] is False
+    assert published["reason"] == NOT_A_BUY_CALL
+    assert published["reason_code"] is None
+    assert [result.status for result in skeptic.results] == [EngineStatus.OK]
+    assert_quiet_tick(quiet_tick, skeptic)
+
+
+# --- (b2) a trained skeptic, either side of its threshold -------------------- #
+
+
+def judged_either_side(
+    paper_config: MappingConfig,
+    clock: Any,
+    clients: Any,
+    rows: list[dict[str, Any]],
+    trained_skeptic: tuple[Path, str],
+    *,
+    offset: float,
+) -> tuple[dict[str, Any], dict[str, Any], float, float, RecordingSkeptic]:
+    """Measure `p_wrong` on the BUY bar, then judge that bar at `p_wrong + offset`.
+
+    The first orchestrator runs with no threshold, which blocks at engine 15 and leaves the
+    tick's feature row and prediction in `state`; `p_wrong` is recomputed from those and the
+    artefact. The second runs the same bar with the threshold set from it. **The threshold is
+    the test's number**, a millionth either side of a measured value, clamped into (0, 1).
+    """
+    root, run_id = trained_skeptic
+    bars = window(rows, BUY_WINDOW_END)
+    measuring = RecordingSkeptic()
+    measured_tick, _ = run_two_ticks(
+        skeptic_config(paper_config, root, run_id, **{"models.skeptic_run_id": run_id}),
+        at_bar_tick(clock, bars),
+        clients,
+        bars,
+        root,
+        measuring,
+    )
+    assert the_prediction(measured_tick)["is_buy"] is True, "the BUY window called no BUY"
+    expected = recomputed_p_wrong(measured_tick, root, run_id)
+    threshold = min(max(expected + offset, 1e-12), 1.0 - 1e-12)
+
+    judging = RecordingSkeptic()
+    bar_tick, quiet_tick = run_two_ticks(
+        skeptic_config(
+            paper_config,
+            root,
+            run_id,
+            **{"models.skeptic_run_id": run_id, "skeptic.veto_threshold": threshold},
+        ),
+        at_bar_tick(clock, bars),
+        clients,
+        bars,
+        root,
+        judging,
+        first_build=False,
+    )
+    assert bar_tick["prediction"] == measured_tick["prediction"], "the two runs saw different bars"
+    return bar_tick, quiet_tick, expected, threshold, judging
+
+
+def test_a_trained_skeptic_vetoes_a_buy_call_above_the_threshold(
+    paper_config: MappingConfig,
+    fixed_clock: Any,
+    fake_clients_with_store: Any,
+    constructed_rows: list[dict[str, Any]],
+    trained_skeptic: tuple[Path, str],
+) -> None:
+    """Threshold a millionth below the measured `p_wrong`: `skeptic_veto`, and it blocks.
+
+    `p_wrong` and `threshold` are published with the veto, because a veto with no numbers is
+    one nobody can check. `p_wrong` is compared against the recomputed value, so an engine
+    reading the model's column as P(right) fails here even where it would still veto.
+    """
+    bar_tick, quiet_tick, expected, threshold, skeptic = judged_either_side(
+        paper_config,
+        fixed_clock,
+        fake_clients_with_store,
+        constructed_rows,
+        trained_skeptic,
+        offset=-1e-6,
+    )
+
+    assert bar_tick["trading_blocked_by"] == "skeptic", bar_tick.get("block_reason")
+    published = bar_tick["skeptic"]
+    assert published["reason_code"] == SKEPTIC_VETO, published
+    assert published["vetoed"] is True
+    assert published["model_run_id"] == trained_skeptic[1]
+    assert published["p_wrong"] == pytest.approx(expected, abs=1e-12)
+    assert published["threshold"] == threshold
+    assert published["p_wrong"] > published["threshold"]
+    assert [result.status for result in skeptic.results] == [EngineStatus.BLOCK]
+    assert_quiet_tick(quiet_tick, skeptic)
+
+
+def test_a_trained_skeptic_passes_the_same_call_below_the_threshold(
+    paper_config: MappingConfig,
+    fixed_clock: Any,
+    fake_clients_with_store: Any,
+    constructed_rows: list[dict[str, Any]],
+    trained_skeptic: tuple[Path, str],
+) -> None:
+    """Threshold a millionth above the same `p_wrong`: `OK`, not vetoed, and no blocker.
+
+    The pass half, two millionths of threshold apart from the veto above. Without it the
+    veto test is satisfied by a gate that vetoes every BUY.
+    """
+    bar_tick, quiet_tick, expected, threshold, skeptic = judged_either_side(
+        paper_config,
+        fixed_clock,
+        fake_clients_with_store,
+        constructed_rows,
+        trained_skeptic,
+        offset=1e-6,
+    )
+
+    assert "trading_blocked_by" not in bar_tick, bar_tick.get("block_reason")
+    published = bar_tick["skeptic"]
+    assert published["reason_code"] is None, published
+    assert published["vetoed"] is False
+    assert published["model_run_id"] == trained_skeptic[1]
+    assert published["p_wrong"] == pytest.approx(expected, abs=1e-12)
+    assert published["threshold"] == threshold
+    assert published["p_wrong"] <= published["threshold"]
+    assert [result.status for result in skeptic.results] == [EngineStatus.OK]
+    assert_quiet_tick(quiet_tick, skeptic)
+
+
+# --- (b4) the declaration ---------------------------------------------------- #
+
+
+def test_engine_15_declares_itself_as_the_registry_has_it() -> None:
+    """The registry table in `engine-contracts.md`: engine 15 `skeptic`, a gate."""
+    engine = SkepticEngine()
+
+    assert (engine.name, engine.number, engine.is_gate) == ("skeptic", 15, True)

@@ -367,7 +367,7 @@ Settled with evidence. Do not relitigate. Changing one requires the operator, no
 - Post-only limit entry, cancel if unfilled, never chase.
 - Tradable universe computed per tick from `ordermin`, `costmin`, tick size, live spread and balance. No account-size thresholds.
 - All Kraken quote currencies scanned; crypto-quoted pairs disabled by default.
-- DI fitted on the predictor's training set, MinMax-scaled, rolling percentile threshold, 30-day per-pair window.
+- DI fitted on the predictor's training set, MinMax-scaled, rolling percentile threshold, 30-day per-pair window; its leave-one-out excludes every row within 48 bars across all pairs (operator, 2026-09-15).
 - DI threshold crossings also feed the regime engine.
 - Alpha attribution uses the full equity curve including cash periods, not trade windows.
 - Execution offset bandit pooled by spread tier, not per pair.
@@ -388,7 +388,7 @@ Settled with evidence. Do not relitigate. Changing one requires the operator, no
 - **The evaluation number is the Brier of P(target) against the fold's base-rate Brier**, with log loss beside it and the BUY-call target rate against the break-even rates in invariant 5.
   Accuracy is never computed: the base rate is 23.89% and a model that always predicts `stop` is right 51% of the time. Retired as a term in `ai-workflow-rules.md`.
 - **Rows are weighted by average uniqueness**, and the effective sample size is reported **per fold on the same line as that fold's row count** and in aggregate. Operator addition: a fold with 8,000 rows and an effective size of 300 is a fold whose numbers mean almost nothing, and an aggregate hides exactly that fold.
-- **The DI reference set** is the predictor's training rows for the fold, per pair the last `prediction.di_window_days`, mean k-nearest distance, thresholded at `prediction.di_percentile` of the leave-one-out distribution, refitted each weekly retrain.
+- **The DI reference set** is the predictor's training rows for the fold, per pair the last `prediction.di_window_days`, mean k-nearest distance, thresholded at `prediction.di_percentile` of the leave-one-out distribution, refitted each weekly retrain. **Amended by the operator 2026-09-15: the leave-one-out excludes every reference row within 48 bars (`backtest.embargo_bars`) of the row being scored, across all pairs, not the row alone** — 78 of the 117 DI columns are shared by every pair on a bar, so excluding the row alone left near-identical same-moment neighbours and the threshold measured time proximity rather than distributional distance. Spec 68, amendment.
 - **Engine 7's ranking is a config-named feature**, `scout.rank_feature` with `scout.rank_descending`; alphabetical while absent, and the engine says so. The feature is ruled after spec 75's study reports.
 - **`lightgbm`, `scikit-learn` and `shap` are base dependencies** from Phase 5; `hmmlearn` and `statsmodels` stay in the `research` extra.
 
@@ -443,6 +443,48 @@ the reason in the YAML comment and in `DatasetConfig`.
 ## Open Questions
 
 - **OPEN for the operator, Phase 5, deliberately: three values are absent until the walk-forward reports.** `prediction.di_percentile`, `anomaly.threshold_percentile` and `skeptic.veto_threshold`. The operator ruled 2026-09-12 that the lead's recommendations (0.95, 0.99, 0.5) are guesses until there is a distribution to place them on. Engines 8, 13 and 15 fail closed while the keys are absent and the Phase 5 criteria that judge them report PENDING naming the key. The fourth, `scout.rank_feature`, waits on spec 75's ranking study.
+
+  **RULED 2026-09-14 by the operator: `skeptic.veto_threshold: 0.50`, chosen from the veto sweep
+  and provisional until the chain runs end to end.** Evidence: at 0.50 the skeptic's survivors hit
+  the target at 0.531 against 0.473 for the same number of the predictor's most confident calls
+  (top N by `p_target`, per fold), the two sets share only 44% of calls, and the survivors beat the
+  vetoed calls in every test year 2017 to 2024. Stricter thresholds give bigger margins on too few
+  effective outcomes; looser ones decay toward the predictor's own confidence (+0.005 at 0.70, 68%
+  overlap). `docs/dataset/skeptic-veto-sweep-2026-09-14.md`, `skeptic-vs-ptarget-2026-09-14.md`.
+  Lands in `config/default.yaml` with the other ruled values under spec 77, not before.
+
+  **REPORTED 2026-09-15, awaiting the operator: the DI and anomaly distributions and the ranking
+  study.** `docs/dataset/di-anomaly-distributions-2026-09-14.md` (all 405 folds fitted from their
+  identity-verified training rows, nothing retrained) and `docs/dataset/ranking-study-2026-09-14.md`.
+  Three findings the ruling cannot avoid: **(1)** the anomaly gate's out-of-sample block rate
+  matches its nominal percentile (5.55% at 0.95, 1.24% at 0.99) and what it blocks is the volatile
+  tail; **(2)** the DI as ruled (operator ruling 6 of 2026-09-12, leave-one-out) refuses 94.7% of
+  complete out-of-sample rows at 0.95, 74.9% at 0.99 and 31.1% at 0.999, refusing no worse rows,
+  because 78 of its 117 columns are macro features shared by every pair on a bar, so its nearest
+  neighbours are other pairs at the same moment; excluding every pair's rows within 48 bars from
+  the leave-one-out moves the reference distribution onto the test distribution on every fold
+  tested. That is a question about ruling 6, not about a percentile. **(3)** 50% of test rows
+  carry an incomplete vector (the 48- and 96-bar lookbacks on pairs that do not trade every bar),
+  refused by engines 8 and 13 at any percentile.
+
+  **RULED 2026-09-15 by the operator, three rulings on that report:**
+  1. **The DI's leave-one-out excludes every reference row within 48 bars of the row being
+     scored, across all pairs** — ruling 6 of 2026-09-12 amended (Locked Decisions below, spec 68
+     amendment). The exclusion rather than dropping the macro columns, which would blind the DI
+     to the conditions it exists to detect, and rather than rebuilding the reference set, which
+     is a larger change with no evidence behind it. A DI fitted without the exclusion is a
+     defect, and the criterion `di_leave_one_out_excludes_48_bars` proves it is applied.
+     **`prediction.di_percentile` stays absent** and engine 8 stays fail-closed until the
+     operator rules on the refit's refusal rates at 0.95, 0.99 and 0.999
+     (`docs/dataset/di-exclusion-refit-2026-09-15.py`, running).
+  2. **`anomaly.threshold_percentile: 0.99`, provisional.** 1.24% blocked against 1% nominal,
+     stable across years (0.9% to 1.8%), and what it blocks is the volatile tail (stop rate 0.67
+     against 0.50). 0.95 was rejected: 5.55% blocked, including BUY calls with better
+     pre-friction returns than the ones kept, which is too much for a data-quality gate. **The
+     spec 70 ten-sigma question stays open** (entry below): a ten-sigma volume spike scores at
+     the 0.904 quantile of training scores and 0.99 does not block it.
+  3. **`scout.rank_feature`: none. Engine 7 stays alphabetical.** Recorded as an open question,
+     not a finding: next entry.
 - **FOUND 2026-09-13, ruled by the lead and flagged to the operator: `data_guard`'s
   missing-candle condition means "no subscribed pair traded in a bar", not "this pair has a
   hole".** Engine 3 computes `missing_bars` over the union of every pair's candles, so past a
@@ -494,7 +536,7 @@ the reason in the YAML comment and in `DatasetConfig`.
   each manifest, with the digest stating it covers 405 of 457 folds and why. The 52 missing
   folds are the 2025 test weeks. Account: `docs/build-log/phase-5/lead.md`.
 - **PHASE 7 PREREQUISITES, recorded by operator ruling 2026-09-14. Phase 7's full walk-forward
-  and its replays pay the same cost again unless all four are fixed first.** Found by the
+  and its replays pay the same cost again unless all six are fixed first (the fifth added by the lead and the sixth by operator ruling, both 2026-09-15).** Found by the
   Phase 5 full run (`docs/build-log/phase-5/lead.md`, the entries of 2026-09-13 and 2026-09-14):
   1. **Cap the skeptic's training set.** Fold k's skeptic trains on every eligible BUY call from
      every earlier fold, uncapped; by fold 404 that was 8.9M rows, the per-fold memory peak grew
@@ -510,6 +552,18 @@ the reason in the YAML comment and in `DatasetConfig`.
   4. **A real memory test.** `test_the_builder_never_holds_two_archive_frames_at_once` counts
      frames and deliberately not bytes, so none of the above was visible to any test. A bounded
      peak-memory check over a run large enough to show growth per fold.
+  5. **The DI's own fitting and scoring path does not finish at this size.** Found 2026-09-15 by
+     the lead, fitting the DI from the saved rows: `di.score` costs 136 ms per test row (fold 404's
+     93,166 rows are 3.5 hours) and the leave-one-out over a 200,000-row reference about 20 minutes
+     of one core; the full run would have taken weeks had `prediction.di_percentile` been set.
+     Batch the test-row score and parallelise or bound the leave-one-out, holding the result to
+     `modelling.di`. Account: `docs/build-log/phase-5/lead.md`, 2026-09-15.
+  6. **Half of every test week is an incomplete feature vector, refused by engines 8 and 13
+     whatever any threshold is.** Recorded by operator ruling 2026-09-15. 8,025,361 of 15,978,803
+     out-of-sample rows (50.2%) carry an unfilled 48- or 96-bar lookback feature, from pairs that
+     do not trade every bar (26% of rows in 2017, 61% in 2023). That bounds everything
+     downstream of engine 8 and it is not a threshold question.
+     `docs/dataset/di-anomaly-distributions-2026-09-14.md`.
   Also measured, for whoever plans Phase 7: 457 weekly folds, pairs arriving over time (14 in
   2017, 115 first appearing in 2022), folds ranging from ~25 s (2017) to ~10 min (late 2024)
   on this machine; the 22.2-hour projection assumed 234 pairs in every fold and was wrong.
@@ -555,7 +609,19 @@ the reason in the YAML comment and in `DatasetConfig`.
 - **RESOLVED 2026-09-09, before Phase 2 engine work began — the orchestrator reads no commands, so the kill switch does not work.** Fixed by the lead as the first task of the phase, composed from the four methods `StoreClient` already exposes, entirely inside `core/`, renaming nothing in B's directory; the startup re-application of claimed-but-unconsumed rows is wired and had never existed. A third break in the same path turned up while fixing it: `_clear_close_intent_if_finished` called a `mark_close_all_consumed` the store has never had, so even a *successful* liquidation left its row unconsumed for the startup replay to re-run on the next boot against an already-flat account. `commands_round_trip` is registered for phase 2 and PASSes. The original finding, kept because the lesson is the transferable part: Found 2026-09-09 by C while building spec 24, confirmed and widened by the lead. `core/orchestrator.py:173` looks up `store.claim_pending_commands` via `getattr`; **`StoreClient` has no such method.** It exposes `pending_commands()`, `claimed_unconsumed_commands()`, `claim_command(command_id, *, claimed_at, run_id)` and `mark_command_consumed(command_id, *, consumed_at)`. So the lookup returns `None`, the reader logs `commands_skipped` at debug level and returns, and **a daemon wired to the real store would silently ignore every Activate, Freeze and Close-all ever written.** Two further faults in the same method: `_mark_consumed` calls `mark_command_consumed(command, now=...)` against a signature of `(command_id, *, consumed_at)`, which would raise if it were ever reached; and **the startup re-application of claimed-but-unconsumed rows is not wired at all** — nothing in `src/` calls `claimed_unconsumed_commands()`, though `architecture-context.md` requires it and names the exact failure it prevents, a daemon killed mid-liquidation coming back with `close_all` marked done and positions still open. The only implementations of the orchestrator's shape are a test double in `tests/core/test_orchestrator.py` and C's documented adapter in `tests/console/test_commands.py`, which is why every gate to date has passed over it. **This is Phase 0 work in `core/orchestrator.py`, which is lead-only, so it is the lead's to fix and no teammate's.** Harmless in Phase 1 — no daemon runs and the console only writes rows — and it bites the moment one does, which is Phase 2. The cheapest correct fix stays entirely inside `core/`: compose the reader from the four methods the store already has, rather than renaming anything in B's directory. **Fix before any Phase 2 work begins.**
 - **RESOLVED 2026-09-09 — `toolchain_green` is now registered for every phase**, via `register_every_phase`, exactly as `docs_vocabulary` is. `TOOLCHAIN` stays scoped to `src/`: the operator deliberately did not widen it to `tests/` or `scripts/`, so the two Phase 0 findings in `verify.py` and the three in `tests/` remain out of scope for the gate. One consequence to expect: every phase's gate now runs `pytest`, so the intermittent seed-path crash below can now surface as a FAIL on any phase rather than only Phase 0. The account of the hole this closed:
 - *Was open, for the operator at the Phase 1 boundary — `toolchain_green` was registered for Phase 0 only, so from Phase 1 onward the gate never ran the tests.* Found 2026-09-09: `scripts/verify.py --phase 1` reported `7 PASS, 0 FAIL, 2 PENDING` while `pytest` was reporting `2 failed, 639 passed`. Nothing in the report was wrong — no Phase 1 criterion makes a claim about the suite — but "a phase is done when `verify.py --phase N` passes every criterion" is the project's definition of done, and for every phase after 0 that definition currently cannot see a red suite. Run-protocol step 4 covers the gap by making each agent run all four commands themselves, which is why this was caught, but it depends on a person following a procedure rather than on the gate. **The obvious fix is to register `toolchain_green` for every phase, exactly as `docs_vocabulary` already is.** It is a change to what every phase asserts, so it belongs at a phase boundary and to the operator, not mid-phase and not to an agent — the same reasoning that deferred widening `TOOLCHAIN` beyond `src/` out of Phase 0. Note the two interact: registering it for every phase also spreads the intermittent seed-path crash across every phase's gate, so the crash question above should be settled first or at the same time.
-- **OPEN, and deliberately so: engine 7 `scout` has no ranking score, and Phase 3 does not give it one.** Operator ruling 2026-09-10. Invariant 4 says the candidate ranking is "a deterministic score over features"; features are engine 5, which is Phase 5. The operator's words, which belong in the record verbatim: *a deterministic score over features is meaningless before features exist, and a placeholder score would be a check whose output resembles the claim while the claim is untrue — this phase has produced enough of those. The universe filter is the contribution; ranking one candidate out of a filtered set is a Phase 5 decision made with real features in front of us.* So Phase 3 orders the universe **alphabetically**, which is equal treatment of every pair when nothing yet distinguishes them, and spec 44 isolates the ordering behind one named function so Phase 5 is a single edit. **An agent arriving in Phase 5 must not read alphabetical ordering as a choice anyone defended.** It is a recorded absence.
+- **OPEN, for Phase 7 by operator ruling 2026-09-15: whether any ranking feature pays for a
+  trade.** Spec 75's study over the full run (`docs/dataset/ranking-study-2026-09-14.md`) reports
+  the **mean realised barrier return per bar** of the pair each feature would rank first, and the
+  short-horizon reversal features (`bar_body_pct`, `log_return_4`, `log_return_16` ascending) read
+  positive in every test year. **That number is not comparable with friction**: friction is paid
+  per round trip over a 2 to 12 hour hold spanning many bars, and a per-bar mean over candidate
+  bars says nothing about returns per trade over the actual holding period. The comparison is to
+  be settled in Phase 7, when the chain runs end to end and returns are measured over the holding
+  period. **The thin-pair caveat stays attached**: `bar_body_pct` ascending's return grows as its
+  picks move into intermittently traded pairs (37-44% of its picks from 2022, against 17-25% for
+  the control), which is the shape a bid-ask bounce leaves, and the archive has no spread to rule
+  it out. Until then `scout.rank_feature` is absent and engine 7 ranks alphabetically.
+- **~~OPEN, and deliberately so: engine 7 `scout` has no ranking score, and Phase 3 does not give it one.~~ Superseded by the entry above (spec 76 built the named-feature seam; the operator ruled no feature 2026-09-15).** Operator ruling 2026-09-10. Invariant 4 says the candidate ranking is "a deterministic score over features"; features are engine 5, which is Phase 5. The operator's words, which belong in the record verbatim: *a deterministic score over features is meaningless before features exist, and a placeholder score would be a check whose output resembles the claim while the claim is untrue — this phase has produced enough of those. The universe filter is the contribution; ranking one candidate out of a filtered set is a Phase 5 decision made with real features in front of us.* So Phase 3 orders the universe **alphabetically**, which is equal treatment of every pair when nothing yet distinguishes them, and spec 44 isolates the ordering behind one named function so Phase 5 is a single edit. **An agent arriving in Phase 5 must not read alphabetical ordering as a choice anyone defended.** It is a recorded absence.
 - None otherwise blocking. The nine operator-required values are set; see below.
 - **Resolved 2026-09-09 — the console screens with no design.** History, the research views, the leaderboard and the SHAP view are named in the Phase 1 criteria and designed in no context file. Split in two at planning: history and the leaderboard have no design but do have data in the Phase 0 seed, and `ui-context.md` already grants an undesigned screen the cycle feed's table treatment, so specs 21 and 22 build them under it. The SHAP view has neither design nor data — `rejections.shap_ref` points at a Parquet artefact the training pipeline does not write until Phase 5 — so spec 22 renders an honest empty state and bans a placeholder chart. Put to the operator at approval rather than decided silently; the operator confirmed the empty state stands.
 
@@ -845,6 +911,12 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
 
 ## Session Notes
 
+- 2026-09-15 — lead (Opus 5) with C-3, C-4, B-3. Operator rulings recorded; DI 48-bar exclusion
+  built with criterion `di_leave_one_out_excludes_48_bars`; engine 15 reviewed (two fail-open
+  defects fixed) and rehearsed; engines 5, 6, 12, 13, 8, 15 registered; the exclusion refit over
+  405 folds refuses 6.79% / 3.31% / 2.06% at 0.95 / 0.99 / 0.999. **Not done**: the two ruled
+  config values (six tests to repoint), C-4's sweep 2, gates for phases 0 to 4. Exact state in
+  Handoff 4 at the top of `feature-specs/PHASE-5-TASKS.md`.
 - 2026-09-13, second session — Phase 5 resumed with the same team and wound down by the
   operator's command. Done and committed: 14 of 21 specs (59 to 69, 76, 78, 79); gate 10 PASS,
   0 FAIL, 3 PENDING; engines 5, 6, 7, 12 rehearsed together. Two items tracked to closure at

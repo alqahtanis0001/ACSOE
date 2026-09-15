@@ -1,0 +1,593 @@
+{
+  "by_test_year_at_0.5_0.6_0.7": {
+    "2017": [
+      {
+        "buy_calls": 130265,
+        "survivor_effective_sample_size": 3683.5129361062077,
+        "survivor_share": 0.12785475760948836,
+        "survivor_target_rate": 0.4836985890123086,
+        "survivor_target_rate_se_by_ess": 0.008233945090929683,
+        "survivors": 16655,
+        "threshold": 0.5,
+        "vetoed": 113610,
+        "vetoed_effective_sample_size": 12082.981610724724,
+        "vetoed_target_rate": 0.2675116627057477
+      },
+      {
+        "buy_calls": 130265,
+        "survivor_effective_sample_size": 6386.557627997543,
+        "survivor_share": 0.2595555214370706,
+        "survivor_target_rate": 0.4311318801573452,
+        "survivor_target_rate_se_by_ess": 0.006196942256235049,
+        "survivors": 33811,
+        "threshold": 0.6,
+        "vetoed": 96454,
+        "vetoed_effective_sample_size": 9379.936918833388,
+        "vetoed_target_rate": 0.24748584817633276
+      },
+      {
+        "buy_calls": 130265,
+        "survivor_effective_sample_size": 10268.201500316882,
+        "survivor_share": 0.4883046098338003,
+        "survivor_target_rate": 0.3845210583408008,
+        "survivor_target_rate_se_by_ess": 0.004800864763042683,
+        "survivors": 63609,
+        "threshold": 0.7,
+        "vetoed": 66656,
+        "vetoed_effective_sample_size": 5498.293046514051,
+        "vetoed_target_rate": 0.2098685789726356
+      }
+    ],
+    "2018": [
+      {
+        "buy_calls": 167386,
+        "survivor_effective_sample_size": 1221.4850588212012,
+        "survivor_share": 0.03211738138195548,
+        "survivor_target_rate": 0.43247767857142855,
+        "survivor_target_rate_se_by_ess": 0.014175201557703831,
+        "survivors": 5376,
+        "threshold": 0.5,
+        "vetoed": 162010,
+        "vetoed_effective_sample_size": 12608.692220732179,
+        "vetoed_target_rate": 0.22102339361767792
+      },
+      {
+        "buy_calls": 167386,
+        "survivor_effective_sample_size": 2899.801862395643,
+        "survivor_share": 0.0981264860860526,
+        "survivor_target_rate": 0.39859969558599695,
+        "survivor_target_rate_se_by_ess": 0.009092140556547192,
+        "survivors": 16425,
+        "threshold": 0.6,
+        "vetoed": 150961,
+        "vetoed_effective_sample_size": 10930.375417157738,
+        "vetoed_target_rate": 0.20923284821907645
+      },
+      {
+        "buy_calls": 167386,
+        "survivor_effective_sample_size": 6706.683996806471,
+        "survivor_share": 0.300718100677476,
+        "survivor_target_rate": 0.3515575333757152,
+        "survivor_target_rate_se_by_ess": 0.005830153737274426,
+        "survivors": 50336,
+        "threshold": 0.7,
+        "vetoed": 117050,
+        "vetoed_effective_sample_size": 7123.493282746907,
+        "vetoed_target_rate": 0.17460059803502775
+      }
+    ],
+    "2019": [
+      {
+        "buy_calls": 257407,
+        "survivor_effective_sample_size": 620.7463065086292,
+        "survivor_share": 0.012179155967009444,
+        "survivor_target_rate": 0.44688995215311006,
+        "survivor_target_rate_se_by_ess": 0.01995487432562431,
+        "survivors": 3135,
+        "threshold": 0.5,
+        "vetoed": 254272,
+        "vetoed_effective_sample_size": 15810.892341458602,
+        "vetoed_target_rate": 0.19391045809212182
+      },
+      {
+        "buy_calls": 257407,
+        "survivor_effective_sample_size": 1799.8274894861825,
+        "survivor_share": 0.046688706989320414,
+        "survivor_target_rate": 0.3939091362955567,
+        "survivor_target_rate_se_by_ess": 0.011517320577895625,
+        "survivors": 12018,
+        "threshold": 0.6,
+        "vetoed": 245389,
+        "vetoed_effective_sample_size": 14631.811158481049,
+        "vetoed_target_rate": 0.18734743611164315
+      },
+      {
+        "buy_calls": 257407,
+        "survivor_effective_sample_size": 5124.835700845932,
+        "survivor_share": 0.1791171180270933,
+        "survivor_target_rate": 0.3281785450917451,
+        "survivor_target_rate_se_by_ess": 0.0065590667986709554,
+        "survivors": 46106,
+        "threshold": 0.7,
+        "vetoed": 211301,
+        "vetoed_effective_sample_size": 11306.8029471213,
+        "vetoed_target_rate": 0.1683664535425767
+      }
+    ],
+    "2020": [
+      {
+        "buy_calls": 651277,
+        "survivor_effective_sample_size": 1936.6422752644742,
+        "survivor_share": 0.010315119373169942,
+        "survivor_target_rate": 0.5081869604048824,
+        "survivor_target_rate_se_by_ess": 0.011360228693065168,
+        "survivors": 6718,
+        "threshold": 0.5,
+        "vetoed": 644559,
+        "vetoed_effective_sample_size": 50163.802321652496,
+        "vetoed_target_rate": 0.20326766052448264
+      },
+      {
+        "buy_calls": 651277,
+        "survivor_effective_sample_size": 6398.702402731762,
+        "survivor_share": 0.04820529513555676,
+        "survivor_target_rate": 0.41755056537665236,
+        "survivor_target_rate_se_by_ess": 0.006165065513766465,
+        "survivors": 31395,
+        "threshold": 0.6,
+        "vetoed": 619882,
+        "vetoed_effective_sample_size": 45701.74219418521,
+        "vetoed_target_rate": 0.19571950790634346
+      },
+      {
+        "buy_calls": 651277,
+        "survivor_effective_sample_size": 21111.40763378227,
+        "survivor_share": 0.23279034880703603,
+        "survivor_target_rate": 0.3421057838811168,
+        "survivor_target_rate_se_by_ess": 0.003265123756422687,
+        "survivors": 151611,
+        "threshold": 0.7,
+        "vetoed": 499666,
+        "vetoed_effective_sample_size": 30989.0369631347,
+        "vetoed_target_rate": 0.16524038057422358
+      }
+    ],
+    "2021": [
+      {
+        "buy_calls": 1240856,
+        "survivor_effective_sample_size": 6507.878417589891,
+        "survivor_share": 0.02002166246526591,
+        "survivor_target_rate": 0.5017308001932056,
+        "survivor_target_rate_se_by_ess": 0.006197944556636386,
+        "survivors": 24844,
+        "threshold": 0.5,
+        "vetoed": 1216012,
+        "vetoed_effective_sample_size": 121683.26970391542,
+        "vetoed_target_rate": 0.2533889468196038
+      },
+      {
+        "buy_calls": 1240856,
+        "survivor_effective_sample_size": 22137.09019940095,
+        "survivor_share": 0.0884985848478792,
+        "survivor_target_rate": 0.4254921958948768,
+        "survivor_target_rate_se_by_ess": 0.0033230241568456493,
+        "survivors": 109814,
+        "threshold": 0.6,
+        "vetoed": 1131042,
+        "vetoed_effective_sample_size": 106054.05792210434,
+        "vetoed_target_rate": 0.24213424435166864
+      },
+      {
+        "buy_calls": 1240856,
+        "survivor_effective_sample_size": 71622.44801558068,
+        "survivor_share": 0.3955454944006396,
+        "survivor_target_rate": 0.3546998359870827,
+        "survivor_target_rate_se_by_ess": 0.0017876677323307565,
+        "survivors": 490815,
+        "threshold": 0.7,
+        "vetoed": 750041,
+        "vetoed_effective_sample_size": 56568.700105924625,
+        "vetoed_target_rate": 0.19531865591347672
+      }
+    ],
+    "2022": [
+      {
+        "buy_calls": 1799529,
+        "survivor_effective_sample_size": 8855.157851738908,
+        "survivor_share": 0.01504393649671664,
+        "survivor_target_rate": 0.5033983451536643,
+        "survivor_target_rate_se_by_ess": 0.005313269188633849,
+        "survivors": 27072,
+        "threshold": 0.5,
+        "vetoed": 1772457,
+        "vetoed_effective_sample_size": 182412.8998999829,
+        "vetoed_target_rate": 0.2290820031177061
+      },
+      {
+        "buy_calls": 1799529,
+        "survivor_effective_sample_size": 26179.653048212895,
+        "survivor_share": 0.06281365846285333,
+        "survivor_target_rate": 0.4114654752952625,
+        "survivor_target_rate_se_by_ess": 0.003041380305865875,
+        "survivors": 113035,
+        "threshold": 0.6,
+        "vetoed": 1686494,
+        "vetoed_effective_sample_size": 165088.40470350892,
+        "vetoed_target_rate": 0.2212613860470301
+      },
+      {
+        "buy_calls": 1799529,
+        "survivor_effective_sample_size": 86297.17954136612,
+        "survivor_share": 0.31473957907874783,
+        "survivor_target_rate": 0.3329213623996483,
+        "survivor_target_rate_se_by_ess": 0.0016042093646616955,
+        "survivors": 566383,
+        "threshold": 0.7,
+        "vetoed": 1233146,
+        "vetoed_effective_sample_size": 104970.8782103557,
+        "vetoed_target_rate": 0.18741089862838625
+      }
+    ],
+    "2023": [
+      {
+        "buy_calls": 2237132,
+        "survivor_effective_sample_size": 10268.57791981921,
+        "survivor_share": 0.01343416481459297,
+        "survivor_target_rate": 0.5821188527317496,
+        "survivor_target_rate_se_by_ess": 0.004867176215166492,
+        "survivors": 30054,
+        "threshold": 0.5,
+        "vetoed": 2207078,
+        "vetoed_effective_sample_size": 226167.011232303,
+        "vetoed_target_rate": 0.22077289520352247
+      },
+      {
+        "buy_calls": 2237132,
+        "survivor_effective_sample_size": 26381.199172187728,
+        "survivor_share": 0.04486011554079062,
+        "survivor_target_rate": 0.472887064309771,
+        "survivor_target_rate_se_by_ess": 0.003073854368116241,
+        "survivors": 100358,
+        "threshold": 0.6,
+        "vetoed": 2136774,
+        "vetoed_effective_sample_size": 210054.3899799345,
+        "vetoed_target_rate": 0.21401421020660116
+      },
+      {
+        "buy_calls": 2237132,
+        "survivor_effective_sample_size": 90221.46652105739,
+        "survivor_share": 0.24703102007391606,
+        "survivor_target_rate": 0.3473122696289273,
+        "survivor_target_rate_se_by_ess": 0.001585104307929829,
+        "survivors": 552641,
+        "threshold": 0.7,
+        "vetoed": 1684491,
+        "vetoed_effective_sample_size": 146214.1226310648,
+        "vetoed_target_rate": 0.18570535550501605
+      }
+    ],
+    "2024": [
+      {
+        "buy_calls": 2464633,
+        "survivor_effective_sample_size": 13521.99894193335,
+        "survivor_share": 0.01668605427258338,
+        "survivor_target_rate": 0.571404255319149,
+        "survivor_target_rate_se_by_ess": 0.0042557412389007026,
+        "survivors": 41125,
+        "threshold": 0.5,
+        "vetoed": 2423508,
+        "vetoed_effective_sample_size": 265907.3546668767,
+        "vetoed_target_rate": 0.24849763235772276
+      },
+      {
+        "buy_calls": 2464633,
+        "survivor_effective_sample_size": 40525.66770784595,
+        "survivor_share": 0.06746034805181948,
+        "survivor_target_rate": 0.46356719694463655,
+        "survivor_target_rate_se_by_ess": 0.002477130704123874,
+        "survivors": 166265,
+        "threshold": 0.6,
+        "vetoed": 2298368,
+        "vetoed_effective_sample_size": 238903.68590096413,
+        "vetoed_target_rate": 0.23871721151704164
+      },
+      {
+        "buy_calls": 2464633,
+        "survivor_effective_sample_size": 148147.05366203393,
+        "survivor_share": 0.38068223544844204,
+        "survivor_target_rate": 0.3538276905105506,
+        "survivor_target_rate_se_by_ess": 0.0012422916642493718,
+        "survivors": 938242,
+        "threshold": 0.7,
+        "vetoed": 1526391,
+        "vetoed_effective_sample_size": 131282.29994677615,
+        "vetoed_target_rate": 0.19245330980069983
+      }
+    ]
+  },
+  "different_fold_controls": [
+    {
+      "buy_calls": 3685,
+      "by_threshold": [
+        {
+          "calls_whose_verdict_differs": 1,
+          "other_survivor_target_rate": 0.8333333333333334,
+          "other_survivors": 24,
+          "own_survivor_target_rate": 0.84,
+          "own_survivors": 25,
+          "threshold": 0.5
+        },
+        {
+          "calls_whose_verdict_differs": 0,
+          "other_survivor_target_rate": 0.8461538461538461,
+          "other_survivors": 26,
+          "own_survivor_target_rate": 0.8461538461538461,
+          "own_survivors": 26,
+          "threshold": 0.6
+        },
+        {
+          "calls_whose_verdict_differs": 0,
+          "other_survivor_target_rate": 0.8461538461538461,
+          "other_survivors": 26,
+          "own_survivor_target_rate": 0.8461538461538461,
+          "own_survivors": 26,
+          "threshold": 0.7
+        }
+      ],
+      "max_abs_p_wrong_difference": 0.06289388744278873,
+      "mean_abs_p_wrong_difference": 0.0007751655002939214,
+      "rows_of_fold": 404,
+      "skeptic_of_fold": 403
+    },
+    {
+      "buy_calls": 3685,
+      "by_threshold": [
+        {
+          "calls_whose_verdict_differs": 7,
+          "other_survivor_target_rate": 0.8333333333333334,
+          "other_survivors": 18,
+          "own_survivor_target_rate": 0.84,
+          "own_survivors": 25,
+          "threshold": 0.5
+        },
+        {
+          "calls_whose_verdict_differs": 1,
+          "other_survivor_target_rate": 0.84,
+          "other_survivors": 25,
+          "own_survivor_target_rate": 0.8461538461538461,
+          "own_survivors": 26,
+          "threshold": 0.6
+        },
+        {
+          "calls_whose_verdict_differs": 0,
+          "other_survivor_target_rate": 0.8461538461538461,
+          "other_survivors": 26,
+          "own_survivor_target_rate": 0.8461538461538461,
+          "own_survivors": 26,
+          "threshold": 0.7
+        }
+      ],
+      "max_abs_p_wrong_difference": 0.17558004496218155,
+      "mean_abs_p_wrong_difference": 0.0026465436840014097,
+      "rows_of_fold": 404,
+      "skeptic_of_fold": 250
+    },
+    {
+      "buy_calls": 16083,
+      "by_threshold": [
+        {
+          "calls_whose_verdict_differs": 236,
+          "other_survivor_target_rate": 0.5465393794749404,
+          "other_survivors": 419,
+          "own_survivor_target_rate": 0.5802469135802469,
+          "own_survivors": 243,
+          "threshold": 0.5
+        },
+        {
+          "calls_whose_verdict_differs": 283,
+          "other_survivor_target_rate": 0.5025252525252525,
+          "other_survivors": 792,
+          "own_survivor_target_rate": 0.5265866209262435,
+          "own_survivors": 583,
+          "threshold": 0.6
+        },
+        {
+          "calls_whose_verdict_differs": 674,
+          "other_survivor_target_rate": 0.40623127621330135,
+          "other_survivors": 1669,
+          "own_survivor_target_rate": 0.4491315136476427,
+          "own_survivors": 1209,
+          "threshold": 0.7
+        }
+      ],
+      "max_abs_p_wrong_difference": 0.27680765788237627,
+      "mean_abs_p_wrong_difference": 0.02730141667251777,
+      "rows_of_fold": 300,
+      "skeptic_of_fold": 150
+    },
+    {
+      "buy_calls": 11689,
+      "by_threshold": [
+        {
+          "calls_whose_verdict_differs": 765,
+          "other_survivor_target_rate": 0.6325,
+          "other_survivors": 400,
+          "own_survivor_target_rate": 0.5771905424200278,
+          "own_survivors": 719,
+          "threshold": 0.5
+        },
+        {
+          "calls_whose_verdict_differs": 1790,
+          "other_survivor_target_rate": 0.6098843322818086,
+          "other_survivors": 1902,
+          "own_survivor_target_rate": 0.5458494208494209,
+          "own_survivors": 2072,
+          "threshold": 0.6
+        },
+        {
+          "calls_whose_verdict_differs": 1485,
+          "other_survivor_target_rate": 0.5314673157162726,
+          "other_survivors": 5752,
+          "own_survivor_target_rate": 0.5029383886255924,
+          "own_survivors": 5275,
+          "threshold": 0.7
+        }
+      ],
+      "max_abs_p_wrong_difference": 0.4328872391380159,
+      "mean_abs_p_wrong_difference": 0.043035158030153335,
+      "rows_of_fold": 200,
+      "skeptic_of_fold": 350
+    }
+  ],
+  "meta": {
+    "all_buy_calls": 8950912,
+    "all_buy_calls_target_rate": 0.2383159392026198,
+    "all_test_rows_target_rate": 0.242158064030203,
+    "buy_calls_without_a_skeptic": 2427,
+    "buy_calls_without_a_skeptic_target_rate": 0.27894519983518745,
+    "coverage": "405 of 457 folds; the run died at fold 405 (see the digest's coverage block)",
+    "effective_sample_size_note": "the sum of the survivors' uniqueness weights (spec 59 decision 5). The standard error beside it is sqrt(p(1-p)/effective size), an approximation that ignores correlation between pairs and between folds, so it is a floor on the uncertainty",
+    "folds_without_a_skeptic": [
+      0
+    ],
+    "measured_on": "2026-09-14",
+    "no_skill_band_note": "20 permutations of each fold's own skeptic scores across that fold's BUY calls; the same per-fold veto counts with no information in them",
+    "oos_file": "data\\derived\\oos_train-20260913T205245-067b2b9d.parquet",
+    "recommends": null,
+    "rule": "a BUY call survives when the skeptic's P(wrong) <= threshold; vetoed when above",
+    "run_id": "train-20260913T205245-067b2b9d",
+    "scored_buy_calls": 8948485,
+    "scored_buy_calls_effective_sample_size": 933452.9037054279,
+    "scored_buy_calls_target_rate": 0.23830491977133558,
+    "scored_folds": 404,
+    "script_sha256": "2b03e4f7d8b01ebd3cd2f6f5feaab67f170d298292731e1018710ab958db1556"
+  },
+  "sweep": [
+    {
+      "buy_calls": 8948485,
+      "no_skill_survivor_target_rate_max": 0.28923503680785234,
+      "no_skill_survivor_target_rate_min": 0.2710978342046303,
+      "survivor_effective_sample_size": 3242.5818825090373,
+      "survivor_share": 0.0010474398739004423,
+      "survivor_target_rate": 0.6349087805398484,
+      "survivor_target_rate_se_by_ess": 0.008454946907422786,
+      "survivors": 9373,
+      "threshold": 0.3,
+      "vetoed": 8939112,
+      "vetoed_effective_sample_size": 930210.321822919,
+      "vetoed_target_rate": 0.23788906549106892
+    },
+    {
+      "buy_calls": 8948485,
+      "no_skill_survivor_target_rate_max": 0.27217936354869815,
+      "no_skill_survivor_target_rate_min": 0.26317904210864673,
+      "survivor_effective_sample_size": 8856.590691575535,
+      "survivor_share": 0.0027812529159963947,
+      "survivor_target_rate": 0.6313484410157506,
+      "survivor_target_rate_se_by_ess": 0.005126362421738311,
+      "survivors": 24888,
+      "threshold": 0.35,
+      "vetoed": 8923597,
+      "vetoed_effective_sample_size": 924596.3130138525,
+      "vetoed_target_rate": 0.23720871751604203
+    },
+    {
+      "buy_calls": 8948485,
+      "no_skill_survivor_target_rate_max": 0.2620784045361228,
+      "no_skill_survivor_target_rate_min": 0.2562713852771532,
+      "survivor_effective_sample_size": 17778.49181115939,
+      "survivor_share": 0.0057154926224941985,
+      "survivor_target_rate": 0.6034607488513051,
+      "survivor_target_rate_se_by_ess": 0.003668767132813166,
+      "survivors": 51145,
+      "threshold": 0.4,
+      "vetoed": 8897340,
+      "vetoed_effective_sample_size": 915674.4118942686,
+      "vetoed_target_rate": 0.23620587726219297
+    },
+    {
+      "buy_calls": 8948485,
+      "no_skill_survivor_target_rate_max": 0.2605390696157695,
+      "no_skill_survivor_target_rate_min": 0.2545344143212153,
+      "survivor_effective_sample_size": 29238.104527462085,
+      "survivor_share": 0.009938106841549155,
+      "survivor_target_rate": 0.5692503176620076,
+      "survivor_target_rate_se_by_ess": 0.002895939712796606,
+      "survivors": 88931,
+      "threshold": 0.45,
+      "vetoed": 8859554,
+      "vetoed_effective_sample_size": 904214.7991779658,
+      "vetoed_target_rate": 0.2349829348068763
+    },
+    {
+      "buy_calls": 8948485,
+      "no_skill_survivor_target_rate_max": 0.2595512940462901,
+      "no_skill_survivor_target_rate_min": 0.25500229063292446,
+      "survivor_effective_sample_size": 46615.99970778188,
+      "survivor_share": 0.017319021040991856,
+      "survivor_target_rate": 0.530929996967331,
+      "survivor_target_rate_se_by_ess": 0.0023113726007470735,
+      "survivors": 154979,
+      "threshold": 0.5,
+      "vetoed": 8793506,
+      "vetoed_effective_sample_size": 886836.9039976462,
+      "vetoed_target_rate": 0.23314762052814883
+    },
+    {
+      "buy_calls": 8948485,
+      "no_skill_survivor_target_rate_max": 0.26098276759880956,
+      "no_skill_survivor_target_rate_min": 0.25743076175006985,
+      "survivor_effective_sample_size": 77151.04659961724,
+      "survivor_share": 0.032405150145527424,
+      "survivor_target_rate": 0.4877283370750094,
+      "survivor_target_rate_se_by_ess": 0.0017995679503586383,
+      "survivors": 289977,
+      "threshold": 0.55,
+      "vetoed": 8658508,
+      "vetoed_effective_sample_size": 856301.8571058107,
+      "vetoed_target_rate": 0.22995162676987768
+    },
+    {
+      "buy_calls": 8948485,
+      "no_skill_survivor_target_rate_max": 0.2629076984022184,
+      "no_skill_survivor_target_rate_min": 0.26017756177534335,
+      "survivor_effective_sample_size": 132708.49951025867,
+      "survivor_share": 0.06516421494811692,
+      "survivor_target_rate": 0.44027740383213776,
+      "survivor_target_rate_se_by_ess": 0.0013626999782888533,
+      "survivors": 583121,
+      "threshold": 0.6,
+      "vetoed": 8365364,
+      "vetoed_effective_sample_size": 800744.4041951693,
+      "vetoed_target_rate": 0.22422610659858913
+    },
+    {
+      "buy_calls": 8948485,
+      "no_skill_survivor_target_rate_max": 0.2648972926080227,
+      "no_skill_survivor_target_rate_min": 0.26356204515664666,
+      "survivor_effective_sample_size": 238275.11290811567,
+      "survivor_share": 0.14144103722585444,
+      "survivor_target_rate": 0.39282110923509284,
+      "survivor_target_rate_se_by_ess": 0.0010004984013540481,
+      "survivors": 1265683,
+      "threshold": 0.65,
+      "vetoed": 7682802,
+      "vetoed_effective_sample_size": 695177.7907973123,
+      "vetoed_target_rate": 0.2128495567112103
+    },
+    {
+      "buy_calls": 8948485,
+      "no_skill_survivor_target_rate_max": 0.2652574025008541,
+      "no_skill_survivor_target_rate_min": 0.26452307077943715,
+      "survivor_effective_sample_size": 439499.27657178964,
+      "survivor_share": 0.3195784537829588,
+      "survivor_target_rate": 0.3481854838004674,
+      "survivor_target_rate_se_by_ess": 0.0007186017364375759,
+      "survivors": 2859743,
+      "threshold": 0.7,
+      "vetoed": 6088742,
+      "vetoed_effective_sample_size": 493953.6271336383,
+      "vetoed_target_rate": 0.18669652943087423
+    }
+  ]
+}

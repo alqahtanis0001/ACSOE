@@ -99,7 +99,32 @@ def candle_frame(
     return pl.DataFrame(rows)
 
 
-def dataset_for(config: Any, *, random_walk: bool, days: int = DAYS) -> Any:
+def dataset_for(
+    config: Any,
+    *,
+    random_walk: bool,
+    days: int = DAYS,
+    macro_archive: dict[str, str] | None = None,
+) -> Any:
+    """The constructed dataset. `macro_archive` maps asset to the pair to join as macro.
+
+    **Omitted, the dataset carries no macro columns at all**, which is right for the trainer's
+    own tests and wrong for anything that exercises an engine: engines 8 and 15 assemble the
+    feature vector from engine 5's row *and* engine 6's macro columns, and a manifest naming
+    no macro columns leaves that half of both engines unreachable while every test passes.
+    `tests/engines/test_prediction.py` supplies one for that reason. Found by a surviving
+    mutation in the spec 73 sweep; the build log for 2026-09-13 has the account.
+    """
+    return _dataset_for(config, random_walk=random_walk, days=days, macro_archive=macro_archive)
+
+
+def _dataset_for(
+    config: Any,
+    *,
+    random_walk: bool,
+    days: int = DAYS,
+    macro_archive: dict[str, str] | None = None,
+) -> Any:
     interval_s = interval_of(config)
     candles: dict[str, Any] = {}
     labelled: dict[str, Any] = {}
@@ -118,7 +143,9 @@ def dataset_for(config: Any, *, random_walk: bool, days: int = DAYS) -> Any:
         )
         candles[pair] = frame
         labelled[pair] = labels
-    return training.build_dataset(labelled, candles, config=config)
+    return training.build_dataset(
+        labelled, candles, config=config, macro_archive=macro_archive
+    )
 
 
 def run(config: Any, dataset: Any, tmp_path: Path, *, name: str = "run", folds: int = 2) -> Any:

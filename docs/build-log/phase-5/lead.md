@@ -637,3 +637,295 @@ number the operator's thresholds rest on: the predictor made **8,950,912 BUY cal
 test row, and their target rate is 0.2383 against 0.2422 over all test rows** — before any
 friction, the BUY calls hit the target slightly less often than an unselected bar. The Brier edge
 is real in most folds and small; as a selector of trades it shows none.
+
+
+### The skeptic veto sweep: the survivors hit their target far more often, and it is not a leak
+
+**Agent:** Lead (Opus 5 session) · **Task:** operator's study for `skeptic.veto_threshold` · **Date:** 2026-09-14
+
+**What was asked.** No retraining, no new models: apply each fold's trained skeptic to that
+fold's out-of-sample BUY calls and sweep the veto threshold from 0.30 to 0.70, reporting the
+survivors with their effective sample size and the target rates of survivors and vetoed calls;
+prove the check can fail with a different fold's skeptic. Evidence only; nothing in config.
+
+**How.** `docs/dataset/skeptic-veto-sweep-2026-09-14.py` (sha256 `2b03e4f7…58db1556`), run on the
+`6e09881` code that trained the artefacts, scoring through `_skeptic_matrix` with each fold's
+verified scaler and `skeptic.txt`; a call survives when P(wrong) ≤ threshold, the trainer's and
+engine 15's rule. Per fold the BUY count matched the manifest and the dataset join kept every row.
+Fold 0 has no skeptic (no earlier calls); folds 1 to 404 were scored, 8,948,485 calls at a target
+rate of 0.2383, effective size 933,453. Fold k's skeptic is out of sample on fold k's calls by
+construction. Results in `docs/dataset/skeptic-veto-sweep-2026-09-14.json`, table in the `.md`
+beside it.
+
+| threshold | survivors | share | survivors' effective size | survivor target rate | vetoed target rate | no-skill band |
+|---|---|---|---|---|---|---|
+| 0.30 | 9,373 | 0.10% | 3,243 | 0.6349 | 0.2379 | 0.2711-0.2892 |
+| 0.35 | 24,888 | 0.28% | 8,857 | 0.6313 | 0.2372 | 0.2632-0.2722 |
+| 0.40 | 51,145 | 0.57% | 17,778 | 0.6035 | 0.2362 | 0.2563-0.2621 |
+| 0.45 | 88,931 | 0.99% | 29,238 | 0.5693 | 0.2350 | 0.2545-0.2605 |
+| 0.50 | 154,979 | 1.73% | 46,616 | 0.5309 | 0.2331 | 0.2550-0.2596 |
+| 0.55 | 289,977 | 3.24% | 77,151 | 0.4877 | 0.2300 | 0.2574-0.2610 |
+| 0.60 | 583,121 | 6.52% | 132,708 | 0.4403 | 0.2242 | 0.2602-0.2629 |
+| 0.65 | 1,265,683 | 14.14% | 238,275 | 0.3928 | 0.2128 | 0.2636-0.2649 |
+| 0.70 | 2,859,743 | 31.96% | 439,499 | 0.3482 | 0.1867 | 0.2645-0.2653 |
+
+**What happened when the numbers came back.** A survivor target rate of 0.53 at 0.50 against a
+BUY-call base of 0.24 is the shape of result this phase exists to distrust, so it was treated as
+a leak until shown otherwise, before anything was reported.
+
+**Why it is not the obvious leak.** `docs/dataset/skeptic-training-identity-check-2026-09-14.py`
+recomputed the skeptic's eligible training set for folds 1, 50, 150, 250, 300, 350 and 404 from
+the out-of-sample file with the trainer's rule and matched the manifest's `training_identity` and
+row count on all seven, with zero rows reaching the scored test window; dropping the purge and
+embargo breaks every match. The different-fold controls move the way they should: adjacent
+skeptics (404 and 403, sharing nearly all of ~8.9M training rows) differ in one verdict at 0.50;
+distant ones in hundreds; and fold 200's calls scored by fold 350's skeptic, which *did* train on
+fold 200's rows, reach 0.6325 against its own skeptic's 0.5772. The no-skill band (each fold's
+own scores permuted across its calls, 20 seeds) sits at about 0.26, so random vetoing at the same
+per-fold counts explains 0.02 of the lift and not the rest. The lift holds in every test year,
+2017 to 2024, at 0.50, 0.60 and 0.70.
+
+**What it does not establish.** All rates are before friction. The standard error beside each
+rate (by effective size) is a floor: it ignores correlation between pairs moving together and
+between folds. No check here separates the skeptic's contribution from a simpler ranking of the
+predictor's own `p_target` at the same survivor counts; that comparison was not asked for and was
+not run. Nothing was committed to config.
+
+### At matched counts the skeptic beats the predictor's own confidence, by less as the threshold loosens
+
+**Agent:** Lead (Opus 5 session) · **Task:** operator's control on the skeptic sweep · **Date:** 2026-09-14
+
+**What was asked.** Whether the skeptic adds anything over ranking the predictor's own
+`p_target`: per fold, take the top N BUY calls by `p_target`, N the skeptic's survivor count at
+each threshold, and compare target rates and effective sizes; prove the comparison can fail.
+
+**How.** `docs/dataset/skeptic-vs-ptarget-2026-09-14.py`, the same scoring as the sweep. Ties at
+the cut are real (`p_target` is isotonic-calibrated, so piecewise constant; up to 42,824 rows tied
+across the cuts at 0.70) and were broken at random under two seeds, which agree to within 0.0004.
+Positive control: top-N by the skeptic's own score selected the identical set as the skeptic at
+all nine thresholds. Negative control: top-N at random gave 0.254 to 0.280.
+
+**Result.** Skeptic minus `p_target` at matched N: +0.0744 (0.30), +0.0753 (0.35), +0.0730
+(0.40), +0.0668 (0.45), +0.0578 (0.50), +0.0458 (0.55), +0.0306 (0.60), +0.0148 (0.65), +0.0049
+(0.70). Effective sizes are close between the two at every threshold (at 0.50, 46,616 against
+41,218). The sets share 29% of calls at 0.30, 44% at 0.50 and 68% at 0.70. So the second stage
+is not decoration at the strict end; at 0.70 it is nearly the same selection as confidence
+ranking. Also found: `p_target` ranking alone reaches 0.47 at the 0.50 count, so the predictor's
+confidence carries real ordering the BUY rule (`expected_move_pct > 0`, 56% of bars) never uses.
+
+**A consequence for the thresholds, found while reading the artefacts.** None of the 405 folds
+carries `di.npz` or an anomaly threshold (`extras.di` null, `extras.anomaly.threshold` null),
+because the run trained with `prediction.di_percentile` and `anomaly.threshold_percentile` absent.
+Engine 8 refuses a run with no `di.npz` and engine 13 refuses one with no recorded threshold, so
+supplying those two keys flips their criteria without making any artefact of this run usable
+live, and the digest holds no DI or anomaly distribution to choose them from. Only
+`skeptic.veto_threshold` is applied at scoring time and has evidence behind it.
+
+### The DI cannot be fitted through the trainer's own path in any time the phase has
+
+**Agent:** Lead (Opus 5 session) · **Task:** operator ruling 2 of 2026-09-14, DI and anomaly fitted from the saved training rows · **Date:** 2026-09-15
+
+**What happened.** The first version of `docs/dataset/di-anomaly-fit-2026-09-14.py` called
+`research.training._fit_and_score_di` directly on each fold's identity-verified training rows. The
+pilot on fold 404 ran for over an hour without finishing and was stopped. Measured afterwards on
+this machine: `modelling.di._mean_nearest` over a 200,000-row reference costs 12.9 s per 2,048
+leave-one-out queries on one thread (about 21 minutes per capped fold), throughput saturates at
+about 780 queries a second across 12 to 16 processes because the elementwise arithmetic is
+memory-bound, and `_fit_and_score_di` scores test rows one `di.score` call at a time at **136 ms a
+row**, so fold 404's 93,166 test rows alone are about 3.5 hours.
+
+**Why.** `prediction.di_reference_rows` is 200,000 and the leave-one-out distribution is quadratic
+in it; `di.score` builds a 200,000-element temporary per call. Neither was ever timed at that size:
+every DI test fits a few hundred rows, and the full run trained with `di_percentile` absent, so the
+DI never executed on real data. **Had the operator supplied the percentile before the run, the run
+would not have died at fold 405 of memory; it would still be running.** That is a fifth Phase 7
+prerequisite, not recorded in the tracker yet: the trainer's DI needs a batched test-row score and
+a leave-one-out search that is not one numpy loop on one core, or a smaller cap.
+
+**Fix, for the evidence only; the trainer is untouched.** The reference set is still built
+exactly as `_fit_and_score_di` builds it (its `_di_reference_rows`, the verified scaler, complete
+rows, the seeded cap). The statistic is computed with scikit-learn's multithreaded brute-force
+nearest-neighbour search, leave-one-out by dropping the row's own index. Held to the module three
+ways, and each was run before a number was kept: `selfcheck` ran the trainer's `_fit_and_score_di`
+in full on folds 0, 1 and 60 (5,429, 6,111 and 26,142 reference rows): identical reference identity
+and matrix, largest distribution difference 6.9e-15, 6.7e-15 and 1.9e-14; every fold recomputes 16
+leave-one-out values and 16 test scores through `di._mean_nearest` and `di.score` and refuses
+beyond 1e-9 (fold 404: 7.7e-14); a random-data benchmark agreed to 2.7e-15. Fold 404 then took
+100 s end to end.
+
+### The purge cannot change a training set whose embargo equals the label horizon
+
+**Agent:** Lead (Opus 5 session) · **Task:** the identity controls for the DI and anomaly fit · **Date:** 2026-09-15
+
+**What happened.** The script's `controls` recompute a fold's training rows four ways and compare
+them with the manifest's `training_identity`. The true rows were ACCEPTED on folds 200 and 404;
+the neighbouring fold's manifest was REFUSED (365,450 against 354,374 rows; 1,203,815 against
+1,183,241); dropping the embargo was REFUSED (366,620 and 1,208,278 rows). **Dropping the purge
+was ACCEPTED on both**, with an identical identity.
+
+**Why.** Not a hole in the check. `backtest.embargo_bars` is 48 and the label window is 48 bars,
+so every row whose label window reaches the test window has its decision bar inside the last 48
+bars before it, which the embargo already removes. The splitter counts those rows as purged
+rather than embargoed, so the two counts differ while the training set does not. It is the Phase 4
+finding (a label window equal to the embargo let a splitter with its purge deleted pass) seen
+from the consumer side, and it is an **equivalent mutant at this config**, reported as a checked
+negative. The fit script also compares `purged_count` and `embargoed_count` with the manifest per
+fold, which is the only place the purge is observable while the two spans are equal.
+
+### The DI's leave-one-out threshold measures closeness in time, and refuses almost every live candidate
+
+**Agent:** Lead (Opus 5 session) · **Task:** operator ruling 2 of 2026-09-14, the DI distribution · **Date:** 2026-09-15
+
+**What happened.** A dry run of `docs/dataset/di-anomaly-distributions-2026-09-14.py` over the
+first seven fitted folds (365 to 371) reported that a threshold at the 0.95 percentile of each
+fold's leave-one-out distribution would refuse **98.1%** of that fold's out-of-sample rows, 0.99
+would refuse 72%, and even 0.999 would refuse 12%. At a percentile p the refusal rate should be
+near 1 − p if the test week resembled the reference window.
+
+**Why, established on fold 371 and not assumed.** The first hypothesis (a row's nearest neighbours
+are its own pair's adjacent bars) was **tested and rejected**: excluding the same pair's rows
+within ±48 bars or ±7 days left the distribution unchanged (median 0.632 in all three). The second
+was confirmed: excluding **every pair's** rows within ±48 bars moved the reference distribution onto
+the out-of-sample one (median 1.423 against the test rows' 1.402; refusal at the 0.90 percentile
+5.1%, at 0.95 1.3%). 78 of the 117 DI columns are the BTC and ETH macro features, identical for
+every pair on the same bar, and the calendar columns are too. So a reference row's ten nearest
+neighbours are **other pairs on the same or adjacent bars**, and leave-one-out removes only the
+row itself. A live candidate is at least the 48-bar embargo after the reference window and has no
+contemporaneous neighbours in it, so its DI sits above almost the whole leave-one-out distribution
+whatever the market is doing. The statistic as ruled (operator ruling 6 of 2026-09-12:
+leave-one-out over the per-pair last 30 days) is a detector of time elapsed since the reference
+window, not of unfamiliar market conditions. Script `docs/dataset/di-serial-correlation-check-2026-09-15.py`;
+its leave-one-out arm reproduces the saved distribution to 2.0e-14.
+
+**Not decided here.** A higher percentile, an exclusion window in the leave-one-out, or a
+narrower DI input are each a change to a ruling or a threshold, and each is the operator's. The
+full 405-fold numbers go in the report.
+
+### The DI and anomaly distributions over all 405 folds, and the ranking study over the real run
+
+**Agent:** Lead (Opus 5 session) · **Task:** operator rulings 2 and 3 of 2026-09-14 · **Date:** 2026-09-15
+
+**What was run.** `docs/dataset/di-anomaly-fit-2026-09-14.py fit 2` from 00:33 to 03:30, exit 0,
+405 of 405 folds fitted with no refusal: every fold's recomputed training rows matched the
+manifest's counts and `training_identity`, every anomaly training set matched its recorded rows and
+identity, and the largest sampled difference from `modelling.di` over all folds was 1.1e-13.
+Aggregated by `di-anomaly-distributions-2026-09-14.py`; the diagnostic
+`di-serial-correlation-check-2026-09-15.py` repeated on folds 20, 100, 180, 260, 340 and 404 gave
+the fold 371 result on every one. Spec 75's committed `--ranking-study` ran over the real
+out-of-sample file in 3.5 minutes, exit 0, with a by-year and thinness split through the study's
+own `chosen_pairs`.
+
+**A partial result that would have misled, recorded because it nearly went into a report.** The
+dry run over folds 365 to 371 had the anomaly gate blocking **half** its nominal rate (2.55% at
+0.95). Over all 405 folds it blocks 5.55%. Seven late folds in a calm stretch were not the run.
+
+**What they say**, in full in the two `.md` files: the anomaly gate is calibrated and blocks the
+volatile tail; the DI as ruled refuses most complete candidates at every percentile below 0.999
+for a reason unrelated to the market (entry above); half of all test rows are incomplete vectors
+before either percentile applies; and in the ranking study the volatility features raise the target
+rate and the stop rate together and choose nothing, while the short-horizon reversal features are
+positive before friction in every test year, the largest of them (`bar_body_pct` ascending) drawing
+37-44% of its picks from intermittently traded pairs from 2022, where the archive cannot price the
+spread. Nothing was put in config; the percentiles and `scout.rank_feature` are the operator's.
+
+### Decision: three operator rulings on the distributions, recorded before any code
+
+**Agent:** Lead (Opus 5 session) · **Date:** 2026-09-15
+
+**Ruled by the operator.** (1) Ruling 6 of 2026-09-12 amended: the DI's leave-one-out excludes
+every reference row within 48 bars of the row being scored, across all pairs; a DI fitted without
+it is a defect, proved by a new criterion; `prediction.di_percentile` stays absent until the refit
+reports. (2) `anomaly.threshold_percentile: 0.99`, provisional; the spec 70 ten-sigma question
+stays open. (3) `scout.rank_feature`: none; the ranking study is an open question for Phase 7,
+not a finding, because its mean return is per bar and friction is per round trip over a multi-bar
+hold, with the thin-pair caveat on `bar_body_pct` kept. Plus the 50.2% incomplete-vector rate as
+Phase 7 prerequisite 6.
+
+**Where each went.** Tracker Open Questions, Locked Decisions (two DI lines) and prerequisites;
+spec 68's amendment with the reasoning the operator asked for; the glossary's DI entry;
+`docs/dataset/ranking-study-2026-09-14.md` reframed so it no longer sets a per-bar return against
+round-trip friction.
+
+**The span is `backtest.embargo_bars`, not a new key, and that is the lead's choice.** The
+operator's number is 48 bars; the embargo is 48 bars and is the minimum gap between a fold's
+reference window and its first live candidate, which is exactly the span a reference row's
+leave-one-out must exclude to look like a candidate. A second key holding the same number would
+be free to drift from the thing it stands for.
+
+**Team for the rest of the phase, spawned 04:10 under names never used in this project:** C-3
+(the exclusion, `modelling/di.py`, the trainer, engine 8's refusal of an unexcluded DI, the
+criterion), C-4 (spec 73 review fixes, engine 15 only), B-3 (engine 15's two-tick rehearsal, which
+it did not build). Refit with the exclusion running in the background from 04:10
+(`docs/dataset/di-exclusion-refit-2026-09-15.py`).
+
+### Spec 73 review: engine 15 failed open on an absent BUY verdict and on a NaN score
+
+**Agent:** Lead (Opus 5 session) · **Task:** spec 73 review · **Date:** 2026-09-15
+
+**What happened.** Reading `engines/skeptic/engine.py`, never reviewed since C-2 built it on
+2026-09-13. Two paths return a pass where invariant 3 requires a block. `if not
+prediction.get("is_buy")` takes the "not a BUY call" `OK` path for `False` **and** for an absent,
+`None` or malformed value, so an engine 8 payload with no BUY verdict is waved through as a
+non-BUY rather than refused as unreadable. And `if p_wrong > limit` is `False` when `p_wrong` is
+NaN, so a non-finite score from the booster passes the veto.
+
+**Why they matter although nothing downstream trades yet.** A `False` here is one fact (the
+predictor did not call a BUY) and an absent key is another (nothing readable was published), and
+the handler cannot tell them apart: the code-standards shape "a handler that cannot distinguish
+two situations will silently pick the wrong one". The NaN path is the one every learned gate in
+this project has been checked for except this one.
+
+**Fix.** Sent to C-4, engine 15's files only: only an explicit `is_buy is False` is the not-a-BUY
+`OK`; absent or non-bool blocks `skeptic_unavailable`; a non-finite `p_wrong` blocks
+`skeptic_unavailable` before the comparison; block tests by reason code; mutations including the
+spec's two. Rest of the review: the published shape carries no approval field, the threshold is
+never defaulted, the input vector is rebuilt in the manifest's order from engines 5 and 6, the
+veto is strict `>` as the sweep's survival rule is `<=`, the artefact is hash-verified through
+`load_run`, reason prose exists for both codes. **The rehearsal constraint**: engine 10 blocks for
+want of engine 9 (Phase 6), so in the registered chain engine 15 cannot run this phase; B-3
+rehearses it with 10 and 11 left out, and asserts separately that the full chain stops at 10.
+
+### Registration of engines 5, 6, 12, 13, 8 and 15, after B-3's rehearsal of engine 15
+
+**Agent:** Lead (Opus 5 session) · **Task:** spec 77 · **Date:** 2026-09-15
+
+**The rehearsal it waited for.** B-3, which did not build engine 15, added eight tests to
+`tests/engines/test_feature_chain_rehearsal.py` (29 passed): in the full chain 5, 6, 7, 12, 13, 8,
+10, 11, 15 the bar tick stops at `cost` for want of engine 9 and `skeptic` never runs; with 10 and
+11 left out, a BUY call with the skeptic unconfigured blocks `skeptic_unavailable` (threshold
+absent, run id absent, both), a non-BUY call is `OK` with `vetoed: false`, and a trained skeptic
+vetoes at a threshold 1e-6 below the call's `p_wrong` and passes at 1e-6 above it, the thresholds
+recomputed from the artefact rather than read from the engine's own output so that a P(right)
+mutation cannot move the line with it. Four mutations killed by the rehearsal; the fifth (manifest
+names re-sorted into state order) survives it, killed by `test_skeptic.py`, and is unreachable from
+any live state because engine 5 builds rows in manifest order. B-3 also caught a reason sentence
+that formats `p_wrong` to four decimals and reads "0.0000 likely to be wrong against a veto
+threshold of 0.0000" on a trained fixture; sent to C-4.
+
+**The chain.** `OPPORTUNITY_CHAIN` is 5, 6, 7, 12, 13, 8, 10, 11, 15; 9, 14, 16 and 18 absent for
+Phase 6. The docstring states the load-bearing hole: engine 10 blocks every candidate until engine
+9 exists, so engine 15 is registered and unreachable this phase. `tests/cli`, `tests/core` and the
+Phase 0 and Phase 3 criterion tests: 207 passed, exit 0.
+
+### The refit with the 48-bar exclusion, and a session that lost its gates to a wait
+
+**Agent:** Lead (Opus 5 session) · **Date:** 2026-09-15
+
+**The refit.** `docs/dataset/di-exclusion-refit-2026-09-15.py` recomputed every fold's
+leave-one-out distribution with every reference row within 48 bars across all pairs excluded, held
+to direct numpy on 16 rows per fold (largest difference ~4e-15). Test-row DI is unchanged by the
+exclusion and was reused, after asserting per fold that no reference row lies within the span of
+the test window. Out-of-sample refusal over 7,953,442 complete rows: **0.95 refuses 6.79%, 0.99
+3.31%, 0.999 2.06%**, against 94.7%, 74.9% and 31.1% before. The refused rows now have a higher
+target and stop rate than the kept ones, the shape of the volatile tail. The operator rules the
+percentile; the key stays absent.
+
+A first version grouped one scikit-learn search per decision bar and spent most of its time on
+call overhead (232 s for fold 0's 5,429 rows); grouping 32 bars per search with the boundary band
+in numpy cut small folds to seconds. Large folds were bound by the arithmetic itself, ~2 minutes.
+
+**What happened to the gates.** The two ruled config values turn six tests red that pin the keys as
+absent or train fixtures with the committed config; they were backed out so the commit is green,
+and the list is in Handoff 4. Phases 0 to 4 were not gated. **Why:** the lead waited roughly two
+hours for a teammate's end-of-sweep message instead of checking the teammate's file hash on a
+timer, and the time was gone. The engine's hash had been final all along.

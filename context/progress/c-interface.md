@@ -5,6 +5,12 @@ Never edit the tracker directly.
 
 ## Current Task
 
+### DONE 2026-09-15 — C-3 (Opus 5): the DI's leave-one-out excludes every pair within 48 bars (operator ruling 2026-09-15, amending ruling 6). Not committed.
+
+`modelling/di.py` `fit(..., decision_ts, exclusion_s)` (keyword-only, required; three new refusals), `DiFit`/`di.npz` record `decision_ts` and `exclusion_s`, `load` refuses an npz without a positive span (engine 8 turns it into `prediction_unavailable`); `research/training.py` passes `backtest.embargo_bars x timeframes.decision_bar_s` and manifest `extras.di.exclusion_s`. New Phase 5 criterion `di_leave_one_out_excludes_48_bars` in `scripts/verify.py` (own subject percentile 0.90, recomputes both distributions, plus a boundary probe): **PASS**. Tests in `tests/modelling/test_di.py`, `tests/research/test_di.py`, `tests/engines/test_prediction.py`, `tests/verify/test_phase5_criteria.py`. Mutations (a) row-only, (b) `<`, (c) embargo ignored / span 0, (d) `load` accepting legacy: all red in round two; the criterion survived (b) in round one and gained the boundary probe. Targeted suite 446 passed; mypy and ruff clean on these files. `verify --phase 5`: 12 PASS, 1 PENDING (`di_fitted_on_predictor_training_set`, `di_percentile`), 1 FAIL `toolchain_green` — pytest timeout at 900 s under load, `bootstrap.py` I001 and a `test_skeptic.py` case that was C-4's mutation arm on disk (05:12:40 to 05:14:29), not a defect; all from other sessions' concurrent edits. Details: `docs/build-log/phase-5/c-interface.md`, last entry.
+
+**For the lead:** `context/` and `feature-specs/68` still describe leave-one-out on the row alone wherever they did (not mine to edit). `test_all_twelve_criteria_are_registered_for_phase_5` now names twelve; any context file counting Phase 5 criteria as eleven is stale.
+
 ### CLAIM 2026-09-13 21:50 — specs 74 and 75, review-to-green, by the lead session (Opus 5)
 
 C-2 is gone (session limit). The operator assigned **specs 74 and 75 only** to this session;
@@ -38,6 +44,12 @@ engine 8, the `missing_candle` prose, the joblib comment in engine 13.
 The full 234-pair run was started 21:46 by this session, detached, from a worktree at
 `6e09881` (`../ACSOE-fullrun-6e09881`), cwd the main checkout, log
 `logs/fullrun-20260913T214616.log`, cmd PID 45492, python worker PID 41504, `--write-fixture`.
+
+### DONE 2026-09-14 — the skeptic against p_target at matched counts (lead session): `docs/dataset/skeptic-vs-ptarget-2026-09-14.*`, entry in `docs/build-log/phase-5/lead.md`. Not committed.
+
+### CLAIM 2026-09-14 23:30 — the skeptic veto sweep, by the lead session (Opus 5)
+
+Operator request: apply each fold's trained skeptic to that fold's out-of-sample BUY rows and sweep veto thresholds 0.30 to 0.70 by 0.05, reporting survivors (count, share, effective sample size), survivor and vetoed target rates; a different-fold control proving the check can fail. No retraining, no config change. Output to `docs/dataset/`, entry in `docs/build-log/phase-5/lead.md`. Status: **done 2026-09-14, not committed** (evidence files in `docs/dataset/skeptic-veto-sweep-2026-09-14.*` and the identity check beside them).
 
 ### Phase 5 — claimed 2026-09-13, before any code was written
 
@@ -1621,3 +1633,12 @@ faster*; it was first-touch cost after a cache wipe, caught by running the compa
 order. (2) The phase-3 error did **not** reproduce on the immediately following identical suite
 run with the tree untouched: ten consecutive identical `pytest tests/ -q` runs across two
 five-phase passes, one error, and the run straight after it was green.
+
+
+## Engine 15 review fixes — 2026-09-15 (C-4)
+
+- Closed two fail-open paths in engine 15, spec 73. An absent, `None` or non-boolean `is_buy` now blocks with `skeptic_unavailable`, where it used to return `OK` as not a BUY. A non-finite `p_wrong` now blocks with `skeptic_unavailable` before the comparison, where it used to pass.
+- The veto reason prints `p_wrong` and the threshold at 6 significant digits or more, so the two numbers can be told apart. `:.4f` printed "0.0000 … 0.0000" (B-3's rehearsal).
+- Tests: 129 passed across `test_skeptic.py` and `test_reason_prose.py`. ruff and mypy --strict are clean.
+- Sweep 1: mutations (a), (b), (c1) and (c2) were all observed red; kills are in the build log. Sweep 2 (a to d, on the final code) is pending.
+- Open for engine 8's owner: its refusal publishes `is_buy: False` by default, so engine 15 returns `OK` on a tick engine 8 already blocked. That doesn't fail open, but it conflates "no call" with "not a BUY".

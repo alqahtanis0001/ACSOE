@@ -44,7 +44,7 @@ These terms have precise meanings in this codebase. Do not substitute your own.
 
 **Meta-labeling** — training a second model to grade the first model's calls. It sees only the rows where the predictor said BUY, and learns when that call was wrong. This is the Skeptic.
 
-**Dissimilarity Index (DI)** — a measure of how far a live feature vector sits from the model's training data. Computed from the distribution of pairwise distances within the scaled training set, thresholded at a rolling high percentile. Above threshold means the model has never seen conditions like this and must refuse to predict. **Fitted on the predictor's training set, never the Skeptic's subset.**
+**Dissimilarity Index (DI)** — a measure of how far a live feature vector sits from the model's training data. Computed from the distribution of pairwise distances within the scaled training set, thresholded at a rolling high percentile. Above threshold means the model has never seen conditions like this and must refuse to predict. **Fitted on the predictor's training set, never the Skeptic's subset.** The threshold's leave-one-out distribution excludes every reference row within 48 bars of the row being scored, across all pairs, because the macro columns are shared by every pair on a bar (operator ruling 2026-09-15; spec 68, amendment).
 
 **Regime** — the classified market environment: trending, choppy, or high volatility. DI threshold crossings also signal a regime change.
 

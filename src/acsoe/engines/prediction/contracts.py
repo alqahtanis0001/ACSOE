@@ -34,9 +34,11 @@ __all__ = [
     "FEATURE_KEY",
     "FEATURE_PAIRS_FIELD",
     "FEATURE_VERSION_FIELD",
+    "KEY_DI_PERCENTILE",
     "KEY_PREDICTION_RUN_ID",
     "MACRO_CONTEXT_KEY",
     "MACRO_FEATURES_FIELD",
+    "REASON_DI_PERCENTILE_MISMATCH",
     "REASON_DI_REFUSED",
     "REASON_INPUTS_INCOMPLETE",
     "REASON_UNAVAILABLE",
@@ -98,6 +100,14 @@ MACRO_FEATURES_FIELD: Final = "features"
 #: clone with no `models/` at all.
 KEY_PREDICTION_RUN_ID: Final = "models.prediction_run_id"
 
+#: The percentile the DI's threshold was fitted at. **Read here only to check it against the
+#: artefact's**, never to compute anything: the threshold travels inside `di.npz` and is a
+#: property of the training run, so once any percentile is baked in, changing this key changes
+#: nothing the running system does. B-2's rehearsal of engines 13 and 8 found that gap, and the
+#: ruling of 2026-09-13 is that a mismatch blocks rather than letting the operator read a
+#: number the system is not using. Absent, the artefact's own percentile stands unquestioned.
+KEY_DI_PERCENTILE: Final = "prediction.di_percentile"
+
 # --------------------------------------------------------------------------- #
 # Reason codes. Enumerated by tests/console/test_reason_prose.py out of this module's
 # `REASON_*` attributes, so a code added here without operator prose turns that test red
@@ -119,6 +129,14 @@ REASON_INPUTS_INCOMPLETE: Final = "prediction_inputs_incomplete"
 #: This is the model declining to answer a question it was never trained on, which is the
 #: honest outcome and is the one refusal here that says nothing is broken.
 REASON_DI_REFUSED: Final = "di_refused"
+
+#: `prediction.di_percentile` is set and disagrees with the percentile the loaded artefact's
+#: DI was fitted at. **Separate from `prediction_unavailable` because the fix is different**:
+#: the model is fine and the artefact is fine, and what is wrong is that the operator has
+#: changed a number believing it takes effect. It does not — the threshold is baked in — so
+#: the honest answer is to stop and say both numbers rather than to keep refusing at the old
+#: line while the config claims a new one.
+REASON_DI_PERCENTILE_MISMATCH: Final = "di_percentile_mismatch"
 
 # --------------------------------------------------------------------------- #
 # Published

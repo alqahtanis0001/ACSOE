@@ -229,6 +229,10 @@ class AnomalyEngine(BaseEngine):
 
 def _read(directory: Path, run_id: str) -> _Detector:
     """Verify and load one run's detector, or say which way it is unusable."""
+    # **Permanent, by the lead's ruling of 2026-09-13, not a placeholder.** `joblib.*` is
+    # deliberately not in `pyproject.toml`'s mypy overrides: this project runs
+    # `warn_unused_ignores`, so an override would turn this line into an error rather than
+    # remove it. Same treatment as pyarrow, and joblib is a declared dependency either way.
     import joblib  # type: ignore[import-untyped]
 
     from acsoe.modelling.artefacts import ArtefactError, load_run

@@ -13,8 +13,11 @@ the guard chain, and engines 7 ``scout``, 10 ``cost`` and 11 ``risk`` as the opp
 chain. All four are gates; ``is_gate_matches_registry`` checks each against the Gate
 column of the registry table in ``context/engine-contracts.md``.
 
-**What is registered, what is not, and why the chain is not yet in full registry
-order.** Nine of the twenty-three engines exist. The opportunity chain runs 7 -> 10 ->
+**Phase 5 registers engines 5, 6, 12, 13, 8 and 15, spec 77**; see ``OPPORTUNITY_CHAIN``.
+Fifteen of the twenty-three engines are registered or offline after it.
+
+**What was registered after Phase 3, and why the chain was not yet in full registry
+order.** Nine of the twenty-three engines existed then. The opportunity chain runs 7 -> 10 ->
 11 with 5, 6, 12, 13, 8 and 9 absent from between them, and 14, 15, 16 and 18 absent
 after — so it is the registry order with holes, not a different order. The manage chain
 (21, 22, 19) is still empty and Phase 6 fills it. Engines 20 ``tournament`` and 23
@@ -52,15 +55,21 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from acsoe.core.contracts import Chains
+from acsoe.engines.anomaly.engine import AnomalyEngine
 from acsoe.engines.cost.engine import CostEngine
 from acsoe.engines.data_guard.engine import DataGuardEngine
 from acsoe.engines.exchange.engine import ExchangeEngine
+from acsoe.engines.feature.engine import FeatureEngine
+from acsoe.engines.macro_context.engine import MacroContextEngine
 from acsoe.engines.market_data_recorder.engine import MarketDataRecorderEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
 from acsoe.engines.memory.engine import MemoryEngine
+from acsoe.engines.prediction.engine import PredictionEngine
+from acsoe.engines.regime.engine import RegimeEngine
 from acsoe.engines.risk.engine import RiskEngine
 from acsoe.engines.safety.engine import SafetyEngine
 from acsoe.engines.scout.engine import ScoutEngine
+from acsoe.engines.skeptic.engine import SkepticEngine
 
 if TYPE_CHECKING:
     from acsoe.core.contracts import BaseEngine
@@ -116,10 +125,34 @@ GUARD_CHAIN: tuple[BaseEngine, ...] = (
 #: 11 ``risk`` because the cheaper question comes first: cost needs a fee tier and a
 #: spread, risk needs a price, an order book and the account's balances, and there is no
 #: sense sizing a position the edge cannot pay for.
+#:
+#: **Phase 5 registers 5, 6, 12, 13, 8 and 15, spec 77**, into their registry positions:
+#: the chain is now 5 -> 6 -> 7 -> 12 -> 13 -> 8 -> 10 -> 11 -> 15, with 9 ``order_book``,
+#: 14 ``adaptive_router``, 16 ``decision`` and 18 ``execution`` still absent for Phase 6.
+#: Engine 5 ``feature`` is first and returns ``PASS`` on every tick where no decision bar
+#: closed, so from here the rest of the chain runs only on bar ticks. Engines 13, 8 and 15
+#: fail closed on a fresh clone (no ``models/``, no run ids) and on the thresholds the
+#: operator has withheld: ``prediction.di_percentile`` is absent by ruling, so engine 8
+#: blocks on every bar tick until it is supplied.
+#:
+#: **One hole is load-bearing this phase and it is stated rather than found.** Engine 10
+#: ``cost`` reads ``state["order_book"]["estimated_slippage_pct"]`` and engine 9 does not
+#: exist until Phase 6, so ``cost`` blocks every candidate that reaches it and engine 15
+#: ``skeptic`` is never reached in this chain. Engine 15 was therefore rehearsed through two
+#: real orchestrator ticks by B-3 in ``tests/engines/test_feature_chain_rehearsal.py`` with
+#: 10 and 11 left out, and the same file asserts that in this full chain the tick stops at
+#: ``cost`` and ``skeptic`` never runs. Registration was held until that rehearsal and B-2's
+#: rehearsals of 5, 6, 12, 13 and 8 were green, the same deferral as Phases 2, 3 and 4.
 OPPORTUNITY_CHAIN: tuple[BaseEngine, ...] = (
+    FeatureEngine(),
+    MacroContextEngine(),
     ScoutEngine(),
+    RegimeEngine(),
+    AnomalyEngine(),
+    PredictionEngine(),
     CostEngine(),
     RiskEngine(),
+    SkepticEngine(),
 )
 
 #: Engines 21, 22, 19. Every tick, every mode. Watches positions, exits them, records

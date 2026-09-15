@@ -198,7 +198,15 @@ def test_every_reason_code_engine_19_can_write_is_in_the_map() -> None:
     # blocks under contract rule 6 all the same, so engine 19 copies its codes exactly as
     # it copies a gate's — and a code left out of this tuple is one the enumeration cannot
     # see, which is the same silence the enumeration exists to prevent.
-    for name in ("scout", "cost", "risk", "safety", "prediction", "anomaly"):
+    for name in (
+        "scout",
+        "cost",
+        "risk",
+        "safety",
+        "prediction",
+        "anomaly",
+        "skeptic",
+    ):
         module = importlib.import_module(f"acsoe.engines.{name}.contracts")
         for attr, value in vars(module).items():
             if attr.startswith("REASON_") and isinstance(value, str):

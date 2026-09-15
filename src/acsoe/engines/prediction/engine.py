@@ -66,9 +66,11 @@ from acsoe.engines.prediction.contracts import (
     FEATURE_KEY,
     FEATURE_PAIRS_FIELD,
     FEATURE_VERSION_FIELD,
+    KEY_DI_PERCENTILE,
     KEY_PREDICTION_RUN_ID,
     MACRO_CONTEXT_KEY,
     MACRO_FEATURES_FIELD,
+    REASON_DI_PERCENTILE_MISMATCH,
     REASON_DI_REFUSED,
     REASON_INPUTS_INCOMPLETE,
     REASON_UNAVAILABLE,
@@ -167,6 +169,19 @@ class PredictionEngine(BaseEngine):
                 "names describe different quantities; a model scored across them produces "
                 "numbers that look ordinary and mean nothing.",
                 model_run_id=artefact.run_id,
+            )
+
+        mismatch = _di_percentile_complaint(context, artefact)
+        if mismatch is not None:
+            return self._blocked(
+                started,
+                str(pair),
+                bar_ts,
+                REASON_DI_PERCENTILE_MISMATCH,
+                mismatch,
+                model_run_id=artefact.run_id,
+                feature_version=artefact.feature_version,
+                di_threshold=float(artefact.di.threshold),
             )
 
         row = (features.get(FEATURE_PAIRS_FIELD) or {}).get(pair)
@@ -411,6 +426,16 @@ def _read(directory: Path, run_id: str) -> _Artefact:
         )
 
     try:
+        di_fit = di_module.load(di_path)
+    except di_module.DissimilarityError as problem:
+        # A di.npz from before the ruling of 2026-09-15 carries no exclusion span. Its
+        # threshold measures time proximity and refuses nearly every candidate, and it
+        # cannot be corrected without refitting, so it is no DI at all.
+        raise PredictionError(
+            f"model run {run_id!r} has an unusable di.npz: {problem}"
+        ) from problem
+
+    try:
         calibrators = from_json((directory / CALIBRATORS_NAME).read_bytes())
     except (OSError, CalibrationError) as problem:
         raise PredictionError(
@@ -434,7 +459,7 @@ def _read(directory: Path, run_id: str) -> _Artefact:
         scaler=loaded.scaler,
         booster=lgb.Booster(model_file=str(directory / "model.txt")),
         calibrators=calibrators,
-        di=di_module.load(di_path),
+        di=di_fit,
     )
 
 
@@ -454,6 +479,36 @@ def _expected_features(
     payload = json.loads(manifest_path.read_bytes().decode("utf-8"))
     assets = list((payload.get("dataset") or {}).get("macro_assets") or [])
     return (*feature_names, *macro_names(assets))
+
+
+def _di_percentile_complaint(context: EngineContext, artefact: _Artefact) -> str | None:
+    """The sentence to block with when the config's DI percentile is not the artefact's.
+
+    **The threshold is baked into `di.npz` and this engine never computes one.** So once a run
+    has been trained at some percentile, editing `prediction.di_percentile` changes nothing
+    the running system does — the engine goes on refusing at the old line while the config
+    claims a new one, and the operator reads a number that is not in use. B-2's rehearsal of
+    engines 13 and 8 found that, and the ruling of 2026-09-13 is that it stops the tick.
+
+    **Only when the key is present.** Absent is the committed state and it is not a
+    disagreement: it means the operator has not chosen yet and the artefact's own percentile
+    stands. `None` here is "no complaint", which is why the check reads as a sentence rather
+    than as a boolean — the caller needs the words either way.
+    """
+    configured = context.config.get(KEY_DI_PERCENTILE)
+    if configured is None:
+        return None
+    wanted = float(configured)
+    fitted = float(artefact.di.percentile)
+    if wanted == fitted:
+        return None
+    return (
+        f"{KEY_DI_PERCENTILE} is {wanted:g} and model run {artefact.run_id!r} was fitted at "
+        f"{fitted:g}. The DI threshold is baked into the artefact, so changing the key does "
+        "not move it: the engine would refuse at the percentile it was trained on while the "
+        "config claimed another. Retrain at the percentile you want, or point "
+        "`models.prediction_run_id` at a run that was."
+    )
 
 
 def _vector(

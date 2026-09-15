@@ -16,6 +16,13 @@ Two of these tests are the ones that matter:
   distance zero, which drags the whole distribution down and puts the threshold below
   where live scores will fall. The veto then almost never fires, which looks exactly like
   a well-behaved model.
+
+And one the ruling of 2026-09-15 added, because leaving out the row alone was the same
+defect one step removed:
+:func:`test_same_moment_rows_on_other_pairs_are_left_out_of_the_distribution`. Most DI
+columns are macro and calendar features identical for every pair on one bar, so a row's
+nearest neighbours were its own moment's rows and the threshold measured time proximity.
+The fit leaves out every reference row within the exclusion span, across pairs.
 """
 
 from __future__ import annotations
@@ -31,6 +38,11 @@ di = require_module("acsoe.modelling.di", reason="acsoe.modelling.di does not ex
 
 NEIGHBOURS = 5
 PERCENTILE = 0.95
+BAR_S = 900
+#: `backtest.embargo_bars x timeframes.decision_bar_s` as committed. Spelled here rather
+#: than read from config because this module is the arithmetic; the trainer's tests prove
+#: the trainer reads the real one.
+SPAN_S = 48 * BAR_S
 
 
 def cloud(rows: int, *, spread: float, seed: int, width: int = 4) -> object:
@@ -39,12 +51,44 @@ def cloud(rows: int, *, spread: float, seed: int, width: int = 4) -> object:
 
 
 def identity(rows: int, *, pair: str = "AAAUSD") -> list[str]:
-    return [f"{pair}|{900 * index}" for index in range(rows)]
+    return [f"{pair}|{BAR_S * index}" for index in range(rows)]
+
+
+def stamps(rows: int) -> list[int]:
+    """The `decision_ts` half of :func:`identity`, one bar apart."""
+    return [BAR_S * index for index in range(rows)]
+
+
+def fit_on(reference: object, rows: int, **overrides: object) -> object:
+    arguments: dict[str, object] = {
+        "neighbours": NEIGHBOURS,
+        "percentile": PERCENTILE,
+        "decision_ts": stamps(rows),
+        "exclusion_s": SPAN_S,
+    }
+    arguments.update(overrides)
+    return di.fit(reference, identity(rows), **arguments)
 
 
 def a_fit(rows: int = 300, *, spread: float = 1.0, seed: int = 7) -> object:
-    reference = cloud(rows, spread=spread, seed=seed)
-    return di.fit(reference, identity(rows), neighbours=NEIGHBOURS, percentile=PERCENTILE)
+    return fit_on(cloud(rows, spread=spread, seed=seed), rows)
+
+
+def brute_force_distribution(
+    reference: object, decision_ts: object, *, neighbours: int, span_s: int | None
+) -> object:
+    """The leave-one-out statistic from the full distance matrix, written independently.
+
+    `span_s=None` leaves out the row alone - the reading before 2026-09-15, kept here only
+    as the comparison the defect is measured against.
+    """
+    matrix = np.asarray(reference, dtype=np.float64)
+    ts = np.asarray(decision_ts, dtype=np.int64)
+    distances = np.sqrt(((matrix[:, None, :] - matrix[None, :, :]) ** 2).sum(axis=2))
+    np.fill_diagonal(distances, np.inf)
+    if span_s is not None:
+        distances[np.abs(ts[:, None] - ts[None, :]) <= span_s] = np.inf
+    return np.sort(distances, axis=1)[:, :neighbours].mean(axis=1)
 
 
 # --------------------------------------------------------------------------- #
@@ -111,12 +155,8 @@ def test_a_fit_on_a_tight_cluster_refuses_an_ordinary_row_the_broad_fit_accepts(
     rest = cloud(380, spread=1.5, seed=12)
     broad = np.vstack([tight, rest])
 
-    broad_fit = di.fit(
-        broad, identity(broad.shape[0]), neighbours=NEIGHBOURS, percentile=PERCENTILE
-    )
-    tight_fit = di.fit(
-        tight, identity(tight.shape[0]), neighbours=NEIGHBOURS, percentile=PERCENTILE
-    )
+    broad_fit = fit_on(broad, broad.shape[0])
+    tight_fit = fit_on(tight, tight.shape[0])
 
     # An ordinary row: an unremarkable member of the broad training set, far outside the
     # tight cluster. Taken from the training set itself, so no row is being invented.
@@ -163,11 +203,11 @@ def test_a_nan_in_the_reference_set_is_refused() -> None:
     reference = cloud(50, spread=1.0, seed=3)
     reference[7, 2] = np.nan
     with pytest.raises(di.DissimilarityError, match="NaN or infinity"):
-        di.fit(reference, identity(50), neighbours=NEIGHBOURS, percentile=PERCENTILE)
+        fit_on(reference, 50)
 
 
 def test_a_nan_in_the_scored_vector_is_refused() -> None:
-    fitted = a_fit(100)
+    fitted = a_fit(300)
     vector = np.zeros(fitted.width)
     vector[1] = np.nan
     with pytest.raises(di.DissimilarityError, match="NaN or infinity"):
@@ -175,7 +215,7 @@ def test_a_nan_in_the_scored_vector_is_refused() -> None:
 
 
 def test_a_vector_of_the_wrong_width_is_refused() -> None:
-    fitted = a_fit(100)
+    fitted = a_fit(300)
     with pytest.raises(di.DissimilarityError, match="against the reference set's"):
         di.score(fitted, np.zeros(fitted.width + 1))
 
@@ -185,13 +225,20 @@ def test_an_identity_that_does_not_match_the_rows_is_refused() -> None:
     nothing, and it would still load, still score and still look like an artefact."""
     reference = cloud(50, spread=1.0, seed=5)
     with pytest.raises(di.DissimilarityError, match="identity has"):
-        di.fit(reference, identity(49), neighbours=NEIGHBOURS, percentile=PERCENTILE)
+        di.fit(
+            reference,
+            identity(49),
+            neighbours=NEIGHBOURS,
+            percentile=PERCENTILE,
+            decision_ts=stamps(50),
+            exclusion_s=SPAN_S,
+        )
 
 
 def test_a_percentile_outside_zero_to_one_is_refused() -> None:
     reference = cloud(50, spread=1.0, seed=5)
     with pytest.raises(di.DissimilarityError, match="percentile must be in"):
-        di.fit(reference, identity(50), neighbours=NEIGHBOURS, percentile=1.0)
+        fit_on(reference, 50, percentile=1.0)
 
 
 def test_too_few_reference_rows_for_k_is_a_stop_rather_than_a_smaller_k() -> None:
@@ -199,9 +246,98 @@ def test_too_few_reference_rows_for_k_is_a_stop_rather_than_a_smaller_k() -> Non
     where history is thinnest, which are the folds it matters most on."""
     reference = cloud(NEIGHBOURS, spread=1.0, seed=5)
     with pytest.raises(di.DissimilarityError, match="cannot support"):
-        di.fit(
-            reference, identity(NEIGHBOURS), neighbours=NEIGHBOURS, percentile=PERCENTILE
-        )
+        fit_on(reference, NEIGHBOURS)
+
+
+# --------------------------------------------------------------------------- #
+# The exclusion span - ruling of 2026-09-15, amending ruling 6
+# --------------------------------------------------------------------------- #
+
+
+def test_same_moment_rows_on_other_pairs_are_left_out_of_the_distribution() -> None:
+    """The defect the ruling names, constructed.
+
+    Six pairs on 300 bars, and on each bar every pair carries the same market state plus a
+    little noise - which is what 78 macro columns identical across pairs, and the calendar
+    columns, do to a real reference set. Leaving out the row alone, a row's five nearest
+    neighbours are the other five pairs on its own bar, so the distribution collapses to
+    the noise and the threshold measures time proximity: every live candidate, which has no
+    same-moment neighbour, lands above it. Leaving out every row within the span, the
+    neighbours come from other moments and the distribution is the market's spread.
+    """
+    pairs, bars = 6, 300
+    rng = np.random.default_rng(21)
+    market = rng.normal(size=(bars, 4))
+    noise = rng.normal(scale=1e-3, size=(bars * pairs, 4))
+    reference = np.repeat(market, pairs, axis=0) + noise
+    ts = np.repeat(np.arange(bars, dtype=np.int64) * BAR_S, pairs)
+    ids = [f"P{index % pairs}USD|{int(stamp)}" for index, stamp in enumerate(ts)]
+
+    fitted = di.fit(
+        reference,
+        ids,
+        neighbours=NEIGHBOURS,
+        percentile=PERCENTILE,
+        decision_ts=ts,
+        exclusion_s=SPAN_S,
+    )
+    excluded = brute_force_distribution(reference, ts, neighbours=NEIGHBOURS, span_s=SPAN_S)
+    row_only = brute_force_distribution(reference, ts, neighbours=NEIGHBOURS, span_s=None)
+
+    assert np.allclose(fitted.distribution, excluded, rtol=1e-9, atol=1e-9), (
+        "the fitted distribution is not the leave-one-out with every row within the span "
+        "left out"
+    )
+    assert float(np.median(excluded)) > 100.0 * float(np.median(row_only)), (
+        "the constructed case cannot tell the exclusion from leave-one-out on the row alone"
+    )
+    assert fitted.threshold == pytest.approx(float(np.quantile(excluded, PERCENTILE)))
+    assert fitted.exclusion_s == SPAN_S
+    assert np.array_equal(fitted.decision_ts, ts)
+
+
+def test_the_span_is_inclusive_at_exactly_exclusion_s() -> None:
+    """A row exactly `exclusion_s` away is left out; one second further is not.
+
+    Five rows on one axis. Row 0's nearest point in space is row 1, exactly the span away
+    in time, so an exclusive boundary would give it a distance of 0.001; inclusive, its
+    nearest candidate is row 2, one second outside the span, at 0.5.
+    """
+    reference = np.array([[0.0], [0.001], [0.5], [1.0], [2.0]])
+    ts = [0, SPAN_S, SPAN_S + 1, 5 * SPAN_S, 6 * SPAN_S]
+    ids = [f"AAAUSD|{stamp}" for stamp in ts]
+
+    inclusive = di.fit(
+        reference, ids, neighbours=1, percentile=0.5, decision_ts=ts, exclusion_s=SPAN_S
+    )
+    assert inclusive.distribution[0] == pytest.approx(0.5), inclusive.distribution
+    narrower = di.fit(
+        reference, ids, neighbours=1, percentile=0.5, decision_ts=ts, exclusion_s=SPAN_S - 1
+    )
+    assert narrower.distribution[0] == pytest.approx(0.001), narrower.distribution
+
+
+def test_decision_ts_that_does_not_match_the_rows_is_refused() -> None:
+    reference = cloud(200, spread=1.0, seed=5)
+    with pytest.raises(di.DissimilarityError, match="decision_ts has shape"):
+        fit_on(reference, 200, decision_ts=stamps(199))
+
+
+@pytest.mark.parametrize("span", [0, -SPAN_S])
+def test_a_span_that_is_not_positive_is_refused(span: int) -> None:
+    """Zero is leave-one-out on the row alone, which is the defect rather than a variant."""
+    reference = cloud(200, spread=1.0, seed=5)
+    with pytest.raises(di.DissimilarityError, match="exclusion_s must be positive"):
+        fit_on(reference, 200, exclusion_s=span)
+
+
+def test_a_row_left_with_fewer_than_k_candidates_is_a_stop() -> None:
+    """60 rows one bar apart: rows 12 to 47 are within 48 bars of every other row, so they
+    keep no candidate at all. A narrower span or a smaller k chosen here would change what
+    the DI means on exactly the folds where history is thinnest."""
+    reference = cloud(60, spread=1.0, seed=5)
+    with pytest.raises(di.DissimilarityError, match="keep fewer than 5 neighbours"):
+        fit_on(reference, 60)
 
 
 # --------------------------------------------------------------------------- #
@@ -218,6 +354,9 @@ def test_a_saved_fit_round_trips_with_its_identity(tmp_path: Path) -> None:
     assert loaded.threshold == fitted.threshold
     assert loaded.neighbours == fitted.neighbours
     assert loaded.percentile == fitted.percentile
+    assert loaded.exclusion_s == fitted.exclusion_s == SPAN_S
+    assert np.array_equal(loaded.decision_ts, fitted.decision_ts)
+    assert np.array_equal(loaded.distribution, fitted.distribution)
     assert np.array_equal(loaded.reference, fitted.reference)
     assert di.score(loaded, fitted.reference[0]).di == di.score(fitted, fitted.reference[0]).di
 
@@ -229,8 +368,34 @@ def test_loading_needs_no_pickle(tmp_path: Path) -> None:
 
     Asserted by loading with the default, which raises on a pickled array.
     """
-    fitted = a_fit(60)
+    fitted = a_fit(300)
     path = tmp_path / "di.npz"
     di.save(fitted, path)
     with np.load(path) as payload:  # allow_pickle defaults to False
         assert set(payload.files) >= {"reference", "identity", "distribution", "threshold"}
+
+
+def _rewrite(path: Path, *, drop: tuple[str, ...], **replace: object) -> None:
+    with np.load(path) as payload:
+        kept = {name: payload[name] for name in payload.files if name not in drop}
+    kept.update(replace)
+    np.savez_compressed(path, **kept)
+
+
+def test_loading_a_di_fitted_without_the_exclusion_is_refused(tmp_path: Path) -> None:
+    """A `di.npz` from before 2026-09-15 has no span. Its threshold measures time proximity
+    and cannot be corrected without refitting, so it is refused rather than loaded with a
+    default; engine 8 turns the refusal into `prediction_unavailable`."""
+    path = tmp_path / "di.npz"
+    di.save(a_fit(150), path)
+    _rewrite(path, drop=("exclusion_s", "decision_ts"))
+    with pytest.raises(di.DissimilarityError, match=r"records no exclusion_s.*time proximity"):
+        di.load(path)
+
+
+def test_loading_a_di_with_a_span_that_is_not_positive_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "di.npz"
+    di.save(a_fit(150), path)
+    _rewrite(path, drop=(), exclusion_s=np.int64(0))
+    with pytest.raises(di.DissimilarityError, match="not positive"):
+        di.load(path)

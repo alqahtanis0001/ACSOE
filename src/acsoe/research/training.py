@@ -1098,9 +1098,23 @@ def _fit_and_score_di(
         complete = sorted(generator.choice(complete, size=cap, replace=False).tolist())
     matrix = matrix[complete]
     identity = [identity[index] for index in complete]
+    stamps = eligible["decision_ts"].to_numpy().astype(np.int64)[complete]
 
+    # The leave-one-out excludes every reference row within the embargo of the scored one,
+    # across all pairs (ruling of 2026-09-15). A live candidate sits at least the embargo
+    # after the reference window, so this is the span it is guaranteed; leaving out only
+    # the row keeps its same-bar neighbours on every pair and the threshold measures time
+    # proximity.
+    exclusion_s = int(_required(config, "backtest.embargo_bars")) * int(
+        _required(config, "timeframes.decision_bar_s")
+    )
     fit = di_module.fit(
-        matrix, identity, neighbours=neighbours, percentile=float(percentile)
+        matrix,
+        identity,
+        neighbours=neighbours,
+        percentile=float(percentile),
+        decision_ts=stamps,
+        exclusion_s=exclusion_s,
     )
     values: list[float | None] = []
     refusals: list[bool] = []
@@ -1812,6 +1826,7 @@ def _write_fold_artefacts(
                 "rows": int(di_fit.rows),
                 "neighbours": int(di_fit.neighbours),
                 "percentile": float(di_fit.percentile),
+                "exclusion_s": int(di_fit.exclusion_s),
                 "threshold": float(di_fit.threshold),
                 "reference_identity": identity_digest(
                     [entry_id.split("|")[0] for entry_id in di_fit.identity],

@@ -190,6 +190,7 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
         "predictor_trains_and_calibrates",
         "training_is_reproducible_from_config_and_data",
         "di_fitted_on_predictor_training_set",
+        "di_leave_one_out_excludes_48_bars",
         "skeptic_trains_only_on_predictor_buy_rows",
         "walkforward_weekly_retrain_reports_oos",
         "anomaly_and_skeptic_have_both_tests",

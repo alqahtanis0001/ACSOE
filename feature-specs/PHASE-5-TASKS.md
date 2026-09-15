@@ -1,5 +1,57 @@
 # Phase 5 — shared task list
 
+## HANDOFF 4, 2026-09-15 ~08:10 — the operator is shutting down. Read this first.
+
+**Phase 5 is NOT closed and NOT consolidated** (both withheld by the operator). The session ran
+out of time before the gates for phases 0 to 4 and before the ruled config values could land
+green. Exact state of every piece:
+
+| Piece | State |
+|---|---|
+| Operator rulings of 2026-09-15 (DI exclusion; `anomaly.threshold_percentile: 0.99` provisional; `scout.rank_feature` none, open for Phase 7; 50.2% incomplete vectors as Phase 7 prerequisite 6) and of 2026-09-14 (`skeptic.veto_threshold: 0.50` provisional) | **Recorded** in the tracker (Open Questions, Locked Decisions, prerequisites 5 and 6), spec 68's amendment, the glossary, `docs/build-log/phase-5/lead.md`. |
+| DI 48-bar exclusion (C-3): `modelling/di.py` (`fit(..., decision_ts, exclusion_s)`, `load` refuses an unexcluded DI), `research/training.py` (span from `backtest.embargo_bars`), engine 8 blocks `prediction_unavailable` on a refused load, criterion `di_leave_one_out_excludes_48_bars` in `scripts/verify.py` with tests | **Built, C-3 reported the criterion PASS and 446 targeted tests green, mypy clean**; four mutations red. Included in the gate run below. |
+| Spec 73 engine 15 review | **Done by the lead.** Two fail-open defects (absent/non-bool `is_buy` read as non-BUY; NaN `p_wrong` passed) fixed by C-4 with block tests, plus the veto sentence precision; `engine.py` sha256 `022039a7…`; 129 tests green; sweep 1 killed every arm. **C-4's sweep 2 (the same arms on the final code, plus the reason-format revert) was still pending at the stop: re-run it.** |
+| Engine 15 rehearsal (B-3, did not build it) | **Done**, 29 tests in `tests/engines/test_feature_chain_rehearsal.py`. In the full chain the bar tick stops at engine 10 for want of engine 9, so engine 15 is unreachable this phase; with 10 and 11 omitted it blocks unconfigured and vetoes/passes correctly with a trained skeptic. |
+| Registration of 5, 6, 12, 13, 8, 15 in `bootstrap.py` | **Done**: opportunity chain 5, 6, 7, 12, 13, 8, 10, 11, 15. `tests/cli`, `tests/core`, Phase 0 and 3 criterion tests 207 passed. |
+| `skeptic.veto_threshold: 0.50` and `anomaly.threshold_percentile: 0.99` into `config/default.yaml` | **NOT LANDED.** Pasting them turns 6 tests red that pin the keys as absent or train fixtures with the committed config (listed below). Backed out so the commit is green. **Next session: land the YAML and repoint those 6 tests in the same change.** |
+| DI refit with the exclusion over all 405 folds | **Done.** Out-of-sample refusal with the exclusion: **0.95 → 6.79%, 0.99 → 3.31%, 0.999 → 2.06%** (was 94.7%, 74.9%, 31.1%). `docs/dataset/di-exclusion-refit-2026-09-15.py` and `.json`. `prediction.di_percentile` stays absent until the operator rules on these. |
+| Gates | **Only `--phase 5` was run, on the committed tree: `14 criteria: 13 PASS, 0 FAIL, 1 PENDING`, exit 0** (PENDING `di_fitted_on_predictor_training_set` on `prediction.di_percentile`, as ruled). The first run failed `toolchain_green` on one test, `tests/verify/test_runner.py::test_each_phase_registers_its_own_criteria_and_no_others`, whose phase 5 list lacked C-3's new criterion; the lead added the name (C lane, under the deadline) and the re-run was green. **Phases 0 to 4 were not gated this session. Run all six in order on a quiet tree.** |
+
+**The config change to land** (it was in the tree and backed out):
+
+```yaml
+anomaly:                         # Engine 13, specs 70, 72.
+  threshold_percentile: 0.99     # OPERATOR, ruled 2026-09-15, PROVISIONAL. 1.24% blocked out of
+                                 # sample against 1% nominal, stable by year, the volatile tail.
+                                 # 0.95 rejected. The spec 70 ten-sigma question stays open.
+skeptic:                         # Engine 15, specs 69, 73.
+  veto_threshold: 0.50           # OPERATOR, ruled 2026-09-14, from the veto sweep, PROVISIONAL
+                                 # until the chain runs end to end.
+```
+
+and the header comment above `models:` updated to say three keys remain absent
+(`prediction.di_percentile`, `models.*_run_id`, `scout.rank_feature`).
+
+**The 6 tests that go red with it** (each pins the committed config's absence; the absent case
+must be supplied by the test instead, not deleted):
+`tests/engines/test_skeptic.py::test_with_no_threshold_configured_it_blocks_rather_than_passing`
+(line 227 precondition only), `tests/research/test_anomaly_training.py::test_no_threshold_is_recorded_while_the_key_is_absent`,
+`tests/research/test_skeptic_training.py::test_the_veto_numbers_wait_for_the_operators_threshold`
+(both train with the committed config, so a threshold is now baked in: train with the key removed),
+`tests/harness/test_doubles.py::test_a_leaf_the_model_declares_optional_and_the_file_omits_reads_as_none`
+(drop the two ruled keys from its list), and
+`tests/engines/test_feature_chain_rehearsal.py::test_a_buy_call_with_the_skeptic_unconfigured_blocks_with_skeptic_unavailable[no-threshold|no-run-id|neither]`
+(its "unconfigured" config must remove `skeptic.veto_threshold` explicitly).
+
+**Then, in order:** land config plus those 6 tests; C-4's sweep 2; gates `--phase 0` to
+`--phase 5` on a quiet tree, each to a file; commit; report. Expected `--phase 5` then: every
+criterion PASS except `di_fitted_on_predictor_training_set` PENDING on `prediction.di_percentile`.
+
+**One lesson, recorded because it cost this session its gates:** the lead waited about two hours
+for a teammate message that never came instead of checking the teammate's files. Check the tree
+on a timer; never block on a message.
+
+
 ## HANDOFF — session closed by the operator 2026-09-13 ~03:00. Read this first.
 
 **Phase 5 is in progress, not closed.** Phase 4 is green on its gate (10/10, re-verified at

@@ -813,3 +813,90 @@ pydantic's `to_python`. **My progress file says it becomes mine again if it appe
 seed write path.** This is outside it — a config parse in an engine test — so it is recorded
 here rather than left as a re-run that happened to pass. Not chased further: the tree is being
 written by three agents at once, which is the worst possible conditions to chase it in.
+
+### Engine 15 `skeptic` rehearsed through two real ticks, and where it cannot be reached
+
+**Agent:** B (the `B-3` session) · **Task:** engine 15 rehearsal · **Date:** 2026-09-15
+
+**What happened.** Eight tests added to `tests/engines/test_feature_chain_rehearsal.py` (now 29,
+all green), driving C's engine 15 through the real `Orchestrator` behind real engines 5, 6, 7,
+12, 13 and 8, over a bar tick and then a tick sixty seconds later. A new module fixture trains
+four folds from the constructed series **with a macro column** (`{"btc": "AAAUSD"}`), so the
+manifest names `macro_btc_*` and engine 15 assembles its vector from engines 5 and 6 the way it
+does live. The run id is the last fold whose manifest carries `extras.skeptic` and whose
+directory has `skeptic.txt`; fold 0 is asserted to have neither.
+
+**(a) The full registry chain, 5, 6, 7, 12, 13, 8, 10, 11, 15.** On a bar tick where engine 8
+calls a BUY and the skeptic is fully configured, the chain stops at `cost` — *"Cost gate could
+not price this candidate: missing order_book is NoneType, expected a mapping"* — and neither
+`risk` nor `skeptic` appears in `state`; engine 15 is never called. **That is why engine 15 is
+rehearsed in (b) without 10 and 11**, and it is what spec 77's registration will run until
+engine 9 lands, at which point this test goes red on purpose.
+
+**(b) Chain 5, 6, 7, 12, 13, 8, 15.** What the bar tick reached:
+
+| Configuration | `state["skeptic"]` on the bar tick | blocker |
+|---|---|---|
+| BUY, no threshold | `reason_code: skeptic_unavailable`, `vetoed: false`, `p_wrong: null`; reason names `skeptic.veto_threshold` | `skeptic` |
+| BUY, no run id | same code; reason names `models.skeptic_run_id` | `skeptic` |
+| BUY, neither | same code; the threshold is checked first, so it is the one named | `skeptic` |
+| not a BUY, neither key | `vetoed: false`, `reason: "not a BUY call"`, `reason_code: null` | none |
+| BUY, trained, threshold `p_wrong − 1e-6` | `p_wrong: 8.980585978810067e-06`, `threshold: 7.98…e-06`, `vetoed: true`, `reason_code: skeptic_veto` | `skeptic` |
+| BUY, trained, threshold `p_wrong + 1e-6` | same `p_wrong`, `threshold: 9.98…e-06`, `vetoed: false`, `reason_code: null` | none |
+
+On every quiet tick `feature == {}`, there is no blocker, `skeptic` is absent, and the engine's
+own record shows it ran once in two ticks. Status is asserted directly through a
+`RecordingSkeptic` subclass that calls the real `process` and keeps the result, because `state`
+carries no status and an `ERROR` leaves a payload a careless assertion would accept.
+
+**Why the windows are named constants.** The trained predictor is saturated on this series
+(`p_target` is 1e-9 or 1.0), so whether engine 8 calls a BUY depends only on where the window
+ends. Replaying windows through this chain found the series end calls no BUY
+(`expected_move_pct` -0.015) and the window ending 200 bars earlier calls one (+0.030). Both are
+the test's choice and both are asserted on every run, so a retrained model that moves either
+fails the test that needs it by name rather than leaving a vacuous branch green. The first
+diagnostic run used only the series tail and **never produced a BUY** in fifty windows; had the
+test branched on `is_buy`, every veto assertion would have been unreachable and green.
+
+**Why the threshold is recomputed rather than read back.** The first design put the threshold a
+millionth either side of the `p_wrong` engine 15 published. That threshold moves with any
+mutation of `p_wrong`, so reading P(right) would have left both tests green. The threshold is
+instead set from `p_wrong` recomputed from the manifest's input order, the run's scaler,
+`skeptic.txt` and this tick's `state`, measured on a first orchestrator and judged on a second
+over the same bar. The second asserts it saw the same prediction.
+
+**Mutations**, each applied from a byte copy and restored with the hash checked in the same
+step. `engine.py` was `d598f652…` before every arm and after every restore, so C-4's file did
+not change during the sweep. Run narrowly against this file's engine 15 tests (`-k "skeptic or
+engine_15"`; the other 21 tests have no engine 15 in any chain) and against
+`tests/engines/test_skeptic.py`, both green at baseline (8 and 27 passed):
+
+| # | Mutation | Rehearsal | `test_skeptic.py` |
+|---|---|---|---|
+| M1 | veto `>` → `<=` | **killed**: veto test (`KeyError: 'trading_blocked_by'`) and pass test (vetoed at `p_wrong + 1e-6`) | killed |
+| M2 | `p_wrong = 1 - _score(...)` | **killed**: veto test (`0.99999… == 8.98e-06 ± 1e-12`) and pass test (vetoed, *"1.0000 likely to be wrong"*) | killed by the direction test |
+| M3a | vector built by iterating the state row's keys | **killed**, both trained tests: `ERROR`, *"a row has 117 values against 78 feature names"* | killed by the order test |
+| M3b | the manifest's names re-sorted into the state row's key order | **survived** | **killed** by `test_the_vector_is_built_in_the_manifests_order_not_the_state_rows` |
+| M4 | `limit = 0.5` | **killed**: veto test (not blocked) and pass test (`0.5 == 9.98e-06`) | killed |
+
+**M3b is covered elsewhere, not a survivor.** Engine 5 publishes its row in `FEATURE_NAMES`
+order and engine 6 its macro columns in theirs, so on every `state` the live chain produces the
+two orders agree, and no end-to-end fixture can build the disagreement. The same finding as T2
+in the engines 13 and 8 rehearsal, from the other side. M3a is the literal form and dies on an
+`ERROR`, because engine 6 also publishes `macro_eth_*` columns the manifest does not name.
+
+**One thing for C, not fixed.** The veto reason formats both numbers to four decimals: on this
+fixture it reads *"the skeptic puts this call 0.0000 likely to be wrong against a veto threshold
+of 0.0000."*, a veto whose own sentence cannot show why it fired. `test_skeptic.py` asserts
+`f"{p_wrong:.4f}" in reason`, which is true of `"0.0000"` for any small `p_wrong`. The published
+`p_wrong` and `threshold` fields are exact, so nothing is lost for engine 19; it is the operator
+reading the console who cannot check it.
+
+**One red attributed to an in-flight edit.** The first fixture run failed inside
+`research/training.py:1102` with `TypeError: fit() missing 2 required keyword-only arguments:
+'decision_ts' and 'exclusion_s'`, and the traceback showed `???` for that line, which means the
+file changed while the test was running. That is C-3's DI change (`modelling/di.py` gained the
+two arguments first). A re-run a few minutes later trained cleanly, with
+`training.py` at `5d691999…` and `di.py` at `00601cc2…`. Nothing worked around.
+
+**Fix.** None needed in any engine. Test additions only.

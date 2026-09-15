@@ -268,6 +268,27 @@ had already passed over it, because a mutation can only ask about behaviour some
 is a consumer reasoning about a producer, and it is the one review this project keeps proving
 no amount of self-testing replaces.
 
+#### COMPLETE 2026-09-15 — engine 15 `skeptic` rehearsed (B-3 session)
+
+Same file, now **29 tests**, on the lead's request. `pytest tests/engines/test_feature_chain_rehearsal.py -q`
+29 passed; `ruff check` on the file clean. Account in the Phase 5 build log, 2026-09-15.
+
+- **(a) Full registry chain 5, 6, 7, 12, 13, 8, 10, 11, 15**: stops at `cost` for want of engine
+  9, and `skeptic` never appears in `state`. That is why 15 is rehearsed without 10 and 11.
+- **(b) Chain 5, 6, 7, 12, 13, 8, 15**, bar tick then quiet tick, a four-fold skeptic trained with
+  a macro column: `skeptic_unavailable` naming the missing key on a BUY call (three configs);
+  `OK` with "not a BUY call" on a non-BUY; `skeptic_veto` at `p_wrong − 1e-6` and `OK` at
+  `p_wrong + 1e-6`, with `p_wrong` recomputed from the artefact rather than read back. Engine 15
+  is absent on every quiet tick.
+- **Mutations**: veto inverted, P(right), state-key iteration and constant 0.5 all killed by the
+  rehearsal. The manifest's names re-sorted into state order survives it and is killed by C's
+  `test_the_vector_is_built_in_the_manifests_order_not_the_state_rows`: covered elsewhere, and
+  the two orders cannot disagree on a state the live chain produces.
+- **For C**: the veto reason prints `p_wrong` and the threshold to four decimals, so on this
+  fixture it reads "0.0000 … 0.0000". The published fields are exact.
+- **In-flight red**: one fixture run hit C-3's mid-save `fit()` signature change in
+  `research/training.py`, and a re-run minutes later was clean.
+
 #### COMPLETE 2026-09-13 — engines 13 and 8 rehearsed, two configurations
 
 Same file, now **21 tests**, on the lead's request of 17:25. Chain 5, 6, 7, 12, 13, 8, 10, 11

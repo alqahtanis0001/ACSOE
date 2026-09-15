@@ -196,6 +196,22 @@ def test_the_seed_generators_older_di_spelling_still_renders_because_it_carries_
     assert operator_reason("dissimilarity_index", "") == NO_REASON_RECORDED
 
 
+def test_the_percentile_mismatch_points_at_the_setting_not_at_a_missing_model() -> None:
+    """Ruled 2026-09-13. There *is* a usable model; a setting the operator changed does not
+    reach it, because the DI threshold is baked into the artefact.
+
+    An operator told "no usable model is loaded" would go looking for a missing artefact that
+    is sitting right there, so the two sentences have to differ in what they point at.
+    """
+    from acsoe.engines.prediction import contracts as prediction_contracts
+
+    sentence = REASON_PROSE[prediction_contracts.REASON_DI_PERCENTILE_MISMATCH]
+    assert sentence != REASON_PROSE[prediction_contracts.REASON_UNAVAILABLE]
+    assert "setting" in sentence.lower()
+    for missing_model in ("no usable model", "not loaded", "no model"):
+        assert missing_model not in sentence.lower(), missing_model
+
+
 def test_the_di_refusal_reads_as_the_model_declining_rather_than_as_a_fault() -> None:
     """`ui-context.md` rule 3: rejection reasons are written for the operator.
 
@@ -235,6 +251,44 @@ def test_the_anomaly_block_says_market_rather_than_trade() -> None:
     assert "condition" in sentence or "market" in sentence, sentence
     for about_the_trade in ("trade", "entry", "edge", "signal"):
         assert about_the_trade not in sentence, (about_the_trade, sentence)
+
+
+# --------------------------------------------------------------------------- #
+# Engine 15 `skeptic` — spec 73
+# --------------------------------------------------------------------------- #
+
+
+def test_every_reason_code_skeptic_declares_has_prose() -> None:
+    from acsoe.engines.skeptic import contracts as skeptic_contracts
+
+    assert unmapped(skeptic_contracts) == {}
+
+
+def test_the_skeptic_veto_reads_as_a_refusal_and_never_as_an_approval() -> None:
+    """Invariant 4, in the view layer.
+
+    There is no output of engine 15 that makes a trade more likely, and the sentence has to
+    carry that. A line an operator could read as the system endorsing an entry would be the
+    one place a veto-only model appeared to have approved something.
+    """
+    from acsoe.engines.skeptic import contracts as skeptic_contracts
+
+    sentence = REASON_PROSE[skeptic_contracts.REASON_VETO].lower()
+    for approving in ("approve", "confidence", "endorse", "good", "strong"):
+        assert approving not in sentence, (approving, sentence)
+
+
+def test_the_two_skeptic_codes_and_the_seeded_one_are_three_sentences() -> None:
+    """`meta_label_veto` is the seed generator's spelling and `skeptic_veto` is the engine's.
+
+    They are kept apart rather than sharing a line, the way `di_refused` and the retired
+    `dissimilarity_index` could not be: a shared sentence makes two codes one code as far as
+    the operator is concerned, which `test_no_two_codes_share_a_sentence` refuses.
+    """
+    from acsoe.engines.skeptic import contracts as skeptic_contracts
+
+    assert "meta_label_veto" in REASON_PROSE
+    assert REASON_PROSE["meta_label_veto"] != REASON_PROSE[skeptic_contracts.REASON_VETO]
 
 
 # --------------------------------------------------------------------------- #

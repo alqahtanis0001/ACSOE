@@ -174,6 +174,11 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # The engine's own code is `market_anomalous`, and its sentence says **market** because
     # this gate has no opinion about the trade and could not form one.
     "market_anomalous": "Trading conditions on this pair look broken",
+    # Engine 15 `skeptic`, spec 73. `meta_label_veto` above is the seed generator's spelling
+    # for the same fact and stays because it is already on seeded rows; the engine's own code
+    # is `skeptic_veto`, so the two get different sentences rather than one shared — the
+    # engine's names the model, the seed's names the act.
+    "skeptic_veto": "A second model expects this entry to fail",
     # Engine 20 `tournament`, spec 74. Offline: an operator meets these in a research run's
     # output rather than on the live screen, and they still go through the same table because
     # `operator_reason` is the one thing that turns a code into a sentence. Three separate
@@ -186,6 +191,7 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     "tournament_digest_mismatch": (
         "The training run's summary and its out-of-sample rows disagree, so no models were ranked"
     ),
+    "skeptic_unavailable": "No second-opinion model is loaded, so this entry was not judged",
     "anomaly_unavailable": "No market-health model is loaded, so conditions were not checked",
     "anomaly_inputs_incomplete": "Some market-health inputs were missing for this pair",
     # Engine 8 `prediction`, spec 71. **`di_refused`, and `dissimilarity_index` is gone.**
@@ -202,6 +208,13 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # in. The second is a model that is fine and inputs that are not, which is usually a
     # pair whose longest lookback has not filled and needs no action.
     "prediction_unavailable": "No usable model is loaded, so nothing was predicted",
+    # Ruled 2026-09-13 after B-2's rehearsal. Deliberately not a variant of the line above:
+    # there IS a usable model, and what is wrong is that a setting the operator changed does
+    # not reach it. The sentence therefore points at the setting, because an operator told
+    # "no usable model" would go looking for a missing artefact that is sitting right there.
+    "di_percentile_mismatch": (
+        "The refusal threshold setting does not match the loaded model, so it was not used"
+    ),
     "prediction_inputs_incomplete": "Some inputs the model needs were missing for this pair",
     "insufficient_depth": "Order book is too thin to fill without slippage",
     "no_candidate_cleared": "Nothing cleared the gates on this bar",
@@ -218,7 +231,12 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # the opposite way in each. Engine 4's README carries the same note.
     "market_data_stale": "Market data is older than the guard allows",
     "negative_spread": "The order book is crossed",
-    "missing_candle": "A decision bar has no candle",
+    # Reworded 2026-09-13 on the lead's ruling under the `missing_bars` seam, A-2's
+    # wording. "A decision bar has no candle" reads as a hole in *this pair*, and engine
+    # 3 pools the gap across every pair it tracks — so the only true statement the
+    # published number supports is that nothing traded anywhere for a whole bar. The
+    # previous sentence would have sent an operator to look at one pair's feed.
+    "missing_candle": "No pair traded for a whole decision bar",
     # Deliberately not folded into `market_data_stale`. "Older than the guard
     # allows" is a *false sentence* when nothing has arrived at all, and it sends
     # the operator after a lagging feed when the fault is an absent one — a slow

@@ -8853,12 +8853,18 @@ def _trained(
     name: str = "run",
     max_folds: int = CONSTRUCTED_MAX_FOLDS,
     now: datetime | None = None,
+    overrides: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[Any, Any, Any] | None, Outcome | None]:
     """`(report, dataset, config)` from one training run into a temporary models root.
 
     **Nothing here reads `models/`, `data/` or `logs/`.** All three are gitignored, so a
     criterion that depended on one would pass only on the machine that produced it. The
     artefacts are written into `tmp` and thrown away with it.
+
+    `overrides` answers named keys for the **trainer only**, never the committed file: a
+    criterion that needs a subject the operator's withheld key would otherwise prevent
+    (a DI, while `prediction.di_percentile` is absent) supplies its own value here and says
+    so, and the config it returns is the one the trainer saw.
     """
     polars, problem = _polars()
     if polars is None:
@@ -8878,6 +8884,8 @@ def _trained(
     dataset, problem = _constructed_dataset(ctx, polars, training, engine_config)
     if dataset is None:
         return None, problem
+    if overrides:
+        engine_config = _ConfigWith(engine_config, overrides)
     models_dir = tmp / name / "models"
     derived_dir = tmp / name / "derived"
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -8899,6 +8907,22 @@ def _trained(
             TRAINING_CONTRACT,
         )
     return (report, dataset, engine_config), None
+
+
+class _ConfigWith:
+    """The committed config with named keys answered, and nothing else changed."""
+
+    def __init__(self, inner: Any, overrides: Mapping[str, Any]) -> None:
+        self._inner = inner
+        self._overrides = dict(overrides)
+
+    def get(self, dotted_key: str, /) -> Any:
+        if dotted_key in self._overrides:
+            return self._overrides[dotted_key]
+        return self._inner.get(dotted_key)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
 
 
 def _fold_entries(report: Any) -> tuple[list[dict[str, Any]] | None, Outcome | None]:
@@ -9365,6 +9389,262 @@ def check_di_fitted_on_predictor_training_set(ctx: VerifyContext) -> Outcome:
         + " of them not BUY calls so the set is not the BUY subset, and none among the "
         + str(len(test_ids))
         + " test rows"
+    )
+
+
+# --- di_leave_one_out_excludes_48_bars ------------------------------------- #
+
+#: The percentile this criterion trains its subject at. **Not a proposal and not the
+#: operator's value**: `prediction.di_percentile` stays absent from config by ruling, and
+#: the property here — which rows the leave-one-out leaves out — does not depend on where
+#: the line is drawn. Supplied to the trainer only, through `_trained(overrides=...)`, so
+#: this criterion has a DI to judge while the key is withheld.
+DI_EXCLUSION_SUBJECT_PERCENTILE: Final = 0.90
+
+#: How far the recorded distribution may sit from this criterion's recomputation. The
+#: arithmetic is the same Euclidean expansion over different chunking, so the two agree to
+#: floating-point noise or not at all.
+DI_EXCLUSION_TOLERANCE: Final = 1e-9
+
+#: When leaving out the row alone counts as materially different on the subject: the
+#: row-only threshold, drawn at the same percentile, must sit below at least this multiple
+#: of the share it is meant to refuse of the excluded distribution. Below it, the subject
+#: could not tell the exclusion from its absence and a PASS would prove nothing.
+DI_EXCLUSION_MATERIAL_MULTIPLE: Final = 2.0
+
+
+def _loo_distribution(
+    np_mod: ModuleType,
+    reference: Any,
+    decision_ts: Any,
+    *,
+    neighbours: int,
+    span_s: int | None,
+) -> Any:
+    """The mean distance to the `neighbours` nearest reference rows, leaving rows out.
+
+    Written here rather than borrowed from `acsoe.modelling.di`, because it is the thing
+    being checked. `span_s=None` leaves out the row alone — the reading before the ruling of
+    2026-09-15 — and a span leaves out every row, of any pair, whose `decision_ts` is within
+    it of the row being scored, inclusive.
+    """
+    rows = int(reference.shape[0])
+    norms = np_mod.einsum("ij,ij->i", reference, reference)
+    out = np_mod.empty(rows, dtype=np_mod.float64)
+    step = 256
+    for start in range(0, rows, step):
+        stop = min(start + step, rows)
+        block = reference[start:stop]
+        squared = norms[start:stop, None] + norms[None, :] - 2.0 * (block @ reference.T)
+        distances = np_mod.sqrt(np_mod.clip(squared, 0.0, None))
+        distances[np_mod.arange(stop - start), np_mod.arange(start, stop)] = np_mod.inf
+        if span_s is not None:
+            gap = np_mod.abs(decision_ts[None, :] - decision_ts[start:stop, None])
+            distances[gap <= span_s] = np_mod.inf
+        nearest = np_mod.sort(distances, axis=1)[:, :neighbours]
+        out[start:stop] = nearest.mean(axis=1)
+    return out
+
+
+def check_di_leave_one_out_excludes_48_bars(ctx: VerifyContext) -> Outcome:
+    """The DI's leave-one-out leaves out every reference row within 48 bars, across pairs.
+
+    **Ruling of 2026-09-15, amending ruling 6.** 78 of the 117 DI columns are BTC and ETH
+    macro features identical for every pair on the same bar, and the calendar columns are
+    too, so leaving out only the row being scored leaves its same-moment rows in the
+    reference set as near-duplicates. The threshold then measures **time proximity**, not
+    distributional distance, and a live candidate — at least the embargo after the reference
+    window, with no such neighbours — lands above it: over 405 folds the row-only threshold
+    at the 0.95 percentile refused 94.7% of out-of-sample rows. A DI fitted without the
+    exclusion is the defect, not a variant.
+
+    **The subject is fabricated, never the contract.** One fold is trained through
+    `research/training.py` on the constructed two-pair dataset, with a percentile this
+    criterion owns (`DI_EXCLUSION_SUBJECT_PERCENTILE`), because
+    `prediction.di_percentile` stays absent by ruling and this property does not depend on
+    it. The artefact's `di.npz` is then read and **both distributions recomputed here** from
+    its reference matrix and the timestamps in its identity, with the span read from config
+    as `backtest.embargo_bars x timeframes.decision_bar_s`:
+
+    * PASS needs the recorded distribution to equal the excluded recomputation, and the
+      threshold its percentile;
+    * and the row-only recomputation to differ materially on the same subject. Without
+      that, a subject with no same-moment rows would let an implementation without the
+      exclusion pass, and the proof would be empty.
+    """
+    np_mod, problem = try_import("numpy")
+    if np_mod is None:
+        return problem or pending("numpy is not installed")
+
+    with tempfile.TemporaryDirectory(prefix="acsoe-verify-di-exclusion-") as raw_tmp:
+        tmp = Path(raw_tmp)
+        with root_import_path(ctx.root):
+            trained, problem = _trained(
+                ctx,
+                tmp,
+                max_folds=1,
+                overrides={KEY_DI_PERCENTILE: DI_EXCLUSION_SUBJECT_PERCENTILE},
+            )
+            if trained is None:
+                return problem or pending("acsoe.research.training does not exist yet")
+            report, _dataset, engine_config = trained
+
+            di_mod, problem = _phase5_module("acsoe.modelling.di")
+            if di_mod is None:
+                return problem or pending("acsoe.modelling.di does not exist yet")
+
+            interval_s = int(engine_config.get(KEY_DECISION_BAR_S))
+            embargo_bars = int(engine_config.get(KEY_EMBARGO_BARS))
+            span_s = embargo_bars * interval_s
+            if span_s <= 0:
+                return failed(
+                    f"`{KEY_EMBARGO_BARS}` x `{KEY_DECISION_BAR_S}` is {span_s} s. The DI's "
+                    "exclusion span is that product, and a span that excludes nothing is "
+                    "leave-one-out on the row alone."
+                )
+
+            fold_runs = list(getattr(report, "fold_runs", ()) or ())
+            if not fold_runs:
+                return failed("the training run reported no artefact run ids")
+            models_dir = Path(str(getattr(report, "models_dir", tmp / "run" / "models")))
+            run_dir = models_dir / fold_runs[0]
+            di_path = run_dir / "di.npz"
+            if not di_path.is_file():
+                return failed(
+                    "the fold trained at `prediction.di_percentile` = "
+                    + str(DI_EXCLUSION_SUBJECT_PERCENTILE)
+                    + " wrote no di.npz at "
+                    + str(di_path)
+                )
+            try:
+                fitted = di_mod.load(di_path)
+            except ValueError as exc:
+                return failed(
+                    "the trainer's own di.npz was refused on load: " + str(exc)[:300]
+                )
+            manifest = json.loads((run_dir / "manifest.json").read_bytes().decode("utf-8"))
+
+    recorded_span = getattr(fitted, "exclusion_s", None)
+    if recorded_span is None:
+        return failed(
+            "the DI records no exclusion span, so its leave-one-out left out only the row "
+            "itself. Its same-moment rows on every pair stayed in the reference set and the "
+            "threshold measures time proximity rather than distributional distance."
+        )
+    if int(recorded_span) != span_s:
+        return failed(
+            f"the DI was fitted with an exclusion span of {int(recorded_span)} s against "
+            f"{span_s} s from config ({embargo_bars} bars x {interval_s} s). A live "
+            "candidate is at least the embargo after the reference window, and the "
+            "leave-one-out excludes the same span; any other span puts the threshold where "
+            "live scores do not land."
+        )
+    manifest_span = ((manifest.get("extras") or {}).get("di") or {}).get("exclusion_s")
+    if manifest_span != span_s:
+        return failed(
+            f"the manifest's extras.di.exclusion_s is {manifest_span!r} against {span_s} s; "
+            "the artefact's own record of the span must say what it was fitted with"
+        )
+
+    reference = np_mod.asarray(fitted.reference, dtype=np_mod.float64)
+    identity = list(fitted.identity)
+    try:
+        stamps = np_mod.array(
+            [int(entry.rsplit("|", 1)[1]) for entry in identity], dtype=np_mod.int64
+        )
+    except (IndexError, ValueError):
+        return failed("di.npz identity entries are not `pair|decision_ts`")
+    neighbours = int(fitted.neighbours)
+    percentile = float(fitted.percentile)
+    shared_bars = int((np_mod.unique(stamps, return_counts=True)[1] >= 2).sum())
+    if shared_bars == 0:
+        return failed(
+            "no two reference rows share a bar, so the subject has no same-moment rows and "
+            "cannot tell an exclusion across pairs from one within a pair; the constructed "
+            "dataset must carry at least two pairs on the same bars"
+        )
+
+    excluded = _loo_distribution(
+        np_mod, reference, stamps, neighbours=neighbours, span_s=span_s
+    )
+    row_only = _loo_distribution(np_mod, reference, stamps, neighbours=neighbours, span_s=None)
+    recorded = np_mod.asarray(fitted.distribution, dtype=np_mod.float64)
+    excluded_threshold = float(np_mod.quantile(excluded, percentile))
+    row_only_threshold = float(np_mod.quantile(row_only, percentile))
+    refused_by_row_only = float((excluded > row_only_threshold).mean())
+    meant = 1.0 - percentile
+
+    if refused_by_row_only < DI_EXCLUSION_MATERIAL_MULTIPLE * meant:
+        return failed(
+            f"on this subject the row-only threshold ({row_only_threshold:.4f}) would refuse "
+            f"{refused_by_row_only:.1%} of the excluded distribution against the {meant:.0%} "
+            "it is drawn to refuse, which is not a material difference: the subject cannot "
+            "tell the exclusion from its absence, and a PASS here would prove nothing"
+        )
+    if recorded.shape != excluded.shape:
+        return failed(
+            f"di.npz records {recorded.shape[0]} distribution values for "
+            f"{excluded.shape[0]} reference rows"
+        )
+    if np_mod.allclose(recorded, row_only, rtol=DI_EXCLUSION_TOLERANCE, atol=DI_EXCLUSION_TOLERANCE):
+        return failed(
+            "the DI's leave-one-out distribution is leave-one-out on the row alone: every "
+            "reference row kept its same-moment rows on every pair, and its own adjacent "
+            f"bars, as neighbours. Its threshold ({float(fitted.threshold):.4f}) measures "
+            "time proximity rather than distributional distance; excluding every row within "
+            f"{span_s} s puts it at {excluded_threshold:.4f}."
+        )
+    deviation = float(np_mod.max(np_mod.abs(recorded - excluded)))
+    if not np_mod.allclose(
+        recorded, excluded, rtol=DI_EXCLUSION_TOLERANCE, atol=DI_EXCLUSION_TOLERANCE
+    ):
+        return failed(
+            f"the DI's leave-one-out distribution differs from the one recomputed here "
+            f"with every row of any pair within {span_s} s left out, by up to "
+            f"{deviation:.3g}. The exclusion is inclusive at the span and reaches across "
+            "pairs; a narrower, exclusive or same-pair-only exclusion keeps same-moment "
+            "neighbours and measures time proximity."
+        )
+    if not math.isclose(
+        float(fitted.threshold), excluded_threshold, rel_tol=DI_EXCLUSION_TOLERANCE
+    ):
+        return failed(
+            f"the DI's threshold {float(fitted.threshold)!r} is not the {percentile:g} "
+            f"quantile of its excluded distribution, {excluded_threshold!r}"
+        )
+
+    # The boundary, which the trained subject cannot show: its nearest neighbours are never
+    # exactly 48 bars away, so an exclusive span and an inclusive one record the same
+    # distribution on it. Five rows on one axis instead, handed to the module's own `fit`
+    # (the subject's input is fabricated, its contract is not): row 1 is nearest to row 0 in
+    # space and exactly the span away in time, row 2 one second further at 0.5.
+    boundary_rows = np_mod.array([[0.0], [0.001], [0.5], [1.0], [2.0]])
+    boundary_ts = [0, span_s, span_s + 1, 5 * span_s, 6 * span_s]
+    boundary = di_mod.fit(
+        boundary_rows,
+        [f"BOUNDARY|{stamp}" for stamp in boundary_ts],
+        neighbours=1,
+        percentile=0.5,
+        decision_ts=boundary_ts,
+        exclusion_s=span_s,
+    )
+    if not math.isclose(float(boundary.distribution[0]), 0.5, rel_tol=1e-9):
+        return failed(
+            f"a reference row exactly {span_s} s from the scored row was kept as its "
+            f"neighbour (distance {float(boundary.distribution[0]):.4g}, where excluding it "
+            "gives 0.5). The span is inclusive: a live candidate can sit exactly the embargo "
+            "after the reference window, so the leave-one-out excludes that row too."
+        )
+
+    return passed(
+        f"{reference.shape[0]} DI reference rows, {shared_bars} bars carrying more than one "
+        f"pair; the recorded leave-one-out equals the one recomputed here with every row of "
+        f"any pair within {span_s} s ({embargo_bars} bars x {interval_s} s, from config) "
+        f"left out (max deviation {deviation:.1e}), threshold {excluded_threshold:.4f} at "
+        f"the subject's percentile {percentile:g}. Leaving out the row alone would put the "
+        f"threshold at {row_only_threshold:.4f} and refuse {refused_by_row_only:.1%} of the "
+        f"excluded distribution against {meant:.0%}; a row exactly {span_s} s away is "
+        "excluded"
     )
 
 
@@ -10379,6 +10659,12 @@ register(
     5,
     Criterion(
         "di_fitted_on_predictor_training_set", check_di_fitted_on_predictor_training_set
+    ),
+)
+register(
+    5,
+    Criterion(
+        "di_leave_one_out_excludes_48_bars", check_di_leave_one_out_excludes_48_bars
     ),
 )
 register(

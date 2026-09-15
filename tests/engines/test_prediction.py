@@ -44,7 +44,9 @@ from acsoe.engines.macro_context.engine import MacroContextEngine  # noqa: E402
 from acsoe.engines.market_sensor.contracts import STATE_KEY as SENSOR_KEY  # noqa: E402
 from acsoe.engines.market_sensor.engine import MarketSensorEngine  # noqa: E402
 from acsoe.engines.prediction.contracts import (  # noqa: E402
+    KEY_DI_PERCENTILE,
     KEY_PREDICTION_RUN_ID,
+    REASON_DI_PERCENTILE_MISMATCH,
     REASON_DI_REFUSED,
     REASON_INPUTS_INCOMPLETE,
     REASON_UNAVAILABLE,
@@ -59,6 +61,18 @@ PAIR = "AAAUSD"
 #: what `di_fitted_on_predictor_training_set` reports PENDING for, and a number in the
 #: committed config would be this lane deciding when a model may refuse a trade.
 DI_PERCENTILE = 0.99
+
+#: The dataset is built **with** macro columns, so the manifest names them and engines 8 and
+#: 15 assemble the vector from two publishers the way they do live. Without this the macro
+#: half of both engines is unreachable and every test passes anyway — found by a surviving
+#: mutation in the spec 73 sweep.
+#:
+#: The macro asset is the candidate pair itself, which is not a shortcut: it is exactly the
+#: macro self-identification case the lead ruled on (a BTC row whose `macro_btc_*` equals its
+#: own features), left for Phase 5 and documented. It also keeps the macro values inside the
+#: trained range, so the Dissimilarity Index still accepts the bar and everything past it
+#: stays reachable — which zeros would not.
+MACRO_ARCHIVE = {"btc": "AAAUSD"}
 
 
 class Wrapped:
@@ -97,7 +111,7 @@ def trained(tmp_path_factory: Any) -> tuple[Path, str, Any]:
     config = load_default_config()
     root = tmp_path_factory.mktemp("prediction-models")
     report = training.train_walkforward(
-        dataset_for(config, random_walk=False),
+        dataset_for(config, random_walk=False, macro_archive=MACRO_ARCHIVE),
         config=Wrapped(config, **{"prediction.di_percentile": DI_PERCENTILE}),
         models_dir=root / "models",
         derived_dir=root / "derived",
@@ -252,10 +266,19 @@ def complete_state(
         (artefact_root / run_id / "manifest.json").read_bytes().decode("utf-8")
     )
     row = state["feature"]["pairs"][PAIR]
-    macro = {
-        name: 0.0 for name in manifest["feature_names"] if name.startswith("macro_")
-    }
-    macro = {name: value for name, value in macro.items() if name not in row}
+    macro: dict[str, Any] = {}
+    for name in manifest["feature_names"]:
+        if not name.startswith("macro_") or name in row:
+            continue
+        # `macro_<asset>_<feature>` back to `<feature>`, and the value is this pair's own —
+        # which is what the artefact was trained on, because the fixture's macro asset is the
+        # pair itself. Engine 6 publishes the same shape live from the real macro pair.
+        stem = name.split("_", 2)[2]
+        macro[name] = row.get(stem)
+    assert macro, (
+        "the fixture trained with no macro columns, so the macro half of engines 8 and 15 "
+        "is unreachable and every assertion past it proves nothing"
+    )
     state["macro_context"] = {**state["macro_context"], "features": macro}
     return state, context
 
@@ -378,6 +401,47 @@ def test_an_artefact_with_no_di_blocks_rather_than_predicting_unguarded(
     assert "di.npz" in (result.reason or "")
 
 
+def test_a_di_fitted_without_the_exclusion_span_blocks_rather_than_loading(
+    engine_context: Any, bars: list[dict[str, Any]], artefact_root: Path, run_id: str,
+    tmp_path: Path
+) -> None:
+    """A `di.npz` written before the ruling of 2026-09-15 records no `exclusion_s`.
+
+    Its threshold was taken over a leave-one-out that kept every same-moment neighbour, so
+    it measures time proximity and refuses nearly every candidate — or, read with a default
+    span, would claim a refusal line it was never fitted at. `modelling.di.load` refuses it,
+    and the refusal is `prediction_unavailable` rather than an `ERROR` escaping the engine.
+    """
+    import numpy as np
+
+    from acsoe.modelling.artefacts import MANIFEST_NAME, sha256_file
+
+    root = tmp_path / "models"
+    shutil.copytree(artefact_root, root)
+    di_path = root / run_id / "di.npz"
+    with np.load(di_path) as payload:
+        legacy = {
+            name: payload[name]
+            for name in payload.files
+            if name not in {"exclusion_s", "decision_ts"}
+        }
+    np.savez_compressed(di_path, **legacy)
+    # Re-hashed, so the manifest's integrity check passes and the missing span is what is
+    # actually being refused rather than a changed file.
+    manifest_path = root / run_id / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_bytes().decode("utf-8"))
+    manifest["files"]["di.npz"] = sha256_file(di_path)
+    manifest_path.write_bytes(json.dumps(manifest, sort_keys=True, indent=2).encode("utf-8"))
+
+    state, context = live_state(engine_context, bars)
+    context = context_with(context, root, **{KEY_PREDICTION_RUN_ID: run_id})
+    result = run(PredictionEngine(), context, state)
+    assert result.status is EngineStatus.BLOCK
+    assert result.data["reason_code"] == REASON_UNAVAILABLE
+    assert "exclusion_s" in (result.reason or "")
+    assert "time proximity" in (result.reason or "")
+
+
 def test_a_null_feature_blocks_with_prediction_inputs_incomplete(
     engine_context: Any, bars: list[dict[str, Any]], artefact_root: Path, run_id: str
 ) -> None:
@@ -451,6 +515,71 @@ def test_a_dissimilar_market_blocks_with_di_refused_and_publishes_no_expected_mo
     assert result.data["di"] is not None
     assert result.data["di_threshold"] is not None
     assert result.data["di"] > result.data["di_threshold"]
+
+
+def test_a_configured_di_percentile_that_is_not_the_artefacts_blocks(
+    engine_context: Any, bars: list[dict[str, Any]], artefact_root: Path, run_id: str
+) -> None:
+    """Ruled 2026-09-13 after B-2's rehearsal of engines 13 and 8.
+
+    **The DI threshold is baked into `di.npz`** and this engine never computes one, so once a
+    run is trained at some percentile, editing `prediction.di_percentile` changes nothing the
+    running system does. Without this block the engine goes on refusing at the percentile it
+    was trained on while the config claims another, and the operator reads a number that is
+    not in use — which is the quietest possible way for a safety threshold to be wrong.
+
+    The reason names **both** numbers, because "they disagree" without saying which is which
+    leaves the operator unable to tell whether to retrain or to change the key back.
+    """
+    state, context = complete_state(engine_context, bars, artefact_root, run_id)
+    context = context_with(
+        context,
+        artefact_root,
+        **{KEY_PREDICTION_RUN_ID: run_id, KEY_DI_PERCENTILE: DI_PERCENTILE - 0.04},
+    )
+    result = run(PredictionEngine(), context, state)
+    assert result.status is EngineStatus.BLOCK
+    assert result.blocks_trading is True
+    assert result.data["reason_code"] == REASON_DI_PERCENTILE_MISMATCH
+    assert "0.95" in (result.reason or "")
+    assert str(DI_PERCENTILE) in (result.reason or "")
+    assert "expected_move_pct" not in result.data
+
+
+def test_a_configured_di_percentile_that_matches_the_artefact_predicts(
+    engine_context: Any, bars: list[dict[str, Any]], artefact_root: Path, run_id: str
+) -> None:
+    """The pass half, one number apart from the block above.
+
+    Without it the check is satisfied by an engine that blocks whenever the key is set at all,
+    which would make supplying the operator's own threshold the thing that stops trading.
+    """
+    state, context = complete_state(engine_context, bars, artefact_root, run_id)
+    context = context_with(
+        context,
+        artefact_root,
+        **{KEY_PREDICTION_RUN_ID: run_id, KEY_DI_PERCENTILE: DI_PERCENTILE},
+    )
+    result = run(PredictionEngine(), context, state)
+    assert result.status is EngineStatus.OK, (result.data.get("reason_code"), result.reason)
+    assert "expected_move_pct" in result.data
+
+
+def test_with_the_percentile_absent_the_artefacts_own_stands(
+    engine_context: Any, bars: list[dict[str, Any]], artefact_root: Path, run_id: str
+) -> None:
+    """Absent is the committed state and it is **not** a disagreement.
+
+    It means the operator has not chosen yet, so the artefact's own percentile stands
+    unquestioned and the engine behaves exactly as it did before this check existed.
+    """
+    from tests.harness.doubles import load_default_config
+
+    assert load_default_config().get(KEY_DI_PERCENTILE) is None
+    state, context = complete_state(engine_context, bars, artefact_root, run_id)
+    context = context_with(context, artefact_root, **{KEY_PREDICTION_RUN_ID: run_id})
+    result = run(PredictionEngine(), context, state)
+    assert result.status is EngineStatus.OK, (result.data.get("reason_code"), result.reason)
 
 
 # --------------------------------------------------------------------------- #

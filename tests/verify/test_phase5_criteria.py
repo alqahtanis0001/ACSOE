@@ -1,4 +1,4 @@
-"""The eleven Phase 5 criteria. Spec 60.
+"""The twelve Phase 5 criteria. Spec 60, and the ruling of 2026-09-15 for the twelfth.
 
 Three observations per criterion, and the third is the one that matters here:
 
@@ -40,6 +40,9 @@ from tests.verify.test_phase2_criteria import (
     run,
 )
 
+#: The real repository, for the two tests that read files `phase5_tree` does not copy.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 #: Registered in this order, and the order is read top to bottom in the report.
 PHASE5_CRITERIA = (
     "features_reproduce_in_replay",
@@ -47,6 +50,7 @@ PHASE5_CRITERIA = (
     "predictor_trains_and_calibrates",
     "training_is_reproducible_from_config_and_data",
     "di_fitted_on_predictor_training_set",
+    "di_leave_one_out_excludes_48_bars",
     "skeptic_trains_only_on_predictor_buy_rows",
     "walkforward_weekly_retrain_reports_oos",
     "anomaly_and_skeptic_have_both_tests",
@@ -61,20 +65,22 @@ BUILT = (
     "feature_lookbacks_are_time_not_rows",
     "predictor_trains_and_calibrates",
     "training_is_reproducible_from_config_and_data",
+    # Built on a percentile the criterion owns, so it PASSes while
+    # `prediction.di_percentile` is withheld: which rows the leave-one-out leaves out does
+    # not depend on where the line is drawn.
+    "di_leave_one_out_excludes_48_bars",
     "skeptic_trains_only_on_predictor_buy_rows",
     "walkforward_weekly_retrain_reports_oos",
+    "anomaly_and_skeptic_have_both_tests",
     "scout_ranks_by_feature_not_arrival",
     "tournament_writes_leaderboard_from_oos",
     "walkforward_trains_on_the_past_only",
 )
 
 #: Still waiting on a spec, each with the module or engine its PENDING line must name.
-AWAITED = {
-    # `test_anomaly.py` landed with spec 72, so the PENDING now names only the half still
-    # outstanding. That is the criterion doing its job: the message is a task list, and a
-    # task list that still names finished work sends its reader to look for it.
-    "anomaly_and_skeptic_have_both_tests": "test_skeptic.py",
-}
+#: **Empty since spec 74.** Every Phase 5 criterion now has a subject; the one remaining
+#: non-PASS waits on the operator, below, which is a different state.
+AWAITED: dict[str, str] = {}
 
 #: Waiting on the **operator** rather than on an agent, which is a different state and has
 #: a different right answer: nobody is late, and the criterion must say which key it is
@@ -107,6 +113,19 @@ def phase5_tree(bare_tree: Path, repo_root: Path) -> Path:
     return bare_tree
 
 
+def repo_file(root: Path, relative: str) -> Path:
+    """A file from the **real** repository, for a copied tree that does not carry it.
+
+    `phase5_tree` copies `src/`, `config/`, `db/` and the test harness and fixtures, not the
+    engine tests — so a criterion that reads those tests sees an empty tree and reports
+    PENDING, which is the state one test here wants. The other needs the real files to alter
+    one of them, and reading them from the repository is the only way to alter *the thing
+    that actually ships* rather than a fabrication that would prove nothing about it.
+    """
+    del root
+    return REPO_ROOT / Path(relative)
+
+
 def patch(root: Path, relative: str, old: str, new: str) -> None:
     """Replace exactly one occurrence of `old` in a copied file.
 
@@ -132,18 +151,18 @@ def patch(root: Path, relative: str, old: str, new: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Registration, and the rules that apply to all eleven
+# Registration, and the rules that apply to all twelve
 # --------------------------------------------------------------------------- #
 
 
-def test_all_eleven_criteria_are_registered_for_phase_5(verify_module: ModuleType) -> None:
+def test_all_twelve_criteria_are_registered_for_phase_5(verify_module: ModuleType) -> None:
     to_run, skipped = verify_module.criteria_for(5, False)
     assert [c.name for c in to_run] == [
         "docs_vocabulary",
         "toolchain_green",
         *PHASE5_CRITERIA,
     ]
-    assert skipped == [], "no Phase 5 criterion is --live; all eleven run on a fresh clone"
+    assert skipped == [], "no Phase 5 criterion is --live; all twelve run on a fresh clone"
 
 
 def test_registering_phase_5_left_every_earlier_phase_alone(
@@ -450,6 +469,141 @@ def test_a_configured_rank_feature_is_a_fail_until_the_operator_rules(
     outcome = run(verify_module, "scout_ranks_by_feature_not_arrival", phase5_tree)
     assert_fail(outcome, verify_module)
     assert "spec 75" in outcome.message
+
+
+# --------------------------------------------------------------------------- #
+# anomaly_and_skeptic_have_both_tests
+# --------------------------------------------------------------------------- #
+
+
+def test_a_gate_with_only_block_tests_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """A gate that refuses everything passes every block test it has.
+
+    That is the failure this criterion exists for and it is the comfortable one: nobody files
+    a bug about a system that will not trade, and every assertion about *why* it refused goes
+    on passing. Engine 15's pass tests are removed from the copy — the block tests are left
+    exactly as they are, so the only thing that changed is the half that proves it can say
+    yes.
+    """
+    tests = phase5_tree / "tests" / "engines"
+    tests.mkdir(parents=True, exist_ok=True)
+    source = repo_file(phase5_tree, "tests/engines/test_skeptic.py").read_text("utf-8")
+    # Every marker the criterion reads as "this test asserts the gate let something
+    # through", turned into its opposite: the three statuses and the `blocks_trading`
+    # comparison. What is left is a file that exercises only the refusals — which is what a
+    # gate's tests look like when whoever wrote them thought about the failures and not
+    # about the one case that has to work.
+    blocked = (
+        source.replace("EngineStatus.OK", "EngineStatus.BLOCK")
+        .replace("EngineStatus.PASS", "EngineStatus.BLOCK")
+        .replace("blocks_trading is False", "blocks_trading is True")
+    )
+    (tests / "test_skeptic.py").write_bytes(blocked.encode("utf-8"))
+    (tests / "test_anomaly.py").write_bytes(
+        repo_file(phase5_tree, "tests/engines/test_anomaly.py").read_bytes()
+    )
+    outcome = run(verify_module, "anomaly_and_skeptic_have_both_tests", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "no test asserting it passes" in outcome.message
+
+
+def test_a_missing_gate_test_file_is_pending_not_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """Work not yet done is not a broken subject, and the PENDING names the file."""
+    outcome = run(verify_module, "anomaly_and_skeptic_have_both_tests", phase5_tree)
+    assert_pending(outcome, verify_module)
+    assert "test_anomaly.py" in outcome.message
+
+
+# --------------------------------------------------------------------------- #
+# di_leave_one_out_excludes_48_bars - ruling of 2026-09-15, amending ruling 6
+# --------------------------------------------------------------------------- #
+
+
+def test_the_exclusion_criterion_is_pending_without_a_trainer(
+    verify_module: ModuleType, unbuilt_tree: Path
+) -> None:
+    """No trainer, no DI to judge: unfinished rather than broken, and the line says which."""
+    outcome = run(verify_module, "di_leave_one_out_excludes_48_bars", unbuilt_tree)
+    assert_pending(outcome, verify_module)
+    assert "acsoe.research.training" in outcome.message
+
+
+def test_the_exclusion_criterion_passes_with_the_percentile_still_withheld(
+    verify_module: ModuleType, repo_root: Path
+) -> None:
+    """The committed config has no `prediction.di_percentile`, by ruling, and this criterion
+    PASSes anyway: it trains its subject at a percentile it owns. A PASS line that did not
+    say the row-only threshold would have refused far more than it is drawn to refuse would
+    be a PASS on a subject that could not exhibit the defect."""
+    config_text = (repo_root / "config" / "default.yaml").read_bytes().decode("utf-8")
+    assert "\n  di_percentile:" not in config_text.replace("\r\n", "\n")
+    outcome = run(verify_module, "di_leave_one_out_excludes_48_bars", repo_root)
+    assert_pass(outcome, verify_module)
+    assert "43200 s (48 bars x 900 s, from config)" in outcome.message
+    assert "Leaving out the row alone would put the threshold at" in outcome.message
+
+
+def test_a_di_whose_leave_one_out_excludes_only_the_row_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """The defect the ruling names, as it existed until 2026-09-15: `di.fit` leaves out the
+    row being scored and nothing else, while still recording the span it was handed.
+
+    Recording the span is what makes this the plausible version rather than a broken one —
+    the artefact looks exactly as it should, loads, scores, and its threshold measures how
+    close in time a row is to the reference window.
+    """
+    patch(
+        phase5_tree,
+        "src/acsoe/modelling/di.py",
+        "        exclude_self=True,\n        decision_ts=stamps,\n        exclusion_s=int(exclusion_s),\n",
+        "        exclude_self=True,\n",
+    )
+    outcome = run(verify_module, "di_leave_one_out_excludes_48_bars", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "leave-one-out on the row alone" in outcome.message
+    assert "time proximity" in outcome.message
+
+
+def test_an_exclusion_that_keeps_the_row_exactly_at_the_span_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """`<` for `<=`. The trained subject cannot show it — no row's nearest neighbours sit
+    exactly 48 bars away, so both record the same distribution, and the criterion PASSed
+    this mutation until it gained its boundary probe. Observed here so it stays caught."""
+    patch(
+        phase5_tree,
+        "src/acsoe/modelling/di.py",
+        "near = np.abs(decision_ts[None, :] - stamps[:, None]) <= exclusion_s",
+        "near = np.abs(decision_ts[None, :] - stamps[:, None]) < exclusion_s",
+    )
+    outcome = run(verify_module, "di_leave_one_out_excludes_48_bars", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "exactly 43200 s from the scored row was kept" in outcome.message
+
+
+def test_a_trainer_that_ignores_the_embargo_in_the_span_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """One bar instead of 48: the plausible slip of passing the bar length as the span.
+
+    It excludes the row and its immediate neighbours and keeps the other 47 bars either
+    side, so it is still mostly a measure of time proximity.
+    """
+    patch(
+        phase5_tree,
+        "src/acsoe/research/training.py",
+        '    exclusion_s = int(_required(config, "backtest.embargo_bars")) * int(\n'
+        '        _required(config, "timeframes.decision_bar_s")\n    )\n',
+        '    exclusion_s = int(_required(config, "timeframes.decision_bar_s"))\n',
+    )
+    outcome = run(verify_module, "di_leave_one_out_excludes_48_bars", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "exclusion span of 900 s against 43200 s" in outcome.message
 
 
 # --------------------------------------------------------------------------- #

@@ -249,6 +249,60 @@ def test_the_reference_set_is_capped_and_the_cap_is_seeded(
     assert one.threshold == two.threshold
 
 
+def test_the_leave_one_out_excludes_every_pair_within_the_embargo(
+    config: Any, dataset: Any, tmp_path: Path
+) -> None:
+    """Ruling of 2026-09-15: the span is `backtest.embargo_bars x timeframes.decision_bar_s`,
+    read from config by the trainer, and it excludes rows of **every** pair.
+
+    Leaving out the row alone keeps its same-bar rows on the other pairs and its own
+    adjacent bars, so the threshold measures time proximity. The distribution is recomputed
+    here for a sample of reference rows, from the matrix and the identity's timestamps, with
+    the span taken from config rather than from the artefact.
+    """
+    span = int(config.get("backtest.embargo_bars")) * int(
+        config.get("timeframes.decision_bar_s")
+    )
+    report = trained(config, dataset, tmp_path, name="exclusion")
+    directory = report.models_dir / report.fold_runs[0]
+    fit = di_module.load(directory / "di.npz")
+    loaded = load_run(directory, expected_features=report.feature_names)
+
+    assert fit.exclusion_s == span
+    assert loaded.manifest.extras["di"]["exclusion_s"] == span
+    stamps = np.array([int(entry.split("|")[1]) for entry in fit.identity], dtype=np.int64)
+    assert np.array_equal(fit.decision_ts, stamps)
+    pairs_per_bar = np.unique(stamps, return_counts=True)[1]
+    assert int(pairs_per_bar.max()) >= 2, (
+        "no two reference rows share a bar, so this fixture cannot show the exclusion "
+        "reaching across pairs"
+    )
+
+    sample = np.random.default_rng(3).choice(fit.rows, size=min(60, fit.rows), replace=False)
+    block = fit.reference[sample]
+    distances = np.sqrt(
+        np.maximum(
+            (block**2).sum(axis=1)[:, None]
+            - 2.0 * block @ fit.reference.T
+            + (fit.reference**2).sum(axis=1)[None, :],
+            0.0,
+        )
+    )
+    row_only = distances.copy()
+    row_only[np.arange(sample.size), sample] = np.inf
+    excluded = distances.copy()
+    excluded[np.abs(stamps[sample][:, None] - stamps[None, :]) <= span] = np.inf
+    k = fit.neighbours
+    expected = np.sort(excluded, axis=1)[:, :k].mean(axis=1)
+    plain = np.sort(row_only, axis=1)[:, :k].mean(axis=1)
+
+    assert np.allclose(fit.distribution[sample], expected, rtol=1e-7, atol=1e-9)
+    assert float(np.median(expected)) > float(np.median(plain)), (
+        "on this fixture the exclusion changes nothing, so the assertion above could not "
+        "tell it from leave-one-out on the row alone"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # What it scores
 # --------------------------------------------------------------------------- #

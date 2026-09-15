@@ -2185,3 +2185,145 @@ Three rows, newest first, `promoted` false on each, and the watermark moved to e
 injected instant, so an open console pushes. With the old `updated_at` it would have landed on
 2026-09-13 12:00, the training time. The Briers are near zero because the constructed series is
 learnable by construction; the base rate beside each is what says so.
+
+
+### Engine 15 review fixes: two fail-open paths closed, and a veto sentence that couldn't show its own numbers
+
+**Agent:** C-4 (C lane) · **Task:** spec 73 review · **Date:** 2026-09-15
+
+**What happened.** The lead's review of engine 15 `skeptic` found two fail-open paths. B-3's rehearsal found a third problem, in the veto's reason text.
+
+1. `if not prediction.get("is_buy")` treated an absent, `None` or non-boolean `is_buy` as "not a BUY call" and returned `OK`. A truthy non-boolean (`"true"`, `"false"`, `1`) went the other way and was scored as if engine 8 had said BUY.
+2. A non-finite `p_wrong` passed. `nan > limit` is `False`, and so is `-inf > limit`, so both went through as a pass. `inf` would have been recorded as a measured veto.
+3. The veto reason formatted both numbers with `:.4f`. On B-3's trained fixture it read "0.0000 likely to be wrong against a veto threshold of 0.0000". The existing `f"{p_wrong:.4f}" in reason` check passed on that for any tiny `p_wrong`.
+
+**Why.** Invariant 3: absence of a "no" is never a "yes". Both engine checks were truthiness or ordering checks that a missing or malformed value gets through. The format check was a test that could not fail on the input it was about.
+
+**Fix.**
+
+- Only `is_buy is False` takes the not-a-BUY `OK` path. Anything that is not a `bool` blocks with `skeptic_unavailable`, and the reason says engine 8 published no usable BUY verdict. The no-candidate `PASS` is unchanged.
+- `math.isfinite(p_wrong)` is checked before the comparison. A non-finite score blocks with `skeptic_unavailable` and the reason names the non-finite score. `p_wrong` is not published on that path, because NaN is not valid JSON.
+- The veto reason prints both numbers at 6 significant digits, adding digits only when the two strings would print identically, and falls back to `repr`.
+- New tests:
+  - `test_an_is_buy_that_is_not_a_boolean_blocks_rather_than_reading_as_non_buy` covers absent, none, `"false"`, `"true"`, 0 and 1.
+  - `test_a_candidate_with_no_prediction_published_blocks_rather_than_passing` covers a scout pair with an empty prediction.
+  - `test_a_non_finite_p_wrong_blocks_rather_than_passing` covers nan, inf and -inf.
+  - `test_a_veto_sentence_shows_two_numbers_that_differ` covers 3.2e-5 against 1.1e-5, and 0.12345678 against 0.12345671, which are equal at 4 decimal places and at 6 significant digits.
+  - The two score tests use `_FixedBooster`. It loads the real skeptic, then swaps the booster for one that returns a chosen score in LightGBM's shape and counts its calls. The real booster on this fixture scores 0.99974 and can't produce NaN or a score four decimal places under its threshold, so without the swap neither property could be exercised. Both tests assert the stub was called once.
+- No existing test relied on an absent `is_buy`: every one builds `state["prediction"]` from engine 8's real output, which always publishes the key, and sets it through `as_buy`.
+
+**Mutations, sweep 1** (the two engine fixes, before the format change). Each was applied to `engine.py`, run against `tests/engines/test_skeptic.py`, then restored from a byte copy with the sha256 checked (`d598f652…`) before the next.
+
+| Mutation | Result | Killed by |
+|---|---|---|
+| (a) back to `not prediction.get(PREDICTION_IS_BUY_FIELD)` | 7 failed | all six `…is_buy_that_is_not_a_boolean…` cases and `…no_prediction_published…`. Falsy cases: `assert <EngineStatus.OK> is <EngineStatus.BLOCK>`, reason "not a BUY call". Truthy cases: `assert 'skeptic_veto' == 'skeptic_unavailable'` |
+| (b) non-finite guard removed | 3 failed | `test_a_non_finite_p_wrong_blocks_rather_than_passing[nan]`, `[inf]` and `[-inf]`. NaN and -inf: `assert <EngineStatus.OK> is <EngineStatus.BLOCK>` with `p_wrong: nan` published. inf: `assert 'skeptic_veto' == 'skeptic_unavailable'` |
+| (c1) veto comparison inverted, `>` to `<=` | 9 errors | the `measured` fixture: `assert <EngineStatus.BLOCK> is <EngineStatus.OK>` at threshold 1.0, which errors every test using it |
+| (c2) threshold read from the constant `0.5` | 9 errors | the same fixture, "0.9997 likely to be wrong against a veto threshold of 0.5000" |
+
+In sweep 1, (c1) and (c2) were killed only through a fixture error, not by a test's own assertion. That's why the score tests now build from `predicted_state` rather than `measured`. It also means `test_a_veto_sentence_shows_two_numbers_that_differ` should fail both on its own assertion, because a 3.2e-5 score against a 1.1e-5 threshold does not veto under either mutation.
+
+**Mutations, sweep 2** (all of the above plus (d), the reason format reverted to `:.4f`, against the final code): PENDING at the time of writing. Results go in a follow-up entry.
+
+**Also observed, not changed.** Engine 8's refusal path publishes `PredictionState` with `is_buy` defaulting to `False`. On a tick where engine 8 blocked, engine 15 therefore sees an explicit `False` and returns `OK`, not a block. Trading is already blocked by engine 8's own `blocks_trading=True`, so this doesn't fail open. The publisher still can't tell "no call" from "not a BUY" apart, and that is engine 8's to decide.
+
+**Checks:** `pytest tests/engines/test_skeptic.py tests/console/test_reason_prose.py -q` gave 129 passed, exit 0. `ruff check src/acsoe/engines/skeptic tests/engines/test_skeptic.py` exited 0. `mypy --strict src/acsoe/engines/skeptic` exited 0 with no issues in 3 source files.
+
+
+### The DI's leave-one-out excludes every pair within 48 bars (ruling of 2026-09-15, amending ruling 6)
+
+**Agent:** C-3 (Opus 5) · **Task:** DI 48-bar exclusion and criterion `di_leave_one_out_excludes_48_bars` · **Date:** 2026-09-15
+
+**What changed.** `modelling/di.py` `fit` takes `decision_ts` (one per row) and `exclusion_s`,
+both keyword-only and required, and the leave-one-out sets every reference row with
+`|decision_ts_j - decision_ts_i| <= exclusion_s` to infinity inside the existing chunked
+`_mean_nearest` (numpy only). Refusals, each its own message: `decision_ts has shape` (length
+mismatch), `exclusion_s must be positive` (0 or negative), `keep fewer than k neighbours` (any
+row left with too few candidates, counted with two `searchsorted` before the distances are
+computed). `DiFit` records `decision_ts` and `exclusion_s`; `save` writes both; `load` refuses
+an npz with no `exclusion_s` ("records no exclusion_s ... measures time proximity"), a
+non-positive one, or a span without `decision_ts`. Engine 8's `_read` turns that
+`DissimilarityError` into `PredictionError`, so a legacy DI blocks with
+`prediction_unavailable` and the reason names `exclusion_s` (the `di_module.load` call in
+`_read` had no guard; a refusal there would have escaped the engine as an exception). `research/training.py`
+`_fit_and_score_di` passes the subsampled reference rows' `decision_ts` and
+`backtest.embargo_bars x timeframes.decision_bar_s` read through `_required`; manifest
+`extras.di` gains `exclusion_s`. `score` is unchanged. Both keys were already in the config
+digest.
+
+**The criterion.** `di_leave_one_out_excludes_48_bars`, registered for phase 5 after
+`di_fitted_on_predictor_training_set`. `_trained` gained an `overrides` argument (a
+`_ConfigWith` wrapper, trainer only) so the criterion trains one fold of the constructed
+two-pair dataset at its own `DI_EXCLUSION_SUBJECT_PERCENTILE = 0.90`; it does not read
+`prediction.di_percentile`, which stays absent. It loads `di.npz`, recomputes the row-only and
+the excluded distributions itself (its own `_loo_distribution`, not `di._mean_nearest`) from the
+reference matrix and the identity timestamps with the span from config, and PASSes only if the
+recorded distribution equals the excluded one (1e-9), the threshold is its quantile, the manifest
+and `DiFit` record the config span, and the row-only threshold would refuse at least twice the
+share it is drawn to refuse of the excluded distribution (materiality; 61.2% against 10% on the
+subject). The PASS line:
+
+```
+5762 DI reference rows, 2881 bars carrying more than one pair; the recorded leave-one-out equals the one recomputed here with every row of any pair within 43200 s (48 bars x 900 s, from config) left out (max deviation 9.2e-15), threshold 1.1576 at the subject's percentile 0.9. Leaving out the row alone would put the threshold at 0.8433 and refuse 61.2% of the excluded distribution against 10%; a row exactly 43200 s away is excluded
+```
+
+**The boundary probe was added after the first mutation round, because the criterion survived
+mutation (b).** On the trained subject no row's nearest neighbours are exactly 48 bars away, so
+`<=` and `<` record the same distribution and round one reported PASS for `<`. The criterion now
+also hands the module's own `fit` five constructed rows on one axis (row 1 nearest to row 0 in
+space and exactly the span away in time, row 2 one second further at 0.5) and FAILs unless row
+0's statistic is 0.5. The subject's input is fabricated; the contract is the real `fit`.
+
+**Tests.** `tests/modelling/test_di.py`: every existing call now passes `decision_ts` (the
+identity's own timestamps, 900 s apart) and the committed 43,200 s span; three fits of 60 or 100
+rows were raised to 300 because 100 rows one bar apart cannot keep five candidates outside a
+97-bar window. No assertion was changed. New: same-moment near-duplicates on six pairs (the
+fitted distribution equals an independent brute-force excluded computation, whose median is more
+than 100x the row-only one), the inclusive boundary, the three fit refusals, and `load` refusing
+a legacy npz and a zero span. `tests/research/test_di.py`: the trainer's span equals config, the
+manifest records it, `decision_ts` matches the identity, at least two pairs share a bar, and a
+60-row sample of the distribution equals the excluded recomputation. `tests/engines/
+test_prediction.py`: a legacy `di.npz` (keys dropped, manifest re-hashed) blocks with
+`prediction_unavailable` naming `exclusion_s` and time proximity.
+`tests/verify/test_phase5_criteria.py`: registration list and count to twelve, the new criterion
+in `BUILT`, PENDING on the unbuilt tree naming `acsoe.research.training`, PASS on the real
+repository with the percentile absent, FAIL on `fit` leaving out only the row, FAIL on a trainer
+passing `decision_bar_s` as the span.
+
+**Mutations**, harness restoring each file from a byte copy and checking its sha256 before the
+next (`di.py` b22bbe7d...d811, `training.py` 5d691999...ca85, both matched after every one).
+Round one had two harness faults, recorded rather than hidden: the research selector `-k
+exclusion` matched no test (pytest exit 5, not a kill), and (d) was mutated as `and False`,
+which crashed on `payload["exclusion_s"]` with a `KeyError` — a body count, not a plausible
+implementation. Round two, all red:
+
+| mutation | red |
+|---|---|
+| (a) `fit` passes no `decision_ts`/`exclusion_s` (row only) | unit: `the fitted distribution is not the leave-one-out with every row within the span left out`, and the boundary test `array([0.001, 0.001, 0.499, 0.5, 1.])`; research: `assert np.allclose(fit.distribution[sample], expected ...)`; criterion: `FAIL the DI's leave-one-out distribution is leave-one-out on the row alone ... Its threshold (0.8433) measures time proximity rather than distributional distance; excluding every row within 43200 s puts it at 1.1576.` |
+| (b) mask `<=` to `<` | unit: `test_the_span_is_inclusive_at_exactly_exclusion_s` `0.001 == 0.5`; criterion (round two): `FAIL a reference row exactly 43200 s from the scored row was kept as its neighbour (distance 0.001, where excluding it gives 0.5)`. Round one: criterion PASS, see above. |
+| (c1) trainer span = `timeframes.decision_bar_s` (embargo ignored) | research: `assert 900 == 43200`; criterion: `FAIL the DI was fitted with an exclusion span of 900 s against 43200 s from config (48 bars x 900 s)` |
+| (c2) trainer span = 0 | research: `DissimilarityError: exclusion_s must be positive; got 0`; criterion: `FAIL criterion raised - DissimilarityError: exclusion_s must be positive` (the fit's refusal, through the runner's guard) |
+| (d) `load` accepts a legacy npz (default span 43200, timestamps from identity) | unit: `DID NOT RAISE DissimilarityError`; engine: `assert 'prediction_inputs_incomplete' == 'prediction_unavailable'` (the legacy DI loaded and the engine went on) |
+
+(d) does not reach the criterion by design: the trainer always writes a new npz. Its guards are
+the unit and engine tests.
+
+**Gate, this session's tree (other lanes editing concurrently).** `pytest tests/modelling
+tests/research tests/engines/test_prediction.py tests/verify/test_phase5_criteria.py -q`: 446
+passed, exit 0 (16 min 39 s); the boundary criterion test added after that run was collected:
+1 passed. `mypy --strict src/ scripts/`: exit 0, 131 files. `ruff check src/ tests/ scripts/`:
+exit 0 when run at 04:4x; at 05:1x it reported `src/acsoe/bootstrap.py:53:1 I001`, a file this
+lane does not own that another session modified during the run. `verify.py --phase 5`: `14
+criteria: 12 PASS, 1 FAIL, 1 PENDING` — PENDING `di_fitted_on_predictor_training_set`
+(`prediction.di_percentile`, by ruling), PASS `di_leave_one_out_excludes_48_bars`, FAIL
+`toolchain_green` for two reasons, neither in these files: pytest timed out at 900 s under the
+background CPU job (not re-run), and the `bootstrap.py` import sort. The one `F` in the timed-out
+log sits at 45%, in the `tests/engines/test_s*` stretch of the collection; that stretch run on
+its own fails at `tests/engines/test_skeptic.py::test_an_is_buy_that_is_not_a_boolean_blocks_rather_than_reading_as_non_buy[absent]`,
+a test written at 05:09 by another session whose `engines/skeptic/engine.py` was still being
+edited at 05:14; it is not a DI test and does not touch these changes. **Corrected by C-4:** it
+was C-4's mutation harness, not a defect. Their arm (a) restored the old
+`not prediction.get(is_buy)` line in `engine.py`, on disk from about 05:12:40 to 05:14:29, which
+is the only state that returns OK "not a BUY call" for an absent `is_buy`; final `engine.py`
+sha256 022039a7...73b7. Engine 15 results before C-4's sweep ends (about 05:25) are not
+evidence either way. My own mutation window (04:45 to 05:05) did not overlap C-4's green runs.

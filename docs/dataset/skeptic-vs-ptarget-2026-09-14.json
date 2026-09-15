@@ -1,0 +1,362 @@
+{
+  "by_threshold": [
+    {
+      "control_topN_by_skeptic_score": {
+        "count": 9373,
+        "effective_sample_size": 3242.5818825090373,
+        "target_rate": 0.6349087805398484,
+        "target_rate_se_by_ess": 0.008454946907422786
+      },
+      "control_topN_by_skeptic_score_identical_set": true,
+      "control_topN_random": {
+        "count": 9373,
+        "effective_sample_size": 1273.1980061049749,
+        "target_rate": 0.279846367225008,
+        "target_rate_se_by_ess": 0.01258126875888571
+      },
+      "skeptic": {
+        "count": 9373,
+        "effective_sample_size": 3242.5818825090373,
+        "target_rate": 0.6349087805398484,
+        "target_rate_se_by_ess": 0.008454946907422786
+      },
+      "threshold": 0.3,
+      "topN_by_p_target_seed_20260914": {
+        "count": 9373,
+        "effective_sample_size": 3009.3076999409823,
+        "overlap_with_skeptic_survivors": 2729,
+        "rows_tied_at_the_cuts": 2358,
+        "target_rate": 0.5605462498666383,
+        "target_rate_se_by_ess": 0.009047508816666806
+      },
+      "topN_by_p_target_seed_7": {
+        "count": 9373,
+        "effective_sample_size": 3005.3028945065935,
+        "overlap_with_skeptic_survivors": 2727,
+        "rows_tied_at_the_cuts": 2358,
+        "target_rate": 0.5608663181478716,
+        "target_rate_se_by_ess": 0.009052820926766467
+      }
+    },
+    {
+      "control_topN_by_skeptic_score": {
+        "count": 24888,
+        "effective_sample_size": 8856.590691575535,
+        "target_rate": 0.6313484410157506,
+        "target_rate_se_by_ess": 0.005126362421738311
+      },
+      "control_topN_by_skeptic_score_identical_set": true,
+      "control_topN_random": {
+        "count": 24888,
+        "effective_sample_size": 3160.531457052484,
+        "target_rate": 0.26651398264223725,
+        "target_rate_se_by_ess": 0.007864585904308715
+      },
+      "skeptic": {
+        "count": 24888,
+        "effective_sample_size": 8856.590691575535,
+        "target_rate": 0.6313484410157506,
+        "target_rate_se_by_ess": 0.005126362421738311
+      },
+      "threshold": 0.35,
+      "topN_by_p_target_seed_20260914": {
+        "count": 24888,
+        "effective_sample_size": 7807.655756725031,
+        "overlap_with_skeptic_survivors": 8269,
+        "rows_tied_at_the_cuts": 3316,
+        "target_rate": 0.5560109289617486,
+        "target_rate_se_by_ess": 0.005622992129512216
+      },
+      "topN_by_p_target_seed_7": {
+        "count": 24888,
+        "effective_sample_size": 7806.579296725378,
+        "overlap_with_skeptic_survivors": 8294,
+        "rows_tied_at_the_cuts": 3316,
+        "target_rate": 0.5558100289296046,
+        "target_rate_se_by_ess": 0.005623635658844548
+      }
+    },
+    {
+      "control_topN_by_skeptic_score": {
+        "count": 51145,
+        "effective_sample_size": 17778.49181115939,
+        "target_rate": 0.6034607488513051,
+        "target_rate_se_by_ess": 0.003668767132813166
+      },
+      "control_topN_by_skeptic_score_identical_set": true,
+      "control_topN_random": {
+        "count": 51145,
+        "effective_sample_size": 6270.196498257897,
+        "target_rate": 0.25807019258969593,
+        "target_rate_se_by_ess": 0.0055259857047031975
+      },
+      "skeptic": {
+        "count": 51145,
+        "effective_sample_size": 17778.49181115939,
+        "target_rate": 0.6034607488513051,
+        "target_rate_se_by_ess": 0.003668767132813166
+      },
+      "threshold": 0.4,
+      "topN_by_p_target_seed_20260914": {
+        "count": 51145,
+        "effective_sample_size": 15450.433123604736,
+        "overlap_with_skeptic_survivors": 19874,
+        "rows_tied_at_the_cuts": 6845,
+        "target_rate": 0.5305112914263369,
+        "target_rate_se_by_ess": 0.004015037099108447
+      },
+      "topN_by_p_target_seed_7": {
+        "count": 51145,
+        "effective_sample_size": 15458.36375299519,
+        "overlap_with_skeptic_survivors": 19883,
+        "rows_tied_at_the_cuts": 6845,
+        "target_rate": 0.530902336494281,
+        "target_rate_se_by_ess": 0.004013813524467412
+      }
+    },
+    {
+      "control_topN_by_skeptic_score": {
+        "count": 88931,
+        "effective_sample_size": 29238.104527462085,
+        "target_rate": 0.5692503176620076,
+        "target_rate_se_by_ess": 0.002895939712796606
+      },
+      "control_topN_by_skeptic_score_identical_set": true,
+      "control_topN_random": {
+        "count": 88931,
+        "effective_sample_size": 10995.402375199432,
+        "target_rate": 0.25436574422867164,
+        "target_rate_se_by_ess": 0.004153236618954397
+      },
+      "skeptic": {
+        "count": 88931,
+        "effective_sample_size": 29238.104527462085,
+        "target_rate": 0.5692503176620076,
+        "target_rate_se_by_ess": 0.002895939712796606
+      },
+      "threshold": 0.45,
+      "topN_by_p_target_seed_20260914": {
+        "count": 88931,
+        "effective_sample_size": 25529.941600314436,
+        "overlap_with_skeptic_survivors": 37805,
+        "rows_tied_at_the_cuts": 12438,
+        "target_rate": 0.5025244290517368,
+        "target_rate_se_by_ess": 0.00312924493743931
+      },
+      "topN_by_p_target_seed_7": {
+        "count": 88931,
+        "effective_sample_size": 25530.89300225192,
+        "overlap_with_skeptic_survivors": 37838,
+        "rows_tied_at_the_cuts": 12438,
+        "target_rate": 0.5028167905454791,
+        "target_rate_se_by_ess": 0.0031291768585227776
+      }
+    },
+    {
+      "control_topN_by_skeptic_score": {
+        "count": 154979,
+        "effective_sample_size": 46615.99970778188,
+        "target_rate": 0.530929996967331,
+        "target_rate_se_by_ess": 0.0023113726007470735
+      },
+      "control_topN_by_skeptic_score_identical_set": true,
+      "control_topN_random": {
+        "count": 154979,
+        "effective_sample_size": 19044.591491273866,
+        "target_rate": 0.25641538531026786,
+        "target_rate_se_by_ess": 0.003164108787862033
+      },
+      "skeptic": {
+        "count": 154979,
+        "effective_sample_size": 46615.99970778188,
+        "target_rate": 0.530929996967331,
+        "target_rate_se_by_ess": 0.0023113726007470735
+      },
+      "threshold": 0.5,
+      "topN_by_p_target_seed_20260914": {
+        "count": 154979,
+        "effective_sample_size": 41218.118404662775,
+        "overlap_with_skeptic_survivors": 67551,
+        "rows_tied_at_the_cuts": 14377,
+        "target_rate": 0.47310925996425324,
+        "target_rate_se_by_ess": 0.0024592174169264227
+      },
+      "topN_by_p_target_seed_7": {
+        "count": 154979,
+        "effective_sample_size": 41228.36428975815,
+        "overlap_with_skeptic_survivors": 67607,
+        "rows_tied_at_the_cuts": 14377,
+        "target_rate": 0.473386716910033,
+        "target_rate_se_by_ess": 0.0024589850372774545
+      }
+    },
+    {
+      "control_topN_by_skeptic_score": {
+        "count": 289977,
+        "effective_sample_size": 77151.04659961724,
+        "target_rate": 0.4877283370750094,
+        "target_rate_se_by_ess": 0.0017995679503586383
+      },
+      "control_topN_by_skeptic_score_identical_set": true,
+      "control_topN_random": {
+        "count": 289977,
+        "effective_sample_size": 35466.10666171657,
+        "target_rate": 0.2587687989047407,
+        "target_rate_se_by_ess": 0.0023255519368661198
+      },
+      "skeptic": {
+        "count": 289977,
+        "effective_sample_size": 77151.04659961724,
+        "target_rate": 0.4877283370750094,
+        "target_rate_se_by_ess": 0.0017995679503586383
+      },
+      "threshold": 0.55,
+      "topN_by_p_target_seed_20260914": {
+        "count": 289977,
+        "effective_sample_size": 69942.9742000156,
+        "overlap_with_skeptic_survivors": 127791,
+        "rows_tied_at_the_cuts": 19356,
+        "target_rate": 0.4418695275832221,
+        "target_rate_se_by_ess": 0.001877771942313147
+      },
+      "topN_by_p_target_seed_7": {
+        "count": 289977,
+        "effective_sample_size": 69938.41678331894,
+        "overlap_with_skeptic_survivors": 127793,
+        "rows_tied_at_the_cuts": 19356,
+        "target_rate": 0.44213506588453566,
+        "target_rate_se_by_ess": 0.001877950382673059
+      }
+    },
+    {
+      "control_topN_by_skeptic_score": {
+        "count": 583121,
+        "effective_sample_size": 132708.49951025867,
+        "target_rate": 0.44027740383213776,
+        "target_rate_se_by_ess": 0.0013626999782888533
+      },
+      "control_topN_by_skeptic_score_identical_set": true,
+      "control_topN_random": {
+        "count": 583121,
+        "effective_sample_size": 70296.74504938678,
+        "target_rate": 0.2610898938642237,
+        "target_rate_se_by_ess": 0.00165662124247186
+      },
+      "skeptic": {
+        "count": 583121,
+        "effective_sample_size": 132708.49951025867,
+        "target_rate": 0.44027740383213776,
+        "target_rate_se_by_ess": 0.0013626999782888533
+      },
+      "threshold": 0.6,
+      "topN_by_p_target_seed_20260914": {
+        "count": 583121,
+        "effective_sample_size": 126085.3781038336,
+        "overlap_with_skeptic_survivors": 274712,
+        "rows_tied_at_the_cuts": 26609,
+        "target_rate": 0.4097057043049384,
+        "target_rate_se_by_ess": 0.0013849622500137493
+      },
+      "topN_by_p_target_seed_7": {
+        "count": 583121,
+        "effective_sample_size": 126098.04273700781,
+        "overlap_with_skeptic_survivors": 274779,
+        "rows_tied_at_the_cuts": 26609,
+        "target_rate": 0.4098411821903173,
+        "target_rate_se_by_ess": 0.001384962694109056
+      }
+    },
+    {
+      "control_topN_by_skeptic_score": {
+        "count": 1265683,
+        "effective_sample_size": 238275.11290811567,
+        "target_rate": 0.39282110923509284,
+        "target_rate_se_by_ess": 0.0010004984013540481
+      },
+      "control_topN_by_skeptic_score_identical_set": true,
+      "control_topN_random": {
+        "count": 1265683,
+        "effective_sample_size": 149182.66593702172,
+        "target_rate": 0.26382435412342586,
+        "target_rate_se_by_ess": 0.001141008771048575
+      },
+      "skeptic": {
+        "count": 1265683,
+        "effective_sample_size": 238275.11290811567,
+        "target_rate": 0.39282110923509284,
+        "target_rate_se_by_ess": 0.0010004984013540481
+      },
+      "threshold": 0.65,
+      "topN_by_p_target_seed_20260914": {
+        "count": 1265683,
+        "effective_sample_size": 239747.7821985159,
+        "overlap_with_skeptic_survivors": 680962,
+        "rows_tied_at_the_cuts": 36787,
+        "target_rate": 0.3779880112160786,
+        "target_rate_se_by_ess": 0.0009902870304055753
+      },
+      "topN_by_p_target_seed_7": {
+        "count": 1265683,
+        "effective_sample_size": 239754.22543186077,
+        "overlap_with_skeptic_survivors": 681030,
+        "rows_tied_at_the_cuts": 36787,
+        "target_rate": 0.37805674880677076,
+        "target_rate_se_by_ess": 0.0009903090375277417
+      }
+    },
+    {
+      "control_topN_by_skeptic_score": {
+        "count": 2859743,
+        "effective_sample_size": 439499.27657178964,
+        "target_rate": 0.3481854838004674,
+        "target_rate_se_by_ess": 0.0007186017364375759
+      },
+      "control_topN_by_skeptic_score_identical_set": true,
+      "control_topN_random": {
+        "count": 2859743,
+        "effective_sample_size": 328266.82810619264,
+        "target_rate": 0.26473253016092707,
+        "target_rate_se_by_ess": 0.0007700391959154967
+      },
+      "skeptic": {
+        "count": 2859743,
+        "effective_sample_size": 439499.27657178964,
+        "target_rate": 0.3481854838004674,
+        "target_rate_se_by_ess": 0.0007186017364375759
+      },
+      "threshold": 0.7,
+      "topN_by_p_target_seed_20260914": {
+        "count": 2859743,
+        "effective_sample_size": 455128.951103236,
+        "overlap_with_skeptic_survivors": 1933153,
+        "rows_tied_at_the_cuts": 42824,
+        "target_rate": 0.34325392176849456,
+        "target_rate_se_by_ess": 0.0007037838016814484
+      },
+      "topN_by_p_target_seed_7": {
+        "count": 2859743,
+        "effective_sample_size": 455125.94530969055,
+        "overlap_with_skeptic_survivors": 1933098,
+        "rows_tied_at_the_cuts": 42824,
+        "target_rate": 0.34325916699507614,
+        "target_rate_se_by_ess": 0.0007037886924137088
+      }
+    }
+  ],
+  "meta": {
+    "coverage": "405 of 457 folds; folds 1 to 404 carry a skeptic",
+    "measured_on": "2026-09-14",
+    "recommends": null,
+    "rule": "per fold, N = skeptic survivors (P(wrong) <= threshold); comparator = that fold's top N by p_target, ties at random",
+    "run_id": "train-20260913T205245-067b2b9d",
+    "scored_buy_calls": 8948485,
+    "scored_buy_calls_effective_sample_size": 933452.9037054279,
+    "scored_buy_calls_target_rate": 0.23830491977133558,
+    "scored_folds": 404,
+    "script_sha256": "e857bd4dbea414325a5747fc5ee4d4d5c32f0128831a95c75ca69c45521afc09",
+    "seeds": [
+      20260914,
+      7
+    ]
+  }
+}
