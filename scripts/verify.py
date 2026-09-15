@@ -59,7 +59,50 @@ MAX_PHASE = 8
 # criterion instead of recursing forever.
 RECURSION_GUARD_ENV = "ACSOE_VERIFY_IN_TOOLCHAIN"
 
+#: The bound on one toolchain subprocess. It is a guard against a tool that has **hung**,
+#: not a budget for one that is merely slow, and the difference is the whole of the ruling
+#: below: a hung tool reports nothing ever, while a working one reports late.
 SUBPROCESS_TIMEOUT_S = 900
+
+#: `pytest` gets its own, larger bound. **Lead ruling of 2026-09-15, flagged to the
+#: operator as overturnable.**
+#:
+#: 900 s was chosen in Phase 0, when the suite was a handful of tests and a minute long.
+#: It is now 2,506 tests, and the measurements are in this repository rather than in
+#: anyone's memory - `logs/verify/toolchain_green/` keeps the evidence file of every
+#: failure:
+#:
+#: * 2026-09-15 07:06Z, before the operator's three thresholds landed: **820.9 s**, a
+#:   margin of 79 s under the limit;
+#: * 2026-09-15 04:10Z, the same tree: **timed out**, having reached 74%;
+#: * 2026-09-15 15:19Z, with the thresholds landed: **1502 s**.
+#:
+#: So the bound was already marginal and had already fired once on a tree that was fine,
+#: and `prediction.di_percentile: 0.99` took it decisively over: the DI is fitted and
+#: scored on every trained fold now that a percentile exists, measured at **3.1 s per
+#: fold** (1.1 s in `di.fit`'s leave-one-out, 1.5 s in the per-row `di.score` loop at
+#: 1.13 ms a row). That cost is Phase 7 prerequisite 5, deferred on the understanding that
+#: it was only paid by the full walk-forward; it is paid by this gate too, which is
+#: recorded in `context/progress-tracker.md` as the second reason to do that work.
+#:
+#: **Nothing here makes a criterion easier to satisfy.** pytest must still exit 0, with
+#: every one of its tests passing, and mypy and ruff keep the 900 s bound because they run
+#: in seconds and a hang in either is a real fault worth catching quickly. What changes is
+#: only how long the gate waits before calling pytest hung - and a gate that reports FAIL
+#: on a fully green tree is a false negative in the one check that decides whether a phase
+#: is green, which is the failure mode this project has spent four phases cataloguing.
+#:
+#: Set at roughly 1.8x the measured 1502 s. The margin is deliberate: the 04:10Z timeout
+#: above was the *same* suite as the 820.9 s one, so machine load alone moves this number
+#: by more than 10%, and a bound sitting just above the measurement would keep firing on a
+#: tree nobody had broken.
+PYTEST_TIMEOUT_S = 2700
+
+#: Per-tool overrides, by the name in `TOOLCHAIN`. Anything absent uses
+#: `SUBPROCESS_TIMEOUT_S`. A mapping rather than a fourth element of each `TOOLCHAIN`
+#: tuple, so the tuple's shape - which `TOOLCHAIN_ROOTS` and
+#: `tests/verify/test_phase0_criteria.py` both unpack - does not change.
+TOOL_TIMEOUT_S: dict[str, int] = {"pytest": PYTEST_TIMEOUT_S}
 
 
 # --------------------------------------------------------------------------- #
@@ -1380,9 +1423,12 @@ def _interpreter_with_toolchain(root: Path) -> tuple[str | None, list[str]]:
 
 
 def _run_tool(
-    interpreter: str, args: list[str], root: Path, env: dict[str, str]
+    interpreter: str, args: list[str], root: Path, env: dict[str, str], timeout_s: int
 ) -> tuple[int | None, str]:
     """One toolchain command. `None` as the returncode means it timed out.
+
+    `timeout_s` is the caller's, from `TOOL_TIMEOUT_S`, because pytest and ruff are not
+    the same kind of wait - see the constants at the top of this file.
 
     The encoding is named rather than inherited, and `errors="replace"` is not
     decoration. `text=True` alone decodes the child's bytes with whatever
@@ -1406,7 +1452,7 @@ def _run_tool(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=SUBPROCESS_TIMEOUT_S,
+            timeout=timeout_s,
             env=env,
         )
     except subprocess.TimeoutExpired as timeout:
@@ -1471,13 +1517,14 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
     survived: list[str] = []
     crashed = False
     for name, args, tool_max_exit in TOOLCHAIN:
-        returncode, output = _run_tool(interpreter, args, ctx.root, env)
+        timeout_s = TOOL_TIMEOUT_S.get(name, SUBPROCESS_TIMEOUT_S)
+        returncode, output = _run_tool(interpreter, args, ctx.root, env, timeout_s)
         if returncode is None:
             evidence = write_toolchain_evidence(
                 ctx.root, name=name, args=args, returncode=None, output=output, attempt=1
             )
             failures.append(
-                name + " timed out after " + str(SUBPROCESS_TIMEOUT_S) + "s - " + evidence
+                name + " timed out after " + str(timeout_s) + "s - " + evidence
             )
             continue
         if returncode == 0:
@@ -1497,13 +1544,13 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
         # A crash. One retry, and only one - this branch is straight-line and there is
         # no path back into it for the same command.
         first = describe_exit(name, returncode, output, tool_max_exit) + " - " + evidence
-        returncode, output = _run_tool(interpreter, args, ctx.root, env)
+        returncode, output = _run_tool(interpreter, args, ctx.root, env, timeout_s)
         if returncode is None:
             crashed = True
             failures.append(
                 first
                 + "; the retry then timed out after "
-                + str(SUBPROCESS_TIMEOUT_S)
+                + str(timeout_s)
                 + "s - "
                 + write_toolchain_evidence(
                     ctx.root,
@@ -9395,10 +9442,11 @@ def check_di_fitted_on_predictor_training_set(ctx: VerifyContext) -> Outcome:
 # --- di_leave_one_out_excludes_48_bars ------------------------------------- #
 
 #: The percentile this criterion trains its subject at. **Not a proposal and not the
-#: operator's value**: `prediction.di_percentile` stays absent from config by ruling, and
-#: the property here — which rows the leave-one-out leaves out — does not depend on where
-#: the line is drawn. Supplied to the trainer only, through `_trained(overrides=...)`, so
-#: this criterion has a DI to judge while the key is withheld.
+#: operator's value**, which has since been ruled at 0.99 (2026-09-15, provisional) and is
+#: deliberately still not read here: the property this criterion checks — which rows the
+#: leave-one-out leaves out — does not depend on where the line is drawn, and a criterion
+#: that read the config would start moving whenever the operator retuned a provisional
+#: number. Supplied to the trainer only, through `_trained(overrides=...)`.
 DI_EXCLUSION_SUBJECT_PERCENTILE: Final = 0.90
 
 #: How far the recorded distribution may sit from this criterion's recomputation. The

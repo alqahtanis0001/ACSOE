@@ -52,15 +52,16 @@ TEST_PERCENTILE = 0.90
 
 
 class WithPercentile:
-    """The committed config plus the one value the operator has withheld.
+    """The committed config with the DI percentile answered — or removed.
 
-    A wrapper rather than an edit to `config/default.yaml`: that file must keep the key
-    **absent**, because absent is what the engines fail closed on and what the Phase 5
-    criteria report PENDING for. Supplying it here exercises the arithmetic without
-    claiming a number nobody has chosen.
+    A wrapper rather than a read of `config/default.yaml`, in both directions. The
+    operator ruled `prediction.di_percentile: 0.99` on 2026-09-15 and it is provisional
+    until the chain runs end to end, so this file supplies its own number for the
+    arithmetic (it must not move when the operator retunes one) and `percentile=None`
+    for the absent case (which the committed file no longer provides).
     """
 
-    def __init__(self, inner: Any, percentile: float = TEST_PERCENTILE) -> None:
+    def __init__(self, inner: Any, percentile: float | None = TEST_PERCENTILE) -> None:
         self._inner = inner
         self._percentile = percentile
 
@@ -347,18 +348,25 @@ def test_a_distant_vector_is_refused_and_an_ordinary_one_is_not(
 def test_no_di_is_fitted_while_the_percentile_is_absent(
     config: Any, dataset: Any, tmp_path: Path
 ) -> None:
-    """The state the phase is actually in, and it is not a failure.
+    """With no percentile configured the trainer fits no DI, and that is not a failure.
 
-    `prediction.di_percentile` decides when a model may refuse a trade. The operator
-    supplies it after the walk-forward reports, and nothing in this repository defaults it:
-    the fold reports `di_rows: null`, no `di.npz` is written, and
-    `di_fitted_on_predictor_training_set` reports PENDING naming the key rather than
-    accusing the trainer of not writing a file it was right not to write.
+    `prediction.di_percentile` decides when a model may refuse a trade, and nothing in
+    this repository defaults it: the fold reports `di_rows: null`, no `di.npz` is written,
+    and the manifest records `di: null`.
+
+    **This was the committed state until 2026-09-15**, when the operator ruled the key at
+    0.99. The absence is supplied here now. The branch still matters: it is what a config
+    without the key produces, and without a test the trainer could start inventing a
+    percentile with nothing to notice.
     """
-    assert config.get("prediction.di_percentile") is None
+    assert config.get("prediction.di_percentile") is not None, (
+        "the operator's DI percentile is absent from config/default.yaml. This test "
+        "supplies the absent case itself, so an absent key here means the ruled value "
+        "has been lost rather than that this test is stale."
+    )
     report = training.train_walkforward(
         dataset,
-        config=config,
+        config=WithPercentile(config, None),
         models_dir=tmp_path / "absent" / "models",
         derived_dir=tmp_path / "absent" / "derived",
         now=NOW,

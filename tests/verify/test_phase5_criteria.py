@@ -86,7 +86,17 @@ AWAITED: dict[str, str] = {}
 #: a different right answer: nobody is late, and the criterion must say which key it is
 #: waiting for rather than accusing the trainer of not writing a DI it was right not to
 #: write. Spec 59 decision 7.
-WITHHELD = {"di_fitted_on_predictor_training_set": "prediction.di_percentile"}
+#:
+#: **Empty since 2026-09-15**, when the operator ruled the last of the three thresholds
+#: (`prediction.di_percentile: 0.99`) and `di_fitted_on_predictor_training_set` stopped
+#: waiting and started judging. The mapping is kept rather than deleted: it is where the
+#: next withheld key goes, and the test below refuses to be vacuous while it is empty by
+#: asserting what that criterion does *now* instead of iterating nothing.
+WITHHELD: dict[str, str] = {}
+
+#: What `WITHHELD` held until the operator ruled it, and what must now PASS. Named here so
+#: the test below has a subject while the mapping is empty.
+FORMERLY_WITHHELD = "di_fitted_on_predictor_training_set"
 
 _NO_PYCACHE = shutil.ignore_patterns("__pycache__", "*.pyc")
 
@@ -228,17 +238,27 @@ def test_a_criterion_waiting_on_the_operator_names_the_key_and_never_fails(
 ) -> None:
     """Waiting on the operator is not the same state as waiting on an agent.
 
-    `prediction.di_percentile` is absent by ruling until the walk-forward reports, and the
-    trainer correctly fits no DI without it. A criterion that FAILed here would be accusing
-    the trainer of not writing a file it was right not to write — which it did, for one
-    run, because the helper tested `value is None` while an absent key arrives as a
-    sentinel. Absent and present-but-null are two facts and only one of them can happen
-    under this ruling.
+    A criterion that FAILed while a key was withheld would be accusing the trainer of not
+    writing a file it was right not to write — which it did, for one run, because the
+    helper tested `value is None` while an absent key arrives as a sentinel. Absent and
+    present-but-null are two facts and only one of them can happen under that ruling.
+
+    **`WITHHELD` is empty since 2026-09-15** and an empty loop is a test that cannot fail,
+    so this asserts the state that replaced it: the criterion that was waiting now PASSes
+    against the real repository and reports the identity evidence it exists for. If a
+    future key is withheld it goes in `WITHHELD`, and the loop below covers it again.
     """
     for name, key in WITHHELD.items():
         outcome = run(verify_module, name, repo_root)
         assert_pending(outcome, verify_module)
         assert key in outcome.message, (name, outcome.message)
+
+    if WITHHELD:
+        return
+    outcome = run(verify_module, FORMERLY_WITHHELD, repo_root)
+    assert_pass(outcome, verify_module)
+    assert "training rows by (pair, decision_ts) identity" in outcome.message, outcome
+    assert "not BUY calls" in outcome.message, outcome
 
 
 def test_no_phase_5_criterion_computes_accuracy(verify_module: ModuleType) -> None:
@@ -532,19 +552,44 @@ def test_the_exclusion_criterion_is_pending_without_a_trainer(
     assert "acsoe.research.training" in outcome.message
 
 
-def test_the_exclusion_criterion_passes_with_the_percentile_still_withheld(
+def test_the_exclusion_criterion_trains_its_subject_at_a_percentile_it_owns(
     verify_module: ModuleType, repo_root: Path
 ) -> None:
-    """The committed config has no `prediction.di_percentile`, by ruling, and this criterion
-    PASSes anyway: it trains its subject at a percentile it owns. A PASS line that did not
-    say the row-only threshold would have refused far more than it is drawn to refuse would
-    be a PASS on a subject that could not exhibit the defect."""
-    config_text = (repo_root / "config" / "default.yaml").read_bytes().decode("utf-8")
-    assert "\n  di_percentile:" not in config_text.replace("\r\n", "\n")
+    """This criterion PASSes on a percentile of its own, not the operator's.
+
+    **It used to prove that by the key being absent from the committed config.** The
+    operator ruled `prediction.di_percentile: 0.99` on 2026-09-15, so absence is no
+    longer available as the proof — and it was never the property that mattered. The
+    property is that the criterion does not *read* the operator's number, because which
+    rows a leave-one-out leaves out does not depend on where the line is drawn, and a
+    criterion reading a provisional value would move whenever the operator retuned it.
+
+    So the proof is now by disagreement: the committed value and the criterion's own
+    subject percentile differ, and the PASS line reports the criterion's. If someone
+    repoints the criterion at the config, this goes red on the threshold line rather
+    than passing quietly because the two happened to agree.
+
+    A PASS line that did not say the row-only threshold would have refused far more than
+    it is drawn to refuse would be a PASS on a subject that could not exhibit the defect.
+    """
+    committed, _problem = verify_module.load_config(repo_root)
+    assert committed is not None, "config/default.yaml could not be read"
+    operator_value = verify_module.config_get(committed, "prediction.di_percentile")
+    subject = float(verify_module.DI_EXCLUSION_SUBJECT_PERCENTILE)
+    assert float(operator_value) != subject, (
+        "the criterion's own subject percentile has drifted onto the operator's "
+        f"committed value ({subject}); they must differ, or a criterion reading the "
+        "config instead of its own constant would pass this test unnoticed"
+    )
     outcome = run(verify_module, "di_leave_one_out_excludes_48_bars", repo_root)
     assert_pass(outcome, verify_module)
     assert "43200 s (48 bars x 900 s, from config)" in outcome.message
     assert "Leaving out the row alone would put the threshold at" in outcome.message
+    assert f"percentile {subject}" in outcome.message, (
+        "the PASS line does not report the criterion's own subject percentile, so nothing "
+        "here would notice it having been repointed at the operator's key: "
+        + outcome.message
+    )
 
 
 def test_a_di_whose_leave_one_out_excludes_only_the_row_is_a_fail(

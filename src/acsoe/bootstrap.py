@@ -131,9 +131,11 @@ GUARD_CHAIN: tuple[BaseEngine, ...] = (
 #: 14 ``adaptive_router``, 16 ``decision`` and 18 ``execution`` still absent for Phase 6.
 #: Engine 5 ``feature`` is first and returns ``PASS`` on every tick where no decision bar
 #: closed, so from here the rest of the chain runs only on bar ticks. Engines 13, 8 and 15
-#: fail closed on a fresh clone (no ``models/``, no run ids) and on the thresholds the
-#: operator has withheld: ``prediction.di_percentile`` is absent by ruling, so engine 8
-#: blocks on every bar tick until it is supplied.
+#: fail closed on a fresh clone, which has no ``models/`` and therefore no run ids, so
+#: all three block on every bar tick there. The operator's three thresholds are no longer
+#: among the reasons: ``prediction.di_percentile``, ``anomaly.threshold_percentile`` and
+#: ``skeptic.veto_threshold`` were ruled on 2026-09-14 and 2026-09-15 and are in
+#: ``config/default.yaml``, all three provisional until the chain runs end to end.
 #:
 #: **One hole is load-bearing this phase and it is stated rather than found.** Engine 10
 #: ``cost`` reads ``state["order_book"]["estimated_slippage_pct"]`` and engine 9 does not

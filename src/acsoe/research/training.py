@@ -21,12 +21,14 @@ fold beside that fold's row count, and again in aggregate. A fold with 8,000 row
 effective size of 300 is a fold whose metrics mean almost nothing, and an aggregate hides
 exactly that fold.
 
-## What is deliberately absent
+## The DI percentile, supplied since 2026-09-15
 
-`prediction.di_percentile` is the operator's and is absent until the walk-forward reports.
-The DI is fitted only when it is supplied; until then every fold reports `di_rows: null`
-and `di_fitted_on_predictor_training_set` is PENDING naming the key. Nothing here defaults
-it: that number decides when a model is allowed to refuse a trade.
+`prediction.di_percentile` is the operator's. It was absent until the walk-forward had
+reported, and the operator ruled `0.99` on 2026-09-15 — provisional until the chain runs
+end to end. The DI is fitted only when it is supplied, so a config without it still trains
+a predictor and reports `di_rows: null` for every fold, and nothing here defaults it: that
+number decides when a model is allowed to refuse a trade. That branch is exercised by the
+tests, which supply their own value or their own absence rather than reading this file's.
 
 **The break-even win rate is not computed here and the reason is invariant 2.** Spec 67
 asks for the BUY-call target rate "beside the break-even rates", and break-even is a

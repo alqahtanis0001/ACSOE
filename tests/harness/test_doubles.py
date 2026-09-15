@@ -150,25 +150,50 @@ def test_a_leaf_the_model_declares_optional_and_the_file_omits_reads_as_none() -
     """The one dimension this double used to get wrong, and it is the dimension Phase 5
     lives in.
 
-    Five keys are absent from `config/default.yaml` by operator ruling — the three
-    thresholds the operator supplies after the walk-forward reports, plus the model run
-    ids a fresh clone has no artefact for — and engines 8, 13 and 15 are written to read
-    the `None` and block with **their own** reason code. This double wraps the raw dict,
-    so it raised; the orchestrator turns a raise into `ERROR`, `ERROR` also blocks, and
-    every test of those engines would have been written against the wrong branch with
-    nothing red anywhere.
+    Two keys are absent from `config/default.yaml` by operator ruling — the model run ids a
+    fresh clone has no artefact for, and the ranking feature the Phase 7 question decides —
+    and the engines that read them are written to read the `None` and block with **their
+    own** reason code. This double wraps the raw dict, so it raised; the orchestrator turns
+    a raise into `ERROR`, `ERROR` also blocks, and every test of those engines would have
+    been written against the wrong branch with nothing red anywhere.
 
     The real `Config` declares each as `Ratio | None` or `str | None` and returns `None`.
+
+    **It was five keys until 2026-09-15.** The three thresholds
+    (`prediction.di_percentile`, `anomaly.threshold_percentile`, `skeptic.veto_threshold`)
+    were ruled by the operator on 2026-09-14 and 2026-09-15 and are no longer absent; they
+    move to the test below, which asserts the other half of the same property, because a
+    double that answered `None` for a leaf the file *does* carry would be wrong in the
+    direction that makes a configured gate look unconfigured.
+    """
+    config = load_default_config()
+    for key in (
+        "models.prediction_run_id",
+        "scout.rank_feature",
+    ):
+        assert config.get(key) is None, key
+
+
+def test_an_optional_leaf_the_file_supplies_reads_as_its_value() -> None:
+    """The other half, and the half that arrived with the operator's rulings.
+
+    `Ratio | None` has two legitimate readings and the double must give the right one for
+    each. Absent reads as `None` above; supplied must read as the number, because a double
+    answering `None` here would have engines 8, 13 and 15 block with `*_unavailable` in
+    every test that used it — a configured gate reported as an unconfigured one, which is
+    fail-closed and therefore silent.
+
+    The values are not pinned: all three are provisional until the chain runs end to end,
+    and this test is about the double, not about where the operator drew the lines.
     """
     config = load_default_config()
     for key in (
         "prediction.di_percentile",
         "anomaly.threshold_percentile",
         "skeptic.veto_threshold",
-        "models.prediction_run_id",
-        "scout.rank_feature",
     ):
-        assert config.get(key) is None, key
+        value = config.get(key)
+        assert isinstance(value, float) and 0.0 < value < 1.0, (key, value)
 
 
 def test_a_typo_still_raises_rather_than_reading_as_an_unset_leaf() -> None:

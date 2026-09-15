@@ -6,6 +6,16 @@
 
 **Phase 5 — Models. OPENED 2026-09-12.** Phase 4 preflight re-run on the clean tree at `ef8f1f0`: **10 criteria, 10 PASS, 0 FAIL, 0 PENDING**, `replay_full_archive` skipped as `--live`. Nineteen specs (59 to 77) written from the Phase 5 row and the ownership map, approved by the operator with all nine rulings confirmed (recorded under Locked Decisions) and one addition: the effective sample size is reported per fold beside that fold's row count, not only in aggregate. The shared task list is `feature-specs/PHASE-5-TASKS.md`. Three operator values stay absent until the walk-forward reports; see Open Questions. **This is the phase where a mistake looks like success**, so every assertion is proven capable of failing and the proof goes in the build log.
 
+**Gates re-run 2026-09-15, phases 0 to 5 in order on a quiet tree, every phase exit 0:**
+Phase 0 **7/7**, Phase 1 **10/10**, Phase 2 **9/9**, Phase 3 **9/9**, Phase 4 **10/10**
+(`replay_full_archive` skipped as `--live`), Phase 5 **14 criteria, 14 PASS, 0 FAIL, 0
+PENDING**. The last PENDING — `di_fitted_on_predictor_training_set` — is resolved by the
+operator's `prediction.di_percentile` ruling and now judges the artefact by row identity.
+**The close and the consolidation stay withheld by the operator**, so this table is
+unchanged and `docs/build-log/phase-5.md` is still not written. Logs:
+`logs/verify/20260915-final-summary.txt`.
+
+
 *Phase 4 — Memory and replay.* Green on its gate 2026-09-11; the operator withheld the close and the consolidation, so `docs/build-log/phase-4.md` does not exist and the four per-agent logs under `docs/build-log/phase-4/` are the record. The three operator rulings of 2026-09-12 (past-only walk-forward, 2017 cutoff, thin-pair floor as a named knob) were applied against the full 234-pair archive; the dataset is 20,331,237 labelled decision bars, 23.89% target, 51.27% stop, 24.84% timeout, 0.376% decided by the both-barriers rule.
 
 *Phase 3 — Economics. GREEN AND CLOSED*, verified **2026-09-10**: 9 criteria, **9 PASS, 0 FAIL, 0 PENDING**. All eleven specs (37 to 47) delivered across A, B, C and the lead. All four gates re-run at close on a quiet tree, every one exit 0 — Phase 0 7/7, Phase 1 10/10, Phase 2 9/9, Phase 3 9/9 — with `pytest` 1340 passed, `mypy --strict src/` clean across 71 files and `ruff check src/` clean. Engines 7 `scout`, 10 `cost`, 11 `risk` and 17 `safety` are built, wired to A's real Kraken client, and registered in `bootstrap.py`: `is_gate_matches_registry` reports **8 engines registered; 0 mismatches (5 gates)**. The narrative account is `docs/build-log/phase-3.md`.
@@ -442,7 +452,16 @@ the reason in the YAML comment and in `DatasetConfig`.
 
 ## Open Questions
 
-- **OPEN for the operator, Phase 5, deliberately: three values are absent until the walk-forward reports.** `prediction.di_percentile`, `anomaly.threshold_percentile` and `skeptic.veto_threshold`. The operator ruled 2026-09-12 that the lead's recommendations (0.95, 0.99, 0.5) are guesses until there is a distribution to place them on. Engines 8, 13 and 15 fail closed while the keys are absent and the Phase 5 criteria that judge them report PENDING naming the key. The fourth, `scout.rank_feature`, waits on spec 75's ranking study.
+- **~~OPEN for the operator, Phase 5, deliberately: three values are absent until the walk-forward reports.~~ ALL THREE ARE NOW RULED AND LANDED, 2026-09-15, and all three are PROVISIONAL.** `prediction.di_percentile: 0.99`, `anomaly.threshold_percentile: 0.99` and `skeptic.veto_threshold: 0.50` are in `config/default.yaml`, each with its evidence in the comment beside it and each revisited once the chain runs end to end. The operator ruled 2026-09-12 that the lead's recommendations (0.95, 0.99, 0.5) were guesses until there was a distribution to place them on; each of the three was then chosen from that distribution, and the DI's only after the 48-bar exclusion had been applied and refitted. Engines 8, 13 and 15 no longer fail closed on an absent threshold — they fail closed on an absent `models.*_run_id`, which is what a fresh clone has. The fourth key, `scout.rank_feature`, stays absent: the operator ruled no feature 2026-09-15 and the question moves to Phase 7.
+
+  **RULED 2026-09-15 by the operator: `prediction.di_percentile: 0.99`, provisional until the
+  chain runs end to end.** With the 48-bar exclusion the DI refuses **3.31%** of complete
+  out-of-sample rows against 1% nominal, over the 405 fitted folds — roughly three times its
+  nominal rate, which is the right direction for an out-of-distribution refusal and nothing
+  like the **74.9%** the same percentile refused before the exclusion. **0.95 rejected: 6.79%**,
+  too much for a gate meant to catch genuinely unfamiliar conditions. 0.999 refuses 2.06% and
+  was not chosen. Evidence: `docs/dataset/di-exclusion-refit-2026-09-15.py` and `.json`.
+  This is the ruling the entry below (ruling 1 of 2026-09-15) left open, and it closes it.
 
   **RULED 2026-09-14 by the operator: `skeptic.veto_threshold: 0.50`, chosen from the veto sweep
   and provisional until the chain runs end to end.** Evidence: at 0.50 the skeptic's survivors hit
@@ -474,9 +493,12 @@ the reason in the YAML comment and in `DatasetConfig`.
      to the conditions it exists to detect, and rather than rebuilding the reference set, which
      is a larger change with no evidence behind it. A DI fitted without the exclusion is a
      defect, and the criterion `di_leave_one_out_excludes_48_bars` proves it is applied.
-     **`prediction.di_percentile` stays absent** and engine 8 stays fail-closed until the
+     ~~**`prediction.di_percentile` stays absent** and engine 8 stays fail-closed until the
      operator rules on the refit's refusal rates at 0.95, 0.99 and 0.999
-     (`docs/dataset/di-exclusion-refit-2026-09-15.py`, running).
+     (`docs/dataset/di-exclusion-refit-2026-09-15.py`, running).~~ **The refit finished and
+     the operator ruled 0.99 on 2026-09-15** — 3.31% refused against 1% nominal, 0.95's 6.79%
+     rejected. The value is in `config/default.yaml` and is provisional until the chain runs
+     end to end; the entry above carries the reasoning.
   2. **`anomaly.threshold_percentile: 0.99`, provisional.** 1.24% blocked against 1% nominal,
      stable across years (0.9% to 1.8%), and what it blocks is the volatile tail (stop rate 0.67
      against 0.50). 0.95 was rejected: 5.55% blocked, including BUY calls with better
@@ -485,6 +507,75 @@ the reason in the YAML comment and in `DatasetConfig`.
      the 0.904 quantile of training scores and 0.99 does not block it.
   3. **`scout.rank_feature`: none. Engine 7 stays alphabetical.** Recorded as an open question,
      not a finding: next entry.
+- **RULED by the lead 2026-09-15, flagged to the operator as overturnable: `pytest` gets
+  its own subprocess bound in `toolchain_green`, `PYTEST_TIMEOUT_S = 2700`; `mypy` and
+  `ruff` keep 900 s.** With the three thresholds landed and the suite green,
+  `--phase 0` reported `FAIL toolchain_green - pytest timed out after 900s` and every
+  other criterion PASS. Because `toolchain_green` is registered for every phase, that is
+  six red gates on a tree with nothing wrong in it.
+
+  **The bound was already marginal before this session**, and the gate's own evidence
+  directory says so: `logs/verify/toolchain_green/` holds a **820.9 s** completed run at
+  07:06Z on 2026-09-15 against the 900 s bound, and a **timeout** at 04:10Z on the same
+  tree, at 74%. 900 s was chosen in Phase 0 when the suite was a minute long and is now
+  2,506 tests. **`prediction.di_percentile: 0.99` then took it over**: the trainer fits and
+  scores a DI only when a percentile exists, so every trained fold in the suite now pays
+  **3.1 s** for one (A/B over `test_training_main.py`: 126.9 s against 228.1 s; cProfile of
+  one two-fold run: `di.fit` 1.1 s and the per-row `di.score` loop 1.5 s a fold, at 1.13 ms
+  a row). The suite is **1502 s**.
+
+  A timeout guards against a tool that has **hung**, not one that is slow, and this makes
+  no criterion easier to satisfy - pytest still has to exit 0 with every test passing. The
+  two alternatives were measured and neither removes the need to move the bound: Phase 7
+  prerequisite 5 recovers at most the DI's own 5.4 s of a 10.1 s two-fold run and leaves the
+  suite near 1000 s; stopping the non-DI tests inheriting the percentile lands near 850 s,
+  which is the margin that already failed at 04:10Z, and pays for it by giving up the
+  property that tests run against the shipped config. Account:
+  `docs/build-log/phase-5/lead.md`.
+
+  **Phase 7 prerequisite 5 now has a second and nearer-term reason**: the DI's fitting and
+  scoring path is the test suite's largest single cost, not only the full run's.
+
+- **OPEN, recorded 2026-09-15 and deliberately not fixed this session: `toolchain_green`
+  cannot tell a collection error from a verdict.** It retries a **crash** once and never
+  retries a **verdict**, where a verdict is any returncode inside the tool's documented
+  range - 0 to 5 for pytest. **Exit 2 is inside that range and is not a verdict about the
+  code**: pytest uses it for *interrupted*, which is what a collection error is. During the
+  Phase 5 gate sweep an import fault inside scipy (no ACSOE frame anywhere in the
+  traceback) interrupted collection after 4.51 s, and the criterion reported it exactly as
+  it would report a failing test suite. The distinction worth drawing is probably **exit 2
+  with zero tests run** against **exit 1 with failures named**. Not changed under a
+  deadline, and in the same session that already moved this criterion's pytest timeout -
+  one change to the gate's own behaviour is enough. Account:
+  `docs/build-log/phase-5/lead.md`, the UNEXPLAINED entry of 2026-09-15.
+
+- **OPEN FOR PHASE 6 by operator ruling 2026-09-15, deliberately not fixed in Phase 5:
+  engine 8's `is_buy` cannot distinguish "no call" from "not a BUY".** Found by C-4 during
+  spec 73's mutation sweep on engine 15. `PredictionResult.is_buy` is declared
+  `is_buy: bool = False` in `engines/prediction/contracts.py` and `to_state()` publishes it
+  unconditionally, so a **refusing** engine 8 — a DI refusal, an absent artefact, an
+  incomplete vector — puts `is_buy: false` into `state["prediction"]` exactly as a predictor
+  that ran and called no BUY does. Two facts arriving through one channel, which is the shape
+  `code-standards.md` names under broad handlers.
+
+  **It is not a fail-open and nothing is at risk today.** Engine 8 returns `BLOCK` on every
+  refusal, the opportunity chain stops on the tick, and no consumer reaches the value. Engine
+  15 was hardened in the same review to treat an absent or non-`bool` `is_buy` as non-BUY and
+  block rather than pass, so the one reader in the chain already fails closed.
+
+  **Why it is still worth fixing.** `expected_move_pct` is the field that got this right and
+  is the model to copy: it is **omitted from the published mapping** on a refusal, so engine
+  10 fails closed on a key that is not there rather than on a number it must interpret. The
+  same treatment for `is_buy` (`bool | None`, omitted on a refusal) makes the payload say
+  which of the two things happened, which matters for the console, for any log anyone reads
+  after a refusal, and for Phase 6's engine 14 `adaptive_router`, the first component that
+  reads engine 8's payload for something other than a gate decision.
+
+  **Phase 6, engine 8's owner (C), and it touches engine 15's read** — the two land together
+  or the hardening above starts reporting a refusal as a non-BUY. Not Phase 5 work: the phase
+  is at its gate and this changes a published contract field, which is a lead approval and a
+  seam, not a fix under a deadline.
+
 - **FOUND 2026-09-13, ruled by the lead and flagged to the operator: `data_guard`'s
   missing-candle condition means "no subscribed pair traded in a bar", not "this pair has a
   hole".** Engine 3 computes `missing_bars` over the union of every pair's candles, so past a

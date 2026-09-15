@@ -12,12 +12,14 @@ reported: a ten-sigma volume spike scores above the threshold while the *same ro
 unspiked scores below it, and the training identity is the fold's own training rows
 recomputed from the public splitter.
 
-**The threshold is the operator's.** `anomaly.threshold_percentile` is absent from
-`config/default.yaml` and nothing here defaults it. The forest is still fitted — it needs
-no number from anybody and its score distribution is a finding in its own right — but the
-threshold and the block rate are `null` until the operator supplies one, and engine 13
-blocks with `anomaly_unavailable` meanwhile. The tests that need a threshold supply one
-through a wrapper so the arithmetic is exercised without anybody inventing the number.
+**The threshold is the operator's**, and as of 2026-09-15 it is supplied:
+`anomaly.threshold_percentile: 0.99`, provisional until the chain runs end to end. Nothing
+here defaults it and nothing here reads it — every test in this file supplies its own
+number through `WithPercentile`, including the `None` that reproduces the absent case,
+because the arithmetic under test must not move when the operator revises a provisional
+value. The forest is fitted whether or not a threshold exists — it needs no number from
+anybody and its score distribution is a finding in its own right — and with none the
+threshold and the block rate are `null` and engine 13 blocks with `anomaly_unavailable`.
 """
 
 from __future__ import annotations
@@ -51,9 +53,11 @@ from tests.research.test_training import (  # noqa: E402
 
 FOLDS = 3
 
-#: Supplied here and **never** written into `config/default.yaml`. Absent is what engine 13
-#: fails closed on and what the Phase 5 criteria report PENDING for; a number in the
-#: committed config would be this lane choosing when a market counts as broken.
+#: The test's own number, and it is **not** read from the committed config even though the
+#: operator has since ruled the same value there (0.99, 2026-09-15, provisional). Supplying
+#: it here is what keeps this file's arithmetic independent of a threshold that is the
+#: operator's to revise: a test that read the config would stop measuring the fit and start
+#: measuring whatever the operator last chose.
 PERCENTILE = 0.99
 
 #: The test's number and nothing else's, chosen to sit clearly below the 0.904 quantile a
@@ -65,7 +69,11 @@ SPIKE_PERCENTILE = 0.85
 
 
 class WithPercentile:
-    """The committed config with one absent key answered, and nothing else changed."""
+    """The committed config with one key answered — or removed — and nothing else changed.
+
+    `value=None` is the absent case, which is how this file still reaches it now that the
+    operator's ruling of 2026-09-15 put a threshold in `config/default.yaml`.
+    """
 
     def __init__(self, inner: Any, value: float | None) -> None:
         self._inner = inner
@@ -89,11 +97,19 @@ def dataset(config: Any) -> Any:
 
 @pytest.fixture(scope="module")
 def bare(config: Any, dataset: Any, tmp_path_factory: Any) -> Any:
-    """A run under the committed config, where the threshold percentile is absent."""
+    """A run with the threshold percentile absent, supplied by this fixture.
+
+    It read the committed config until 2026-09-15, when the operator ruled
+    `anomaly.threshold_percentile: 0.99` and the key stopped being absent there. The
+    property under test is unchanged and is not about what the committed file holds: with
+    no threshold, the trainer records null rather than inventing one. That is what stops a
+    fold whose key was dropped from quietly acquiring a number nobody chose, so the case
+    must still be reachable now that the committed config no longer supplies it.
+    """
     root = tmp_path_factory.mktemp("anomaly-bare")
     return training.train_walkforward(
         dataset,
-        config=config,
+        config=WithPercentile(config, None),
         models_dir=root / "models",
         derived_dir=root / "derived",
         now=NOW,
@@ -286,13 +302,24 @@ def test_it_is_fitted_on_the_folds_training_rows_recomputed(
 
 
 def test_no_threshold_is_recorded_while_the_key_is_absent(bare: Any) -> None:
-    """`anomaly.threshold_percentile` is absent from the committed config by ruling.
+    """With no threshold configured, the trainer records null rather than inventing one.
 
     The forest is fitted anyway — it needs no number from anybody — but the number that
     decides when the market is declared broken is not this module's to invent, so the
     threshold and the block rate are null and engine 13 blocks with `anomaly_unavailable`.
+
+    **The absent case is now the `bare` fixture's to supply, not the committed config's.**
+    The operator ruled `anomaly.threshold_percentile: 0.99` on 2026-09-15, so the assertion
+    below is inverted from what it was: the committed config carries a value, and this test
+    removes it. The value itself is deliberately not pinned here — it is provisional until
+    the chain runs end to end, and a test that pinned it would go red on the operator
+    revising it, which is not a defect this file should report.
     """
-    assert load_default_config().get("anomaly.threshold_percentile") is None
+    assert load_default_config().get("anomaly.threshold_percentile") is not None, (
+        "the operator's threshold is absent from config/default.yaml. This test supplies "
+        "the absent case itself and asserts the committed config does not, so an absent "
+        "key here means the ruled value has been lost rather than that this test is stale."
+    )
     for entry in folds_with_a_detector(bare):
         assert entry["anomaly_threshold"] is None
         assert entry["anomaly_percentile"] is None

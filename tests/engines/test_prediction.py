@@ -568,16 +568,28 @@ def test_a_configured_di_percentile_that_matches_the_artefact_predicts(
 def test_with_the_percentile_absent_the_artefacts_own_stands(
     engine_context: Any, bars: list[dict[str, Any]], artefact_root: Path, run_id: str
 ) -> None:
-    """Absent is the committed state and it is **not** a disagreement.
+    """Absent is **not** a disagreement.
 
-    It means the operator has not chosen yet, so the artefact's own percentile stands
+    It means the operator has not chosen, so the artefact's own percentile stands
     unquestioned and the engine behaves exactly as it did before this check existed.
+
+    **The absence is supplied here, not inherited.** It was the committed state until
+    2026-09-15, when the operator ruled `prediction.di_percentile: 0.99`. Left inherited,
+    this test would have started comparing the artefact's percentile against a real config
+    value — which is the *mismatch* branch, the opposite of what it is named for — and it
+    would have gone on passing whenever the two happened to agree.
     """
     from tests.harness.doubles import load_default_config
 
-    assert load_default_config().get(KEY_DI_PERCENTILE) is None
+    assert load_default_config().get(KEY_DI_PERCENTILE) is not None, (
+        "the operator's DI percentile is absent from config/default.yaml. This test "
+        "supplies the absent case itself, so an absent key here means the ruled value "
+        "has been lost rather than that this test is stale."
+    )
     state, context = complete_state(engine_context, bars, artefact_root, run_id)
-    context = context_with(context, artefact_root, **{KEY_PREDICTION_RUN_ID: run_id})
+    context = context_with(
+        context, artefact_root, **{KEY_PREDICTION_RUN_ID: run_id, KEY_DI_PERCENTILE: None}
+    )
     result = run(PredictionEngine(), context, state)
     assert result.status is EngineStatus.OK, (result.data.get("reason_code"), result.reason)
 

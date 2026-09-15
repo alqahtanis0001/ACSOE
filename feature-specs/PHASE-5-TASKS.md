@@ -1,5 +1,67 @@
 # Phase 5 — shared task list
 
+## HANDOFF 5, 2026-09-15 — the ruled config values are landed and phases 0 to 5 are gated.
+
+**Phase 5 is still NOT closed and NOT consolidated** — the operator withheld both again and
+asked for a report and a stop. What this session did, and the state of every piece:
+
+| Piece | State |
+|---|---|
+| `prediction.di_percentile` | **RULED 0.99 by the operator, PROVISIONAL**, and landed. 3.31% of complete out-of-sample rows refused against 1% nominal with the 48-bar exclusion, over the 405 fitted folds — about three times nominal, the right direction for an out-of-distribution refusal, against the 74.9% the same percentile refused before the exclusion. 0.95 rejected at 6.79%. Recorded in the tracker (Open Questions, and against ruling 1 of 2026-09-15, which it closes) and beside the key in `config/default.yaml`. |
+| All three thresholds in `config/default.yaml` | **LANDED TOGETHER**: `prediction.di_percentile: 0.99`, `anomaly.threshold_percentile: 0.99`, `skeptic.veto_threshold: 0.50`. The header above `models:` now says two keys remain absent (`models.*_run_id`, `scout.rank_feature`) and names all three thresholds as provisional. |
+| The tests that pinned those keys as absent | **REPOINTED IN THE SAME CHANGE — and there were twelve, not six.** Handoff 4 listed the six for the anomaly and skeptic keys; landing `di_percentile` turned up six more, which that list could not have known about because that key was not being landed then. Every one now **supplies its own absence** through a config wrapper and asserts the committed file no longer does. No test pins a threshold's *value*: all three are provisional, and a test that pinned one would go red on the operator revising it. |
+| `di_fitted_on_predictor_training_set` | **PASSES.** It was the one PENDING criterion and it was waiting on this key. 5762 DI reference rows, every one among the fold's 17184 training rows by `(pair, decision_ts)` identity, 5762 of them not BUY calls, none among the 1344 test rows. |
+| Engine 8's `is_buy` | **RECORDED as an open item for Phase 6**, not fixed, per the operator. `is_buy: bool = False` is published unconditionally by `to_state()`, so a refusal is indistinguishable from a non-BUY. Not a fail-open — engine 8's own `BLOCK` stops the tick, and engine 15 was hardened in spec 73's review to treat an absent or non-`bool` value as non-BUY. `expected_move_pct` is the field that got this right (omitted on a refusal) and is the model to copy. It touches engine 15's read, so the two land together. |
+| `toolchain_green`'s pytest timeout | **RAISED to `PYTEST_TIMEOUT_S = 2700` by lead ruling, flagged to the operator as overturnable.** `mypy` and `ruff` keep 900 s. The bound was **already marginal before this session** — the gate's own evidence directory holds a completed **820.9 s** run at 07:06Z against the 900 s bound and a **timeout** at 04:10Z on the same tree — and `di_percentile` took it over, because the trainer fits and scores a DI only when a percentile exists: **3.1 s per trained fold**, measured. See the tracker and the build log. |
+| Phase 7 prerequisite 5 | **Now has a second and nearer-term reason.** The DI's fit-and-score path is the test suite's largest single cost, not only the full run's. It was deferred on the understanding that only the full walk-forward paid it. |
+
+**The gates, phases 0 to 5 in order on a quiet tree, 2026-09-15 17:08Z to 19:08Z.**
+Every phase exit 0, run back to back with nothing touching the tree between them. Logs at
+`logs/verify/phase{N}-20260915-final.log`, summary at
+`logs/verify/20260915-final-summary.txt`.
+
+| Phase | Result |
+|---|---|
+| 0 — Structure | **7 criteria: 7 PASS, 0 FAIL, 0 PENDING** |
+| 1 — Interface | **10 criteria: 10 PASS, 0 FAIL, 0 PENDING** |
+| 2 — Data spine | **9 criteria: 9 PASS, 0 FAIL, 0 PENDING** |
+| 3 — Economics | **9 criteria: 9 PASS, 0 FAIL, 0 PENDING** |
+| 4 — Memory and replay | **10 criteria: 10 PASS, 0 FAIL, 0 PENDING**, `replay_full_archive` skipped as `--live` |
+| 5 — Models | **14 criteria: 14 PASS, 0 FAIL, 0 PENDING** |
+
+Phase 5 had one PENDING at the last session's gate — `di_fitted_on_predictor_training_set`,
+waiting on `prediction.di_percentile`. The operator's ruling supplied the key and the
+criterion now judges rather than waits: *5762 DI reference rows, every one of them among the
+fold's 17184 training rows by (pair, decision_ts) identity, 5762 of them not BUY calls so the
+set is not the BUY subset, and none among the 1344 test rows.*
+
+**The phase is NOT closed and NOT consolidated.** `docs/build-log/phase-5.md` does not exist,
+the Phase Status table still reads *in progress*, and the operator asked for a report and a
+stop. Every criterion passing is the gate's verdict, not the close.
+
+**Four things the next session should not have to rediscover.**
+
+1. **The evidence for "was this already broken" was on disk the whole time.**
+   `logs/verify/toolchain_green/` holds the complete captured output of every
+   `toolchain_green` failure, timestamped. Two minutes there answered a question that would
+   otherwise have been guesswork, and it is the first place to look when the gate reports
+   something odd.
+2. **Measure before concluding, twice over.** The first hypothesis — that the DI arithmetic
+   is slow — was wrong: profiled standalone at the real sizes (5,762 reference rows, 1,344
+   test rows) `di.fit` plus `di.score` costs **1.2 s**. The cost is that it now runs on every
+   trained fold in the suite. Same shape as the Phase 4 benchmark lesson: a wrong answer
+   that is in range survives.
+3. **The suite's wall-clock varies by more than a third on this machine.** The same suite
+   measured 1502 s and 1159 s within the hour, and 820.9 s before the thresholds landed. Any
+   bound set just above a single measurement will fire on a tree nobody has broken.
+4. **An unexplained collection error stopped one phase 4 gate run** — `pytest exit 2`,
+   `TypeError: 'bool' object does not support the context manager protocol`, raised inside
+   `scipy.stats`'s module body with no ACSOE frame in the traceback. It is filed as
+   **unexplained**, deliberately not as the known native fault, and the reason it is not
+   called transient is in the build log: *re-run it and see if it passes* is the diagnostic
+   Phase 3 proved cannot fail.
+
+
 ## HANDOFF 4, 2026-09-15 ~08:10 — the operator is shutting down. Read this first.
 
 **Phase 5 is NOT closed and NOT consolidated** (both withheld by the operator). The session ran

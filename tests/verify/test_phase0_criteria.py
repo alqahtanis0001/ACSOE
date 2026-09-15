@@ -890,13 +890,59 @@ def scripted_toolchain(
     remaining = list(results)
 
     def fake_run(
-        interpreter: str, args: list[str], root: Path, env: dict[str, str]
+        interpreter: str,
+        args: list[str],
+        root: Path,
+        env: dict[str, str],
+        timeout_s: int,
     ) -> tuple[int | None, str]:
-        calls.append(args[1])
+        # The stub asserts the bound it was handed rather than ignoring it. `toolchain_green`
+        # gained a per-tool timeout on 2026-09-15 (`TOOL_TIMEOUT_S`, lead ruling), and a stub
+        # that simply accepted a fifth argument would let the whole mapping be wrong - every
+        # tool on pytest's 2700 s, say - with all five tests below still green.
+        name = args[1]
+        expected = verify_module.TOOL_TIMEOUT_S.get(
+            name, verify_module.SUBPROCESS_TIMEOUT_S
+        )
+        assert timeout_s == expected, (name, timeout_s, expected)
+        calls.append(name)
         return remaining.pop(0)
 
     monkeypatch.setattr(verify_module, "_run_tool", fake_run)
     return calls
+
+
+def test_pytest_gets_its_own_timeout_and_the_fast_tools_keep_the_short_one(
+    verify_module: ModuleType, bare_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bound is per tool, and a timeout names the bound that actually applied.
+
+    **Lead ruling of 2026-09-15**, flagged to the operator as overturnable. A timeout guards
+    against a tool that has *hung*, not one that is slow: the suite legitimately runs for
+    around twenty minutes now that `prediction.di_percentile` has it fitting a DI on every
+    trained fold, and 900 s was chosen in Phase 0 when the suite was a minute long. It had
+    already fired once on a tree nobody had broken - see the evidence files under
+    `logs/verify/toolchain_green/`.
+
+    `mypy` and `ruff` keep 900 s deliberately: they run in seconds, so a hang in either is a
+    real fault and worth catching quickly. Asserting the message names **2700** is what
+    stops the two bounds being quietly collapsed back into one - the `scripted_toolchain`
+    stub checks the value handed to every call, and this checks the value the operator
+    reads.
+    """
+    assert verify_module.TOOL_TIMEOUT_S["pytest"] > verify_module.SUBPROCESS_TIMEOUT_S
+    assert "mypy" not in verify_module.TOOL_TIMEOUT_S
+    assert "ruff" not in verify_module.TOOL_TIMEOUT_S
+
+    calls = scripted_toolchain(
+        verify_module, bare_tree, monkeypatch, [(None, "timed out here"), (0, ""), (0, "")]
+    )
+    outcome = run(verify_module, "toolchain_green", bare_tree)
+    assert outcome.result is verify_module.Result.FAIL
+    assert "pytest timed out after 2700s" in outcome.message, outcome.message
+    assert calls == ["pytest", "mypy", "ruff"], (
+        "a timeout is a verdict on the tool rather than a crash, so it is never retried"
+    )
 
 
 def test_a_crash_is_retried_once_and_a_clean_retry_passes_with_the_crash_named(

@@ -929,3 +929,193 @@ absent or train fixtures with the committed config; they were backed out so the 
 and the list is in Handoff 4. Phases 0 to 4 were not gated. **Why:** the lead waited roughly two
 hours for a teammate's end-of-sweep message instead of checking the teammate's file hash on a
 timer, and the time was gone. The engine's hash had been final all along.
+### Decision: the three withheld thresholds land as one change, with their tests
+
+**Agent:** Lead (Opus 5 session) · **Date:** 2026-09-15
+
+**Options.** Land `prediction.di_percentile`, `skeptic.veto_threshold` and
+`anomaly.threshold_percentile` in `config/default.yaml` and repoint the affected tests
+afterwards, as a follow-up; or land the values and the tests in one change.
+
+**Chose.** One change. The operator ruled it explicitly and the reason is mechanical:
+every one of those tests either asserts the key is absent from the committed config or
+trains a fixture *with* the committed config. Landing the values alone turns them red;
+landing the tests alone makes them assert a state the file does not hold. There is no
+ordering of the two halves that leaves the tree green, which is the same rule
+`code-standards.md` already states for a config key and its model field.
+
+**Because.** A red tree is not a neutral intermediate state in this project. The gate runs
+`pytest` under `toolchain_green` in every phase, so a half-landed change makes **all six**
+phase gates red for reasons unrelated to the phase being gated, and the next reader has to
+work out which failures are the change and which are real.
+
+**Cost.** One larger commit, and the six tests are repointed by the same hand that moved the
+config rather than by their owners. Every repoint is in a lane C owns; the values are the
+lead's file. Recorded here because it crosses that line deliberately and under an operator
+instruction, not silently.
+
+### The absence a test asserts must be the absence the test supplies
+
+**Agent:** Lead (Opus 5 session) · **Date:** 2026-09-15
+
+**What happened.** Six tests pinned the three thresholds as absent. Two of the six read the
+absence from `config/default.yaml` in a precondition (`assert load_default_config().get(key)
+is None`), and four *depended* on it without asserting it: two module-scoped training
+fixtures passed the committed config straight into `train_walkforward`, and one
+parametrisation built its "unconfigured" cases by simply not overriding the key.
+
+**Why.** The four that depended on it silently are the interesting half, and one of them is
+the hazard this phase keeps producing. `test_a_buy_call_with_the_skeptic_unconfigured_blocks
+_with_skeptic_unavailable` runs three parametrisations whose whole subject is engine 15
+refusing for want of a key. With `skeptic.veto_threshold` committed, all three would have
+inherited a real threshold, the "unconfigured" cases would have become configured ones, and
+the test would have gone on passing — against a chain that no longer refuses anything. Three
+green parametrisations reading as coverage of a refusal that was never reached. The two
+training fixtures fail the other way and are loud: the trainer starts recording a threshold
+where the test asserts null.
+
+**Fix.** Every one of the six now supplies its own absence and asserts the committed config
+does **not**. The training fixtures pass `WithPercentile(config, None)` and
+`WithVetoThreshold(config, None)` — wrappers that answer one key and change nothing else, the
+`None` arm being the absent case; the parametrisation spells `None` for each key it means to
+be missing; and the preconditions are inverted to `is not None`, with a message saying that
+an absent key there means the ruled value has been lost rather than that the test is stale.
+No value is pinned in any of them: all three thresholds are provisional until the chain runs
+end to end, and a test that pinned one would go red on the operator revising it.
+
+**A detail worth keeping.** The rehearsal file already had an `_ABSENT_KEY` sentinel, and it
+is the wrong tool here: it makes the wrapper *raise*, which is `Config.get`'s answer to an
+**unknown** key. An optional leaf the YAML omits reads as `None`. Overriding with the
+sentinel would have reached engine 15 as an uncaught exception, which the orchestrator turns
+into `ERROR` — also a block, also fail-closed, and the test asserts a specific reason code,
+so it would have gone red for a reason that had nothing to do with the key being absent.
+
+**Consequence.** The absent case is now reachable from the tests for as long as the tests
+exist, rather than for as long as the operator happens not to have ruled. That is the
+property that was actually wanted all along; the committed file was standing in for it.
+### The gate's pytest budget was already marginal, and the DI percentile took it over
+
+**Agent:** Lead (Opus 5 session) · **Date:** 2026-09-15
+
+**What happened.** With the three ruled thresholds landed and the whole suite green,
+`scripts/verify.py --phase 0` reported **FAIL toolchain_green - pytest timed out after
+900s**, with all six other Phase 0 criteria PASS. Every phase registers
+`toolchain_green`, so this was six red gates on a tree with nothing wrong in it.
+
+**Why.** Two separate facts, and charging both to the new one would have been wrong.
+
+*The budget was already marginal.* `logs/verify/toolchain_green/` keeps an evidence file
+for every failure, and it holds the answer for a tree that predates this session's
+changes: at 07:06Z the suite ran **820.9 s** against the 900 s bound - a 79-second margin
+- and at 04:10Z **the same suite timed out**, having reached 74%. So the bound had already
+fired once on a tree nobody had broken. 900 s was chosen in Phase 0 when the suite was a
+minute long; it is now 2,506 tests.
+
+*The DI percentile then took it decisively over.* The suite is **1502 s** with the
+thresholds landed. `prediction.di_percentile` is what switches the DI on: the trainer fits
+and scores a DI only when a percentile exists, so every trained fold in the suite now pays
+for one. Measured rather than assumed - an A/B over `tests/research/test_training_main.py`
+(10 tests) with the key removed and restored gave **126.9 s against 228.1 s**, and a
+cProfile of one two-fold run gave 3.86 s against 10.10 s, of which `_fit_and_score_di` is
+5.36 s: `di.fit`'s leave-one-out 2.21 s and the per-row `di.score` loop 3.03 s over 2,688
+calls, or **1.13 ms a row**. That is **3.1 s per fold**, and across the suite it is the
+681 s between 821 s and 1502 s.
+
+The first hypothesis was wrong and measurement is what killed it: a standalone profile of
+`di.fit` plus `di.score` at the sizes the criterion reports (5,762 reference rows, 1,344
+test rows) costs **1.2 s**, not 10 s, so the arithmetic is not slow - it is run on every
+fold of every training test in the suite, which is a different problem with a different
+fix.
+
+**Fix.** `pytest` gets its own subprocess bound, `PYTEST_TIMEOUT_S = 2700`, through a
+`TOOL_TIMEOUT_S` mapping; `mypy` and `ruff` keep `SUBPROCESS_TIMEOUT_S = 900`, because
+they run in seconds and a hang in either is worth catching quickly. A mapping rather than
+a fourth element of each `TOOLCHAIN` tuple, so the tuple shape that `TOOLCHAIN_ROOTS` and
+`tests/verify/test_phase0_criteria.py` both unpack does not change.
+
+**Why that and not the alternatives.** A timeout is a guard against a tool that has
+**hung**, not a budget for one that is merely slow, and nothing here makes a criterion
+easier to satisfy: pytest must still exit 0 with every test passing. The two alternatives
+were both measured and both fall short. Doing Phase 7 prerequisite 5 now - batching the
+test-row score, bounding the leave-one-out - recovers at most the 5.36 s of 10.10 s that
+is DI work, leaving the suite near 1000 s and still over. Stopping the non-DI training
+tests inheriting the percentile recovers most of the 681 s and lands near 850 s, which is
+the same knife-edge that already failed at 04:10Z, and it buys the margin by giving up the
+property that tests run against the shipped config. Neither removes the need to move the
+bound, so moving the bound is the honest first move.
+
+**Consequence.** Flagged to the operator as overturnable: it is a change to the gate's own
+budget, in C's file, made by the lead with no C session running. Recorded in
+`context/progress-tracker.md` beside Phase 7 prerequisite 5, which now has a second and
+nearer-term reason to be done - it is the suite's largest single cost, not only the full
+run's. And the standing lesson from Phase 4 applies to the evidence directory itself: the
+answer to "was this already happening" was on disk the whole time, in a file written by
+the gate, and it took two minutes to find once anyone looked.
+
+**A postscript, because the fix broke five tests and the repair is the interesting part.**
+Adding a `timeout_s` parameter to `_run_tool` turned five tests in
+`tests/verify/test_phase0_criteria.py` red at once: `scripted_toolchain`'s `fake_run` stub
+declares the signature it is substituted for, and a stub with the old arity cannot be
+called. That is the seam rule from `code-standards.md` arriving from the producer side, and
+it is the good failure - loud, immediate, naming the file.
+
+What was tempting was to widen the stub's signature and move on. What it got instead is an
+assertion: the stub now looks up `TOOL_TIMEOUT_S.get(name, SUBPROCESS_TIMEOUT_S)` and
+asserts the bound it was handed matches, on every call of all five tests. Without that, the
+entire mapping could be wrong - every tool running on pytest's 2700 s, which is exactly the
+mistake that makes a hung `ruff` take forty-five minutes to report - with all five tests
+green, because none of them looks at the timeout. A double that accepts an argument it never
+checks is a double that is simpler than the real thing in precisely the dimension the change
+was about.
+
+A sixth test was added for what the operator actually reads: that a pytest timeout reports
+**2700**, and that `mypy` and `ruff` are absent from the mapping. Both halves were proved
+capable of failing before being believed. Emptying `TOOL_TIMEOUT_S` kills it; so does the
+subtler mutation of reporting `SUBPROCESS_TIMEOUT_S` in the message while the timeout
+actually applied is the per-tool one - the version where the gate does the right thing and
+tells the reader the wrong number. Restored both times from a byte copy in the scratchpad,
+never `git checkout`, with the sha256 compared before and after: `849402c5...`.
+### UNEXPLAINED: a collection error inside scipy stopped the phase 4 gate, once
+
+**Agent:** Lead (Opus 5 session) · **Date:** 2026-09-15
+
+**What happened.** The gate sweep ran phases 0, 1, 2 and 3 green and then, at 17:04:41Z,
+`toolchain_green` on phase 4 reported `pytest exit 2` after **4.51 s**: one error during
+collection, `tests/engines/test_anomaly.py`, `TypeError: 'bool' object does not support the
+context manager protocol`. Evidence kept at
+`logs/verify/toolchain_green/20260915T170441_997298-pytest-attempt1.log`.
+
+**What the traceback says, and it is the whole reason this entry exists.** There is **no
+ACSOE frame in it**. It is `test_anomaly` importing `test_prediction`, which imports
+`lightgbm`, which imports `sklearn`, which imports `scipy.stats`, whose module body calls
+`_combine_docs` -> `pydoc.getdoc` -> `re.sub` -> `re._compile`, and the `TypeError` is
+raised there. `re._compile` takes its cache lock with a `with` statement, so the reported
+state is that `re`'s internal lock object was a `bool` at that moment. Nothing in this
+repository can produce that, and nothing in this repository was between the import and the
+failure.
+
+**What is NOT being claimed.** It did not reproduce: `import scipy.stats` succeeds, and
+`pytest tests/engines/test_anomaly.py --collect-only` collects 16 tests in 1.2 s. **That is
+not evidence of anything**, and it is exactly the diagnostic Phase 3 recorded as
+unfalsifiable - *re-run it in isolation and if it passes it was the machine* confirmed
+itself every time for two phases while a real defect sat underneath. So it is not charged
+to the native fault: the standing rule from Phase 3 is that a failure is charged to the
+workspace sweeper only when it carries a database error, and that anything else is
+**unexplained until it is explained**. This is unexplained.
+
+**What can be said.** The same suite imported the same scipy 1.18.1 successfully four times
+in the preceding eighty minutes, in the phase 0 to 3 gates of this same sweep, and again on
+demand afterwards. So whatever it was, it was not a property of the tree the gate was
+judging, and the phase 4 run that follows is not a re-run *until it passes* - it is the
+first run of a gate that never got to execute its subject, because collection was
+interrupted before any test ran.
+
+**A gap this exposed, recorded and deliberately not fixed.** `toolchain_green` retries a
+**crash** once and never retries a **verdict**, where a verdict is any returncode inside the
+tool's documented range - 0 to 5 for pytest. **Exit 2 is inside that range and is not a
+verdict about the code**: pytest uses it for "interrupted", which is what a collection error
+is. So an environment fault during collection is currently indistinguishable, to the
+criterion, from pytest reporting on the repository. The distinction worth drawing is
+probably `exit 2 with zero tests run` against `exit 1 with failures named`, but that is a
+second change to the gate's own behaviour in one session and one is enough - it is an open
+question in `context/progress-tracker.md`, not a change made under a deadline.

@@ -212,18 +212,23 @@ backtest:
 
 # --- Phase 5: models. Lead-authored 2026-09-13 after A's spec 61 fields landed. ---------
 #
-# FIVE KEYS ARE DELIBERATELY ABSENT, NOT NULL: prediction.di_percentile,
-# anomaly.threshold_percentile, skeptic.veto_threshold, models.*_run_id and
-# scout.rank_feature. Each is an optional leaf on the config model, so an absent key
-# reads as None and the engine that needs it fails closed (blocks with a reason naming
-# the key) while the Phase 5 criterion that judges it reports PENDING. Writing any of
-# them as `null` is a different thing: a null in this file means OPERATOR REQUIRED and
-# stops every process at load. Absent and null are one character apart in a diff and
-# behave in opposite directions. The three thresholds are the operator's, to be supplied
-# AFTER the walk-forward reports (operator ruling 2026-09-12: a value chosen before
-# there is a distribution to place it on is a guess); the run ids point at artefacts
-# under models/, which is gitignored, so a fresh clone has none; the ranking feature
-# waits on spec 75's study.
+# TWO KEYS ARE DELIBERATELY ABSENT, NOT NULL: models.*_run_id and scout.rank_feature.
+# Each is an optional leaf on the config model, so an absent key reads as None and the
+# engine that needs it fails closed (blocks with a reason naming the key) while the
+# Phase 5 criterion that judges it reports PENDING. Writing either as `null` is a
+# different thing: a null in this file means OPERATOR REQUIRED and stops every process
+# at load. Absent and null are one character apart in a diff and behave in opposite
+# directions. The run ids point at artefacts under models/, which is gitignored, so a
+# fresh clone has none; the ranking feature waits on the Phase 7 question of whether any
+# ranking feature pays for a trade (operator ruling 2026-09-15), and engine 7 ranks
+# alphabetically meanwhile.
+#
+# THE THREE THRESHOLDS ARE NOW SUPPLIED AND ALL THREE ARE PROVISIONAL:
+# skeptic.veto_threshold (0.50, ruled 2026-09-14), anomaly.threshold_percentile (0.99)
+# and prediction.di_percentile (0.99, both ruled 2026-09-15). Each was withheld until the
+# walk-forward had reported (operator ruling 2026-09-12: a value chosen before there is a
+# distribution to place it on is a guess), each is chosen from that distribution, and each
+# is revisited once the chain runs end to end. The reasoning sits with the key.
 
 models:
   dir: models                    # The artefact root. One directory per training run,
@@ -260,16 +265,34 @@ prediction:                      # Engine 8 and the DI, specs 67, 68, 71. Plumbi
                                  # calibrator is fitted on. Never the test window.
   threads: 4                     # Fixed, because LightGBM determinism needs a fixed
                                  # thread count as well as a seed.
-  # di_percentile: OPERATOR, absent until the walk-forward reports. Engine 8 blocks
-  # with di_refused-unavailable and di_fitted_on_predictor_training_set is PENDING.
+  di_percentile: 0.99            # OPERATOR, ruled 2026-09-15, PROVISIONAL until the chain
+                                 # runs end to end. With the 48-bar exclusion (spec 68
+                                 # amendment) the DI refuses 3.31% of complete out-of-sample
+                                 # rows against 1% nominal, over the 405 fitted folds -
+                                 # roughly three times nominal, which is the right direction
+                                 # for an out-of-distribution refusal, and nothing like the
+                                 # 74.9% it refused at this percentile before the exclusion.
+                                 # 0.95 rejected: 6.79%, too much for a gate meant to catch
+                                 # genuinely unfamiliar conditions.
+                                 # docs/dataset/di-exclusion-refit-2026-09-15.json.
 
-anomaly: {}                      # Engine 13, specs 70, 72. Its one key,
-                                 # threshold_percentile, is the operator's and absent;
-                                 # engine 13 blocks with anomaly_unavailable meanwhile.
+anomaly:                         # Engine 13, specs 70, 72.
+  threshold_percentile: 0.99     # OPERATOR, ruled 2026-09-15, PROVISIONAL. 1.24% blocked out
+                                 # of sample against 1% nominal, stable by year (0.9% to
+                                 # 1.8%), and what it blocks is the volatile tail (stop rate
+                                 # 0.67 against 0.50). 0.95 rejected: 5.55% blocked, including
+                                 # BUY calls with better pre-friction returns than the ones
+                                 # kept. The spec 70 ten-sigma question stays open - a
+                                 # ten-sigma volume spike scores at the 0.904 quantile and
+                                 # this threshold does not block it.
 
-skeptic: {}                      # Engine 15, specs 69, 73. Its one key, veto_threshold,
-                                 # is the operator's and absent; engine 15 blocks with
-                                 # skeptic_unavailable meanwhile.
+skeptic:                         # Engine 15, specs 69, 73.
+  veto_threshold: 0.50           # OPERATOR, ruled 2026-09-14 from the veto sweep,
+                                 # PROVISIONAL until the chain runs end to end. At 0.50 the
+                                 # survivors hit the target at 0.531 against 0.473 for the
+                                 # same number of the predictor's most confident calls, the
+                                 # two sets share only 44% of calls, and the survivors beat
+                                 # the vetoed calls in every test year 2017 to 2024.
 
 regime:                          # Engine 12, spec 66. Percentile-relative rules, chosen
                                  # by the lead as plumbing: no gate reads the label and

@@ -1139,6 +1139,13 @@ def test_get_answers_three_different_ways_on_the_shipped_model_sections() -> Non
     * a key the model does not declare at all **raises**, which the orchestrator
       turns into `ERROR`, and `ERROR` blocks.
 
+    **The absent leaf is `models.prediction_run_id` since 2026-09-15.** It was
+    `prediction.di_percentile` until the operator ruled that key at 0.99, at which
+    point the second case stopped being reachable through it. The run id is the
+    right replacement rather than a stand-in: a fresh clone has no `models/`, so it
+    is absent by construction rather than by a ruling anyone can revise, which is
+    what this case wants. The percentile now serves the first bullet.
+
     The fourth case — descending into a `None` *section* — was the state during the
     landing window and cannot happen any more: every section is required, so a
     missing one refuses at startup instead. That is a strictly stronger guarantee
@@ -1148,7 +1155,8 @@ def test_get_answers_three_different_ways_on_the_shipped_model_sections() -> Non
     config = Config.load(DEFAULT_YAML)
 
     assert isinstance(config.get("prediction.di_window_days"), int)
-    assert config.get("prediction.di_percentile") is None
+    assert config.get("prediction.di_percentile") is not None
+    assert config.get("models.prediction_run_id") is None
     with pytest.raises(ConfigKeyError, match="no such configuration key"):
         config.get("prediction.di_percentil")
 

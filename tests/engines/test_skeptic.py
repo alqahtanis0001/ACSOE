@@ -218,13 +218,24 @@ def test_with_no_threshold_configured_it_blocks_rather_than_passing(
 ) -> None:
     """**Blocks, does not pass**, and that is the decision worth testing.
 
-    `skeptic.veto_threshold` is absent from `config/default.yaml` by ruling. A gate that
-    failed open on an absent threshold would be the one gate meant to catch the predictor's
-    mistakes, and the one gate not running — and the system would look like it had a skeptic.
+    A gate that failed open on an absent threshold would be the one gate meant to catch the
+    predictor's mistakes, and the one gate not running — and the system would look like it
+    had a skeptic.
+
+    **The absent case is this test's to supply.** `skeptic.veto_threshold` was absent from
+    `config/default.yaml` until the operator ruled `0.50` on 2026-09-14, so the precondition
+    below is inverted from what it was: the committed config carries a value and the call
+    below removes it. The threshold's value is deliberately not pinned here — it is
+    provisional until the chain runs end to end, and the behaviour under test is what
+    happens when there is no threshold at all, which no value can express.
     """
     from tests.harness.doubles import load_default_config
 
-    assert load_default_config().get(KEY_VETO_THRESHOLD) is None
+    assert load_default_config().get(KEY_VETO_THRESHOLD) is not None, (
+        "the operator's veto threshold is absent from config/default.yaml. This test "
+        "supplies the absent case itself, so an absent key here means the ruled value has "
+        "been lost rather than that this test is stale."
+    )
     state, context = predicted_state(engine_context, bars, root, run_id)
     result = judged(as_buy(state, is_buy=True), context, root, run_id, **{KEY_VETO_THRESHOLD: None})
     assert result.status is EngineStatus.BLOCK

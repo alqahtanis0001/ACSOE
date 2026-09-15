@@ -714,11 +714,13 @@ def test_the_screening_chain_stops_at_engine_5_on_a_non_bar_tick(
 # trains real artefacts from the committed sample into a temporary root.
 # --------------------------------------------------------------------------- #
 
-#: The DI percentile the passing path needs. **This number is the test's, not config's.**
-#: `prediction.di_percentile` is one of the three keys the operator has not supplied, it is
-#: deliberately absent from `config/default.yaml`, and engine 8 fails closed while it is.
-#: A number here decides when a model may refuse a trade, so it stays in the test that
-#: needs it and never reaches the committed file.
+#: The DI percentile the passing path needs. **This number is the test's, not config's**,
+#: and it stays the test's now that the operator has ruled one (0.99, 2026-09-15,
+#: provisional). The rehearsal asserts what engine 8 does with a percentile, not what the
+#: operator chose; reading the committed value would make these ticks move whenever that
+#: provisional number is retuned. Engine 8 still fails closed where no percentile reaches
+#: it at all — the artefact carries the one it was trained at, so a run trained without a
+#: percentile carries no `di.npz` and is refused on load.
 TEST_DI_PERCENTILE = 0.99
 
 
@@ -980,7 +982,16 @@ def trained_without_di(tmp_path_factory: Any) -> tuple[Path, str]:
     root = tmp_path_factory.mktemp("rehearsal-models-no-di")
     report = training.train_walkforward(
         dataset_for(config, random_walk=False),
-        config=Wrapped(config, **{"anomaly.threshold_percentile": TEST_ANOMALY_PERCENTILE}),
+        config=Wrapped(
+            config,
+            **{
+                "anomaly.threshold_percentile": TEST_ANOMALY_PERCENTILE,
+                # Removed explicitly since 2026-09-15: the operator ruled a percentile, so
+                # inheriting the committed config would train a run that *has* a DI, and the
+                # assertion below would void this fixture rather than describe it.
+                "prediction.di_percentile": None,
+            },
+        ),
         models_dir=root / "models",
         derived_dir=root / "derived",
         now=NOW,
@@ -1537,9 +1548,21 @@ def test_in_the_full_registry_chain_engine_15_is_never_reached_this_phase(
 @pytest.mark.parametrize(
     ("configured", "named_key"),
     [
-        pytest.param({"models.skeptic_run_id": True}, "skeptic.veto_threshold", id="no-threshold"),
-        pytest.param({"skeptic.veto_threshold": 1.0}, "models.skeptic_run_id", id="no-run-id"),
-        pytest.param({}, "skeptic.veto_threshold", id="neither"),
+        pytest.param(
+            {"models.skeptic_run_id": True, "skeptic.veto_threshold": None},
+            "skeptic.veto_threshold",
+            id="no-threshold",
+        ),
+        pytest.param(
+            {"skeptic.veto_threshold": 1.0, "models.skeptic_run_id": None},
+            "models.skeptic_run_id",
+            id="no-run-id",
+        ),
+        pytest.param(
+            {"skeptic.veto_threshold": None, "models.skeptic_run_id": None},
+            "skeptic.veto_threshold",
+            id="neither",
+        ),
     ],
 )
 def test_a_buy_call_with_the_skeptic_unconfigured_blocks_with_skeptic_unavailable(
@@ -1553,14 +1576,28 @@ def test_a_buy_call_with_the_skeptic_unconfigured_blocks_with_skeptic_unavailabl
 ) -> None:
     """Chain 5, 6, 7, 12, 13, 8, 15; engine 8 calls a BUY; a skeptic key is missing.
 
-    Absent means **absent from the committed config**, which is where both keys are today,
-    and the test asserts that rather than assuming it. `True` in the table stands for the
-    trained run id, and a threshold of 1.0 where one is supplied is the test's number. The
-    block must name the key that is missing — with both missing the threshold is checked
-    first, so that is the one named.
+    **Each absence is spelled in the table, not inherited from the committed config.** It
+    was inherited until 2026-09-15, when the operator ruled `skeptic.veto_threshold: 0.50`
+    and that key stopped being absent — at which point every "unconfigured" case here would
+    have quietly become a configured one, and the three parametrisations would have tested
+    the same passing chain three times while reading as coverage of the refusal. A `None`
+    override is the right spelling of absence and `_ABSENT_KEY` is not: the real `Config`
+    answers an optional leaf the file omits with `None` and raises only on an *unknown* key,
+    and a raise here would reach engine 15 as `ERROR` rather than as its own block.
+
+    `True` in the table stands for the trained run id, and a threshold of 1.0 where one is
+    supplied is the test's number. The block must name the key that is missing — with both
+    missing the threshold is checked first, so that is the one named.
     """
-    for key in ("skeptic.veto_threshold", "models.skeptic_run_id"):
-        assert paper_config.get(key) is None, f"{key} is now committed; this test is void"
+    assert paper_config.get("skeptic.veto_threshold") is not None, (
+        "the operator's veto threshold is absent from config/default.yaml. This test "
+        "supplies every absence itself, so an absent key here means the ruled value has "
+        "been lost rather than that this test is stale."
+    )
+    assert paper_config.get("models.skeptic_run_id") is None, (
+        "models.skeptic_run_id is now committed. A fresh clone has no artefact under "
+        "models/, so this key staying absent is what the engines fail closed on."
+    )
     root, run_id = trained_skeptic
     overrides = {key: (run_id if value is True else value) for key, value in configured.items()}
     bars = window(constructed_rows, BUY_WINDOW_END)

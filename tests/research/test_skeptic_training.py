@@ -37,6 +37,29 @@ from tests.research.test_training import NOW, dataset_for  # noqa: E402
 
 FOLDS = 4
 
+#: The key whose presence decides which of the two reports below the trainer writes.
+KEY_VETO_THRESHOLD = "skeptic.veto_threshold"
+
+
+class WithVetoThreshold:
+    """The committed config with the veto threshold answered — or removed.
+
+    `value=None` is the absent case. It became this file's to supply on 2026-09-14, when
+    the operator ruled `skeptic.veto_threshold: 0.50` and the key stopped being absent from
+    `config/default.yaml`. The value is not read from the config anywhere in this file: it
+    is provisional until the chain runs end to end, and an arithmetic assertion that moved
+    when the operator revised it would be measuring the ruling rather than the trainer.
+    """
+
+    def __init__(self, inner: Any, value: float | None) -> None:
+        self._inner = inner
+        self._value = value
+
+    def get(self, key: str) -> Any:
+        if key == KEY_VETO_THRESHOLD:
+            return self._value
+        return self._inner.get(key)
+
 
 @pytest.fixture(scope="module")
 def config() -> Any:
@@ -50,12 +73,18 @@ def dataset(config: Any) -> Any:
 
 @pytest.fixture(scope="module")
 def report(config: Any, dataset: Any, tmp_path_factory: Any) -> Any:
-    """One run of four folds, shared. Four folds because the skeptic needs history: fold 0
-    has no earlier out-of-sample calls at all and correctly produces none."""
+    """One run of four folds, shared, with **no veto threshold configured**.
+
+    Four folds because the skeptic needs history: fold 0 has no earlier out-of-sample calls
+    at all and correctly produces none. The threshold is removed rather than inherited,
+    because this run is the baseline every assertion below is written against — the skeptic
+    is trained and scored whether or not anybody has chosen a veto line, and only the two
+    numbers that need one wait for it.
+    """
     root = tmp_path_factory.mktemp("skeptic")
     return training.train_walkforward(
         dataset,
-        config=config,
+        config=WithVetoThreshold(config, None),
         models_dir=root / "models",
         derived_dir=root / "derived",
         now=NOW,
@@ -267,8 +296,18 @@ def test_the_veto_numbers_wait_for_the_operators_threshold(report: Any) -> None:
     Training still runs; only the numbers that need a threshold wait for one. The target
     rate among *all* BUY calls is reported regardless, because it needs no threshold and it
     is half of the comparison that says whether the skeptic helps.
+
+    **The absent case is the `report` fixture's to supply**, since the operator ruled
+    `skeptic.veto_threshold: 0.50` on 2026-09-14 and the committed config has carried a
+    value since. The assertion below is inverted accordingly: it pins that the ruled value
+    is there, so that a config edit losing it is reported here rather than silently turning
+    this test back into a test of the committed file.
     """
-    assert load_default_config().get("skeptic.veto_threshold") is None
+    assert load_default_config().get(KEY_VETO_THRESHOLD) is not None, (
+        "the operator's veto threshold is absent from config/default.yaml. The `report` "
+        "fixture supplies the absent case itself, so an absent key here means the ruled "
+        "value has been lost rather than that this test is stale."
+    )
     for entry in folds_with_a_skeptic(report):
         assert entry["skeptic_veto_rate"] is None
         assert entry["skeptic_surviving_target_rate"] is None
@@ -283,21 +322,15 @@ def test_with_a_threshold_supplied_both_target_rates_are_reported(
     among all BUY calls. A skeptic that vetoes a third of the calls and leaves the rate
     unchanged has cost a third of the opportunities for nothing.
 
-    The threshold is supplied through a wrapper rather than written into
-    `config/default.yaml`, which must keep the key **absent**: absent is what engine 15
-    fails closed on and what the Phase 5 criterion reports PENDING for.
+    The threshold is supplied through a wrapper rather than read from
+    `config/default.yaml`, so this arithmetic does not move when the operator revises a
+    value that is provisional until the chain runs end to end. That the committed config
+    now carries one (0.50, ruled 2026-09-14) is asserted by
+    `test_the_veto_numbers_wait_for_the_operators_threshold` and nowhere else.
     """
-
-    class WithVeto:
-        def __init__(self, inner: Any) -> None:
-            self._inner = inner
-
-        def get(self, key: str) -> Any:
-            return 0.5 if key == "skeptic.veto_threshold" else self._inner.get(key)
-
     report = training.train_walkforward(
         dataset,
-        config=WithVeto(config),
+        config=WithVetoThreshold(config, 0.5),
         models_dir=tmp_path / "models",
         derived_dir=tmp_path / "derived",
         now=NOW,
