@@ -2327,3 +2327,14 @@ was C-4's mutation harness, not a defect. Their arm (a) restored the old
 is the only state that returns OK "not a BUY call" for an absent `is_buy`; final `engine.py`
 sha256 022039a7...73b7. Engine 15 results before C-4's sweep ends (about 05:25) are not
 evidence either way. My own mutation window (04:45 to 05:05) did not overlap C-4's green runs.
+
+### Sweep 2 on the final engine 15 code, recorded by the lead from C-4's report
+
+**Agent:** Lead for C-4 · **Task:** spec 73 · **Date:** 2026-09-15
+
+The entry above says sweep 2 was pending; it had finished before the stop, on `engine.py` sha256
+`022039a7…73b7`, each arm restored by byte copy and hash. No survivor: (a) is_buy truthiness, 7 failed
+(the six non-boolean cases and the no-prediction test); (b) finite guard removed, 3 failed
+(nan/inf/-inf); (c1) veto inverted and (c2) threshold from a constant, each 2 failed on
+`test_a_veto_sentence_shows_two_numbers_that_differ` plus 6 errors from the `measured` fixture;
+(d) reason format back to `:.4f`, 3 failed.
