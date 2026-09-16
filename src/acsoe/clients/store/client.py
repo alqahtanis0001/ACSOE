@@ -936,6 +936,34 @@ class StoreClient:
             ).fetchall()
         return tuple(OrderRow(**_row_to_dict(row)) for row in rows)
 
+    def filled_orders(self) -> tuple[OrderRow, ...]:
+        """Every order that filled, oldest first. The paper ledger's read.
+
+        Spec 88: paper mode's balance is `paper.starting_balances` adjusted by every
+        recorded fill, so the ledger needs the fills themselves — the quantity, the
+        average price and the fee on each — and not a total.
+
+        **Deliberately not a `SUM()`.** Money columns are TEXT with a `typeof` check, so
+        SQLite would either compare and add them lexicographically or coerce them to
+        floats, and `code-standards.md` forbids arithmetic on a money column in SQL for
+        exactly that reason. The rows come back as exact `Decimal` through `OrderRow` and
+        the addition happens in Python. It is the same defect `peak_equity` was written
+        to avoid, in the one direction that silently changes a balance.
+
+        `filled_qty > 0` is not filtered here: `OrderStatus.FILLED` with a zero quantity
+        is a contradiction A's `OrderState` refuses at its own boundary, and filtering it
+        away here would hide a row that should be looked at.
+
+        Ordered by `placed_at` then `userref` so two callers see one order. Addition is
+        commutative, so the order does not change the balance — it changes whether a
+        difference between two runs is reproducible.
+        """
+        rows = self.connection.execute(
+            "SELECT * FROM orders WHERE status = ? ORDER BY placed_at ASC, userref ASC",
+            (OrderStatus.FILLED.value,),
+        ).fetchall()
+        return tuple(OrderRow(**_row_to_dict(row)) for row in rows)
+
     def order_by_userref(self, userref: int) -> OrderRow | None:
         """The invariant 8 idempotency lookup: never place an order without this."""
         row = self.connection.execute(

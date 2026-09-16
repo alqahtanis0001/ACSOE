@@ -34,7 +34,16 @@ from tests.harness.fake_kraken import FakeKrakenClient
 
 from acsoe.clients.kraken.contracts import QuoteTick, TradeTick
 from acsoe.clients.store.client import StoreClient
-from acsoe.clients.store.contracts import EquitySnapshotRow, PositionRow, PositionStatus
+from acsoe.clients.store.contracts import (
+    EquitySnapshotRow,
+    OrderIntent,
+    OrderRow,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    PositionRow,
+    PositionStatus,
+)
 from acsoe.core.contracts import EngineStatus
 from acsoe.engines.exchange.engine import ExchangeEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
@@ -42,10 +51,12 @@ from acsoe.engines.risk.contracts import (
     FALLBACK_BALANCE_FROM_PAPER,
     REASON_BELOW_COSTMIN,
     REASON_BELOW_ORDERMIN,
+    REASON_ENTRY_RESTING_ON_PAIR,
     REASON_INPUTS_UNAVAILABLE,
     REASON_INSUFFICIENT_QUOTE_BALANCE,
     REASON_MAX_CONCURRENT_POSITIONS,
     REASON_NO_FX_RATE,
+    REASON_POSITION_OPEN_ON_PAIR,
     round_down_to_lot,
 )
 from acsoe.engines.risk.engine import RiskEngine
@@ -145,8 +156,14 @@ def build_state(context: Any, *, pair: str = PAIR) -> dict[str, Any]:
     }
 
 
-def open_position(position_id: str, pair: str) -> PositionRow:
-    """One open position, for the portfolio cap. Only `status` and `pair` matter here."""
+def open_position(
+    position_id: str, pair: str, *, status: PositionStatus = PositionStatus.OPEN
+) -> PositionRow:
+    """One position. Only `status` and `pair` matter to the two gates that read it.
+
+    `status` is a keyword with the open default the portfolio-cap tests already rely on,
+    so spec 89's closed-position case varies exactly one argument against its open twin.
+    """
     base, _, quote = pair.partition("/")
     return PositionRow(
         position_id=position_id,
@@ -155,13 +172,47 @@ def open_position(position_id: str, pair: str) -> PositionRow:
         pair=pair,
         base=base,
         quote=quote,
-        status=PositionStatus.OPEN,
+        status=status,
         qty=Decimal("1.00000000"),
         entry_price=Decimal("100.00"),
         target_price=Decimal("103.00"),
         stop_price=Decimal("98.50"),
         timeout_at=9_999,
         opened_at=1_000,
+        closed_at=2_000 if status is PositionStatus.CLOSED else None,
+        updated_at=1_000,
+    )
+
+
+def entry_order(
+    userref: int,
+    pair: str,
+    *,
+    status: OrderStatus = OrderStatus.RESTING,
+    intent: OrderIntent = OrderIntent.ENTRY,
+) -> OrderRow:
+    """One order on `pair`, resting and an entry unless a test says otherwise.
+
+    Invariant 8: entry is always a post-only limit, so `oflags` says `post` and the type
+    is a limit. Neither field is read by engine 11 — the row shape is kept honest anyway,
+    because a fixture that could not exist on the real exchange proves nothing about a
+    gate that will meet the real one.
+    """
+    side = OrderSide.BUY if intent is OrderIntent.ENTRY else OrderSide.SELL
+    return OrderRow(
+        userref=userref,
+        run_id="test-run",
+        cycle_id=1,
+        pair=pair,
+        side=side,
+        intent=intent,
+        order_type=OrderType.LIMIT,
+        oflags="post" if intent is OrderIntent.ENTRY else "",
+        status=status,
+        qty=Decimal("1.00000000"),
+        limit_price=Decimal("99.00"),
+        filled_qty=Decimal("0.00000000"),
+        placed_at=1_000,
         updated_at=1_000,
     )
 
@@ -649,6 +700,214 @@ def test_the_portfolio_cap_is_counted_from_the_store_not_from_state(
 
 
 # --------------------------------------------------------------------------- #
+# One position per pair — invariant 6's last clause, spec 89
+#
+# Enforced nowhere in `src/` before this spec: the portfolio cap above counts open
+# positions and never asks which pair they are on, and engine 7 does not look. It was
+# unreachable only because nothing could open a position, and Phase 6 changes that.
+#
+# Every pair of cases below differs in exactly **one argument** to the fixture helper —
+# the stored pair, the stored status, or the stored intent — so a block that is really
+# "this gate refuses everything once a row exists" cannot pass as enforcement.
+# --------------------------------------------------------------------------- #
+
+OTHER_PAIR = "BTC/USD"
+
+
+@pytest.mark.parametrize(
+    ("stored_pair", "expected_code"),
+    [(PAIR, REASON_POSITION_OPEN_ON_PAIR), (OTHER_PAIR, None)],
+    ids=["same pair refuses", "another pair does not"],
+)
+def test_an_open_position_refuses_a_second_one_on_that_pair_and_only_that_pair(
+    risk: RiskEngine,
+    sized_context: Any,
+    store: StoreClient,
+    stored_pair: str,
+    expected_code: str | None,
+) -> None:
+    """Invariant 6: "One open position per pair."
+
+    The candidate is `SOL/USD` in both cases and the only thing that moves is which pair
+    the already-open position is on. `max_concurrent_positions` is 3, so one position
+    never reaches the cap — the refusal below can only be the per-pair one.
+    """
+    store.write_position(open_position("p-1", stored_pair))
+
+    result = risk.process(sized_context, build_state(sized_context))
+
+    assert result.data["reason_code"] == expected_code
+    assert result.blocks_trading is (expected_code is not None)
+    assert result.data["approved"] is (expected_code is None)
+
+
+@pytest.mark.parametrize(
+    ("stored_status", "expected_code"),
+    [
+        (PositionStatus.OPEN, REASON_POSITION_OPEN_ON_PAIR),
+        (PositionStatus.CLOSED, None),
+    ],
+    ids=["open refuses", "closed does not"],
+)
+def test_a_closed_position_on_the_pair_does_not_refuse_the_next_candidate(
+    risk: RiskEngine,
+    sized_context: Any,
+    store: StoreClient,
+    stored_status: PositionStatus,
+    expected_code: str | None,
+) -> None:
+    """The pair is the same row, on the same pair, with one field changed.
+
+    Without this the check would be satisfied by "this pair has ever been traded", which
+    would take the system out of every pair it had exited once and would look, from the
+    rejection rows alone, exactly like the rule working.
+    """
+    store.write_position(open_position("p-1", PAIR, status=stored_status))
+
+    result = risk.process(sized_context, build_state(sized_context))
+
+    assert result.data["reason_code"] == expected_code
+    assert result.data["approved"] is (expected_code is None)
+
+
+@pytest.mark.parametrize(
+    ("stored_pair", "expected_code"),
+    [(PAIR, REASON_ENTRY_RESTING_ON_PAIR), (OTHER_PAIR, None)],
+    ids=["same pair refuses", "another pair does not"],
+)
+def test_a_resting_entry_refuses_a_second_candidate_on_that_pair_and_only_that_pair(
+    risk: RiskEngine,
+    sized_context: Any,
+    store: StoreClient,
+    stored_pair: str,
+    expected_code: str | None,
+) -> None:
+    """A resting post-only buy is a position that has not filled yet.
+
+    The same reading invariant 14 already applies to `safety`'s escalation precondition —
+    "a resting post-only buy is exposure that has not happened yet". Counting only *open*
+    positions here would let the system place a second entry beside an unfilled one and
+    double the money at risk the moment both fill, with no gate left to refuse it.
+    """
+    store.write_order(entry_order(4_242, stored_pair))
+
+    result = risk.process(sized_context, build_state(sized_context))
+
+    assert result.data["reason_code"] == expected_code
+    assert result.blocks_trading is (expected_code is not None)
+    assert result.data["approved"] is (expected_code is None)
+
+
+@pytest.mark.parametrize(
+    ("stored_status", "stored_intent", "expected_code"),
+    [
+        (OrderStatus.RESTING, OrderIntent.ENTRY, REASON_ENTRY_RESTING_ON_PAIR),
+        (OrderStatus.FILLED, OrderIntent.ENTRY, None),
+        (OrderStatus.CANCELLED, OrderIntent.ENTRY, None),
+        (OrderStatus.RESTING, OrderIntent.EXIT, None),
+    ],
+    ids=["resting entry", "filled entry", "cancelled entry", "resting exit"],
+)
+def test_only_an_entry_still_resting_on_the_book_refuses_the_candidate(
+    risk: RiskEngine,
+    sized_context: Any,
+    store: StoreClient,
+    stored_status: OrderStatus,
+    stored_intent: OrderIntent,
+    expected_code: str | None,
+) -> None:
+    """Each row below differs from the first in exactly one field.
+
+    A **filled** entry is not exposure of its own: whatever it bought is a position row,
+    and that row is what the position check above reads — counting the order too would
+    refuse on the same exposure twice. A **cancelled** entry is off the book. A resting
+    **exit** is the system getting out of something and must never stop it getting in; it
+    is also the one row engine 22 will be writing constantly, so a check reading `orders`
+    without filtering `intent` would refuse every candidate on a pair being exited.
+    """
+    store.write_order(entry_order(4_242, PAIR, status=stored_status, intent=stored_intent))
+
+    result = risk.process(sized_context, build_state(sized_context))
+
+    assert result.data["reason_code"] == expected_code
+    assert result.data["approved"] is (expected_code is None)
+
+
+def test_the_refusal_names_the_pair_and_the_position_it_already_holds(
+    risk: RiskEngine, sized_context: Any, store: StoreClient
+) -> None:
+    """Spec 89 step 2: the sentence names the pair and the existing `position_id`.
+
+    A reason code alone tells an operator a rule fired; the identifier tells them which
+    row to look at, and this is a rejection they may have to act on rather than a metric.
+    Nothing is sized, so no quantity reaches the payload of a refused candidate.
+    """
+    store.write_position(open_position("pos-7f3a", PAIR))
+
+    result = risk.process(sized_context, build_state(sized_context))
+
+    assert PAIR in (result.reason or "")
+    assert "pos-7f3a" in (result.reason or "")
+    assert "qty" not in result.data
+
+
+def test_the_resting_entry_refusal_names_the_pair_and_the_userref(
+    risk: RiskEngine, sized_context: Any, store: StoreClient
+) -> None:
+    """The same, for the order half: the `userref`, because that is the key invariant 8
+    makes the idempotency lookup on and the only handle a cancellation has."""
+    store.write_order(entry_order(918_273, PAIR))
+
+    result = risk.process(sized_context, build_state(sized_context))
+
+    assert PAIR in (result.reason or "")
+    assert "918273" in (result.reason or "")
+    assert "qty" not in result.data
+
+
+def test_a_full_portfolio_that_also_holds_this_pair_reports_the_cap(
+    risk: RiskEngine, sized_context: Any, store: StoreClient
+) -> None:
+    """Both refusals are true at once; the order between them is fixed, not accidental.
+
+    Either code is a correct refusal, so this pins *which* one the rejection row carries
+    rather than claiming one rule outranks the other. The cap is first because it was
+    first: keeping it there means no rejection that existed before spec 89 changes its
+    code because spec 89 landed.
+    """
+    for index, pair in enumerate((PAIR, "ETH/USD", "XRP/USD")):
+        store.write_position(open_position(f"p-{index}", pair))
+
+    result = risk.process(sized_context, build_state(sized_context))
+
+    assert result.data["reason_code"] == REASON_MAX_CONCURRENT_POSITIONS
+
+
+def test_an_unreadable_orders_table_blocks_rather_than_reading_as_no_exposure(
+    risk: RiskEngine, sized_context: Any, store: StoreClient
+) -> None:
+    """Invariant 3: absence of a "no" is never a "yes".
+
+    `orders` is dropped on the real connection, so `positions` still reads and the
+    portfolio cap and the open-position check both succeed — the *only* read that fails
+    is the resting-entry one, which is the branch this test is about. Closing the whole
+    store would have blocked three reads earlier, in
+    `_count_open_positions`, and passed this assertion without ever reaching the code it
+    claims to cover.
+
+    No double: this is what `sqlite3` itself raises at a missing table.
+    """
+    store.connection.execute("DROP TABLE orders")
+
+    result = risk.process(sized_context, build_state(sized_context))
+
+    assert result.blocks_trading is True
+    assert result.data["reason_code"] == REASON_INPUTS_UNAVAILABLE
+    assert "exposure" in (result.reason or ""), "the resting-entry read is the one that failed"
+    assert PAIR in (result.reason or "")
+
+
+# --------------------------------------------------------------------------- #
 # The balance fallback — invariant 2's last surviving one, built by spec 41
 # --------------------------------------------------------------------------- #
 
@@ -872,8 +1131,37 @@ def test_every_reason_code_this_engine_emits_is_renderable_by_the_console() -> N
         REASON_BELOW_COSTMIN,
         REASON_INSUFFICIENT_QUOTE_BALANCE,
         REASON_MAX_CONCURRENT_POSITIONS,
+        REASON_NO_FX_RATE,
     ):
         assert code in REASON_PROSE
+
+
+def test_the_two_codes_spec_89_added_are_still_waiting_on_cs_prose() -> None:
+    """A tripwire, not a coverage test, and it is written to go red when C lands.
+
+    Spec 89 step 6 hands `position_open_on_pair` and `entry_resting_on_pair` to C for
+    `REASON_PROSE` (spec 99). Until they arrive the console renders "No reason was
+    recorded." for both, silently and with no error anywhere — which is exactly the
+    failure mode `ownership.md` carries as a seam row.
+
+    Asserting the *absence* means this test fails the moment C maps either one, and the
+    failure names what to do: move the code into the renderable list above and delete
+    this test. A second, weaker "it is renderable if present" test would have sat green
+    forever in both states.
+    """
+    from acsoe.console.format import REASON_PROSE
+
+    unmapped = sorted(
+        code
+        for code in (REASON_POSITION_OPEN_ON_PAIR, REASON_ENTRY_RESTING_ON_PAIR)
+        if code not in REASON_PROSE
+    )
+
+    assert unmapped == sorted((REASON_POSITION_OPEN_ON_PAIR, REASON_ENTRY_RESTING_ON_PAIR)), (
+        "C has mapped one or both of spec 89's codes: move them into "
+        "test_every_reason_code_this_engine_emits_is_renderable_by_the_console "
+        "and delete this test"
+    )
 
 
 def test_the_published_payload_is_json_serialisable(

@@ -129,7 +129,17 @@ def make_order(
     status: OrderStatus = OrderStatus.RESTING,
     intent: OrderIntent = OrderIntent.ENTRY,
     pair: str = "XBT/USD",
+    filled_qty: str = "0.00000000",
+    avg_fill_price: str | None = None,
+    fee: str | None = None,
+    placed_at: int = 1_000,
 ) -> OrderRow:
+    """One order row. The fill fields default to an unfilled order.
+
+    `filled_qty`, `avg_fill_price`, `fee` and `placed_at` are keywords with the values
+    every existing caller already had, so spec 88's `filled_orders` tests vary one field
+    each without moving any test that was written before them.
+    """
     return OrderRow(
         userref=userref,
         order_id=f"O-{userref}",
@@ -143,8 +153,11 @@ def make_order(
         status=status,
         qty=Decimal("0.00100000"),
         limit_price=Decimal("61000.00"),
-        filled_qty=Decimal("0.00000000"),
-        placed_at=1_000,
+        filled_qty=Decimal(filled_qty),
+        avg_fill_price=None if avg_fill_price is None else Decimal(avg_fill_price),
+        fee=None if fee is None else Decimal(fee),
+        placed_at=placed_at,
+        closed_at=None if status is OrderStatus.RESTING else placed_at + 1,
         updated_at=1_000,
     )
 
@@ -1545,3 +1558,85 @@ def test_leaderboard_entries_sees_a_fold_the_console_read_would_have_truncated(
     assert len(store.leaderboard_entries(
         model_id="predictor", model_version="run-1", fold=oldest
     )) == 1
+
+
+# --------------------------------------------------------------------------- #
+# `filled_orders` — the paper ledger's read, spec 88
+# --------------------------------------------------------------------------- #
+
+
+def test_filled_orders_returns_only_the_fills(store: StoreClient) -> None:
+    """One row per status, so the filter is proved to be a filter.
+
+    A read that returned everything would still make the paper ledger *look* right on a
+    fixture where nothing else exists, and would then spend cash on a rejected order the
+    first time one appeared.
+    """
+    store.write_order(make_order(userref=1, status=OrderStatus.RESTING))
+    store.write_order(make_order(userref=2, status=OrderStatus.CANCELLED))
+    store.write_order(make_order(userref=3, status=OrderStatus.REJECTED))
+    store.write_order(make_order(userref=4, status=OrderStatus.EXPIRED))
+    store.write_order(
+        make_order(
+            userref=5,
+            status=OrderStatus.FILLED,
+            filled_qty="0.00100000",
+            avg_fill_price="61000.00",
+            fee="1.34",
+        )
+    )
+
+    assert [row.userref for row in store.filled_orders()] == [5]
+
+
+def test_filled_orders_is_ordered_by_when_the_order_was_placed(store: StoreClient) -> None:
+    """Addition is commutative, so the order does not change the ledger — it changes
+    whether a difference between two runs is reproducible. Written second so the
+    insertion order and the expected order disagree."""
+    for userref, placed_at in ((7, 3_000), (8, 1_000), (9, 2_000)):
+        store.write_order(
+            make_order(
+                userref=userref,
+                status=OrderStatus.FILLED,
+                filled_qty="0.00100000",
+                avg_fill_price="61000.00",
+                fee="1.34",
+                placed_at=placed_at,
+            )
+        )
+
+    assert [row.userref for row in store.filled_orders()] == [8, 9, 7]
+
+
+def test_filled_orders_hands_back_exact_decimals_and_never_a_float(
+    store: StoreClient,
+) -> None:
+    """The whole reason the ledger sums in Python.
+
+    The amount below is chosen so a float round trip is visibly wrong: `0.1 + 0.2` in
+    binary floating point is not `0.3`, and a fee of `0.1` on a price of `0.2` is the
+    smallest thing that demonstrates it. The assertion is an exact equality on
+    `Decimal`, which a float column would fail.
+    """
+    store.write_order(
+        make_order(
+            userref=11,
+            status=OrderStatus.FILLED,
+            filled_qty="0.30000000",
+            avg_fill_price="0.20000000",
+            fee="0.10000000",
+        )
+    )
+
+    row = store.filled_orders()[0]
+
+    assert isinstance(row.avg_fill_price, Decimal)
+    assert isinstance(row.fee, Decimal)
+    assert row.avg_fill_price == Decimal("0.20000000")
+    assert row.fee + Decimal("0.20000000") == Decimal("0.30000000")
+
+
+def test_filled_orders_is_empty_on_a_database_with_no_fills(store: StoreClient) -> None:
+    """Empty, not an error: a paper account that has never traded is the ordinary
+    starting state and its ledger is the opening balance."""
+    assert store.filled_orders() == ()

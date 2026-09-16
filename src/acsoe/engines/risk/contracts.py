@@ -77,10 +77,12 @@ __all__ = [
     "QUOTE_BID_FIELD",
     "REASON_BELOW_COSTMIN",
     "REASON_BELOW_ORDERMIN",
+    "REASON_ENTRY_RESTING_ON_PAIR",
     "REASON_INPUTS_UNAVAILABLE",
     "REASON_INSUFFICIENT_QUOTE_BALANCE",
     "REASON_MAX_CONCURRENT_POSITIONS",
     "REASON_NO_FX_RATE",
+    "REASON_POSITION_OPEN_ON_PAIR",
     "SCOUT_KEY",
     "RiskInputs",
     "RiskSizing",
@@ -173,6 +175,21 @@ REASON_MAX_CONCURRENT_POSITIONS: Final = "max_concurrent_positions"
 #: or assuming parity. Shared with engine 7, which excludes such a pair from the universe
 #: under the same code and for the same reason.
 REASON_NO_FX_RATE: Final = "no_fx_rate"
+
+#: Invariant 6: **one open position per pair.** Nothing in `src/` enforced it before spec 89 —
+#: the portfolio cap counts open positions and never asks which pair they are on — and it was
+#: unreachable only because nothing could open a position. Phase 6 makes it reachable.
+REASON_POSITION_OPEN_ON_PAIR: Final = "position_open_on_pair"
+
+#: The same refusal for an entry order still sitting on the book. **A resting post-only buy is
+#: a position that has not filled yet**, which is the reason invariant 14 gates `safety`'s
+#: escalation on "open positions *or* resting entry orders" rather than on positions alone. A
+#: second entry placed beside it doubles the exposure the moment both fill.
+#:
+#: Two codes rather than one, because the two states are cleared by different actions: a
+#: position is exited and an order is cancelled, and an operator reading the rejection row needs
+#: to know which.
+REASON_ENTRY_RESTING_ON_PAIR: Final = "entry_resting_on_pair"
 
 #: Fail-closed. Not in C's table yet; flagged. The reason written alongside it is always
 #: prose, and `operator_reason` prefers prose over the mapping, so it renders correctly

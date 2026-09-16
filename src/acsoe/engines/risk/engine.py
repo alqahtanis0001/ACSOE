@@ -33,6 +33,16 @@ order matters. Rounding after the check would let a quantity that passed `orderm
 rounded below it and placed anyway; rounding before means the number compared against the
 minimum is the number that would actually be sent.
 
+## One position per pair, and a resting entry counts as one
+
+Invariant 6's last clause — "one open position per pair" — is enforced here, by
+:meth:`RiskEngine._pair_exposure`, and it was enforced **nowhere** before spec 89: the
+portfolio cap above it counts open positions and never asks which pair they are on. A
+resting post-only entry on the pair refuses a second candidate exactly as an open
+position does, because it is exposure that has not happened yet; that is the reading
+invariant 14 already applies to `safety`'s escalation precondition, and a second entry
+placed beside an unfilled one doubles the money at risk the moment both fill.
+
 ## Which side of the book, and why it is two sides
 
 **The quantity is sized from the ask; `costmin` is tested against the bid.** A lead
@@ -68,10 +78,11 @@ from __future__ import annotations
 
 import time
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, NamedTuple
 
 from pydantic import ValidationError
 
+from acsoe.clients.store.contracts import OrderIntent
 from acsoe.core.contracts import BaseEngine, EngineContext, EngineResult, EngineStatus, State
 from acsoe.engines.risk.contracts import (
     EXCHANGE_BALANCES_KEY,
@@ -89,10 +100,12 @@ from acsoe.engines.risk.contracts import (
     QUOTE_BID_FIELD,
     REASON_BELOW_COSTMIN,
     REASON_BELOW_ORDERMIN,
+    REASON_ENTRY_RESTING_ON_PAIR,
     REASON_INPUTS_UNAVAILABLE,
     REASON_INSUFFICIENT_QUOTE_BALANCE,
     REASON_MAX_CONCURRENT_POSITIONS,
     REASON_NO_FX_RATE,
+    REASON_POSITION_OPEN_ON_PAIR,
     SCOUT_KEY,
     RiskInputs,
     RiskSizing,
@@ -116,6 +129,18 @@ PAPER_MODE = "paper"
 
 class MissingInputError(Exception):
     """An input this gate needs is absent, null, or the wrong shape."""
+
+
+class PairExposure(NamedTuple):
+    """Exposure this pair already carries, and how the refusal reads.
+
+    Carried as a value rather than raised, because it is a *refusal* and not a missing
+    input: the gate knows the answer and the answer is no. A `MissingInputError` here
+    would report a working store as unreachable.
+    """
+
+    reason_code: str
+    reason: str
 
 
 def _require(container: Any, key: str, where: str) -> Any:
@@ -165,6 +190,7 @@ class RiskEngine(BaseEngine):
             open_positions = self._count_open_positions(context)
             max_concurrent = int(_config_decimal(context, MAX_CONCURRENT_KEY))
             inputs, fallbacks = self._read_inputs(context, state)
+            exposure = self._pair_exposure(context, inputs.pair)
         except MissingInputError as missing:
             return self._blocked_on_missing_input(str(missing), started)
 
@@ -179,6 +205,17 @@ class RiskEngine(BaseEngine):
                 fallbacks,
                 started,
             )
+
+        # Invariant 6: **one open position per pair.** Checked after the portfolio cap and
+        # before sizing, for the same reason the cap is: what this candidate would have
+        # been sized to is not a question worth answering once it is refused.
+        #
+        # The order between the two is deliberate and both refuse, so it decides only
+        # which `reason_code` the rejection row carries. The cap is the coarser statement
+        # — the account as a whole is full — and it was here first; keeping it first means
+        # no existing rejection changes its code because spec 89 landed.
+        if exposure is not None:
+            return self._reject(inputs, exposure.reason_code, exposure.reason, fallbacks, started)
 
         risk_amount = inputs.equity * inputs.risk_fraction
         target_notional = risk_amount / inputs.stop_pct
@@ -304,6 +341,58 @@ class RiskEngine(BaseEngine):
             # unexpected exception would still be converted to ERROR by the orchestrator,
             # but with a reason nobody can read.
             raise MissingInputError(f"could not count open positions: {exc}") from exc
+
+    def _pair_exposure(self, context: EngineContext, pair: str) -> PairExposure | None:
+        """Exposure this pair already carries, or `None` if it carries none.
+
+        Invariant 6's "one open position per pair", which until spec 89 was enforced
+        nowhere in `src/`: the portfolio cap above counts open positions and never asks
+        which pair they are on, and engine 7 does not look. It was unreachable only
+        because nothing in the system could open a position, and Phase 6 changes that.
+
+        **A resting entry order counts as a position.** It is the same reading invariant
+        14 applies to `safety`'s escalation precondition — "a resting post-only buy is
+        exposure that has not happened yet" — and the arithmetic is unforgiving: a second
+        entry placed beside an unfilled one doubles the money at risk the moment both
+        fill, at which point no gate is left to refuse it.
+
+        Read from the store and not from `state` for the structural reason the cap is:
+        this gate runs in the opportunity chain and the manage chain runs after it, so
+        `state["position_manager"]` does not exist yet.
+
+        Any store failure is "cannot reach my data", which invariant 3 makes a block. The
+        `except` is deliberately broad for the reason :meth:`_count_open_positions` gives:
+        a database error escaping as an unexpected exception would still become ERROR at
+        the orchestrator, but with a reason nobody can read.
+        """
+        store = getattr(context.clients, "store", None)
+        if store is None:
+            raise MissingInputError("clients.store is not available")
+        try:
+            positions = tuple(store.open_positions())
+            resting = tuple(store.resting_orders(intent=OrderIntent.ENTRY))
+        except Exception as exc:
+            raise MissingInputError(f"could not read existing exposure on {pair}: {exc}") from exc
+
+        for position in positions:
+            if str(position.pair) == pair:
+                return PairExposure(
+                    REASON_POSITION_OPEN_ON_PAIR,
+                    (
+                        f"{pair} already has an open position, {position.position_id}, and "
+                        "only one position per pair is allowed"
+                    ),
+                )
+        for order in resting:
+            if str(order.pair) == pair:
+                return PairExposure(
+                    REASON_ENTRY_RESTING_ON_PAIR,
+                    (
+                        f"{pair} already has an entry order resting on the book, userref "
+                        f"{order.userref}, which is a position that has not filled yet"
+                    ),
+                )
+        return None
 
     def _equity(self, context: EngineContext) -> Decimal:
         """Total account equity, from the latest `equity_snapshots` row.
@@ -495,4 +584,4 @@ class RiskEngine(BaseEngine):
         )
 
 
-__all__ = ["MissingInputError", "RiskEngine"]
+__all__ = ["MissingInputError", "PairExposure", "RiskEngine"]

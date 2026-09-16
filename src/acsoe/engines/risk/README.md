@@ -37,6 +37,8 @@ notional", and $5,000 x 1% / 1.5% is $3,333.33.
 | Entry price — **ask** for sizing, **bid** for `costmin` | `state["market_sensor"]["quotes"][pair]` | 3 `market_sensor` (A) |
 | Total equity | `store.latest_equity_snapshot()` | 19 `memory`, Phase 4 |
 | Open position count | `store.count_open_positions()` | 19 `memory`, Phase 4 |
+| Open positions, per pair | `store.open_positions()` | 19 `memory`, Phase 4 |
+| Resting entry orders, per pair | `store.resting_orders(intent=entry)` | 19 `memory`, Phase 4 |
 
 Configuration: `trading.risk_fraction_per_trade`, `trading.max_concurrent_positions`,
 `barriers.stop_pct`, `trading.base_reporting_currency`.
@@ -51,7 +53,8 @@ forbids.
 
 **The open-position count comes from the store too**, for the same structural reason
 engine 17 reads the store: this gate runs in the opportunity chain and the manage chain
-runs after it, so `state["position_manager"]` does not exist yet.
+runs after it, so `state["position_manager"]` does not exist yet. The per-pair reads
+added by spec 89 are there for the same reason and from the same tables.
 
 ## Output written to `state["risk"]`
 
@@ -92,11 +95,15 @@ In order, because the order is part of the behaviour:
 
 1. **Portfolio already full** — `max_concurrent_positions`. Checked before sizing, so a
    refused candidate never has a quantity computed for it at all.
-2. **Notional exceeds the quote balance** — `insufficient_quote_balance`. Invariant 6:
+2. **This pair already has an open position** — `position_open_on_pair`. Invariant 6's
+   last clause, "one open position per pair". See below; also checked before sizing.
+3. **This pair already has an entry order resting on the book** —
+   `entry_resting_on_pair`. Same rule, same clause; see below.
+4. **Notional exceeds the quote balance** — `insufficient_quote_balance`. Invariant 6:
    never allocate cash the account does not hold in that pair's quote currency. Rejected
    rather than capped to fit: a position quietly resized is no longer the position the
    sizing rule chose, which is the same objection as rounding up to a minimum.
-3. **The quote currency is not the reporting currency** — `no_fx_rate`. Affordability
+5. **The quote currency is not the reporting currency** — `no_fx_rate`. Affordability
    cannot be *computed*: the notional is in `trading.base_reporting_currency` and the
    balance is in the pair's quote currency, and nothing publishes a rate between them.
    **Ruled by the operator on 2026-09-10**, after it surfaced while engine 7 `scout` was
@@ -104,14 +111,56 @@ In order, because the order is part of the behaviour:
    reached it, because no fixture had such a pair with a balance in its quote currency.
    Refusing claims nothing about the world; inventing a rate or assuming parity would.
    Engine 7 excludes such a pair from the universe under the same code.
-4. **Quantity below `ordermin`** — `below_ordermin`. Rejected, never rounded up.
-5. **Position value below `costmin`** — `costmin` is tested on the rounded quantity's real
+6. **Quantity below `ordermin`** — `below_ordermin`. Rejected, never rounded up.
+7. **Position value below `costmin`** — `costmin` is tested on the rounded quantity's real
    value **at the bid**, not on the notional the sizing asked for, because rounding down
    can drop the value below the minimum even when the request cleared it.
-6. Any input absent, null or unparseable — `risk_inputs_unavailable`. A published `null`
+8. Any input absent, null or unparseable — `risk_inputs_unavailable`. A published `null`
    `ordermin` means the `AssetPairs` fetch failed, and invariant 2 gives pair rules no
    fallback at all; it must never be readable as zero, which would make every position
    trivially large enough.
+
+## One position per pair — spec 89, and it was enforced nowhere
+
+Invariant 6 ends with "One open position per pair. A configured maximum of concurrent
+positions across the portfolio." Until spec 89 this engine implemented the second
+sentence and **nothing in `src/` implemented the first**: the portfolio cap counts open
+positions and never asks which pair they are on, and engine 7 `scout` does not look
+either. The gap was invisible because it was unreachable — no engine in phases 0 to 5
+could open a position — and Phase 6 makes it reachable, so the gate lands before engine
+18 does rather than after.
+
+**A resting entry order refuses a candidate exactly as an open position does.** That is
+not an extension of the invariant; it is the reading invariant 14 already applies to
+`safety`'s escalation precondition, in as many words: "a resting post-only buy is
+exposure that has not happened yet". The arithmetic is unforgiving. A second entry placed
+beside an unfilled one is not a second chance at the same trade, it is double the money
+at risk from the moment both fill, and by then there is no gate left between them and the
+account.
+
+Two reason codes rather than one, because the two states are cleared by different
+actions: a position is exited and an order is cancelled, and an operator reading the
+rejection row has to know which. Both sentences name the pair and the identifier — the
+`position_id` or the `userref`, the latter being the key invariant 8 makes the
+idempotency lookup on and the only handle a cancellation has.
+
+Four states deliberately do **not** refuse, each pinned by a test that differs from its
+refusing twin in one field:
+
+- **A closed position on the pair.** Otherwise the rule would read "this pair has ever
+  been traded", which would walk the system out of every pair it had exited once and
+  would look, from the rejection rows alone, exactly like the rule working.
+- **A filled entry order.** Whatever it bought is a `positions` row, and that row is what
+  the first check reads. Counting the order too would refuse on the same exposure twice.
+- **A cancelled entry order.** It is off the book.
+- **A resting *exit* order.** The system getting out of something must never stop it
+  getting in, and engine 22 will be writing those constantly — a check that read `orders`
+  without filtering `intent` would refuse every candidate on a pair being exited.
+
+**Order against the portfolio cap.** Both can be true at once and either is a correct
+refusal, so the order decides only which `reason_code` the rejection row carries. The cap
+stays first because it was first: a rejection that would have been recorded as
+`max_concurrent_positions` before spec 89 is still recorded that way after it.
 
 ## The entry price: a lead ruling, not a default
 
