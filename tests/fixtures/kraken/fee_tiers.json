@@ -1,0 +1,33 @@
+{
+  "_comment": [
+    "Named fee-tier profiles for the fake Kraken client. Spec 100 step 1.",
+    "These are INVENTED TEST DATA for a fake exchange. They are not Kraken's fee",
+    "schedule and no code outside tests/ may read them. Invariant 2 is absolute:",
+    "the real fees come from POST /0/private/TradeVolume at runtime or the trade",
+    "is blocked.",
+    "Tier 1 is the same fact as trade_volume.json's result and is pinned equal to",
+    "it by test_the_tier_1_profile_is_the_default_envelope, so the two cannot drift.",
+    "Tier 3 is the profile every Phase 6 criterion that drives a trade runs at. At",
+    "tier 1 the cost gate is unreachable by construction: hurdle_multiple 1.5 makes",
+    "the bar 2.5x friction, tier-1 reference friction is about 1.25% round trip, and",
+    "the resulting 3.125% is above the 3.0% target barrier. Tier 3's reference",
+    "friction is about 0.65% and the bar is 1.625%, which a real expected move can",
+    "clear. Do not change hurdle_multiple to produce a trade; change the tier."
+  ],
+  "tiers": {
+    "1": {
+      "tier": 1,
+      "currency": "USD",
+      "volume_30d": "0",
+      "maker_fee_pct": "0.0025",
+      "taker_fee_pct": "0.0045"
+    },
+    "3": {
+      "tier": 3,
+      "currency": "USD",
+      "volume_30d": "250000",
+      "maker_fee_pct": "0.0011",
+      "taker_fee_pct": "0.0019"
+    }
+  }
+}

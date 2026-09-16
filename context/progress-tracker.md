@@ -572,6 +572,33 @@ sample of the universe. Any Phase 7 statement about coverage, capacity or opport
 to carry this number. Recorded as Phase 7 prerequisite 6 by operator ruling 2026-09-15.
 `docs/dataset/di-anomaly-distributions-2026-09-14.md`.
 
+## Findings — Phase 6
+
+### FINDING: engine 12's two reason codes have rendered as silence since Phase 5
+
+Found 2026-09-16 by the spec 99 walking test, on its **first run**, before it had judged a single
+Phase 6 engine. `engines/regime/contracts.py` declares `REASON_NO_FEATURE_ROW = 'no_feature_row'`
+and `REASON_NO_INPUTS = 'regime_inputs_incomplete'`; neither was in `console/format.py`'s
+`REASON_PROSE`. Engine 12 writes the bare code into `reason` and publishes no `reason_code`, so
+`operator_reason` recognises the stored text as code-like, refuses to print it, looks up an empty
+string, and the operator reads **"No reason was recorded."** on the field whose only job is to say
+why the market could not be classified. Live since Phase 5, with every gate green throughout.
+
+**The seam row named the gates; the hazard never cared.** `ownership.md`'s reason-code row was
+written for "every gate", and this is a non-gate from a phase nobody was auditing — which is why
+the walking test was specified to walk **every** engine's contracts rather than a maintained list.
+It is also why `no_fx_rate` had been mapped but unlisted since Phase 3, found the same day from
+the other direction.
+
+**It was about to matter more, not less.** Engine 14 `adaptive_router` reads
+`state["regime"]["label"]` under spec 97, so the `null`-label tick — the one these two codes
+explain — is the tick the router will have to account for.
+
+All four unmapped codes (these two plus engine 21's `data_guard_blocked` and
+`position_unrecordable`) now have prose. `data_guard_blocked` is the first **hold** reason in the
+map and is deliberately not worded as a refusal: nothing was rejected, exits are paused, and the
+position is still being watched.
+
 ## Locked Decisions
 
 Settled with evidence. Do not relitigate. Changing one requires the operator, not an agent.

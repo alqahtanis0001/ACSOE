@@ -1,6 +1,219 @@
 # Agent B — Store and trading
 
-## Phase 6 — Decision and execution, current session
+## Phase 6, session 2 — CLAIMED 2026-09-16
+
+The first B session died at the usage limit at 23:49Z. Everything below this section was
+written by it and is accurate; nothing here revises it. This session picks up where it
+stopped, in the order the lead set.
+
+**Claimed, before any code, per rule 1.**
+
+**Four loose ends, in order:**
+
+1. **Delete the spec 89 tripwire.** `tests/engines/test_risk.py::test_the_two_codes_spec_89_added_are_still_waiting_on_cs_prose`
+   is red on purpose — C landed the prose. Delete it; move `position_open_on_pair` and
+   `entry_resting_on_pair` into `test_every_reason_code_this_engine_emits_is_renderable_by_the_console`.
+   Files: `tests/engines/test_risk.py`.
+2. **Apply the lead's precedence reversal** — the per-pair refusal goes *ahead* of the
+   portfolio cap. Files: `src/acsoe/engines/risk/engine.py`, `src/acsoe/engines/risk/README.md`,
+   `tests/engines/test_risk.py` (invert the pinning test), and an **appended** Decision entry
+   in `docs/build-log/phase-6/b-store.md` (script-rules rule 6 — the old entry is not edited).
+3. **`PaperBroker` drops `drain_gaps`.** Found and measured by A. Files:
+   `src/acsoe/clients/paper/broker.py`, `tests/clients/paper/`. The test walks
+   `MarketStreamProtocol.__protocol_attrs__` and asserts the broker forwards all of them.
+4. **Engine 21's mutation sweep.** Never run — the one piece of committed Phase 6 code with
+   no sweep behind it. Subject `tests/engines/test_position_manager.py`, equivalent control
+   included.
+
+**Then, in order: spec 90 (engine 16 `decision`, a gate), spec 91 (engine 18 `execution`),
+spec 93 (engine 22 `exit`).**
+
+### All four loose ends DONE 2026-09-16 — green in my lane, gates not yet run
+
+Files touched, and nothing else:
+
+- `tests/engines/test_risk.py` — tripwire deleted, two codes moved into the renderable
+  list, the precedence test inverted and renamed.
+- `src/acsoe/engines/risk/engine.py` + `README.md` — the per-pair refusal now precedes the
+  portfolio cap; the branch comment, the module docstring and the README's numbered gate
+  list and precedence paragraph all rewritten to argue the new order.
+- `src/acsoe/clients/paper/broker.py` + `README.md` — `drain_gaps` forwarded.
+- `tests/clients/paper/test_broker.py` — the protocol walk.
+- `tests/engines/test_position_manager.py` — eight tests for the eight survivors.
+- `docs/build-log/phase-6/b-store.md` — five appended entries. **The original precedence
+  Decision entry was not edited**, per `script-rules.md` rule 6; the reversal is a new
+  entry that names it.
+
+**No change to `src/acsoe/engines/position_manager/engine.py`.** All eight survivors were
+missing assertions, not defects — I checked each against the contracts, the config and
+`research/labelling.py` before concluding it. `git status` shows the engine unmodified,
+which is also the proof the sweep restored all twenty-two mutants.
+
+**Green in lane:**
+
+```
+pytest tests/engines/test_position_manager.py -q          48 passed  (was 40)
+pytest tests/engines/test_risk.py -q                      47 passed  (was 48, the
+                                                          deleted one is the tripwire)
+pytest tests/clients/paper/ -q                            55 passed  (was 54)
+the three together                                       150 passed
+ruff  check (all touched src and test paths)             All checks passed
+mypy  --strict src/acsoe/{clients/paper,engines/risk,engines/position_manager}/  clean
+```
+
+**Three mutation sweeps, 29 mutations, 29 killed, 3 equivalent controls all survived as
+required.** Tables and reasoning in the build log. Two findings worth the lead's eye:
+
+1. **Engine 21's `test_a_fill_sets_the_barriers_from_the_fill_price_and_not_the_bar_close`
+   could not tell the fill price from the limit price**, because the paper broker fills a
+   resting maker buy *at* its limit, so both are the same number in that fixture. The test
+   was right about its subject and wrong about its witness — Phase 5's closing finding
+   again. Replaced by a case where the client answers 98.50 for an order resting at 99.00.
+2. **Two of the kill switch's four failure branches were unasserted** in an engine that
+   had 40 tests and was already committed: a client that *answers* without mentioning the
+   order, and a cancel the exchange did not act on. Both now covered.
+
+**I deliberately did not mutate `src/acsoe/console/format.py`** to prove the renderable-codes
+assertion. It is C's lane and C has it dirty in this shared tree; a restore-by-hash would
+have written my pre-mutation bytes over C's uncommitted work. Respelling my own constant in
+`engines/risk/contracts.py` asks the same question from my side of the seam.
+
+**Four gates not run** — rule 6 requires the lead's explicit stop before any baseline run.
+
+### Spec 90 — CLAIMED 2026-09-16, engine 16 `decision`
+
+Claimed before any code. Files I will touch and nothing else:
+`src/acsoe/engines/decision/{engine.py,contracts.py,README.md}` and
+`tests/engines/test_decision.py`.
+
+**Spec 80's prerequisites are on disk and I checked them rather than assuming:**
+`context/engine-contracts.md:212` gives engine 16 a **Y** in the Gate column,
+`trading-invariants.md:91` lists 16 among the gate engines, and `:102` lists it in
+invariant 4's protected set. Scope limit "do not build before the lead's registry and
+invariant edits land" is satisfied.
+
+**Engines 9 `order_book` and 14 `adaptive_router` do not exist** — neither directory is
+in `src/acsoe/engines/`. Engine 16 takes exactly two provenance fields from them,
+`estimated_slippage_pct` and `active_model_run_id`, and **nothing it blocks on**, so it is
+not blocked on C. Contract agreed from specs 96 and 97 and messaged to C-models.
+
+**Two design decisions I am taking, both flagged to the lead rather than assumed:**
+
+1. **Provenance is copied when present and omitted when absent; engine 16 never blocks on
+   a provenance field.** Spec 97 item 5 says engine 14 must publish nothing "engine 15, 16
+   or 18 reads to decide", and spec 90 item 3 puts the router's `active_model_run_id` in
+   the intent. Both hold only if that field is a record and not a criterion. The same
+   reading is applied to engine 9's slippage. Blocking on an absent provenance field would
+   be a fifth clause the spec does not list, i.e. inventing a refusal.
+2. **The pair and bar clauses are a walk over the payloads, not a hand-written list of
+   four comparisons.** Engine 16 examines every payload it reads, and any that carries a
+   `pair` or a bar timestamp is compared. So when C lands 9 and 14, whatever they publish
+   is checked without engine 16 being edited — the same argument as the `drain_gaps` walk
+   this morning: a hand-written list is written by the person who forgot the entry.
+
+Verified rather than assumed: `state["prediction"]["bar_ts"]` is the **same value** as
+`state["market_sensor"]["closed_bar_ts"]` — engine 5 reads `closed_bar_ts` at
+`feature/engine.py:102` and engine 8 copies feature's at `prediction/engine.py:158` — so
+comparing them is a real staleness check and not two unrelated clocks.
+
+#### Spec 90 — BUILT AND GREEN IN MY LANE 2026-09-16; the four gates are not yet run
+
+`src/acsoe/engines/decision/{__init__,engine,contracts}.py` + `README.md`, and
+`tests/engines/test_decision.py`. Nothing else touched. **Not marked complete** — my
+standing rule: a spec is complete once its four gates are green, never in the edit that
+builds it.
+
+```
+pytest tests/engines/test_decision.py -q                    30 passed
+the whole lane together (decision, risk, position_manager,
+  clients/paper)                                           180 passed
+ruff  check src/acsoe/engines/decision/ tests/.../test_decision.py   All checks passed
+mypy  --strict src/acsoe/engines/decision/                  3 source files, clean
+```
+
+**Sixteen mutations, sixteen killed, equivalent control survived.** First pass was 12
+killed and 3 survivors; three tests added; the whole sweep re-run from scratch rather
+than the three re-checked.
+
+**Two findings for the lead, both the same shape and both found only by mutation:**
+
+1. **`_approved_quantity` returned `str(qty)`, which turns off `Money`'s float refusal.**
+   `str(33.33)` is `"33.33"` and parses cleanly, so the one validator in the system built
+   to stop a float that has already lost precision would never have seen one. Latent on
+   every real tick, because engine 11 publishes `format(d, "f")` — the two paths are
+   identical until they are not. Fixed; the docstring says why the tidy-up is not one.
+2. **`expected_move_pct` appears in two payloads with the same value**, so the README's
+   claim that engine 16 takes all three cost numbers from one publisher had no witness:
+   a mutation pointing the field at engine 8 survived all 27 tests. Same shape as engine
+   21's fill-price test this morning and as Phase 5's calibrator. **Three in one day.**
+
+**Blocked on nobody.** Engines 9 and 14 do not exist; engine 16 takes only provenance
+from them and never blocks on it, so it is complete without them. Two hand-built payloads
+stand in, guarded by `test_engines_nine_and_fourteen_still_do_not_exist`, which goes red
+the day C lands either.
+
+**Engine 16 is not registered in `bootstrap.py`** — that is the lead's, spec 82, held
+until 87 and 94 are green. `is_gate_matches_registry` will not count it until then.
+
+### Spec 91 — BUILT AND GREEN IN MY LANE 2026-09-16; the four gates are not yet run
+
+Claimed before any code. Files: `src/acsoe/engines/execution/{__init__,engine,contracts}.py`
++ `README.md`, `tests/engines/test_execution.py`, and **`src/acsoe/clients/paper/broker.py`
++ `tests/clients/paper/test_broker.py`** for the defect below. Nothing else.
+
+```
+pytest tests/engines/test_execution.py -q                    34 passed
+the whole lane (execution, decision, position_manager,
+  risk, clients/paper)                                      216 passed
+ruff  check (all six touched paths)                          All checks passed
+mypy  --strict (execution, decision, clients/paper)          9 source files, clean
+```
+
+**Eighteen mutations, eighteen killed, equivalent control survived.** First pass 15
+killed and 2 survivors; two tests added and one refactor; whole sweep re-run from
+scratch. Two of the eighteen are in the paper broker, because the fix below is part of
+this spec's correctness.
+
+**A defect in my own spec 88 broker, found by engine 18 rather than by anything in
+`tests/clients/paper/`.** `PaperBroker.open_orders()` was derived **entirely from the
+store**, so an order it had accepted and engine 19 had not yet recorded was invisible to
+it — which is *every* order between the opportunity chain and the end of the manage
+chain. Two consequences: it answered "nothing is open" while a post-only buy was on the
+book (invariant 3's shape), and paper and live disagreed about the same question, which
+defeats the reason the broker exists. Fixed to ask the union of the store's resting rows
+and `_pending`, through the same single `query_orders` path. The old test drove only
+orders the store already held, which is why 57 tests could not see it.
+
+**Two deviations from spec 91, both flagged to the lead, neither taken quietly:**
+
+1. **The second idempotency probe is `open_orders()`, not `query_orders([userref])`.**
+   `query_orders` raises for *both* "never heard of it" and "cannot reach the exchange",
+   and those need opposite actions — read it one way and an outage places a duplicate
+   order; read it the other and the *first* placement of every candidate is refused and
+   the system never trades. `open_orders()` has a well-defined negative and still raises
+   during an outage. Same shape as spec 88's `drain_trades`: the spec's conclusion is
+   right and its mechanism cannot work.
+2. **`OrderState` carries no `qty` and no `limit_price`**, so an order found at the
+   exchange that the store never recorded cannot be described well enough to build engine
+   19's row. Engine 18 does not place a duplicate — the part that protects money — and
+   publishes **no row** under a fourth code, `entry_unrecorded_at_exchange`, rather than
+   guessing two numbers. **The residual gap is real and not mine to close:** nothing will
+   ever cancel that order, because engine 21 assembles entries from the store plus
+   `state["execution"]` and it is in neither. Reported to the lead and to A.
+
+**A fourth occurrence of the day's recurring failure.** `test_a_non_positive_bid_raises`
+matched `"not a price"`, which appears in *two* error messages, so deleting the guard it
+was written for left it green. Substring variant this time — `pytest.raises(match=...)`
+invites it, because the memorable fragment is usually the shared one.
+
+**The two-enum trap caught me in the test file**: `request.side is OrderSide.BUY` with
+the store's enum against the client's. The standing rule worked — immediate and legible,
+not silent. Both sides now alias the client's enums.
+
+### Spec 93 — CLAIMED 2026-09-16, engine 22 `exit`
+
+Claimed before any code. Files: `src/acsoe/engines/exit/{__init__,engine,contracts}.py`
++ `README.md`, and `tests/engines/test_exit.py`.
 
 ### Spec 89 — BUILT AND GREEN IN MY LANE 2026-09-16; the four gates are not yet run
 

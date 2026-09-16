@@ -45,10 +45,17 @@ cost the archive nothing so far.
 
 ### Four things waiting, and two of them are half-applied edits the deaths left behind
 
-1. **`src/acsoe/modelling/di.py` names `score_many` in `__all__` and does not define it.**
-   C-models had landed `_BLOCK_ELEMENTS` and the export before it died. The module imports and
-   compiles; `from acsoe.modelling.di import *` would not. **C-models finishes it** — do not
-   revert it, the reasoning in the `_BLOCK_ELEMENTS` comment is worth keeping.
+1. **~~`src/acsoe/modelling/di.py` names `score_many` in `__all__` and does not define it.~~
+   CORRECTED AND CLOSED, 2026-09-16.** Two things in the original wording were wrong. It was far
+   worse than an unusable `import *`: the rename left `_CHUNK` undefined at two call sites inside
+   `_mean_nearest`, so **~180 tests errored** on a `NameError` — every file that imports the DI.
+   I had run `compileall`, which answers *does this parse*, and read it as *do the names resolve*;
+   `ruff`'s `F821` and `mypy`'s `name-defined` each name it in one line and I had run neither.
+   And the instruction "do not revert it" is superseded: `di.py` **was** restored to its committed
+   state, the 171 affected tests pass, the partial edit is saved as `scratchpad/di-102-partial.diff`
+   with its `_BLOCK_ELEMENTS` reasoning intact, and **spec 102 is not started rather than
+   half-done**. Spec 102 is now **parked by the operator** until Phase 7, where prerequisite 5
+   lives. Correction raised by C-models against its own work.
 2. **`PaperBroker` forwards six of `MarketStreamProtocol`'s seven methods and drops
    `drain_gaps`.** Found by A, measured, reported to B, never fixed — B died first. Engine 2 then
    records **no `gap` line** into `data/raw/`, so a recording made through the daemon would claim

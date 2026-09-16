@@ -258,6 +258,17 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   same rule as the import fallback above, arriving through an agreed-by-message signature
   instead of an `ImportError`. Until the real module lands, every test of the seam is a test
   of the mock.
+- **`compileall` answers "does this parse". It does not answer "do the names resolve", and it
+  reads like it does when you are looking for reassurance.** The lead ran `python -m compileall`
+  over `src/` to assess a half-finished edit another session had left behind, got a clean exit,
+  and reported the module sound. It was not: a rename had left `_CHUNK` undefined at two call
+  sites **inside a function body**, which is a perfectly valid parse and a `NameError` at call
+  time. ~180 tests errored on it — every file that imports the DI — and the conclusion drawn from
+  the clean exit was the opposite of the truth. `ruff`'s `F821` and `mypy`'s `name-defined` each
+  name it in one line, on the same file, in under a second. This is the prefilter shape below,
+  arriving in a *diagnostic* rather than in shipped code: a cheap check standing in front of a
+  stronger one, narrower than it, and trusted for an answer it cannot give. Generalised by
+  C-models against the lead's own mistake, 2026-09-16.
 - **A cheap prefilter is a second, weaker parser, and it must be strictly broader than the
   check it fronts.** A found two of these in one file: a JSON prefilter matching `orjson`'s
   exact separators before parsing. The second would have classified **the entire recording as

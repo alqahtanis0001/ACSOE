@@ -33,9 +33,35 @@ benchmark in spec 102, which is worthless under contention.
 pairs and the window and deposit the fixture, and I build engine 9 against the fake client's
 book while I wait.
 
-#### 95 — status
+#### 95 — DONE, committed by the lead at `8941eec`
 
-Claimed 2026-09-16. In progress.
+Engine 8 omits `is_buy` on every refusal; engine 15's read landed in the same change.
+Four mutations, four killed, each naming its killing test — M1 the field defaulting back to
+`False`, M2 `to_state` emitting `None` instead of omitting, M3 engine 15 reading absent as
+non-BUY, M4 `_blocked` passing `is_buy=False` explicitly. Full account, both red messages
+and the harness's guarantees in `docs/build-log/phase-6/c-interface.md`. The cross-chain key
+row in `context/engine-contracts.md` was added by the lead.
+
+#### 102 — IN PROGRESS, restarted from nothing after the session death
+
+**The previous C-models session left `modelling/di.py` half-renamed and it cost the Phase 6
+baseline 171 errors.** `_CHUNK` became `_BLOCK_ELEMENTS` and `score_many` went into `__all__`
+before either the function or the two call sites existed. The lead restored the file; disk is
+the committed version and `git diff -- src/acsoe/modelling/di.py` is empty, so **spec 102 is
+not started rather than half-done** — HANDOFF 1's item 1 predates the restore in the same
+commit. The partial edit is `scratchpad/di-102-partial.diff` and the `_BLOCK_ELEMENTS`
+reasoning goes back in **with** the code that uses it.
+
+The lesson, and the working rule for the rest of this spec: **define the new thing, point the
+call sites at it, rename last**, so the module is importable at every intermediate save. A
+half-applied rename in a shared checkout has no marker on it and reads to everyone else as a
+defect rather than as work in flight.
+
+The diagnosis is already in the build log, written before any code: `_mean_nearest` recomputes
+the reference norms inside its chunk loop and `score` calls it one row at a time, so every
+scored row squares and sums the whole 200,000 x 117 reference — and the leave-one-out's
+exclusion mask allocates an 819 MB int64 intermediate per chunk. **No timing or memory number
+has been taken and none will be until the lead calls a quiet window.**
 
 ### DONE 2026-09-15 — C-3 (Opus 5): the DI's leave-one-out excludes every pair within 48 bars (operator ruling 2026-09-15, amending ruling 6). Not committed.
 
@@ -1696,3 +1722,100 @@ releases me.
 `tests/engines/test_risk.py::test_the_two_codes_spec_89_added_are_still_waiting_on_cs_prose`
 asserts both codes are *absent* from the map; it is B's tripwire and B deletes it. That file is
 B's and I did not touch it. Lead and B told at the moment the prose landed.
+
+### Session 2 of C-verify — claimed now, 2026-09-16
+
+The first C-verify session died at the usage limit at 23:49Z having landed the two spec 89
+sentences and nothing else. Same lane, same three specs: **99, 100, 101**. Same files:
+`src/acsoe/console/`, `scripts/verify.py`, `tests/verify/`, `tests/harness/`, `tests/console/`,
+and the `tests/fixtures/` entries those specs name. Nothing under `engines/`, `modelling/` or
+`research/` — those are `C-models`'s and that session is not running.
+
+**Claiming, in this order:**
+
+1. `tests/verify/test_phase0_criteria.py::test_is_gate_parses_the_registry_out_of_the_document` —
+   red because the lead added engine 16 `decision`'s **Y** to the Gate column of
+   `context/engine-contracts.md` after the operator ruled it a gate. The document moved first and
+   the test caught it, which is the test doing its job; `decision` joins the expected set and the
+   test keeps its shape.
+2. **Spec 99's walking test**, `tests/console/test_reason_prose.py` — imports every
+   `acsoe.engines.*.contracts`, collects every module-level `REASON_*` / `HOLD_*` string constant,
+   asserts each value is a key of `REASON_PROSE`. Plus the inverse as a warning list. The map
+   itself closes late, because codes are still arriving from B (16, 18, 21, 22) and `C-models`
+   (9, 14); the walking test is the part with lasting value and it lands now.
+3. **Spec 100**, the Phase 6 criteria: `scripts/verify.py`, `tests/verify/test_phase6_criteria.py`,
+   `tests/harness/`. Registered early as PENDING so B builds engines 16, 18 and 22 against them.
+4. **Spec 101** last, because its criterion is one of spec 100's.
+
+### Status at the end of turn 1 of session 2 — 2026-09-16
+
+**Done and green in my lane.**
+
+- The gate list: `decision` added to `test_is_gate_parses_the_registry_out_of_the_document`,
+  which went red because the lead changed `engine-contracts.md` first. 71 tests green.
+- **Spec 99's walking test.** `tests/console/test_reason_prose.py` imports every
+  `acsoe.engines.*.contracts`, collects every `REASON_*` / `HOLD_*` string constant and
+  requires prose. It found **nine** unmapped codes in one afternoon: engine 21's two
+  (expected, B flagged them), engine 12 `regime`'s two (**a phase old, nobody had a test
+  for engine 12**) and engine 16 `decision`'s five (B landed them mid-session). All nine
+  now have prose. Five mutations, five killed; arm B is killed only by the walk, which is
+  the evidence the walk was worth writing.
+- **Spec 100 registered.** Nine criteria for phase 6, `tests/verify/test_phase6_criteria.py`
+  (33 tests), `tests/verify/test_runner.py`'s phase-6 list, and the named tier-3 profile in
+  `tests/fixtures/kraken/fee_tiers.json` + `tests/harness/fake_kraken.py`.
+
+**All nine criteria are PENDING and that is the deliverable for now.** Each names the
+engine by number, the spec that owes it and the fee regime it will run in. The frontier is
+**engine 18 `execution` (B, spec 91)** for the four trade criteria, **engine 22 `exit`
+(B, spec 93)** for the two manage-chain ones, and engines 9 and 14 plus their fixtures for
+the last two, which are `C-models`'s.
+
+**Two defects the tests found in the criteria themselves**, both in the build log: the
+first draft had no `root_import_path(ctx.root)` and so judged the installed package
+whatever tree it was pointed at; and `test_no_criterion_reads_data_models_or_logs` needed
+three attempts before it could tell its own rule from a violation of it.
+
+**Open, for the lead.** The `REASON_`/`HOLD_` naming collision: three constants with those
+prefixes name a `state` field rather than a code (`memory.REASON_CODE_FIELD`,
+`memory.HOLD_REASON_FIELD`, `position_manager.HOLD_REASON_FIELD`). Pinned exactly rather
+than exempted by suffix, so a fourth goes red. A rename is the lead's call; both modules
+are other agents'.
+
+**Next, in order.** The trade-producing subject of spec 100 step 2 (candles with a planted
+pattern, trained through the real `research/training.py`, driven through the real
+orchestrator at tier 3) — the largest shared cost in the spec and the one thing not
+blocked on B. Then the PASS and FAIL halves per criterion as engines 18 and 22 land. Then
+spec 101.
+
+**Not touched, and not mine:** `engines/`, `modelling/`, `research/`, and anything under
+B's or A's paths. `tests/engines/test_risk.py`, `engines/risk/engine.py` and
+`engines/risk/README.md` are CRLF in the working tree — B's, reported to the lead, not
+corrected here.
+
+### Spec 100 step 2 landed — the subject produces a real BUY, measured
+
+`_planted_candles` and `_trade_subject_model` are in `scripts/verify.py`; `_trained` and
+`_constructed_dataset` gained an optional `candles_builder` so Phase 5's market and Phase
+6's planted one come out of one pipeline. 140 days, two pairs, two folds, **~9 s** to
+train, cached per repository root for the process (the fitted artefacts only — no store,
+no database, no broker ledger, which is spec 100 step 6's "say which").
+
+**656 out-of-sample BUY rows clear the tier-3 bar of 1.625%**, expected move 1.66% to
+3.00%, `p_target` 0.702 to 1.0, DI refusing 7 of 2688. Fifty-seven of the 656 end at the
+**stop**, which is the evidence the pattern was learned and not memorised.
+
+Two wrong turns are in the build log: an assertion that demanded the isotonic calibrator
+not be isotonic, and a fresh-clone test that took four versions before it stated the rule
+instead of searching for the word.
+
+### The scripted market landed — `tests/harness/market_script.py`
+
+`ScriptedMarket` (the fake Kraken client plus the seven `MarketStreamProtocol` methods,
+all filtered by the injected clock), `Bar`, `Bar.flat` and `bar_trades`. 14 tests, two of
+them driving the real engine 3 rather than reading the harness back. `tests/harness -q`:
+85 passed.
+
+That is spec 100 step 1 complete: the named tier-3 profile and the book, trade and quote
+feeds a criterion can script tick by tick. Step 2's subject is done and measured. What
+remains in spec 100 is the criteria bodies, and four of the seven trade-driving ones are
+blocked on engine 18 and two on engine 22.
