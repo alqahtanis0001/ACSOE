@@ -32,6 +32,7 @@ from acsoe.clients.kraken.client import KrakenClient
 from acsoe.clients.kraken.limiter import RateLimiter
 from acsoe.clients.kraken.rest import KrakenRestClient
 from acsoe.clients.kraken.ws import KrakenWebSocketClient
+from acsoe.clients.paper.broker import PaperBroker
 from acsoe.clients.recorder.writer import JsonlRecorder
 from acsoe.clients.store.client import StoreClient
 from acsoe.core.orchestrator import Orchestrator
@@ -82,6 +83,21 @@ def build_clients(config: Config, clock: Clock, paths: RuntimePaths) -> Clients:
     listen. An empty scope produces no subscribe frames at all rather than one asking
     for an empty symbol list.
 
+    **In paper mode, and only in paper mode, ``kraken`` is B's paper broker wrapping
+    the real client.** Operator ruling of 2026-09-16, spec 88: the fill simulator is a
+    client, not an engine. Engines 18, 21 and 22 call ``add_order``, ``cancel_order``,
+    ``query_orders`` and ``open_orders`` through ``context.clients.kraken`` and never
+    learn which object they hold, which is what makes a paper run exercise the live
+    code path rather than a parallel one. The wrap happens **here**, at the one place
+    the daemon builds its clients, because a mode test inside an engine would be a
+    second place the paper/live distinction lives.
+
+    ``live`` and ``replay`` both get the bare :class:`KrakenClient`, whose four order
+    methods refuse until Phase 8 (spec 84). That is the fail-closed direction in both
+    cases: a simulator in live mode would place no real order while the system believed
+    it had, which is the worst failure in this system — a position it thinks it holds
+    and does not, or the reverse. There is no flag that wraps in live.
+
     One rate limiter, shared by REST and the stream, because it is one account
     against one published rate limit.
     """
@@ -104,8 +120,16 @@ def build_clients(config: Config, clock: Clock, paths: RuntimePaths) -> Clients:
     # because tests and scripts construct it directly rather than through here.
     store = StoreClient(paths.db / DB_FILENAME, models_dir=paths.models)
     store.migrate()
+    real = KrakenClient(rest=rest, stream=stream)
+    # `== "paper"`, not `!= "live"`. The two read the same today because there are
+    # three modes, and they stop reading the same the moment a fourth is added — at
+    # which point the negative form wraps it silently. A simulator reached by a mode
+    # nobody considered is exactly the failure this line exists to prevent.
+    kraken: Any = real
+    if config.mode == "paper":
+        kraken = PaperBroker(real, store=store, config=config, clock=clock)
     return Clients(
-        kraken=KrakenClient(rest=rest, stream=stream),
+        kraken=kraken,
         store=store,
         recorder=JsonlRecorder(paths.raw),
     )

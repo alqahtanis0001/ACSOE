@@ -11,11 +11,22 @@ exactly what the real client raises.
 
 from acsoe.clients.kraken.client import KrakenClient
 from acsoe.clients.kraken.contracts import (
+    TERMINAL_ORDER_STATUSES,
+    USERREF_MAX,
+    USERREF_MIN,
     BalancesSnapshot,
     FeeTierSnapshot,
     KrakenClientProtocol,
     MarketStreamProtocol,
+    OrderAck,
+    OrderAckStatus,
     OrderBookSnapshot,
+    OrderClientProtocol,
+    OrderRequest,
+    OrderSide,
+    OrderState,
+    OrderStatus,
+    OrderType,
     PairRule,
     PairRulesSnapshot,
     QuoteTick,
@@ -32,6 +43,9 @@ from acsoe.clients.kraken.rest import KrakenRestClient, parse_envelope
 from acsoe.clients.kraken.ws import KrakenWebSocketClient
 
 __all__ = [
+    "TERMINAL_ORDER_STATUSES",
+    "USERREF_MAX",
+    "USERREF_MIN",
     "BalancesSnapshot",
     "FeeTierSnapshot",
     "KrakenAPIError",
@@ -42,7 +56,15 @@ __all__ = [
     "KrakenUnavailableError",
     "KrakenWebSocketClient",
     "MarketStreamProtocol",
+    "OrderAck",
+    "OrderAckStatus",
     "OrderBookSnapshot",
+    "OrderClientProtocol",
+    "OrderRequest",
+    "OrderSide",
+    "OrderState",
+    "OrderStatus",
+    "OrderType",
     "PairRule",
     "PairRulesSnapshot",
     "QuoteTick",

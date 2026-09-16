@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from acsoe.clients.kraken.contracts import QuoteTick, TradeTick
 from acsoe.core.contracts import EngineStatus
@@ -33,7 +34,7 @@ from acsoe.engines.market_sensor.candles import (
     build_candles,
     missing_bar_timestamps,
 )
-from acsoe.engines.market_sensor.contracts import STATE_KEY, spread_ratio
+from acsoe.engines.market_sensor.contracts import STATE_KEY, TradeRange, spread_ratio
 from acsoe.engines.market_sensor.engine import MarketSensorEngine, bar_closed_on
 
 BAR = 900
@@ -459,3 +460,372 @@ def test_a_bar_in_which_every_pair_was_silent_blocks_as_a_missing_candle(
     assert guard.status is EngineStatus.BLOCK
     assert guard.data["reason_code"] == REASON_MISSING_CANDLE
     assert guard.blocks_trading is True
+
+
+# --------------------------------------------------------------------------- #
+# Spec 85 — trade_ranges: what traded between the previous tick and this one
+# --------------------------------------------------------------------------- #
+#
+# The property under test is what happened in the fifty-nine seconds nobody looked
+# at. A resting post-only buy fills when the market trades *through* its price and a
+# stop is touched when the market trades *to* it, and a quote sampled once a minute
+# sees neither. So every test here drives the real engine over a stream whose trades
+# are known second by second, and asserts against the arithmetic — never against a
+# quote, and never against a payload the test also supplied.
+#
+# The window comes from `context.previous_now`, which `core/` stamps with the previous
+# tick's `context.now` and leaves `None` on the first tick of a process. A context
+# built by hand therefore has no previous tick and publishes no ranges, so every test
+# that wants one says when the previous tick was — `ranges_at(..., previous=...)` makes
+# that visible rather than incidental.
+
+MICROS = 1_000_000
+
+
+def tick_state() -> dict[str, Any]:
+    return {
+        "system": {"mode": "running", "close_intent": False},
+        "cycle_id": 2,
+        "guard_blockers": [],
+    }
+
+
+#: "The caller did not say", distinct from `None`, which means "there was no
+#: previous tick". See `ranges_at`.
+_ON_TIME: Any = object()
+
+
+def one_tick_before(moment: datetime) -> datetime:
+    return moment - timedelta(seconds=TICK)
+
+
+def sensor_at(
+    engine_context: Any,
+    stream: Any,
+    moment: datetime,
+    *,
+    previous: datetime | None,
+) -> Any:
+    import dataclasses
+
+    context = dataclasses.replace(
+        context_at(engine_context, moment, stream), previous_now=previous
+    )
+    return MarketSensorEngine().process(context, tick_state())
+
+
+def ranges_at(
+    engine_context: Any,
+    stream: FakeStream,
+    moment: datetime,
+    *,
+    previous: datetime | None = _ON_TIME,
+) -> dict[str, Any]:
+    """The ranges one tick produced. `previous` defaults to the regular loop.
+
+    The default is a sentinel and **not** `None`, because `None` is a meaningful
+    value here — it is "there was no previous tick" — and a default of `None` would
+    conflate "the caller did not say" with "the caller said there is none". That is
+    the one distinction the first-tick test exists to make, and it silently lost it
+    the first time this helper was written.
+    """
+    if previous is _ON_TIME:
+        previous = one_tick_before(moment)
+    result = sensor_at(engine_context, stream, moment, previous=previous)
+    ranges: dict[str, Any] = result.data["trade_ranges"]
+    return ranges
+
+
+def test_a_pair_s_range_is_the_low_the_high_and_the_count_of_what_traded(
+    engine_context: Any,
+) -> None:
+    """Three trades inside the window, one before it. The range is the three."""
+    now = ORIGIN + timedelta(seconds=10 * TICK)
+    stream = FakeStream(
+        [
+            trade("AAA/USD", 9 * TICK - 30, "500.00", "1"),  # previous tick's window
+            trade("AAA/USD", 9 * TICK + 5, "101.50", "1"),
+            trade("AAA/USD", 9 * TICK + 25, "99.25", "2"),
+            trade("AAA/USD", 10 * TICK, "100.00", "3"),  # exactly on `now`, included
+        ]
+    )
+
+    ranges = ranges_at(engine_context, stream, now)
+
+    assert ranges == {
+        "AAA/USD": {
+            "low": "99.25",
+            "high": "101.50",
+            "trades": 3,
+            "since_ts": int((now - timedelta(seconds=TICK)).timestamp()) * MICROS,
+        }
+    }
+
+
+def test_a_silent_pair_is_absent_and_is_never_a_zero(engine_context: Any) -> None:
+    """BBB traded a minute ago and not since. It has no range, not a range of nothing.
+
+    A range of `{"low": p, "high": p, "trades": 0}` at BBB's last price would tell a
+    barrier check the market touched `p` in this window. It did not.
+    """
+    now = ORIGIN + timedelta(seconds=10 * TICK)
+    stream = FakeStream(
+        [
+            trade("BBB/USD", 9 * TICK - 10, "42.00", "1"),
+            trade("AAA/USD", 9 * TICK + 30, "100.00", "1"),
+        ]
+    )
+
+    ranges = ranges_at(engine_context, stream, now)
+
+    assert set(ranges) == {"AAA/USD"}
+    assert "BBB/USD" not in ranges
+
+
+def test_a_range_never_spans_two_ticks(engine_context: Any) -> None:
+    """Two consecutive ticks over one stream. Neither range sees the other's trades.
+
+    The spike at 300.00 belongs to tick 9 alone. If the window were anchored anywhere
+    other than one tick back, it would reappear in tick 10's high and a stop far above
+    the market would read as touched.
+    """
+    stream = FakeStream(
+        [
+            trade("AAA/USD", 9 * TICK - 20, "300.00", "1"),
+            trade("AAA/USD", 9 * TICK - 5, "100.00", "1"),
+            trade("AAA/USD", 9 * TICK + 40, "101.00", "1"),
+            trade("AAA/USD", 10 * TICK, "102.00", "1"),
+        ]
+    )
+    ninth = ORIGIN + timedelta(seconds=9 * TICK)
+    tenth = ORIGIN + timedelta(seconds=10 * TICK)
+
+    first = ranges_at(engine_context, stream, ninth)["AAA/USD"]
+    second = ranges_at(engine_context, stream, tenth)["AAA/USD"]
+
+    assert (first["low"], first["high"], first["trades"]) == ("100.00", "300.00", 2)
+    assert (second["low"], second["high"], second["trades"]) == ("101.00", "102.00", 2)
+    assert first["trades"] + second["trades"] == 4, "every trade counted exactly once"
+    assert second["since_ts"] == int(ninth.timestamp()) * MICROS
+
+
+def test_a_trade_exactly_on_since_ts_belongs_to_the_earlier_tick(
+    engine_context: Any,
+) -> None:
+    """The window is half-open at the bottom, so consecutive ticks tile without overlap.
+
+    Without that, the trade on the boundary is in both ranges and the two counts sum
+    to one more than the number of trades.
+    """
+    ninth = ORIGIN + timedelta(seconds=9 * TICK)
+    tenth = ORIGIN + timedelta(seconds=10 * TICK)
+    stream = FakeStream(
+        [
+            trade("AAA/USD", 9 * TICK, "777.00", "1"),  # exactly on the boundary
+            trade("AAA/USD", 10 * TICK - 1, "100.00", "1"),
+        ]
+    )
+
+    first = ranges_at(engine_context, stream, ninth)["AAA/USD"]
+    second = ranges_at(engine_context, stream, tenth)["AAA/USD"]
+
+    assert first["high"] == "777.00"
+    assert second["high"] == "100.00", "the boundary trade is not in the later range"
+    assert first["trades"] + second["trades"] == 2
+
+
+def test_a_trade_stamped_after_this_tick_is_not_in_the_range(
+    engine_context: Any,
+) -> None:
+    """Exchange clock skew is not a licence to read the future. Invariant 10."""
+    now = ORIGIN + timedelta(seconds=10 * TICK)
+    stream = FakeStream(
+        [
+            trade("AAA/USD", 10 * TICK - 5, "100.00", "1"),
+            trade("AAA/USD", 10 * TICK + 5, "900.00", "1"),
+        ]
+    )
+
+    ranges = ranges_at(engine_context, stream, now)
+
+    assert ranges["AAA/USD"]["high"] == "100.00"
+    assert ranges["AAA/USD"]["trades"] == 1
+
+
+def test_the_first_tick_of_a_process_publishes_no_ranges_rather_than_inventing_a_start(
+    engine_context: Any,
+) -> None:
+    """`previous_now` is None, so there is nothing to measure from.
+
+    `core/` leaves it None on the first tick of a process **and on the first tick
+    after a restart**, and the second is the one that matters: a position restored
+    from the store would otherwise be checked against a window the stream had only
+    just begun to observe.
+    """
+    now = ORIGIN + timedelta(seconds=10 * TICK)
+    stream = FakeStream([trade("AAA/USD", 10 * TICK - 5, "100.00", "1")])
+
+    assert ranges_at(engine_context, stream, now, previous=None) == {}
+    assert ranges_at(engine_context, stream, now) != {}, (
+        "a tick carrying a previous stamp must publish, or the assertion above "
+        "passes for the wrong reason"
+    )
+
+
+def test_a_loop_that_ran_late_produces_a_longer_range_and_not_a_hole(
+    engine_context: Any,
+) -> None:
+    """The reason `previous_now` exists rather than `now - loop_tick_s`.
+
+    The previous tick was three minutes ago, not one. Under the arithmetic this
+    replaced, the 300.00 trade two and a half minutes back fell in **no** range at
+    all — and a stop at 300 touched in that window was missed by engines 21 and 22.
+    Here it is inside the range, because the range is bounded by when the previous
+    tick actually happened.
+    """
+    now = ORIGIN + timedelta(seconds=10 * TICK)
+    late_previous = now - timedelta(seconds=3 * TICK)
+    stream = FakeStream(
+        [
+            trade("AAA/USD", 10 * TICK - 150, "300.00", "1"),  # inside the overshoot
+            trade("AAA/USD", 10 * TICK - 30, "100.00", "1"),
+        ]
+    )
+
+    with_real_stamp = ranges_at(engine_context, stream, now, previous=late_previous)["AAA/USD"]
+    as_if_on_time = ranges_at(engine_context, stream, now)["AAA/USD"]
+
+    assert with_real_stamp["high"] == "300.00"
+    assert with_real_stamp["trades"] == 2
+    assert with_real_stamp["since_ts"] == int(late_previous.timestamp()) * MICROS
+    assert as_if_on_time["high"] == "100.00", (
+        "the one-tick window must miss it, or this test is not measuring the overshoot"
+    )
+
+
+def test_the_ranges_and_the_candles_read_the_same_trades(engine_context: Any) -> None:
+    """Spec 85 step 3. One source, so the two cannot disagree about what happened.
+
+    Recomputed from the trades the test fed the stream, not copied from the payload:
+    a comparison of `trade_ranges` against `candles` would be two readings of the
+    same code agreeing with each other.
+    """
+    now = ORIGIN + timedelta(seconds=BAR + TICK)
+    # Every trade of the bar that just closed falls inside the last tick's window.
+    trades = [
+        trade("AAA/USD", BAR + 5, "100.00", "1"),
+        trade("AAA/USD", BAR + 20, "103.00", "1"),
+        trade("AAA/USD", BAR + 40, "98.00", "1"),
+    ]
+    stream = FakeStream(trades)
+
+    result = sensor_at(engine_context, stream, now, previous=one_tick_before(now))
+    live = result.data["trade_ranges"]["AAA/USD"]
+
+    assert live["low"] == format(min(tick.price for tick in trades), "f")
+    assert live["high"] == format(max(tick.price for tick in trades), "f")
+    assert live["trades"] == len(trades)
+
+
+def test_a_client_with_no_stream_publishes_no_ranges_and_does_not_raise(
+    engine_context: Any,
+) -> None:
+    """C's fake Kraken client has no `recent_trades`. The bar clock still runs."""
+
+    class NoStream:
+        pass
+
+    moment = ORIGIN + timedelta(seconds=10 * TICK)
+    result = sensor_at(engine_context, NoStream(), moment, previous=one_tick_before(moment))
+    assert result.status is EngineStatus.OK
+    assert result.data["trade_ranges"] == {}
+    assert result.data["stream_available"] is False
+
+
+def test_prices_cross_state_as_exact_decimal_strings(engine_context: Any) -> None:
+    """A float here arrives in a barrier comparison wrong in the fourth decimal, and
+    `EngineResult.data` accepts a float silently — which is what makes this worth a
+    test of its own rather than an inspection."""
+    now = ORIGIN + timedelta(seconds=10 * TICK)
+    stream = FakeStream([trade("AAA/USD", 10 * TICK - 5, "0.000012340", "1")])
+
+    ranges = ranges_at(engine_context, stream, now)
+
+    assert ranges["AAA/USD"]["low"] == "0.000012340"
+    assert isinstance(ranges["AAA/USD"]["low"], str)
+    assert isinstance(ranges["AAA/USD"]["trades"], int)
+
+
+def test_two_pairs_each_get_their_own_range(engine_context: Any) -> None:
+    """A busy pair's spike must not reach a quiet pair's high."""
+    now = ORIGIN + timedelta(seconds=10 * TICK)
+    stream = FakeStream(
+        [
+            trade("AAA/USD", 10 * TICK - 50, "100.00", "1"),
+            trade("AAA/USD", 10 * TICK - 10, "140.00", "1"),
+            trade("BBB/USD", 10 * TICK - 30, "7.50", "1"),
+        ]
+    )
+
+    ranges = ranges_at(engine_context, stream, now)
+
+    assert ranges["AAA/USD"] == {
+        "low": "100.00",
+        "high": "140.00",
+        "trades": 2,
+        "since_ts": int((now - timedelta(seconds=TICK)).timestamp()) * MICROS,
+    }
+    assert ranges["BBB/USD"]["low"] == "7.50"
+    assert ranges["BBB/USD"]["high"] == "7.50"
+    assert ranges["BBB/USD"]["trades"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# TradeRange — the model refuses what the rule forbids
+# --------------------------------------------------------------------------- #
+
+
+def a_range(**overrides: Any) -> TradeRange:
+    fields: dict[str, Any] = {
+        "pair": "AAA/USD",
+        "low": Decimal("99.00"),
+        "high": Decimal("101.00"),
+        "trades": 3,
+        "since_ts": 1_772_000_000_000_000,
+    }
+    fields.update(overrides)
+    return TradeRange(**fields)
+
+
+def test_a_range_of_zero_trades_cannot_be_constructed() -> None:
+    """The absent-is-not-zero rule, made structural rather than remembered."""
+    with pytest.raises(ValidationError, match="a range with no trades in it is not a range"):
+        a_range(trades=0)
+
+
+def test_a_single_trade_is_a_valid_range() -> None:
+    """The other half. A model refusing every count would satisfy the test above."""
+    single = a_range(trades=1, low=Decimal("100"), high=Decimal("100"))
+    assert single.trades == 1
+    assert single.low == single.high
+
+
+def test_a_low_above_its_high_is_refused() -> None:
+    with pytest.raises(ValidationError, match="is above high"):
+        a_range(low=Decimal("102.00"), high=Decimal("101.00"))
+
+
+def test_a_non_positive_traded_price_is_refused() -> None:
+    with pytest.raises(ValidationError, match="a traded price is positive"):
+        a_range(low=Decimal("0"))
+
+
+def test_the_state_dict_is_exactly_the_four_keys_spec_85_names() -> None:
+    """No `pair` inside the value: the map key already carries it, and a second copy
+    is one more thing that can disagree with it."""
+    assert a_range().state_dict() == {
+        "low": "99.00",
+        "high": "101.00",
+        "trades": 3,
+        "since_ts": 1_772_000_000_000_000,
+    }

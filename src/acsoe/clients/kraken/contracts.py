@@ -35,14 +35,24 @@ the trailing zeros are the quantum.
 from __future__ import annotations
 
 import datetime as _datetime
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Annotated, Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 __all__ = [
+    "TERMINAL_ORDER_STATUSES",
+    "USERREF_MAX",
+    "USERREF_MIN",
     "Balances",
     "BalancesSnapshot",
     "BookLevel",
@@ -50,7 +60,15 @@ __all__ = [
     "KrakenClientProtocol",
     "MarketStreamProtocol",
     "Money",
+    "OrderAck",
+    "OrderAckStatus",
     "OrderBookSnapshot",
+    "OrderClientProtocol",
+    "OrderRequest",
+    "OrderSide",
+    "OrderState",
+    "OrderStatus",
+    "OrderType",
     "PairRule",
     "PairRulesSnapshot",
     "QuoteTick",
@@ -58,6 +76,7 @@ __all__ = [
     "RetainedValue",
     "StreamChannel",
     "TradeTick",
+    "UserRef",
     "coerce_balances",
     "coerce_fee_tier",
     "coerce_order_book",
@@ -493,6 +512,292 @@ class QuoteTick(_Snapshot):
 
 
 # --------------------------------------------------------------------------- #
+# Orders — spec 84, the one surface paper and live both wear
+# --------------------------------------------------------------------------- #
+#
+# Engines 18, 21 and 22 place, cancel and query orders through `OrderClientProtocol`
+# on `context.clients.kraken`, and they cannot tell paper from live. That is the
+# whole design (`architecture-context.md`, Modes): the mode difference lives in the
+# client layer, so the same engine code runs in both and a paper run exercises the
+# live path rather than a parallel one.
+#
+# Nothing here is a fee, a minimum, a tick size or a precision. Sizes and prices
+# arrive already rounded by the caller using the pair's own `lot_decimals` and
+# `pair_decimals` from `AssetPairs` — this module refuses to know what those are.
+#
+# The three models are deliberately strict about *coupling* rather than about
+# values: a limit order without a price, a fill with no average price, a resting
+# order with a close time. Each of those is a self-contradiction that a consumer
+# would otherwise have to re-check, and "absent is never zero" is only true if
+# something enforces it at the boundary.
+
+
+#: Kraken's ``userref`` is a **signed 32-bit** integer, and it is the whole of the
+#: system's order idempotency (invariant 8: never place an order without checking
+#: whether that ``userref`` already exists). A value outside the range is not
+#: truncated by the exchange in any way this system could predict, so it is refused
+#: here rather than discovered as a mismatched order later.
+USERREF_MIN = -2_147_483_648
+USERREF_MAX = 2_147_483_647
+
+#: The bounded field itself, so the request, the ack and the state cannot drift
+#: apart about what a ``userref`` is. The refusal message is pydantic's constraint
+#: message — *"Input should be greater than or equal to …"* — and that is on
+#: purpose: in a model with ``extra="forbid"`` a refusal always names the field, so
+#: a test matching the field name passes whether the bound rejected the value or
+#: the field was deleted. Only the constraint text tells those apart.
+UserRef = Annotated[int, Field(ge=USERREF_MIN, le=USERREF_MAX)]
+
+
+class OrderSide(StrEnum):
+    BUY = "buy"
+    SELL = "sell"
+
+
+class OrderType(StrEnum):
+    """``limit`` or ``market``, and the system almost never wants the second.
+
+    Invariant 8: an entry is always a post-only limit, and an unfilled entry is
+    cancelled rather than chased with a market order. ``MARKET`` exists because
+    invariant 14's emergency liquidation exits as a taker, having already decided
+    that getting flat beats getting a good price. Engine 18 must never construct
+    one; that is asserted in engine 18's own tests, not here, because a client
+    contract that could not express a taker exit would make rule 14 unimplementable.
+    """
+
+    LIMIT = "limit"
+    MARKET = "market"
+
+
+class OrderAckStatus(StrEnum):
+    """What the exchange said about a placement, immediately.
+
+    Three values, and they are a subset of :class:`OrderStatus`'s five with the
+    same spellings — ``StrEnum`` members compare equal to the matching string, so
+    ``ack.status == OrderStatus.RESTING`` is True and a consumer holding either
+    enum can compare against either. They are separate types because a placement
+    cannot come back ``cancelled`` or ``expired``: nothing has had time to happen
+    yet, and a status set that can express it invites a consumer to handle it.
+    """
+
+    RESTING = "resting"
+    FILLED = "filled"
+    REJECTED = "rejected"
+
+
+class OrderStatus(StrEnum):
+    """Where an order is now.
+
+    ``RESTING`` is the only non-terminal one. The other four mean the order is
+    finished and :attr:`OrderState.closed_at` says when.
+    """
+
+    RESTING = "resting"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
+#: Every status that means the order is over. Named once so the coupling rule in
+#: :class:`OrderState` and any consumer asking "is this done" cannot disagree.
+TERMINAL_ORDER_STATUSES = frozenset(
+    {
+        OrderStatus.FILLED,
+        OrderStatus.CANCELLED,
+        OrderStatus.REJECTED,
+        OrderStatus.EXPIRED,
+    }
+)
+
+
+class OrderRequest(_Snapshot):
+    """One order, as the system asks for it.
+
+    ``post_only`` has **no default**. Invariant 8 makes every entry post-only and
+    invariant 14 makes a liquidation a taker, so the right answer differs per call
+    site and a default would be silently right in one of the two places and
+    silently wrong in the other — producing, in the wrong direction, an entry that
+    crosses the book and pays taker fees the cost gate never priced.
+    """
+
+    pair: str
+    side: OrderSide
+    order_type: OrderType
+    qty: Money
+    limit_price: Money | None = None
+    post_only: bool
+    userref: UserRef
+
+    @field_validator("qty")
+    @classmethod
+    def _qty_is_positive(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("an order quantity must be greater than zero")
+        return value
+
+    @field_validator("limit_price")
+    @classmethod
+    def _price_is_positive(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value <= 0:
+            raise ValueError("a limit price must be greater than zero")
+        return value
+
+    @model_validator(mode="after")
+    def _price_matches_the_type(self) -> OrderRequest:
+        if self.order_type is OrderType.LIMIT and self.limit_price is None:
+            raise ValueError(
+                "a limit order needs a limit_price; there is nothing for it to rest at"
+            )
+        if self.order_type is OrderType.MARKET and self.limit_price is not None:
+            raise ValueError(
+                "a market order has no limit_price; a price here is ignored by the "
+                "exchange and believed by everything downstream, which is the worst "
+                "of both"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _post_only_is_a_limit_flag(self) -> OrderRequest:
+        if self.post_only and self.order_type is OrderType.MARKET:
+            raise ValueError(
+                "post_only is Kraken's oflags=post, a limit-order flag. A market order "
+                "always takes liquidity, so post_only on one is a contradiction rather "
+                "than a flag the exchange would quietly ignore"
+            )
+        return self
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "pair": self.pair,
+            "side": str(self.side),
+            "order_type": str(self.order_type),
+            "qty": money_text(self.qty),
+            "limit_price": None if self.limit_price is None else money_text(self.limit_price),
+            "post_only": self.post_only,
+            "userref": self.userref,
+        }
+
+
+class OrderAck(_Snapshot):
+    """What came back from the placement, before anything else happened.
+
+    ``reason`` is present **exactly when** the status is ``rejected``, and it is
+    non-empty. A rejection with no reason is the shape that makes a paper run and a
+    live run indistinguishable in the logs for the wrong reasons; a reason attached
+    to a resting order is a note nobody can interpret. A post-only order that would
+    have crossed the book is the ordinary rejection here, and it names that cause.
+    """
+
+    userref: UserRef
+    order_id: str
+    status: OrderAckStatus
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def _reason_iff_rejected(self) -> OrderAck:
+        rejected = self.status is OrderAckStatus.REJECTED
+        if rejected and not (self.reason or "").strip():
+            raise ValueError(
+                "a rejected order must name why it was rejected; a rejection with no "
+                "cause cannot be told from a rejection nobody recorded"
+            )
+        if not rejected and self.reason is not None:
+            raise ValueError(
+                f"reason belongs to a rejection; status is {self.status} and a reason "
+                "on an accepted order is a note no consumer can act on"
+            )
+        return self
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "userref": self.userref,
+            "order_id": self.order_id,
+            "status": str(self.status),
+            "reason": self.reason,
+        }
+
+
+class OrderState(_Snapshot):
+    """Where one order stands now, from a query or a cancel.
+
+    Four couplings are enforced, because each of them is a fact a consumer would
+    otherwise have to re-derive and could re-derive differently:
+
+    * ``avg_fill_price`` is present **exactly when** ``filled_qty`` is above zero.
+      An unfilled order has no average price, and ``0`` is not one — it would put a
+      zero cost basis into the ledger.
+    * an order that filled nothing paid no fee.
+    * ``filled`` means something filled.
+    * ``closed_at`` is present **exactly when** the status is terminal. A resting
+      order has not closed; a cancelled one has, and engine 19 records when.
+    """
+
+    userref: UserRef
+    order_id: str
+    status: OrderStatus
+    filled_qty: Money
+    avg_fill_price: Money | None = None
+    fee: Money
+    closed_at: int | None = None
+
+    @field_validator("filled_qty", "fee")
+    @classmethod
+    def _not_negative(cls, value: Decimal) -> Decimal:
+        if value < 0:
+            raise ValueError("a filled quantity and a fee are never negative")
+        return value
+
+    @field_validator("avg_fill_price")
+    @classmethod
+    def _price_is_positive(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value <= 0:
+            raise ValueError("an average fill price must be greater than zero")
+        return value
+
+    @model_validator(mode="after")
+    def _fill_fields_agree(self) -> OrderState:
+        filled = self.filled_qty > 0
+        if filled and self.avg_fill_price is None:
+            raise ValueError(
+                f"{money_text(self.filled_qty)} filled with no avg_fill_price; a fill "
+                "without a price cannot be valued and must not reach the ledger"
+            )
+        if not filled and self.avg_fill_price is not None:
+            raise ValueError(
+                "avg_fill_price is set on an order that filled nothing; absent is not "
+                "zero and a price for no fill is neither"
+            )
+        if not filled and self.fee != 0:
+            raise ValueError("an order that filled nothing paid no fee")
+        if self.status is OrderStatus.FILLED and not filled:
+            raise ValueError("status is filled and filled_qty is zero")
+        return self
+
+    @model_validator(mode="after")
+    def _closed_at_matches_the_status(self) -> OrderState:
+        terminal = self.status in TERMINAL_ORDER_STATUSES
+        if terminal and self.closed_at is None:
+            raise ValueError(f"status is {self.status}, which is over, so it closed at some point")
+        if not terminal and self.closed_at is not None:
+            raise ValueError(f"status is {self.status}, which is not over, so nothing closed")
+        return self
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "userref": self.userref,
+            "order_id": self.order_id,
+            "status": str(self.status),
+            "filled_qty": money_text(self.filled_qty),
+            "avg_fill_price": (
+                None if self.avg_fill_price is None else money_text(self.avg_fill_price)
+            ),
+            "fee": money_text(self.fee),
+            "closed_at": self.closed_at,
+        }
+
+
+# --------------------------------------------------------------------------- #
 # Coercion — the same models, whichever client produced them
 # --------------------------------------------------------------------------- #
 #
@@ -586,8 +891,11 @@ def coerce_order_book(snapshot: Any) -> OrderBookSnapshot:
 class KrakenClientProtocol(Protocol):
     """The REST half of ``context.clients.kraken``.
 
-    Four calls, all read-only. ``AddOrder`` is deliberately absent: Phase 2 does not
-    mutate the exchange, and placing an order belongs to Phase 6.
+    Four calls, all read-only. Ordering is **not** here: it is
+    :class:`OrderClientProtocol`, a separate protocol landed by spec 84, so that a
+    consumer that only reads the market — engines 1, 2, 3, 4, 9 — cannot be handed
+    an object that can place an order, and so that the paper broker can implement
+    one protocol and forward the other.
 
     Matches ``tests/harness/fake_kraken.py``'s declaration exactly, so the fake and
     the real client are interchangeable everywhere and a fail-closed test keeps
@@ -601,6 +909,38 @@ class KrakenClientProtocol(Protocol):
     async def balance(self) -> BalancesSnapshot: ...
 
     async def order_book(self, pair: str, depth: int) -> OrderBookSnapshot: ...
+
+
+@runtime_checkable
+class OrderClientProtocol(Protocol):
+    """The order half of ``context.clients.kraken``. Spec 84.
+
+    Four calls, async like every other call on the client, and **identical in
+    paper and live**. In paper mode ``build_clients`` wraps :class:`KrakenClient`
+    in B's paper broker (``clients/paper/``, operator ruling 2026-09-16), which
+    implements this protocol and forwards the read-only calls; in live mode the
+    real client implements it by **refusing**, until Phase 8 builds it. There is
+    no third case and no flag that turns the refusal off.
+
+    ``userref`` is the key everywhere, not ``order_id``. Invariant 8 makes it the
+    system's idempotency token — the system chooses it before the order exists,
+    so it is the only identifier that survives a placement whose answer never came
+    back. ``order_id`` is the exchange's, arrives afterwards, and is carried for
+    reconciliation rather than used for lookup.
+
+    A call that cannot be completed **raises** rather than returning an empty
+    result. Invariant 3: the absence of a "no" is never a "yes", and an
+    ``open_orders`` that answered ``()`` during an outage would tell engine 21
+    there was nothing resting to cancel.
+    """
+
+    async def add_order(self, request: OrderRequest) -> OrderAck: ...
+
+    async def cancel_order(self, userref: int) -> OrderState: ...
+
+    async def query_orders(self, userrefs: Sequence[int]) -> tuple[OrderState, ...]: ...
+
+    async def open_orders(self) -> tuple[OrderState, ...]: ...
 
 
 @runtime_checkable

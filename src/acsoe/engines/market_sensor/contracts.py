@@ -12,6 +12,10 @@ ratified:
   and engine 10 `cost` (B). Ratified by the lead on 2026-09-09: engine 1 is the
   *account* engine, engine 3 is the *market-data* engine, and engine 4 blocks on three
   market-data faults that should all arrive from one place.
+* ``trade_ranges[pair]`` — the low, the high and the trade count since the previous
+  tick. Spec 85, Phase 6. Read by the fill simulator (B, spec 88) and by engines 21
+  `position_manager` and 22 `exit` (B, specs 92 and 93), so that all three agree about
+  what the market did *between* one-minute ticks rather than each sampling a quote.
 
 **The mixed cadence is deliberate.** ``quotes`` is per tick; ``bar_closed`` and
 ``candles`` are per bar. They sit in one engine because they are both statements about
@@ -27,11 +31,11 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from acsoe.clients.kraken.contracts import Money, money_text
 
-__all__ = ["STATE_KEY", "MarketSensorState", "QuoteView"]
+__all__ = ["STATE_KEY", "MarketSensorState", "QuoteView", "TradeRange"]
 
 #: The one key this engine writes into ``state``. Contract rule 2.
 STATE_KEY: Final = "market_sensor"
@@ -72,6 +76,76 @@ class QuoteView(BaseModel):
             "spread": money_text(self.spread),
             "spread_pct": money_text(self.spread_pct),
             "age_s": self.age_s,
+        }
+
+
+class TradeRange(BaseModel):
+    """What one pair actually traded between the previous tick and this one. Spec 85.
+
+    Top-of-book quotes sampled once a minute miss both of the things Phase 6 has to
+    know: a resting post-only buy fills when the market **trades through** its price,
+    and a stop or target is touched when the market **trades to** it — and both
+    happen between ticks. This is the trade record of that interval, so engines 21
+    and 22 and the fill simulator read one source rather than three readings of a
+    quote.
+
+    **It is trades, not quotes.** A book that quoted 100 and never traded there has
+    no range here.
+
+    ``trades`` is refused at zero, and that is the whole of the absent-is-not-zero
+    rule made structural: a pair that did not trade has **no** ``TradeRange``, and a
+    consumer asking for a silent pair gets a ``KeyError`` rather than a range of
+    nothing with a copied price in it. A range of ``{"low": p, "high": p,
+    "trades": 0}`` would tell a barrier check that the market touched ``p``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pair: str
+    low: Money
+    high: Money
+    trades: int
+    since_ts: int
+    """``context.previous_now`` in microseconds — the real stamp of the previous tick,
+    not ``now`` minus a configured interval. The window is ``(since_ts, now]``,
+    half-open at the bottom, so consecutive ticks tile it without overlapping and no
+    trade is counted in two ranges. Because it is the real stamp, a loop that ran late
+    produces a longer range rather than a hole: no trade falls between two ticks."""
+
+    @field_validator("low", "high")
+    @classmethod
+    def _positive(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("a traded price is positive")
+        return value
+
+    @field_validator("trades")
+    @classmethod
+    def _at_least_one(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError(
+                "a range with no trades in it is not a range; a pair that did not "
+                "trade since the previous tick is absent from trade_ranges"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _low_is_not_above_high(self) -> TradeRange:
+        if self.low > self.high:
+            raise ValueError(f"low {self.low} is above high {self.high}")
+        return self
+
+    def state_dict(self) -> dict[str, Any]:
+        """Exactly the four keys spec 85 names, and no ``pair``.
+
+        The map key already carries the pair. A second copy inside the value is one
+        more thing that can disagree with it, and nothing reads it.
+        """
+        return {
+            "low": money_text(self.low),
+            "high": money_text(self.high),
+            "trades": self.trades,
+            "since_ts": self.since_ts,
         }
 
 
@@ -123,6 +197,27 @@ class MarketSensorState(BaseModel):
     """
 
     quotes: dict[str, dict[str, Any]] = {}
+
+    trade_ranges: dict[str, dict[str, Any]] = {}
+    """Per pair, what actually **traded** between the previous tick and this one:
+    ``{"low", "high", "trades", "since_ts"}``, prices as exact decimal strings and
+    ``since_ts`` in microseconds. Spec 85, read by the fill simulator and by engines
+    21 `position_manager` and 22 `exit`.
+
+    **A pair with no trade since the previous tick is absent**, never
+    ``{"trades": 0}`` with a copied price — no trade means no range, and a range of
+    zero trades at a copied price would tell a barrier check the market touched it.
+    :class:`TradeRange` refuses ``trades=0`` so the rule cannot be broken here.
+
+    **Empty on the first tick of a process, and on the first tick after a restart.**
+    The window is ``(context.previous_now, context.now]`` and ``previous_now`` is
+    ``None`` on both, which is the truth rather than an inconvenience: nothing
+    observed the span while the process was down. An interval with no start is not an
+    interval, and the honest answer is nothing rather than an invented beginning.
+
+    **Trades, not quotes.** A book that quoted a price and never traded there has no
+    range here."""
+
     stream_available: bool = True
     trades_seen: int = 0
 

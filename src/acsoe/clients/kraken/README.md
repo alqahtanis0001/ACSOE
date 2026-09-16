@@ -226,10 +226,42 @@ half to protect the recoverable one.
 loss as a gap. A silent overflow is impossible; so is a process that grows until it
 dies because an engine stopped draining.
 
+## The order surface — spec 84, Phase 6
+
+`contracts.py` carries `OrderRequest`, `OrderAck`, `OrderState` and
+`OrderClientProtocol`: `add_order`, `cancel_order(userref)`,
+`query_orders(userrefs)` and `open_orders()`, all async. Engines 18, 21 and 22
+place, cancel and query through that one surface and **cannot tell paper from
+live** — the mode difference lives here, in the client layer, which is what makes
+a paper run exercise the live code path rather than a parallel one.
+
+**The models are strict about coupling, not about values.** A limit order with no
+price, a market order carrying one, `post_only` on a market order, a fill with no
+average price, a fee on an order that filled nothing, a resting order with a close
+time: each is refused at construction. Nothing here knows a fee, a minimum, a tick
+size or a precision — sizes and prices arrive already rounded by the caller using
+the pair's own `lot_decimals` and `pair_decimals`.
+
+`userref` is the key everywhere, not `order_id`. Invariant 8 makes it the system's
+idempotency token: the system chooses it *before* the order exists, so it is the
+only identifier that survives a placement whose answer never came back. It is
+bounded to Kraken's signed 32-bit range on all three models, from one shared
+`UserRef` annotation, so the request cannot refuse a value the ack would accept.
+
+**The live client refuses all four, and makes no request.** Live order placement
+is Phase 8. The refusal is the first statement in each body — no limiter token, no
+nonce, no signature — it names the method and the phase, and there is no flag that
+turns it off. A live client that refuses is fail-closed; one that half-works is
+not, because an order Kraken accepted and this process did not record is exposure
+nothing in the system knows about. In paper mode `build_clients` wraps
+`KrakenClient` in B's paper broker (`clients/paper/`, operator ruling 2026-09-16),
+which implements the protocol and forwards the read-only calls.
+
 ## What this package does not do
 
-- **It places no orders.** `AddOrder` is not here and must not be added in this
-  phase. Phase 2 is read-only against the exchange; placing an order is Phase 6.
+- **It places no orders.** The four order methods exist and **refuse**: `AddOrder`,
+  `CancelOrder` and `QueryOrders` are not implemented against Kraken and must not
+  be until Phase 8. Fills are the paper broker's, never this package's.
 - **It reads no clock.** Every timestamp comes from the injected `Clock`.
 - **It applies no fallback.** See above.
 - **It touches no network in a test.** `tests/conftest.py`'s autouse guard patches

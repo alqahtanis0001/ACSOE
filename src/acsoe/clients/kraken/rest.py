@@ -60,14 +60,17 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, Protocol, TypeVar
+from typing import Any, NoReturn, Protocol, TypeVar
 from urllib.parse import urlencode
 
 from acsoe.clients.kraken.contracts import (
     BalancesSnapshot,
     BookLevel,
     FeeTierSnapshot,
+    OrderAck,
     OrderBookSnapshot,
+    OrderRequest,
+    OrderState,
     PairRule,
     PairRulesSnapshot,
     RetainedValue,
@@ -100,6 +103,10 @@ BALANCE_PATH = "/0/private/Balance"
 
 #: Calls whose last successful value is kept for rule 14 and nothing else.
 RETAINED_CALLS = frozenset({"asset_pairs", "balance"})
+
+#: The four calls of ``OrderClientProtocol``. Written out so the refusal below and
+#: the test that walks it read from one list rather than two that can drift.
+ORDER_CALLS = ("add_order", "cancel_order", "query_orders", "open_orders")
 
 #: Calls that may be served from a TTL-bounded cache. Deliberately not the same set
 #: as :data:`RETAINED_CALLS`: ``balance`` is retained but never cached, and
@@ -675,6 +682,54 @@ class KrakenRestClient:
         return map_order_book(
             result, pair=pair, depth=depth, fetched_at=self._now_micros()
         )
+
+    # -- OrderClientProtocol: refused until Phase 8 ----------------------- #
+    #
+    # Spec 84 step 2. These four exist so that the *surface* is complete — the
+    # engines, the paper broker and the live client all wear the same shape from
+    # today — while the live implementation does not exist yet.
+    #
+    # They refuse before anything else happens. No limiter token, no nonce, no
+    # signature, no request. The refusal is the first statement in each body and
+    # there is no flag, config key or environment variable that turns it off,
+    # because a live client that half-places orders is worse than one that places
+    # none: an order Kraken accepted and this process did not record is exposure
+    # nothing in the system knows about.
+
+    async def add_order(self, request: OrderRequest) -> OrderAck:
+        _refuse_order_call("add_order", subject=f"userref {request.userref}")
+
+    async def cancel_order(self, userref: int) -> OrderState:
+        _refuse_order_call("cancel_order", subject=f"userref {userref}")
+
+    async def query_orders(self, userrefs: Sequence[int]) -> tuple[OrderState, ...]:
+        _refuse_order_call("query_orders", subject=f"{len(tuple(userrefs))} userrefs")
+
+    async def open_orders(self) -> tuple[OrderState, ...]:
+        _refuse_order_call("open_orders", subject="the open order list")
+
+
+def _refuse_order_call(method: str, *, subject: str) -> NoReturn:
+    """Fail closed, naming the method and the phase that will implement it.
+
+    :class:`KrakenUnavailableError` rather than ``NotImplementedError`` on
+    purpose. Every caller in the system already catches the exchange-shaped types
+    and blocks — invariant 3 — so a refusal that arrives as one is handled by code
+    that exists, while a ``NotImplementedError`` would escape to the orchestrator
+    and become an ``ERROR`` status whose reason says nothing about Phase 8.
+
+    The method name is in the message because every fail-closed path in this
+    package raises this one type, which makes ``pytest.raises(KrakenUnavailableError)``
+    on its own unable to say which branch ran (``code-standards.md``). ``subject``
+    is what was being asked for, so a log line says which order was refused.
+    """
+    raise KrakenUnavailableError(
+        f"KrakenRestClient.{method} refuses {subject} and makes no request: placing, "
+        "cancelling and querying orders against Kraken is Phase 8 work and is not "
+        "built. A live client that refuses is fail-closed; one that half-works is "
+        "not. In paper mode this call is answered by the paper broker in "
+        "clients/paper/, which never delegates it here."
+    )
 
 
 def is_exchange_error(exc: BaseException) -> bool:

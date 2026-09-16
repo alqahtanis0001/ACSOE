@@ -5,9 +5,11 @@ calls and the market stream have to arrive as a single object. This is that obje
 and it is deliberately thin: it holds the two transports and forwards. No logic
 lives here, because logic here would be logic no engine test could reach.
 
-It satisfies both ``KrakenClientProtocol`` and ``MarketStreamProtocol``, which is
-what lets engine 1 take the first and engines 2 and 3 take the second without any
-of them knowing the other half exists.
+It satisfies ``KrakenClientProtocol``, ``MarketStreamProtocol`` and — since spec
+84 — ``OrderClientProtocol``, which is what lets engine 1 take the first, engines
+2 and 3 the second and engines 18, 21 and 22 the third, without any of them
+knowing the others exist. The order half **refuses** here until Phase 8; paper
+mode reaches it through B's broker, which wraps this object.
 """
 
 from __future__ import annotations
@@ -18,7 +20,10 @@ from typing import Any
 from acsoe.clients.kraken.contracts import (
     BalancesSnapshot,
     FeeTierSnapshot,
+    OrderAck,
     OrderBookSnapshot,
+    OrderRequest,
+    OrderState,
     PairRulesSnapshot,
     QuoteTick,
     RawFrame,
@@ -67,6 +72,29 @@ class KrakenClient:
     @property
     def last_known_good_balances(self) -> RetainedValue | None:
         return self._rest.last_known_good_balances
+
+    # -- orders ----------------------------------------------------------- #
+    #
+    # Forwarded, exactly like the four read calls, so the refusal lives in one
+    # place. `rest.py` is where the Phase 8 refusal is written and this facade must
+    # not grow a second copy of it: two refusals is two things to remove in Phase 8
+    # and one of them would be missed.
+    #
+    # In paper mode B's broker wraps *this* object and answers these four itself,
+    # so the forward below is never reached; in live mode it is reached and it
+    # raises. There is no mode in which it places an order.
+
+    async def add_order(self, request: OrderRequest) -> OrderAck:
+        return await self._rest.add_order(request)
+
+    async def cancel_order(self, userref: int) -> OrderState:
+        return await self._rest.cancel_order(userref)
+
+    async def query_orders(self, userrefs: Sequence[int]) -> tuple[OrderState, ...]:
+        return await self._rest.query_orders(userrefs)
+
+    async def open_orders(self) -> tuple[OrderState, ...]:
+        return await self._rest.open_orders()
 
     # -- stream ----------------------------------------------------------- #
 

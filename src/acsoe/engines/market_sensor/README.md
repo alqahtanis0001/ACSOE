@@ -8,6 +8,8 @@ off starts here.
 ## What it reads from `state`
 
 **Nothing.** It reads the feed and the injected clock, not another engine's output.
+`trade_ranges` needs to know when the previous tick was, and that arrives on
+`context.previous_now` — a `core/` field, not `state` and not another engine.
 
 ## What it writes into `state["market_sensor"]`
 
@@ -19,15 +21,61 @@ off starts here.
 | `candles` | per bar | Closed candles, oldest first: `pair`, `ts`, `open`, `high`, `low`, `close`, `volume`, `trades` |
 | `missing_bars` | per bar | Bar openings inside the covered range in which nothing traded |
 | `quotes` | **per tick** | Per pair: `bid`, `ask`, `spread`, `spread_pct`, `age_s` |
+| `trade_ranges` | **per tick** | Per pair: `low`, `high`, `trades`, `since_ts` — what **traded** since the previous tick |
 | `stream_available`, `trades_seen` | per tick | Feed health |
 
 Money is an exact decimal string everywhere — never a `float`. The validator in
 `core/contracts.py` refuses a `Decimal` and *accepts* a `float`, so the reflexive cast
 on hitting that refusal is the dangerous mistake.
 
+## `trade_ranges` — what happened *between* ticks
+
+Spec 85, Phase 6. Read by the fill simulator (B, spec 88) and by engines 21
+`position_manager` and 22 `exit`.
+
+A resting post-only buy fills when the market **trades through** its price, and a
+position's stop or target is touched when the market **trades to** it. Both happen
+between one-minute ticks, and a top-of-book quote sampled once a minute misses both:
+the quote says where the book was at the instant it was read, not where the market
+went in the fifty-nine seconds nobody looked. So engine 3, which already drains every
+trade to build candles, also reports per pair the lowest and highest price that
+actually traded and how many trades there were.
+
+**It is trades, not quotes.** A book that quoted 100 and never traded there produces
+no range at 100. That is the whole point of the field and it is the one thing a reader
+is most likely to assume the other way round.
+
+**A pair with no trade since the previous tick is absent.** Never `{"trades": 0}`, and
+never a copied price. `TradeRange` refuses a zero count at construction, so the rule
+is structural rather than remembered: a consumer asking for a silent pair gets a
+`KeyError`, which is a question it has to answer, rather than a range of nothing at a
+price the market never traded at — which would tell a barrier check the market touched
+it.
+
+**The window is `(since_ts, now]`**, half-open at the bottom. Consecutive ticks
+therefore tile the timeline with no overlap, so **a range never spans two ticks** and
+no trade is ever counted twice. Closed at the top at `context.now`, because a trade
+stamped after the tick is clock skew and using it would be look-ahead.
+
+**The first tick of a process publishes no ranges at all**, and so does the first
+tick after a restart. There is no previous tick to measure from, and the honest answer
+to "what traded since a moment that never happened" is nothing, rather than an
+invented start. That second case is the one that matters: a position restored from the
+store would otherwise be checked against a window the stream had only just begun to
+observe.
+
+**`since_ts` is `context.previous_now`** — the real stamp of the previous tick, in
+microseconds. It is **not** `context.now` minus `loop_tick_s`. That arithmetic is what
+`bar_closed` uses and it is sound there, because `bar_closed` asks about an *index* and
+fires exactly once however late the loop ran. An *interval* is different: on an
+overshoot the trades inside it would fall in no range at all, and a stop touched there
+would be missed by engines 21 and 22. `EngineContext.previous_now` was added to `core/`
+in Phase 6 for exactly this, after A found the hole while building this field. Because
+it is the real stamp, a late loop produces a **longer** range rather than a hole.
+
 ### The mixed cadence is deliberate
 
-`quotes` is per tick; `bar_closed` and `candles` are per bar. That looks like two
+`quotes` and `trade_ranges` are per tick; `bar_closed` and `candles` are per bar. That looks like two
 engines squashed into one and is not. They are both statements about the **market
 feed**, and engine 4 `data_guard` blocks on three market-data faults — stale data, a
 negative spread, a missing candle — which should all arrive from one place rather than
