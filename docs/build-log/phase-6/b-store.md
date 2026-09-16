@@ -1702,3 +1702,213 @@ on `contracts.py` during the migration 0003 sweep, reported `ANCHOR MATCHED 0x` 
 refused, which is the only reason it was a nuisance rather than a silent non-result
 counted as a clean sweep. Found across the team by C-models after it cost four mutation
 arms.
+
+### Spec 94 — the registry chain reaches engine 15, on a book that can witness engine 9
+
+**Agent:** B (session 4) · **Task:** spec 94 · **Date:** 2026-09-16
+
+**What happened.** `tests/engines/test_feature_chain_rehearsal.py` now drives the chain the
+registry will run — 5, 6, 7, 12, 13, 8, 9, 10, 11, 14, 15 — through two real ticks (bar, then
+quiet), every engine real, the artefacts trained in the module, B's real store, and the fake
+client at **fee tier 3** by name (`TIER_3`, `fee_tier_profile(3)`: maker `0.0011`, taker
+`0.0019`). Engine 7 picks `BTC/USD` on the BUY window, and that is asserted on every run.
+
+**The book.** A probe of the chain on the fake's default book, before any test was written:
+`order_book` published `estimated_slippage_pct: '0'`, `levels_consumed: 1`, `fill_price
+'50000.0'` — the default top bid holds 0.75 BTC, about 37,500 USD, against the 5,000 USD
+basis. That is the zero my session-3 entry measured, and the operator's instruction applies:
+"Spec 94 uses the thin book." The rehearsal loads the **recorded `BTC/USD` opening snapshot**
+from the committed `tests/fixtures/book_sample.jsonl` — the candidate's own pair, a real
+ten-level book, no delta replay (a Kraken v2 `snapshot` frame is absolute on its own, so
+nothing of C's `_replay_book` is duplicated), numbers parsed with `parse_float=Decimal`. It
+is loaded into the stream double **before** the stream quote is read off it, so engine 3's
+spread and engine 9's walk describe one market.
+
+Measured on the bar tick:
+
+| Figure | Value |
+|---|---|
+| best bid / ask | `75731.8` / `75731.9` |
+| basis notional | `5000.00` (engine 1's USD) |
+| levels consumed | **4** (`52.65` + `3.86` + `3.86` USD, then the remainder at `75726.8`) |
+| fill price | `75726.85619614271459554707421` |
+| `estimated_slippage_pct` | **`0.00006528042192692375531712952815`** — strictly positive |
+| engine 3 `spread_pct` | `0.000001320448397866947658085732753` |
+| engine 10 `friction_pct` | `0.003066600870324790702975215261` |
+| recomputed maker + taker + spread + slippage | equal, exactly |
+| recomputed **without** slippage | `0.003001320448397866947658085733` — **differs** |
+| `hurdle_pct` / `expected_move_pct` | `0.004599901305487186054462822892` / `0.029999999932724522` — clears |
+
+The test asserts in that order: the estimate is `> 0` first; it equals an independent walk
+of the loaded bids (written from the README, not by calling `walk_the_bid_side`, same
+operations in the same order so the 28-digit context rounds alike); friction equals the
+four published parts summed in invariant 5's order — fees from the named profile, spread
+from engine 3, slippage from engine 9 — and **differs** from the three-part sum; net edge and
+hurdle follow from it. Engine 10's total is never read back against itself.
+
+**Scenarios, all green on C's code as committed at `a668df3`:**
+
+1. `test_the_full_registry_chain_reaches_engine_15_on_the_bar_tick_and_not_the_quiet_one` —
+   tier 3 asserted from engine 1's payload; all eleven keys present on the bar tick, no
+   blocker, `cost.clears_hurdle`, `risk.approved`, engine 15's **returned** statuses
+   `[OK]`; on the quiet tick `feature == {}`, **no `trading_blocked_by`**, none of the ten
+   downstream keys, and engine 15 called exactly once across both ticks.
+2. `test_engine_10_prices_the_nonzero_slippage_engine_9_walked_on_the_recorded_book` — the
+   table above.
+3. `test_engine_14_weights_the_leaderboard_in_the_real_store_on_the_bar_tick` — the
+   committed `leaderboard_sample.json` written through `write_leaderboard_entry` into a
+   freshly migrated store; weights recomputed from the rows (aaaa `0.818…`, bbbb `0.181…`,
+   cccc `0.0`), the other family absent, provenance matched to engines 8 and 12, absent on
+   the quiet tick.
+4. `test_nothing_engine_14_publishes_changes_whether_engine_15_blocks[pass|veto]` — invariant
+   4. `p_wrong` recomputed from the artefact (`8.98e-06` on this bar), threshold a millionth
+   either side; the bar judged with the leaderboard loaded (weights sum to 1) and with an
+   empty store (`leaderboard_empty`), the two router payloads asserted **different**, and
+   engine 15's status asserted to be **the one the threshold dictates** in both runs as well
+   as identical across them. Equality alone would call a router output that engine 15 read
+   on both runs sound, because it would move both answers alike.
+5. `test_without_engine_9_before_it_engine_10_blocks_and_names_the_missing_estimate` — the
+   Phase 5 test `test_engine_10_stops_the_chain_for_want_of_engine_9_and_says_so`, renamed
+   for what it now is: the fail-closed half of the seam, with engine 9 explicitly removed.
+   `judgement_chain()` now carries engine 9 in its registry position, and the three tests
+   that assert "nothing after the block ran" now also assert `order_book` did not.
+
+One database per run (`fresh_store`), because scenario 4 compares a loaded store with an
+empty one and a leaderboard row cannot be taken back out through the store's surface.
+
+**Deleted, per spec 94 step 5:** `test_in_the_full_registry_chain_engine_15_is_never_reached_
+this_phase`, which asserted `skeptic` never appears in the registry chain because engine 10
+blocked for want of engine 9. It was true of a chain that no longer exists: engine 9 has
+landed, and scenario 1 asserts the opposite. A comment stands where it was, naming it.
+
+**A wrong turn, mine.** My first version of scenario 5 asserted the block reason names
+`order_book.estimated_slippage_pct`. It does not, and engine 10 is right: with engine 9
+absent there is no `order_book` payload at all, and `_require` reports `missing order_book
+is NoneType, expected a mapping`. The key-level sentence is what a payload carrying the
+estimate under another name produces — mutation M1 below — which is a different case. The
+assertion now names what engine 10 actually says for this one.
+
+**Found and not touched: `src/acsoe/engines/cost/engine.py` is 328 CRLF / 0 LF in the
+working tree** (measured in Python at claim time), against the LF the rest of the engines
+carry. It is C's file, the blob is normalised by `.gitattributes`, and I did not convert it.
+The sweep's engine-10 anchors contain no line break, so they match either way. Reported to
+the lead for C.
+
+**No finding against engines 9, 14, 10 or 15.** Every scenario was green on the first run of
+section 6; the only red was my own assertion above.
+
+### Spec 94 — seven mutations of C's engines: five killed by the tests written for them, one control, one equivalent on this path
+
+**Agent:** B (session 4) · **Task:** spec 94 step 6 · **Date:** 2026-09-16
+
+Harness: `scratchpad/b94/sweep94.py`. For each arm, a byte copy of every file it touches;
+every anchor counted and required to occur **exactly once** (no anchor contains a line
+break, so `cost/engine.py` being CRLF could not disarm one); the mutant written; pytest run
+through `sys.executable` (absolute) with `PYTHONDONTWRITEBYTECODE=1` and `-p
+no:cacheprovider`; the bytes restored in a `finally` **before the next arm**, with the sha256
+compared in the same statement. A verdict with no pytest summary line is reported as NO
+RESULT; none was. Sweep run against **my file only**, `tests/engines/
+test_feature_chain_rehearsal.py`, narrowly, per the shared-checkout rule — the survivors
+are then re-run against the whole suite below. Logs `logs/verify/b94-sweep-*.log`, table
+`logs/verify/b94-sweep-M0-M1-M2-M2b-M3-M4-M5-1t.json`.
+
+Pre-sweep baseline of the file: `33 passed`. Hashes before the sweep and after every
+restore, identical:
+
+```
+src/acsoe/engines/order_book/contracts.py    f55419cbdecc17ff4d279b54fcb3e825b49f292a07c67ca2c45ad6a650a1a08f
+src/acsoe/engines/order_book/engine.py       2d53b479b5778266bd8810f9da59d4bdce5fcd13cc9cae3940dbe573f46f89a2
+src/acsoe/engines/cost/engine.py             9f8ac3d4b821614de5bc2a035d037c30b87acdb9a2b28f88f2da0472e2299087
+src/acsoe/engines/adaptive_router/engine.py  f7e1ea62f53107d6fae344e50f44ef2b5d11253087e03ac4e8c335af9c5ff459
+src/acsoe/engines/skeptic/engine.py          44525d29f4eb09ceadca79aec2497c67e1bb65d64d1e4a5b24397b138a54ef8b
+tests/engines/test_feature_chain_rehearsal.py 57c4f9ea90d4224066b5bd0801d030648619b2c28aab36781dd8b72ee2e9ab95  (not a variable; unchanged)
+```
+
+| Arm | Mutation | Verdict (file) | Killing test — the one written for it | Incidental kills |
+|---|---|---|---|---|
+| M0 | engine 10 `clears = net_edge > hurdle` → `not net_edge <= hurdle` — **equivalent control** | survived, `33 passed` | — | — |
+| M1 | engine 9 `ESTIMATED_SLIPPAGE_FIELD` → `"estimated_slippage"` (spec 94 step 6) | killed, `5 failed, 28 passed` | `…reaches_engine_15_on_the_bar_tick…` (`('cost', '… missing order_book.estimated_slippage_pct')`) and `…prices_the_nonzero_slippage…` (key absent) | engine 14 and invariant 4 tests: engine 14 never runs once 10 blocks |
+| M2 | engine 14 publishes `skeptic_weight: 1.0`; engine 15 adds it to its threshold (spec 94 step 6) | killed, `2 failed, 31 passed` | `test_nothing_engine_14_publishes_changes_whether_engine_15_blocks[pass]` and `[veto]` | none |
+| M2b | engine 15 adds the sum of engine 14's `weights` to its threshold | killed, `2 failed, 31 passed` | the same two | none |
+| M3 | engine 10 drops `+ inputs.slippage_pct` from friction — **the arm the thin book exists for** | killed, `1 failed, 32 passed` | `test_engine_10_prices_the_nonzero_slippage_engine_9_walked_on_the_recorded_book` — `Decimal('0.003001320448397866947658085733') == … + Decimal('0.00006528042192692375531712952815')` | none |
+| M4 | engine 9 publishes `walk.slippage_pct * 0` | killed, `1 failed, 32 passed` | the same test, at its first assertion: `engine 9 estimated 0E-32` | none |
+| M5 | engine 14's own model-family filter → `if False:` | survived, `33 passed` | — | — |
+
+**M2 is the arm that justifies the shape of the invariant 4 test, and the log shows it.** In
+M2 engine 14 publishes the weight whether or not the leaderboard holds rows, so the two runs
+the test compares are **identical to each other** — `with_weights["skeptic"] ==
+without["skeptic"]` holds. The kill came from the absolute assertion, on the run *without*
+weights: status `[OK]` where the recomputed threshold dictates `[BLOCK]`, and on the pass
+side a published threshold of `1.0000099805859788` against the configured
+`9.980585978810067e-06`. A test that asserted only that the two runs agree would have
+passed M2. That is why the docstring says equality alone would call it sound.
+
+**M3 is killed only by the recomputation test, and M4 only by its first line.** Scenario 1
+stays green under both, because friction still clears the hurdle with or without 0.0065%.
+That is the operator's point measured from the other side: every test that does not
+recompute is blind to engine 10 ignoring engine 9.
+
+**M3 on the default book would have been an equivalent mutant.** Not run as an arm — the
+arithmetic settles it: engine 9 publishes `'0'` there, and `x + 0 == x` for these
+`Decimal`s, so the recomputation assertion holds with or without the term.
+
+**M5 is expected to survive this file and is not a finding against engine 14.** B's
+`all_leaderboard_rows(model_id=...)` filters by family in SQL, so on the enumerating path
+engine 14's own filter is redundant — C recorded exactly this in `code-standards.md` ("a
+double that was faithful when written…"). In this chain the filter can never be reached
+with a foreign row. Scenario 3's assertion that the other family is absent therefore
+proves the *read* is scoped, not that engine 14 filters. Re-run against the whole suite
+below, where C's windowed-fallback tests are the ones that can see it.
+
+**The two file-survivors, re-run against the whole of `tests/`** (`logs/verify/b94-sweep-M5-
+M0-1t.json`; each wide run's failing set compared with the known red, which is the eight
+parametrisations of `test_pending_on_the_real_tree_names_the_subject_and_the_spec`, C's
+spec 100):
+
+- **M5 — killed**, `9 failed, 3170 passed, 2 skipped, 1 xfailed` in 1246.60s. The one failure
+  beyond the known eight is C's `tests/engines/test_adaptive_router.py::
+  test_a_second_model_family_is_not_weighted`. So the filter is covered, by the owner's test
+  on the path that can reach it, and on the registry path it is an equivalent mutant because
+  the store scopes the read. A checked negative for this file, not a hole.
+- **M0 — behaviourally survived, and "killed" by an anchor collision I caused.** `10 failed,
+  3169 passed, 2 skipped, 1 xfailed` in 887.99s: the known eight plus
+  `tests/verify/test_phase3_criteria.py::test_a_cost_gate_that_never_blocks_is_a_fail` and
+  `…blocks_everything_is_a_fail`, both with `acsoe.engines.cost.engine: anchor appears 0
+  times, expected exactly once`. Those two tests patch engine 10 **by the literal text
+  `clears = net_edge > hurdle`** — the same line I chose for the control. Rewriting it to an
+  equivalent form did not change what engine 10 does; it removed the text another test's
+  patcher anchors on, and that patcher refused loudly, as it is built to. No test failed on
+  behaviour.
+
+  **The lesson, which I have not seen written down here:** an equivalent-mutant control is
+  equivalent *to the behaviour*, and this repository also has tests that read *the text*.
+  A control placed on a line a `tests/verify/` patcher anchors on reads as a kill in any
+  wide run. Pick a control's line by grepping `tests/` for its text first. It cost nothing
+  this time because the refusal names itself; a patcher that silently no-op'd on a missing
+  anchor would have turned the same collision into a quiet false PASS, which is why they
+  refuse.
+
+### Spec 94 — the gate at the spec 94 boundary
+
+**Agent:** B (session 4) · **Date:** 2026-09-16
+
+Tree: `a668df3` plus my three files (`tests/engines/test_feature_chain_rehearsal.py`, this
+log, my progress file), nothing else modified, no sweep running. Four commands, each to its
+own file, files read rather than piped:
+
+| Command | Result | Log |
+|---|---|---|
+| `pytest tests/ -q` | `8 failed, 3171 passed, 2 skipped, 1 xfailed, 3 warnings in 869.99s` — the eight are exactly the known parametrisations of `test_pending_on_the_real_tree_names_the_subject_and_the_spec` (C, spec 100); no other failure | `logs/verify/b94-gate-pytest.log` |
+| `mypy --strict src/ scripts/` | `Success: no issues found in 153 source files` | `logs/verify/b94-gate-mypy.log` |
+| `ruff check src/ tests/ scripts/` | `All checks passed!` | `logs/verify/b94-gate-ruff.log` |
+| `verify.py --phase 6` | `11 criteria: 1 PASS, 1 FAIL, 9 PENDING` — the FAIL is `toolchain_green` on the same eight | `logs/verify/b94-gate-verify.log` |
+
+**One crash inside `toolchain_green`, attributed to the registered native fault.** Its first
+pytest attempt died `3221225477 (0xC0000005 ACCESS_VIOLATION)`; the retry completed with the
+same eight. The faulting stack (`logs/verify/toolchain_green/20260916T163220_659731-pytest-
+attempt1.log`) is `clients/store/client.py` `_to_sql` → `_insert` → `write_equity_snapshot`,
+called from `seed.py` under `tests/conftest.py`'s `seed_fixtures` — an access violation in
+`sqlite3`, which is on the known fault's list, in a path spec 94 does not touch, and it did
+not recur on the retry or in my own full run minutes earlier. Checked against the other
+known mechanism, a stale `.pyc`: no sweep was running and nothing was mutated during the
+gate. Not filed as unexplained.

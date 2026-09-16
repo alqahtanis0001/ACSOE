@@ -1,5 +1,54 @@
 # Agent B — Store and trading
 
+## Phase 6, session 4 — CLAIMED 2026-09-16, specs 94 then 103, in that order
+
+Tree clean at `a668df3` when claimed. Claimed before any code, per rule 1.
+
+1. **Spec 94 — rehearse C's engines 9 `order_book` and 14 `adaptive_router` through real
+   orchestrator ticks.** Only file: `tests/engines/test_feature_chain_rehearsal.py`. The
+   full-registry scenario becomes 5, 6, 7, 12, 13, 8, 9, 10, 11, 14, 15, bar tick then quiet
+   tick, fake client at fee tier 3, and a **thin book** — the operator's instruction: "Spec 94
+   uses the thin book. Engine 9's estimate on the fake's default book is exactly zero, and a
+   zero proves nothing." Engines 9, 14, 10, 15 are mutated transiently from byte copies and
+   restored by hash; never edited. **`src/acsoe/engines/cost/engine.py` is 328 CRLF / 0 LF in
+   the working tree** (C's file, measured in Python at claim time) — not normalised by me;
+   the harness's anchors follow the file's own line ending.
+2. **Spec 103 — the paper broker's balance counts every fill it has executed.** Only after 94
+   is recorded and the lead says go. Files: `src/acsoe/clients/paper/broker.py`,
+   `src/acsoe/clients/paper/README.md` if its ledger description changes,
+   `tests/clients/paper/test_broker.py` (or a new file under `tests/clients/paper/`). No
+   engine edits; A's `tests/engines/test_trade_chain_rehearsal.py` is not touched — its strict
+   xfail is expected to XPASS and fail once 103 lands.
+
+Records: this file and `docs/build-log/phase-6/b-store.md`. Scratch:
+`...\scratchpad\b94\`; logs `logs/verify/b94-*`, `logs/verify/b103-*`.
+
+### Spec 94 — DONE in lane 2026-09-16; gate below
+
+Only `tests/engines/test_feature_chain_rehearsal.py` changed (33 tests, all green). No engine
+edited; every transient mutation restored by hash.
+
+- The registry chain 5, 6, 7, 12, 13, 8, 9, 10, 11, 14, 15 runs to engine 15 on the bar tick
+  and stops after engine 5 on the quiet tick, at **fee tier 3** by name.
+- **The thin book is the recorded `BTC/USD` opening snapshot** from
+  `tests/fixtures/book_sample.jsonl` (engine 7's candidate is `BTC/USD`). Engine 9 walks 4
+  levels; `estimated_slippage_pct = 0.00006528042192692375531712952815`, asserted `> 0` first.
+  Friction recomputed from the named tier-3 fees + engine 3's spread + engine 9's slippage
+  equals engine 10's `0.003066600870324790702975215261` exactly, and the recomputation
+  without slippage (`0.003001320448397866947658085733`) differs.
+- Engine 14 weights the committed leaderboard fixture from a real store; invariant 4 is
+  asserted both sides of a recomputed veto threshold, with and without weights.
+- Deleted: `test_in_the_full_registry_chain_engine_15_is_never_reached_this_phase`.
+  Renamed: engine 10's "for want of engine 9" test is now the explicit no-engine-9 case.
+- **Mutations:** M1 key rename, M2 router weight read by the skeptic, M2b, M3 cost drops
+  slippage, M4 engine 9 publishes zero — all killed by the tests written for them. M0
+  control survived behaviourally (the wide run's two "kills" were an anchor collision with
+  `test_phase3_criteria.py`'s patcher — recorded). M5 (engine 14 family filter) survives this
+  file by construction and is killed wide by C's
+  `test_a_second_model_family_is_not_weighted`.
+- **No finding against engines 9, 14, 10 or 15.** One observation for C:
+  `src/acsoe/engines/cost/engine.py` is entirely CRLF in the working tree.
+
 ## Phase 6, session 3 — CLAIMED 2026-09-16
 
 The second B session was stopped; everything it built is committed (`bdcb1ff`, `b2fb9de`,

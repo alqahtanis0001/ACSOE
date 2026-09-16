@@ -31,6 +31,8 @@ which is the other half of the same wiring and the half that matters for invaria
 from __future__ import annotations
 
 import dataclasses
+import json
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -39,7 +41,7 @@ from typing import Any
 import pytest
 from tests.conftest import require_module
 from tests.harness.doubles import MappingConfig
-from tests.harness.fake_kraken import FakeKrakenClient
+from tests.harness.fake_kraken import TIER_3, FakeKrakenClient, fee_tier_profile
 
 from acsoe.clients.kraken.contracts import QuoteTick, TradeTick
 from acsoe.clients.store.contracts import (
@@ -47,17 +49,27 @@ from acsoe.clients.store.contracts import (
     CommandRow,
     CommandSource,
     EquitySnapshotRow,
+    LeaderboardRow,
 )
 from acsoe.core.contracts import Chains, EngineStatus
 from acsoe.core.orchestrator import Orchestrator
+from acsoe.engines.adaptive_router.contracts import MODEL_ID as ROUTER_MODEL_ID
+from acsoe.engines.adaptive_router.contracts import REASON_LEADERBOARD_EMPTY
+from acsoe.engines.adaptive_router.engine import AdaptiveRouterEngine
+from acsoe.engines.cost.contracts import REASON_INPUTS_UNAVAILABLE as COST_INPUTS_UNAVAILABLE
 from acsoe.engines.cost.engine import CostEngine
 from acsoe.engines.data_guard.engine import DataGuardEngine
 from acsoe.engines.exchange.engine import ExchangeEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
+from acsoe.engines.order_book.engine import OrderBookEngine
 from acsoe.engines.risk.engine import RiskEngine
 from acsoe.engines.scout.engine import ScoutEngine
 
 pl = require_module("polars", reason="polars is not installed")
+
+#: A book as the fake client takes it: `(bids, asks)`, each level a `(price, volume)` pair
+#: of decimal strings.
+Book = tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]
 
 BAR = 900
 TICK = 60
@@ -168,9 +180,24 @@ class BookedArchiveStream(FakeKrakenClient):
     red when another test of mine is refactored.
     """
 
-    def __init__(self, bars: list[dict[str, Any]], pairs: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        bars: list[dict[str, Any]],
+        pairs: tuple[str, ...],
+        *,
+        books: dict[str, Book] | None = None,
+        fee_tier: int | None = None,
+    ) -> None:
         super().__init__()
         from acsoe.platform.aio import run_blocking
+
+        # Before the quotes below are taken, because the stream quote is read off this
+        # same book: engine 3's spread and engine 9's walk must describe one market, and a
+        # book scripted after construction would leave the quote on the fake's default.
+        for pair, (bids, asks) in (books or {}).items():
+            self.set_order_book(pair, bids=bids, asks=asks)
+        if fee_tier is not None:
+            self.use_fee_tier(fee_tier)
 
         # Engine 7 compares a position it sizes from equity against the **quote
         # currency's** balance, so an account with no USD excludes every USD pair for
@@ -298,6 +325,8 @@ def build(
     opportunity: list[Any] | None = None,
     stream_pairs: tuple[str, ...] = (PAIR,),
     quotes: bool = False,
+    books: dict[str, Book] | None = None,
+    fee_tier: int | None = None,
 ) -> Orchestrator:
     """The real orchestrator with engine 5 first in the opportunity chain.
 
@@ -313,7 +342,7 @@ def build(
     and useless as a fixture.
     """
     stream: Any = (
-        BookedArchiveStream(bars, stream_pairs)
+        BookedArchiveStream(bars, stream_pairs, books=books, fee_tier=fee_tier)
         if quotes
         else ArchiveStream([t for p in stream_pairs for t in trades_for(bars, pair=p)])
     )
@@ -705,9 +734,10 @@ def test_the_screening_chain_stops_at_engine_5_on_a_non_bar_tick(
 # --------------------------------------------------------------------------- #
 # 4. Engines 13 and 8 behind them, in the two configurations that matter
 #
-# Registry order 5, 6, 7, 12, 13, 8, 10, 11 — engines 10 `cost` and 11 `risk` are mine and
-# sit in their real positions. Engine 9 `order_book` does not exist (Phase 6), so engine 10
-# meets an absent slippage input; what it does about that is asserted rather than avoided.
+# Registry order 5, 6, 7, 12, 13, 8, 9, 10, 11 — engines 10 `cost` and 11 `risk` are mine and
+# sit in their real positions. Engine 9 `order_book` is C's, landed in Phase 6 (spec 96), and
+# sits in its registry position since spec 94; the chain without it is kept below as the
+# fail-closed half of the seam, named as such.
 #
 # Configuration (a) is the committed config, where `models.anomaly_run_id` and
 # `models.prediction_run_id` are deliberately absent — a fresh clone has no artefact. (b)
@@ -755,18 +785,26 @@ class _AbsentKey:
 _ABSENT_KEY = _AbsentKey()
 
 
-def judgement_chain() -> list[Any]:
-    """Engines 5, 6, 7, 12, 13, 8, 10, 11 in the order `engine-contracts.md` fixes."""
-    return [
+def judgement_chain(*, with_order_book: bool = True) -> list[Any]:
+    """Engines 5, 6, 7, 12, 13, 8, 9, 10, 11 in the order `engine-contracts.md` fixes.
+
+    `with_order_book=False` drops engine 9 and nothing else, for the one test about what
+    engine 10 does when nothing published a slippage estimate. It is not the registry.
+    """
+    chain = [
         FeatureEngine(),
         MacroContextEngine(),
         ScoutEngine(),
         RegimeEngine(),
         AnomalyEngine(),
         PredictionEngine(),
+        OrderBookEngine(),
         CostEngine(),
         RiskEngine(),
     ]
+    if not with_order_book:
+        chain = [engine for engine in chain if not isinstance(engine, OrderBookEngine)]
+    return chain
 
 
 def test_without_an_artefact_engine_13_blocks_and_nothing_after_it_runs(
@@ -776,7 +814,7 @@ def test_without_an_artefact_engine_13_blocks_and_nothing_after_it_runs(
 
     `models.anomaly_run_id` is deliberately absent — a fresh clone has no `models/` — so
     engine 13 blocks with `anomaly_unavailable`. **The assertion that matters is the
-    second one**: engines 8, 10 and 11 must not appear in `state` at all. A gate that
+    second one**: engines 8, 9, 10 and 11 must not appear in `state` at all. A gate that
     blocked while the chain kept running would be a gate in name only, and invariant 4
     rests on the chain stopping.
     """
@@ -796,7 +834,7 @@ def test_without_an_artefact_engine_13_blocks_and_nothing_after_it_runs(
 
     assert state["trading_blocked_by"] == "anomaly"
     assert state["anomaly"]["reason_code"] == ANOMALY_UNAVAILABLE
-    for engine in ("prediction", "cost", "risk"):
+    for engine in ("prediction", "order_book", "cost", "risk"):
         assert engine not in state, f"{engine} ran after the chain was blocked"
     # And the engines before it did run, so this is a block at 13 rather than a chain that
     # never started: without this the test would pass against a broken engine 5.
@@ -1044,7 +1082,7 @@ def test_a_run_trained_without_the_di_percentile_makes_engine_8_block(
     assert "di_percentile" in str(state["block_reason"]), (
         "the block does not say which operator key is missing, so nobody can act on it"
     )
-    for engine in ("cost", "risk"):
+    for engine in ("order_book", "cost", "risk"):
         assert engine not in state, f"{engine} ran on a prediction that never happened"
 
 
@@ -1138,36 +1176,48 @@ def test_the_di_refuses_market_data_the_model_never_saw_and_publishes_no_expecte
     assert isinstance(prediction["di"], float)
     assert isinstance(prediction["di_threshold"], float)
     assert prediction["di"] > prediction["di_threshold"]
-    for engine in ("cost", "risk"):
+    for engine in ("order_book", "cost", "risk"):
         assert engine not in state, f"{engine} ran on a refused prediction"
 
 
-def test_engine_10_stops_the_chain_for_want_of_engine_9_and_says_so(
+def test_without_engine_9_before_it_engine_10_blocks_and_names_the_missing_estimate(
     paper_config: MappingConfig,
     trained_clock: Any,
     fake_clients_with_store: Any,
     trained_bars: Any,
     trained: tuple[Path, str],
 ) -> None:
-    """**The honest end of this chain today, reported rather than avoided.**
+    """**The fail-closed half of the 9-to-10 seam, and it is no longer the registry.**
 
-    Engine 9 `order_book` is Phase 6 and does not exist, so
-    `state["order_book"]["estimated_slippage_pct"]` is absent. Invariant 2 gives slippage no
-    fallback and invariant 3 says a gate that cannot reach its data blocks, so engine 10
-    blocks and engine 11 never runs. That is the cost gate working, not a rehearsal
-    failure, and it is asserted here so that the day engine 9 lands this test goes red and
-    someone extends the rehearsal rather than discovering it in Phase 6.
+    Until spec 94 this was the honest end of the chain: engine 9 did not exist, so engine 10
+    met an absent `estimated_slippage_pct` and blocked, and this test said so under the name
+    `test_engine_10_stops_the_chain_for_want_of_engine_9_and_says_so`. Engine 9 has landed
+    and the registry chain is rehearsed in section 6; this keeps the other half. Invariant 2
+    gives slippage no fallback and invariant 3 says a gate that cannot reach its data
+    blocks, so a chain with engine 9 removed must stop at engine 10 **naming the publisher it
+    could not read** — `order_book` as a whole, since nothing wrote the payload at all. (A
+    payload carrying the estimate under another name is named down to the key instead; that
+    case is the spec 94 mutation M1, and section 6 is what kills it.)
     """
     root, run_id = trained
     config = artefact_config(
         paper_config, root, run_id, **{"prediction.di_percentile": TEST_DI_PERCENTILE}
     )
-    orchestrator = build_trained(config, trained_clock, fake_clients_with_store, trained_bars, root)
+    orchestrator = build_trained(
+        config,
+        trained_clock,
+        fake_clients_with_store,
+        trained_bars,
+        root,
+        opportunity=judgement_chain(with_order_book=False),
+    )
 
     state = orchestrator.tick()
 
+    assert "order_book" not in state, "the chain under test was supposed to omit engine 9"
     assert state["trading_blocked_by"] == "cost"
-    assert state["block_reason"]
+    assert state["cost"]["reason_code"] == COST_INPUTS_UNAVAILABLE, state["cost"]
+    assert "missing order_book is NoneType" in str(state["block_reason"]), state["block_reason"]
     assert "risk" not in state, "engine 11 ran after the cost gate blocked"
 
 
@@ -1256,13 +1306,14 @@ SKEPTIC_MACRO_ARCHIVE = {"btc": "AAAUSD"}
 
 
 def skeptic_chain() -> list[Any]:
-    """Engines 5, 6, 7, 12, 13, 8 and 15, registry order kept, **10 and 11 omitted**.
+    """Engines 5, 6, 7, 12, 13, 8 and 15, registry order kept, **9, 10, 11 and 14 omitted**.
 
-    Omitted because engine 10 `cost` blocks for want of engine 9 `order_book` (Phase 6),
-    which `test_engine_10_stops_the_chain_for_want_of_engine_9_and_says_so` asserts and
-    `test_in_the_full_registry_chain_engine_15_is_never_reached_this_phase` repeats with 15
-    registered. In the full chain engine 15 is unreachable, so it is rehearsed here without
-    the two engines that stand between it and engine 8.
+    Written in Phase 5, when engine 10 `cost` blocked for want of engine 9 and engine 15 was
+    unreachable in the registry chain, so it was rehearsed without the engines between it
+    and engine 8. That reason is gone — section 6 drives the full registry chain to engine
+    15 — and this chain is kept for what it is still good for: engine 15's unavailable,
+    not-a-BUY, veto and pass cases alone, with no cost or sizing arithmetic between the
+    prediction and the gate that could stop the tick first.
     """
     return [
         FeatureEngine(),
@@ -1489,57 +1540,13 @@ def recomputed_p_wrong(state: dict[str, Any], root: Path, run_id: str) -> float:
     return float(np.asarray(scored, dtype=np.float64).reshape(-1)[0])
 
 
-# --- (a) the full registry chain ------------------------------------------- #
-
-
-def test_in_the_full_registry_chain_engine_15_is_never_reached_this_phase(
-    paper_config: MappingConfig,
-    fixed_clock: Any,
-    fake_clients_with_store: Any,
-    constructed_rows: list[dict[str, Any]],
-    trained_skeptic: tuple[Path, str],
-) -> None:
-    """Engines 5, 6, 7, 12, 13, 8, 10, 11, 15 — the chain spec 77's registration will run.
-
-    **This is why engine 15 is rehearsed below without 10 and 11.** Engine 10 `cost` blocks
-    for want of engine 9 `order_book`, which is Phase 6: invariant 2 gives slippage no
-    fallback. So in registry order the chain stops at `cost` on every bar tick and engine 15
-    is never reached, however well it is configured. Here it is configured fully — a trained
-    skeptic and a threshold of 1.0, the test's number — on a window where engine 8 calls a
-    BUY, so the absence of `skeptic` cannot be blamed on anything but the cost gate.
-
-    When engine 9 lands this goes red, and the rehearsal should then run the full chain.
-    """
-    root, run_id = trained_skeptic
-    bars = window(constructed_rows, BUY_WINDOW_END)
-    config = skeptic_config(
-        paper_config,
-        root,
-        run_id,
-        **{"models.skeptic_run_id": run_id, "skeptic.veto_threshold": 1.0},
-    )
-    skeptic = RecordingSkeptic()
-    orchestrator = build_trained(
-        config,
-        at_bar_tick(fixed_clock, bars),
-        fake_clients_with_store,
-        bars,
-        root,
-        opportunity=[*judgement_chain(), skeptic],
-    )
-
-    bar_tick = orchestrator.tick()
-    fixed_clock.advance(TICK)
-    quiet_tick = orchestrator.tick()
-
-    assert the_prediction(bar_tick)["is_buy"] is True, "the BUY window no longer calls a BUY"
-    assert bar_tick["trading_blocked_by"] == "cost", bar_tick.get("block_reason")
-    for engine in ("risk", "skeptic"):
-        assert engine not in bar_tick, f"{engine} ran after the cost gate blocked"
-    assert skeptic.results == [], "engine 15 was called in a chain the cost gate stopped"
-    assert quiet_tick["feature"] == {}
-    assert "trading_blocked_by" not in quiet_tick
-    assert "skeptic" not in quiet_tick
+# --- (a) the full registry chain: moved to section 6 by spec 94 ------------- #
+#
+# `test_in_the_full_registry_chain_engine_15_is_never_reached_this_phase` asserted that the
+# registry chain stopped at `cost` on every bar tick because engine 9 did not exist, so
+# `skeptic` never appeared in it. Deleted by spec 94 step 5: engine 9 has landed, the chain
+# it described no longer exists, and section 6 asserts the opposite — engine 15 runs on the
+# bar tick of the full registry chain. Recorded in `docs/build-log/phase-6/b-store.md`.
 
 
 # --- (b1) no threshold, or no skeptic run ----------------------------------- #
@@ -1793,3 +1800,471 @@ def test_engine_15_declares_itself_as_the_registry_has_it() -> None:
     engine = SkepticEngine()
 
     assert (engine.name, engine.number, engine.is_gate) == ("skeptic", 15, True)
+
+
+# --------------------------------------------------------------------------- #
+# 6. The full registry chain, 5, 6, 7, 12, 13, 8, 9, 10, 11, 14, 15. Spec 94.
+#
+# Engines 9 `order_book` and 14 `adaptive_router` are C's; this section rehearses the
+# orchestrator carrying them, not their arithmetic. Every engine is the real one in its
+# registry position, the artefacts are trained in this module, and the store is B's real
+# client. Two things are scripted and both are named: the fee tier, and the book.
+#
+# **The book is the recorded one, because the fake's default cannot witness the seam.** Its
+# top BTC/USD bid level holds 37,500 USD against a 5,000 USD basis, so engine 9's walk
+# consumes one level and publishes an estimate of exactly zero — measured by B. A friction
+# recomputed with a zero slippage term equals one recomputed with no slippage term, so an
+# engine 10 that ignored engine 9 would pass the recomputation. The operator: "Spec 94 uses
+# the thin book. Engine 9's estimate on the fake's default book is exactly zero, and a zero
+# proves nothing."
+# --------------------------------------------------------------------------- #
+
+#: The fee tier this section runs at, by name. Ruling 8 of the Phase 6 task list: at tier 1
+#: the cost gate is unreachable by construction, so a chain meant to reach engine 15 has to
+#: say which tier let it through.
+REGISTRY_FEE_TIER = TIER_3
+
+#: The pair engine 7 selects on the BUY window — asserted on every run, never trusted.
+REGISTRY_PAIR = "BTC/USD"
+
+#: The engines of the opportunity chain, by `state` key, in registry order.
+REGISTRY_KEYS = (
+    "feature",
+    "macro_context",
+    "scout",
+    "regime",
+    "anomaly",
+    "prediction",
+    "order_book",
+    "cost",
+    "risk",
+    "adaptive_router",
+    "skeptic",
+)
+
+BOOK_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "book_sample.jsonl"
+LEADERBOARD_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "leaderboard_sample.json"
+
+#: Engine 14's weights are statistics, so a float tolerance is right for them. Money in this
+#: section is compared exactly.
+WEIGHT_TOLERANCE = 1e-12
+
+
+def registry_chain(skeptic: RecordingSkeptic) -> list[Any]:
+    """The opportunity chain in the order `engine-contracts.md` fixes, engine 15 recorded."""
+    return [
+        FeatureEngine(),
+        MacroContextEngine(),
+        ScoutEngine(),
+        RegimeEngine(),
+        AnomalyEngine(),
+        PredictionEngine(),
+        OrderBookEngine(),
+        CostEngine(),
+        RiskEngine(),
+        AdaptiveRouterEngine(),
+        skeptic,
+    ]
+
+
+def recorded_opening_book(pair: str) -> Book:
+    """The first frame the committed book fixture holds for `pair`, which is a snapshot.
+
+    **The opening snapshot only, and no deltas**, so nothing here reconstructs a book: a
+    Kraken v2 `snapshot` frame is an absolute ten-level book on its own, and the delta
+    replay is C's, in `test_order_book.py`. Numbers are parsed as `Decimal` from the JSON
+    text, so the recorded digits reach the fake unchanged — a float round trip is how a
+    price stops being the one that was recorded.
+    """
+    with BOOK_FIXTURE.open("rb") as handle:
+        header = json.loads(handle.readline())
+        assert header["_fixture"] == "book_frames", header
+        for raw in handle:
+            frame = json.loads(raw, parse_float=Decimal)
+            if frame.get("pair") != pair:
+                continue
+            payload = frame["payload"]
+            assert payload["type"] == "snapshot", f"the first {pair} frame is not a snapshot"
+            data = payload["data"][0]
+            return (
+                tuple((format(lv["price"], "f"), format(lv["qty"], "f")) for lv in data["bids"]),
+                tuple((format(lv["price"], "f"), format(lv["qty"], "f")) for lv in data["asks"]),
+            )
+    raise AssertionError(f"{BOOK_FIXTURE.name} holds no frame for {pair}")
+
+
+def hand_walked_slippage(
+    bids: tuple[tuple[str, str], ...], notional: Decimal
+) -> tuple[Decimal, int]:
+    """`(slippage, levels touched)` for a taker sell of `notional`, from the definition.
+
+    Written from engine 9's README rather than by calling `walk_the_bid_side`, so it is a
+    second implementation: sell whole levels from the best bid down until the remainder
+    fits, then `(best_bid - volume-weighted price) / best_bid`. The same operations in the
+    same order, so the 28-digit context rounds both alike and the comparison can be exact.
+    """
+    remaining = notional
+    base = Decimal(0)
+    touched = 0
+    for price_text, qty_text in bids:
+        price, qty = Decimal(price_text), Decimal(qty_text)
+        touched += 1
+        if price * qty >= remaining:
+            base += remaining / price
+            remaining = Decimal(0)
+            break
+        base += qty
+        remaining -= price * qty
+    assert remaining == 0, "the recorded book cannot absorb the basis; this fixture is void"
+    best = Decimal(bids[0][0])
+    return (best - notional / base) / best, touched
+
+
+def leaderboard_rows() -> list[LeaderboardRow]:
+    """The committed fixture's rows as real `LeaderboardRow`s, `why` dropped."""
+    payload = json.loads(LEADERBOARD_FIXTURE.read_bytes().decode("utf-8"))
+    rows: list[LeaderboardRow] = []
+    for row in payload["rows"]:
+        fields = {key: value for key, value in row.items() if key != "why"}
+        fields["net_pnl"] = Decimal(fields["net_pnl"])
+        rows.append(LeaderboardRow(**fields))
+    return rows
+
+
+def expected_weights(rows: list[LeaderboardRow]) -> dict[str, float]:
+    """The weights, recomputed here from the rule engine 14's README states.
+
+    Latest row per `(version, fold)` within the engine's own family; per-fold skill
+    `max(0, 1 - brier / base_rate_brier)`; unweighted mean per version; normalised.
+    """
+    latest: dict[tuple[str, str | None], LeaderboardRow] = {}
+    for row in rows:
+        if row.model_id != ROUTER_MODEL_ID:
+            continue
+        key = (row.model_version, row.fold)
+        if key not in latest or row.updated_at >= latest[key].updated_at:
+            latest[key] = row
+    per_version: dict[str, list[float]] = {}
+    for (version, _fold), row in latest.items():
+        assert row.brier is not None and row.base_rate_brier is not None
+        per_version.setdefault(version, []).append(
+            max(0.0, 1.0 - row.brier / row.base_rate_brier)
+        )
+    skills = {version: sum(folds) / len(folds) for version, folds in per_version.items()}
+    total = sum(skills.values())
+    assert total > 0, "the fixture no longer gives any version a weight; the witness is void"
+    return {version: skill / total for version, skill in skills.items()}
+
+
+@pytest.fixture
+def fresh_store(tmp_path: Path) -> Iterator[Callable[[Path], Any]]:
+    """A factory for B's real store over a newly migrated database, one per run.
+
+    One database per run rather than one per test, because the invariant 4 test compares a
+    run with the leaderboard loaded against one without it, and a row once written cannot
+    be taken back out through the store's surface.
+    """
+    from acsoe.clients.store.client import StoreClient
+    from acsoe.clients.store.migrations import apply_migrations
+
+    opened: list[Any] = []
+
+    def make(models_root: Path) -> Any:
+        db_path = tmp_path / f"registry-{len(opened)}.sqlite"
+        apply_migrations(db_path)
+        store = StoreClient(db_path, models_dir=models_root)
+        opened.append(store)
+        return store
+
+    yield make
+    for store in opened:
+        store.close()
+
+
+@dataclasses.dataclass(frozen=True)
+class RegistryRun:
+    bar_tick: dict[str, Any]
+    quiet_tick: dict[str, Any]
+    skeptic: RecordingSkeptic
+    bids: tuple[tuple[str, str], ...]
+
+
+def run_full_registry(
+    paper_config: MappingConfig,
+    clock: Any,
+    clients: Any,
+    rows: list[dict[str, Any]],
+    trained_skeptic: tuple[Path, str],
+    make_store: Callable[[Path], Any],
+    *,
+    threshold: float | None,
+    leaderboard: bool,
+) -> RegistryRun:
+    """The full registry chain on the BUY window: a bar tick, then a tick sixty seconds on.
+
+    The recorded BTC/USD book, fee tier 3, a trained skeptic, and `threshold` as the veto
+    line (the test's number). `leaderboard` loads the committed leaderboard fixture into the
+    run's own store before the first tick.
+    """
+    root, run_id = trained_skeptic
+    bars = window(rows, BUY_WINDOW_END)
+    config = skeptic_config(
+        paper_config,
+        root,
+        run_id,
+        **{"models.skeptic_run_id": run_id, "skeptic.veto_threshold": threshold},
+    )
+    store = make_store(root)
+    object.__setattr__(clients, "store", store)
+    write_equity(store)
+    activate(store)
+    if leaderboard:
+        for row in leaderboard_rows():
+            store.write_leaderboard_entry(row)
+    book = recorded_opening_book(REGISTRY_PAIR)
+    skeptic = RecordingSkeptic()
+    orchestrator = build(
+        config,
+        at_bar_tick(clock, bars),
+        clients,
+        bars,
+        opportunity=registry_chain(skeptic),
+        stream_pairs=(PAIR, *MACRO_PAIRS),
+        quotes=True,
+        books={REGISTRY_PAIR: book},
+        fee_tier=REGISTRY_FEE_TIER,
+    )
+    bar_tick = orchestrator.tick()
+    clock.advance(TICK)
+    quiet_tick = orchestrator.tick()
+    assert the_prediction(bar_tick)["is_buy"] is True, "the BUY window no longer calls a BUY"
+    assert bar_tick["scout"]["pair"] == REGISTRY_PAIR, (
+        f"engine 7 chose {bar_tick['scout'].get('pair')}; the recorded book is "
+        f"{REGISTRY_PAIR}'s, so every slippage assertion would be about the wrong pair"
+    )
+    return RegistryRun(bar_tick, quiet_tick, skeptic, book[0])
+
+
+def test_the_full_registry_chain_reaches_engine_15_on_the_bar_tick_and_not_the_quiet_one(
+    paper_config: MappingConfig,
+    fixed_clock: Any,
+    fake_clients_with_store: Any,
+    constructed_rows: list[dict[str, Any]],
+    trained_skeptic: tuple[Path, str],
+    fresh_store: Callable[[Path], Any],
+) -> None:
+    """Every engine of the registry chain ran on the bar tick; none after 5 on the quiet one.
+
+    **Replaces the Phase 5 assertion that `skeptic` never appears in this chain.** At fee
+    tier 3 — named, because at tier 1 engine 10 stops every candidate — with the recorded
+    book and a threshold of 1.0 nothing blocks, so engine 15 is reached and answers `OK`.
+    Its status is read from what it returned: `state` holds a payload, and contract rule 7
+    lets an `ERROR` leave any payload behind.
+    """
+    run = run_full_registry(
+        paper_config,
+        fixed_clock,
+        fake_clients_with_store,
+        constructed_rows,
+        trained_skeptic,
+        fresh_store,
+        threshold=1.0,
+        leaderboard=True,
+    )
+    bar, quiet = run.bar_tick, run.quiet_tick
+
+    profile = fee_tier_profile(REGISTRY_FEE_TIER)
+    fees = bar["exchange"]["fee_tier"]
+    assert fees["tier"] == profile.tier == 3
+    assert Decimal(fees["maker_fee_pct"]) == Decimal(profile.maker_fee_pct)
+    assert Decimal(fees["taker_fee_pct"]) == Decimal(profile.taker_fee_pct)
+
+    assert "trading_blocked_by" not in bar, (bar.get("trading_blocked_by"), bar.get("block_reason"))
+    for engine in REGISTRY_KEYS:
+        assert engine in bar, f"{engine} did not run on the bar tick"
+    assert bar["cost"]["clears_hurdle"] is True
+    assert bar["risk"]["approved"] is True
+    assert [result.status for result in run.skeptic.results] == [EngineStatus.OK]
+    assert bar["skeptic"]["pair"] == REGISTRY_PAIR
+    assert bar["skeptic"]["vetoed"] is False
+    assert bar["skeptic"]["reason_code"] is None
+
+    assert quiet["market_sensor"]["bar_closed"] is False
+    assert quiet["feature"] == {}
+    assert "trading_blocked_by" not in quiet, "engine 5 did not pass on the quiet tick, it failed"
+    for engine in REGISTRY_KEYS[1:]:
+        assert engine not in quiet, f"{engine} ran on a tick where no bar closed"
+    assert len(run.skeptic.results) == 1, "engine 15 was called on the quiet tick"
+
+
+def test_engine_10_prices_the_nonzero_slippage_engine_9_walked_on_the_recorded_book(
+    paper_config: MappingConfig,
+    fixed_clock: Any,
+    fake_clients_with_store: Any,
+    constructed_rows: list[dict[str, Any]],
+    trained_skeptic: tuple[Path, str],
+    fresh_store: Callable[[Path], Any],
+) -> None:
+    """**The 9-to-10 seam, proven by recomputation on a book that can tell.**
+
+    First, engine 9's estimate is **strictly positive** — asserted before anything else,
+    because a zero makes every later line unable to fail. Then it is the walk of the book
+    this test loaded, recomputed here. Then friction is rebuilt from its published parts —
+    tier 3's two fees from the named profile, engine 3's spread, engine 9's slippage, in
+    invariant 5's order — and compared with engine 10's figure; engine 10's total is never
+    read back against itself. Last, the same rebuild **without** the slippage term must
+    differ, which is the assertion that this witness discriminates at all.
+    """
+    run = run_full_registry(
+        paper_config,
+        fixed_clock,
+        fake_clients_with_store,
+        constructed_rows,
+        trained_skeptic,
+        fresh_store,
+        threshold=1.0,
+        leaderboard=True,
+    )
+    bar = run.bar_tick
+    order_book = bar["order_book"]
+    assert order_book["reason_code"] is None, order_book
+    assert "estimated_slippage_pct" in order_book, order_book
+
+    slippage = Decimal(order_book["estimated_slippage_pct"])
+    assert slippage > 0, f"engine 9 estimated {slippage}: the book is not thin enough to witness"
+    assert order_book["levels_consumed"] > 1
+
+    basis = Decimal(order_book["basis_notional"])
+    assert basis == Decimal(bar["exchange"]["balances"]["USD"])
+    walked, touched = hand_walked_slippage(run.bids, basis)
+    assert slippage == walked
+    assert order_book["levels_consumed"] == touched
+
+    profile = fee_tier_profile(REGISTRY_FEE_TIER)
+    maker, taker = Decimal(profile.maker_fee_pct), Decimal(profile.taker_fee_pct)
+    spread = Decimal(bar["market_sensor"]["quotes"][REGISTRY_PAIR]["spread_pct"])
+    friction = Decimal(bar["cost"]["friction_pct"])
+
+    assert friction == maker + taker + spread + slippage
+    assert friction != maker + taker + spread, (
+        "friction is the same with and without the slippage term; this book cannot witness it"
+    )
+
+    expected_move = Decimal(bar["prediction"]["expected_move_pct"])
+    hurdle_multiple = Decimal(repr(paper_config.get("trading.hurdle_multiple")))
+    assert Decimal(bar["cost"]["net_edge_pct"]) == expected_move - friction
+    assert Decimal(bar["cost"]["hurdle_pct"]) == hurdle_multiple * friction
+
+
+def test_engine_14_weights_the_leaderboard_in_the_real_store_on_the_bar_tick(
+    paper_config: MappingConfig,
+    fixed_clock: Any,
+    fake_clients_with_store: Any,
+    constructed_rows: list[dict[str, Any]],
+    trained_skeptic: tuple[Path, str],
+    fresh_store: Callable[[Path], Any],
+) -> None:
+    """Engine 14 read the committed leaderboard fixture out of B's store, in the chain.
+
+    The weights are recomputed from the fixture rows and compared, and the fixture's other
+    model family must not appear: a weight for it would be a predictor's weight handed to
+    something else. Provenance is checked against its sources in this tick's `state`.
+    """
+    run = run_full_registry(
+        paper_config,
+        fixed_clock,
+        fake_clients_with_store,
+        constructed_rows,
+        trained_skeptic,
+        fresh_store,
+        threshold=1.0,
+        leaderboard=True,
+    )
+    bar = run.bar_tick
+    router = bar["adaptive_router"]
+    assert router["reason_code"] is None, router
+
+    expected = expected_weights(leaderboard_rows())
+    assert set(router["weights"]) == set(expected)
+    for version, weight in expected.items():
+        assert abs(router["weights"][version] - weight) <= WEIGHT_TOLERANCE, (version, router)
+    assert router["active_model_run_id"] == bar["prediction"]["model_run_id"]
+    assert router["regime"] == bar["regime"]["label"]
+    assert "adaptive_router" not in run.quiet_tick
+
+
+@pytest.mark.parametrize("side", ["pass", "veto"])
+def test_nothing_engine_14_publishes_changes_whether_engine_15_blocks(
+    paper_config: MappingConfig,
+    fixed_clock: Any,
+    fake_clients_with_store: Any,
+    constructed_rows: list[dict[str, Any]],
+    trained_skeptic: tuple[Path, str],
+    fresh_store: Callable[[Path], Any],
+    side: str,
+) -> None:
+    """Invariant 4: no router decision may skip, soften or override a gate.
+
+    One bar is judged twice at one threshold — once with the leaderboard fixture in the
+    store, so engine 14 publishes weights, and once with an empty store, so it publishes
+    none. Engine 14's payload must differ between the two, or the comparison proves
+    nothing; engine 15's answer must be **the one its threshold dictates** in both runs, and
+    identical across them.
+
+    The threshold is the test's number: `p_wrong` recomputed from the artefact and this bar,
+    then a millionth above it (`pass`) or below it (`veto`). The expected answer is asserted
+    and not only the equality: a router output engine 15 read on both runs would move both
+    answers the same way, and equality alone would call that sound.
+    """
+    root, run_id = trained_skeptic
+    measured = run_full_registry(
+        paper_config,
+        fixed_clock,
+        fake_clients_with_store,
+        constructed_rows,
+        trained_skeptic,
+        fresh_store,
+        threshold=None,
+        leaderboard=False,
+    )
+    p_wrong = recomputed_p_wrong(measured.bar_tick, root, run_id)
+    offset = 1e-6 if side == "pass" else -1e-6
+    threshold = min(max(p_wrong + offset, 1e-12), 1.0 - 1e-12)
+
+    runs = {
+        loaded: run_full_registry(
+            paper_config,
+            fixed_clock,
+            fake_clients_with_store,
+            constructed_rows,
+            trained_skeptic,
+            fresh_store,
+            threshold=threshold,
+            leaderboard=loaded,
+        )
+        for loaded in (False, True)
+    }
+    without, with_weights = runs[False].bar_tick, runs[True].bar_tick
+    assert without["prediction"] == with_weights["prediction"], "the two runs saw different bars"
+
+    assert without["adaptive_router"]["reason_code"] == REASON_LEADERBOARD_EMPTY
+    assert not any((without["adaptive_router"].get("weights") or {}).values())
+    assert with_weights["adaptive_router"]["reason_code"] is None
+    weights = with_weights["adaptive_router"]["weights"]
+    assert abs(sum(weights.values()) - 1.0) <= WEIGHT_TOLERANCE, weights
+
+    expected_status = EngineStatus.OK if side == "pass" else EngineStatus.BLOCK
+    for loaded, run in runs.items():
+        where = "with weights" if loaded else "without weights"
+        assert [result.status for result in run.skeptic.results] == [expected_status], where
+        published = run.bar_tick["skeptic"]
+        assert published["threshold"] == threshold, where
+        assert published["p_wrong"] == pytest.approx(p_wrong, abs=1e-12), where
+        if side == "veto":
+            assert run.bar_tick["trading_blocked_by"] == "skeptic", where
+            assert published["reason_code"] == SKEPTIC_VETO, where
+        else:
+            assert "trading_blocked_by" not in run.bar_tick, (where, run.bar_tick.get("block_reason"))
+            assert published["reason_code"] is None, where
+    assert with_weights["skeptic"] == without["skeptic"]
+    assert with_weights.get("block_reason") == without.get("block_reason")
