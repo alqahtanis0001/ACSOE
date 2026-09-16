@@ -329,6 +329,256 @@ def test_the_four_tournament_refusals_name_four_different_fixes() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Engine 9 `order_book` — spec 96, prose landed by spec 99
+# --------------------------------------------------------------------------- #
+
+#: Words that tell an operator something was *stopped*. Checked against the sentences of
+#: engines that cannot stop anything.
+REFUSAL_WORDS: Final = ("refus", "reject", "block", "declin", "denied", "veto")
+
+
+def test_every_reason_code_order_book_declares_has_prose() -> None:
+    from acsoe.engines.order_book import contracts as book_contracts
+
+    assert unmapped(book_contracts) == {}
+
+
+def test_no_engine_nine_sentence_reads_as_a_refusal() -> None:
+    """Engine 9 **cannot** refuse, and the sentences have to say so by never implying it.
+
+    This is the engine's defining structural property rather than a stylistic
+    preference: `EngineStatus.OK` appears exactly once in the module and `BLOCK`, `PASS`
+    and `ERROR` appear zero times, so there is one return point and one status. When
+    engine 9 cannot price the book it publishes **no slippage estimate**, and engine 10
+    `cost` is what refuses, on the absence.
+
+    A sentence here saying "refused" or "blocked" sends the operator looking for a gate
+    that does not exist, past the gate that actually stopped the trade. The console is
+    the only place that distinction is ever made visible.
+    """
+    from acsoe.engines.order_book import contracts as book_contracts
+
+    offenders = {
+        code: REASON_PROSE[code]
+        for code in declared_reason_codes(book_contracts).values()
+        for word in REFUSAL_WORDS
+        if word in REASON_PROSE[code].lower()
+    }
+    assert offenders == {}, (
+        "engine 9 never blocks, so none of its sentences may read as a refusal: "
+        + repr(offenders)
+    )
+
+
+def test_engine_nine_reuses_the_scouts_empty_balance_code() -> None:
+    """One fact, one spelling, one sentence.
+
+    Engines 7 and 9 both meet an account holding none of the pair's quote currency. A
+    parallel code would give the operator two different sentences for one condition
+    depending on which engine reached it first — the same defect
+    `test_scout_reuses_engine_elevens_codes_rather_than_minting_parallel_ones` refuses
+    on the sizing codes.
+    """
+    from acsoe.engines.order_book import contracts as book_contracts
+
+    assert book_contracts.REASON_NO_QUOTE_BALANCE == scout_contracts.REASON_NO_QUOTE_BALANCE
+
+
+def test_the_thin_book_and_the_unreadable_setup_are_not_one_sentence() -> None:
+    """A shallow book is a fact about the market; a missing input is a fact about us.
+
+    `book_too_thin` means the walk ran and could not fill the size within the depth
+    fetched — the market is what it is, and there is nothing to fix. Its sentence names
+    the depth, because the levels nobody fetched are the worst ones and an estimate past
+    them would be optimistic by construction. `order_book_inputs_unavailable` means the
+    walk never started, which someone must fix. One sentence across them costs the
+    operator the only clue about which.
+    """
+    from acsoe.engines.order_book import contracts as book_contracts
+
+    thin = REASON_PROSE[book_contracts.REASON_BOOK_TOO_THIN]
+    unavailable = REASON_PROSE[book_contracts.REASON_INPUTS_UNAVAILABLE]
+    assert thin != unavailable
+    assert "depth" in thin.lower(), (
+        "the thin-book sentence must say the estimate was bounded by the depth fetched, "
+        "or it reads as a claim about the whole book: " + repr(thin)
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Engine 14 `adaptive_router` — spec 97, prose landed by spec 99
+# --------------------------------------------------------------------------- #
+
+
+def test_every_reason_code_adaptive_router_declares_has_prose() -> None:
+    from acsoe.engines.adaptive_router import contracts as router_contracts
+
+    assert unmapped(router_contracts) == {}
+
+
+def test_the_four_router_codes_are_four_sentences() -> None:
+    """All four end in *no weights*, and they are four different things to know.
+
+    A fresh clone, a store that cannot be enumerated, a window that was too small, and a
+    leaderboard honestly reporting no edge. Only two of the four are anybody's to fix,
+    and one sentence across them would hide which.
+    """
+    from acsoe.engines.adaptive_router import contracts as router_contracts
+
+    sentences = {
+        REASON_PROSE[code]
+        for code in declared_reason_codes(router_contracts).values()
+    }
+    assert len(sentences) == len(declared_reason_codes(router_contracts))
+
+
+def test_the_two_ordinary_router_states_do_not_read_as_faults() -> None:
+    """A fresh clone and a leaderboard with no edge are **findings**, not failures.
+
+    `leaderboard_empty` is the state every clone starts in. `no_model_beats_its_base_rate`
+    is the tournament saying, correctly and usefully, that nothing on it has edge — the
+    number an operator most needs stated plainly rather than softened into an apology.
+    Neither may borrow the vocabulary of the two refusals beside them, because an
+    operator who reads "could not" goes looking for a broken thing.
+    """
+    from acsoe.engines.adaptive_router import contracts as router_contracts
+
+    for name in ("REASON_LEADERBOARD_EMPTY", "REASON_NO_MODEL_BEATS_ITS_BASE_RATE"):
+        sentence = REASON_PROSE[getattr(router_contracts, name)].lower()
+        assert "could not" not in sentence, name + ": " + repr(sentence)
+        assert not any(word in sentence for word in REFUSAL_WORDS), (
+            name + ": " + repr(sentence)
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Engine 18 `execution` — spec 91, and the sentence A's spec 84 amendment falsified
+# --------------------------------------------------------------------------- #
+
+
+def test_every_reason_code_execution_declares_has_prose() -> None:
+    from acsoe.engines.execution import contracts as execution_contracts
+
+    assert unmapped(execution_contracts) == {}
+
+
+def test_the_unrecorded_entry_sentence_matches_what_order_state_can_now_carry() -> None:
+    """**The prose and the contract are read in one test, because they disagreed.**
+
+    The sentence for `entry_unrecorded_at_exchange` used to say the system could not
+    describe the order because `OrderState` carried no quantity or limit price. A's spec
+    84 amendment added `qty`, `limit_price` and `opened_at`; B builds the row; and the
+    ordinary crash-recovery case moved to `entry_recovered_from_exchange`. The sentence
+    survived all of that and went on describing a repaired defect, and nothing was
+    capable of noticing — a stale sentence is not a failing test, it is a screen that
+    quietly misinforms whoever reads it at 3am.
+
+    So this test holds the two halves against each other: the three fields must exist on
+    A's model, **and** the sentence must not claim the order is indescribable. What is
+    left of the code is the one gap the amendment does not close — the exchange answering
+    with no placement time — so the sentence must say that instead.
+    """
+    from acsoe.clients.kraken.contracts import OrderState
+    from acsoe.engines.execution import contracts as execution_contracts
+
+    carried = set(OrderState.model_fields)
+    assert {"qty", "limit_price", "opened_at"} <= carried, (
+        "the sentence below was rewritten because OrderState gained these three fields; "
+        "if they are gone the sentence is wrong again: " + repr(sorted(carried))
+    )
+
+    sentence = REASON_PROSE[execution_contracts.REASON_ENTRY_UNRECORDED].lower()
+    assert "no record of" not in sentence, (
+        "the system does have a record of the order — it is the *placement time* it "
+        "cannot establish: " + repr(sentence)
+    )
+    assert "when it was placed" in sentence, (
+        "the only case this code still covers is an exchange answer with no placement "
+        "time, so the sentence has to name that: " + repr(sentence)
+    )
+
+
+def test_the_three_provenance_codes_are_three_sentences() -> None:
+    """A re-run, a recovered order, and one that could not be dated.
+
+    All three end with no duplicate placed, and each means something different happened:
+    the store was the source, the exchange was the source and the row was written, the
+    exchange was the source and the row was not. Only the third asks the operator to go
+    and look.
+    """
+    from acsoe.engines.execution import contracts as execution_contracts
+
+    sentences = {
+        REASON_PROSE[execution_contracts.REASON_ENTRY_ALREADY_PLACED],
+        REASON_PROSE[execution_contracts.REASON_ENTRY_RECOVERED],
+        REASON_PROSE[execution_contracts.REASON_ENTRY_UNRECORDED],
+    }
+    assert len(sentences) == 3
+    assert (
+        "reference"
+        in REASON_PROSE[execution_contracts.REASON_ENTRY_UNRECORDED].lower()
+    ), "the unrecorded order is the one an operator has to go and find, by its userref"
+
+
+# --------------------------------------------------------------------------- #
+# Engine 22 `exit` — spec 93, prose landed by spec 99
+# --------------------------------------------------------------------------- #
+
+
+def test_every_reason_code_exit_declares_has_prose() -> None:
+    from acsoe.engines.exit import contracts as exit_contracts
+
+    assert unmapped(exit_contracts) == {}
+
+
+def test_engine_twenty_two_spells_the_hold_exactly_as_engine_twenty_one_does() -> None:
+    """One fact about one tick, one spelling, one sentence.
+
+    B wrote engine 22's `data_guard_blocked` to match engine 21's hold reason
+    deliberately. Two vocabularies for one fact is how a `trades` table ends up carrying
+    both "stop" and "stopped", and the console is where the divergence would first be
+    visible and last be noticed.
+    """
+    from acsoe.engines.exit import contracts as exit_contracts
+    from acsoe.engines.position_manager import contracts as manager_contracts
+
+    assert exit_contracts.REASON_DATA_GUARD_BLOCKED == manager_contracts.HOLD_DATA_GUARD_BLOCKED
+    assert exit_contracts.REASON_DATA_GUARD_BLOCKED in REASON_PROSE
+
+
+def test_the_exit_outcome_codes_do_not_read_as_refusals() -> None:
+    """Engine 22 is not a gate either, and two of its five codes are things it *did*.
+
+    `exits_placed` and `nothing_to_exit` are a successful tick and a quiet one. Without
+    sentences they would render as `NO_REASON_RECORDED` — the console narrating a placed
+    stop-loss as silence — and with the wrong sentences they would read as refusals from
+    an engine that cannot refuse.
+    """
+    from acsoe.engines.exit import contracts as exit_contracts
+
+    for name in ("REASON_EXITS_PLACED", "REASON_NOTHING_TO_EXIT"):
+        sentence = REASON_PROSE[getattr(exit_contracts, name)].lower()
+        assert not any(word in sentence for word in REFUSAL_WORDS), (
+            name + ": " + repr(sentence)
+        )
+
+
+def test_the_incomplete_exit_says_the_position_is_still_open() -> None:
+    """The one of engine 22's codes that is a fault, and the exposure is still the
+    operator's.
+
+    `positions_closed` is `False` beside this code and the attempt repeats next tick. A
+    sentence saying only that the exit was incomplete leaves the one question that
+    matters — *am I still holding this?* — unanswered, on the screen whose whole job is
+    to answer it.
+    """
+    from acsoe.engines.exit import contracts as exit_contracts
+
+    sentence = REASON_PROSE[exit_contracts.REASON_EXIT_INCOMPLETE].lower()
+    assert "still open" in sentence, sentence
+
+
+# --------------------------------------------------------------------------- #
 # The enumeration itself, broken on purpose
 # --------------------------------------------------------------------------- #
 

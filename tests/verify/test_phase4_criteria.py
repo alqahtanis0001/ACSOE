@@ -216,6 +216,50 @@ def test_a_memory_engine_that_flattens_the_status_is_a_fail(
 # --------------------------------------------------------------------------- #
 
 
+def disagreeing_readings(outcome: object) -> list[str]:
+    """Which of `safety`'s six readings `memory_writes_safety_inputs_live` found moved.
+
+    Parsed out of the message and compared as a whole set, never matched inside it.
+    `in outcome.message` cannot say *which* readings disagreed, and — the reason this
+    helper exists — it cannot tell a disagreement from a crash.
+
+    All three tests below spent a while green against
+    `criterion raised - ValueError: live.drawdown_pct is not a decimal: None`: the
+    criterion never reached its comparison, `verify.py` rendered the raise as a FAIL,
+    and that text contains `drawdown_pct`. The two tests naming other readings went red
+    and were noticed; the one naming `drawdown_pct` kept passing, and **the only live
+    proof that spec 50's named mutation is caught had quietly stopped being one.** A
+    substring assertion on a bare FAIL can only ever say *at least this* —
+    `code-standards.md`'s `match=` rule, reached from the other direction.
+    """
+    message = str(getattr(outcome, "message", outcome))
+    assert "criterion raised" not in message, (
+        "the criterion raised rather than comparing the two producers' numbers, so this "
+        "test is not observing the failure it induces: " + message
+    )
+    marker = "the Phase 0 seed - "
+    assert marker in message, "not a disagreement message: " + message
+    body = message.split(marker, 1)[1].split(". The seam", 1)[0]
+    return sorted(part.split(":", 1)[0].strip() for part in body.split("; "))
+
+
+def disagreeing_columns(outcome: object) -> list[str]:
+    """Which `equity_snapshots` columns the criterion found the two producers differing on.
+
+    The sibling of `disagreeing_readings`, and parsed the same way for the same reason:
+    the property is *which* columns moved, and a substring test can only say *at least
+    this one*.
+    """
+    message = str(getattr(outcome, "message", outcome))
+    assert "criterion raised" not in message, (
+        "the criterion raised rather than comparing the two producers' rows: " + message
+    )
+    marker = "is not the seed's - "
+    assert marker in message, "not an equity-composition message: " + message
+    body = message.split(marker, 1)[1].split(". Equity is", 1)[0]
+    return sorted(part.split(":", 1)[0].strip() for part in body.split("; "))
+
+
 def test_a_peak_equity_recomputed_from_this_tick_is_a_fail(
     verify_module: ModuleType, phase4_tree: Path
 ) -> None:
@@ -235,7 +279,7 @@ def test_a_peak_equity_recomputed_from_this_tick_is_a_fail(
     )
     outcome = run(verify_module, "memory_writes_safety_inputs_live", phase4_tree)
     assert_fail(outcome, verify_module)
-    assert "drawdown_pct" in outcome.message
+    assert disagreeing_readings(outcome) == ["drawdown_pct"]
 
 
 def test_a_memory_engine_that_drops_the_closed_trades_is_a_fail(
@@ -251,7 +295,7 @@ def test_a_memory_engine_that_drops_the_closed_trades_is_a_fail(
     )
     outcome = run(verify_module, "memory_writes_safety_inputs_live", phase4_tree)
     assert_fail(outcome, verify_module)
-    assert "consecutive_losses" in outcome.message
+    assert disagreeing_readings(outcome) == ["consecutive_losses"]
 
 
 def test_a_memory_engine_that_drops_the_resting_orders_is_a_fail(
@@ -268,7 +312,33 @@ def test_a_memory_engine_that_drops_the_resting_orders_is_a_fail(
     )
     outcome = run(verify_module, "memory_writes_safety_inputs_live", phase4_tree)
     assert_fail(outcome, verify_module)
-    assert "resting_entry_orders" in outcome.message
+    assert disagreeing_readings(outcome) == ["resting_entry_orders"]
+
+
+def test_a_memory_engine_that_stores_the_total_without_its_composition_is_a_fail(
+    verify_module: ModuleType, phase4_tree: Path
+) -> None:
+    """The equity row is right in both columns `safety` reads and wrong in one it does not.
+
+    `equity_snapshots` stores `cash`, `positions_value` and `unrealised_pnl` because the
+    Phase 7 alpha attribution reads the curve *including its cash periods* — the migration
+    says so. A writer keeping the total and losing the split leaves every `safety` reading
+    intact and every drawdown correct, and hands Phase 7 a portfolio that was never
+    invested. Until 2026-09-16 this criterion compared the totals only, so nothing here
+    could have gone red.
+
+    It is also the proof that the criterion's own replay arithmetic is falsifiable: engine
+    19 is handed the seed row's cash *and* its mark and has to arrive at the row's equity.
+    """
+    patch_module(
+        phase4_tree,
+        MEMORY_ENGINE,
+        "                positions_value=positions_value,",
+        "                positions_value=Decimal(0),",
+    )
+    outcome = run(verify_module, "memory_writes_safety_inputs_live", phase4_tree)
+    assert_fail(outcome, verify_module)
+    assert disagreeing_columns(outcome) == ["positions_value"]
 
 
 # --------------------------------------------------------------------------- #

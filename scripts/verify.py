@@ -6606,6 +6606,23 @@ def check_memory_writes_safety_inputs_live(ctx: VerifyContext) -> Outcome:
     `peak_equity` from the current tick rather than reading the running maximum out of
     the store reports a peak equal to that tick's equity, a drawdown of zero, and this
     criterion FAILs on `drawdown_pct`. A one-tick replay could not tell the two apart.
+
+    **Each of those two ticks is a whole seed row - its cash, its mark, its
+    unrealised - and the latest equity row is then compared column by column.** Both
+    halves were added on 2026-09-16 and neither is decoration:
+
+    * Engine 19 adds a cash balance to a mark. Replaying the seed's *equity* as a bare
+      balance says the account is entirely in cash while its positions sit in the same
+      database - a contradiction the old engine 19 resolved by valuing the position at
+      nothing, which is a drawdown approaching 100% and an account frozen by a missing
+      quote. Since the lead's ruling it writes no row at all instead, and this replay
+      was the thing publishing the contradiction.
+    * Comparing only the six readings leaves the *composition* unasserted, and
+      `equity_snapshots` stores it for the Phase 7 alpha attribution. Measured: a
+      replay deriving the cash as `equity - positions_value` returns the seed's total
+      for any mark whatsoever, so a mark read out of the wrong column survived. Both
+      components now come from the row and are read back, which is Phase 5's closing
+      finding applied here - recompute what a number was supposed to be computed from.
     """
     with root_import_path(ctx.root):
         memory_cls, contracts, problem = _memory_engine()
@@ -6661,6 +6678,14 @@ def check_memory_writes_safety_inputs_live(ctx: VerifyContext) -> Outcome:
             if live is None:
                 return problem or pending("engine 17 could not be driven over the live rows")
 
+            # Both reads happen inside the workspace - the databases go with `tmp` -
+            # but only the first is *reported* here. See each helper's docstring for
+            # why one comes before the six readings and the other after.
+            empty = _no_equity_row_written(live_path)
+            if empty is not None:
+                return empty
+            composition = _equity_composition_disagreements(seed_path, live_path)
+
     missing = [f for f in SAFETY_INPUT_FIELDS if f not in live or f not in seeded]
     if missing:
         return failed(
@@ -6685,6 +6710,9 @@ def check_memory_writes_safety_inputs_live(ctx: VerifyContext) -> Outcome:
             "the live one is the new arrival."
         )
 
+    if composition is not None:
+        return composition
+
     return passed(
         "engine 19 wrote "
         + str(replayed)
@@ -6694,7 +6722,8 @@ def check_memory_writes_safety_inputs_live(ctx: VerifyContext) -> Outcome:
         + f", {live['consecutive_losses']} losing trade(s), "
         + f"{live['errors_in_window']} error block(s), {live['stored_data_blocks']} "
         + f"outage tick(s), {live['open_positions']} position(s), "
-        + f"{live['resting_entry_orders']} resting order(s))"
+        + f"{live['resting_entry_orders']} resting order(s)), on an equity row matching "
+        "the seed's on " + ", ".join(EQUITY_COMPOSITION)
     )
 
 
@@ -6733,9 +6762,9 @@ def _replay_seed_through_memory(
             seed_store.resting_orders(intent=store_contracts.OrderIntent.ENTRY)
         )
         trades = _rows_as_state(seed_store.recent_closed_trades(100_000))
-        peak, closing = _seed_equity_bounds(seed_path)
+        equity_ticks = _seed_equity_ticks(seed_path)
     blocks = _block_rows(seed_path)
-    if peak is None or closing is None:
+    if equity_ticks is None:
         return 0, pending("the Phase 0 seed carries no equity_snapshots row")
 
     # Trades come back newest first; `safety` walks the trailing run ordered by
@@ -6830,7 +6859,22 @@ def _replay_seed_through_memory(
 
         # 4. Equity: the peak first, then the close. Two ticks, because one cannot
         #    tell a `peak_equity` read from the store from one recomputed here.
-        for index, equity in enumerate((peak, closing), start=3):
+        #
+        #    **Each tick replays a whole seed row, not a balance.** Step 2 put the
+        #    seed's open positions into this database, so by the time these ticks run
+        #    the live account is invested. Engine 19 reads
+        #    `store.count_open_positions()`, and a tick publishing a balance and no
+        #    mark writes **no equity row at all** - correctly, because `cash + 0` on an
+        #    invested account is a drawdown that did not happen, and one missing quote
+        #    would otherwise freeze the account through engine 17.
+        #
+        #    So the cash and the mark are each read from the seed row being replayed,
+        #    and engine 19's `equity = cash + positions_value` has to *arrive at* that
+        #    row's equity. Deriving the cash as `equity - positions_value` instead
+        #    would reproduce the total for any mark whatsoever - a number reproduced
+        #    over an account invented to reach it, which is the shape Phase 5's closing
+        #    finding names.
+        for index, snapshot in enumerate(equity_ticks, start=3):
             context, _ = _engine_context(
                 config, clients, run_id="verify-phase-4-replay", now=now
             )
@@ -6841,9 +6885,19 @@ def _replay_seed_through_memory(
                     cycle_id=index,
                     extra={
                         str(contracts.EXCHANGE_KEY): {
-                            str(contracts.BALANCES_FIELD): {currency: format(equity, "f")},
+                            str(contracts.BALANCES_FIELD): {
+                                currency: format(snapshot.cash, "f")
+                            },
                             "fetched_at": int(now.timestamp() * MICROSECONDS),
-                        }
+                        },
+                        str(contracts.POSITION_MANAGER_KEY): {
+                            str(contracts.POSITIONS_VALUE_FIELD): format(
+                                snapshot.positions_value, "f"
+                            ),
+                            str(contracts.UNREALISED_PNL_FIELD): format(
+                                snapshot.unrealised_pnl, "f"
+                            ),
+                        },
                     },
                 ),
             )
@@ -6851,27 +6905,139 @@ def _replay_seed_through_memory(
     return written, None
 
 
-def _seed_equity_bounds(db_path: Path) -> tuple[Decimal | None, Decimal | None]:
-    """(peak_equity, equity) of the seed's most recent `equity_snapshots` row.
+#: The `equity_snapshots` columns the replay hands over and reads back. Deliberately
+#: not `realised_pnl_cum`, which is a running total over whichever trades each producer
+#: has seen and is the one column the two sides are not expected to agree on.
+EQUITY_COMPOSITION: Final = ("equity", "peak_equity", "cash", "positions_value", "unrealised_pnl")
 
-    `safety`'s drawdown is `(peak_equity - equity) / peak_equity` on the **latest**
-    row - `architecture-context.md`'s input table says so - so these two numbers are
-    the whole of what the live rows have to reproduce.
+
+@dataclass(frozen=True)
+class SeedEquityRow:
+    """One whole `equity_snapshots` row of the seed, composition included.
+
+    **A whole row rather than a total, because engine 19 is never handed a total.** It
+    is handed a cash balance and a mark and it *adds* them, and since the lead's ruling
+    of 2026-09-16 it refuses the pair where the account holds positions and no mark
+    arrived. Replaying the seed's equity as a cash balance alone hands it a
+    contradiction - an invested account reporting a cash-only equity - and before that
+    ruling the answer that came back was the position silently valued at nothing.
+
+    Handing over the row's own `cash` and its own `positions_value` is also what turns
+    `equity = cash + positions_value` into something this criterion *checks* rather
+    than something it assumes: a replay that derived the cash as `equity -
+    positions_value` would return the seed's total for any mark at all, including a
+    mark read out of the wrong column. Measured - that arrangement survived the
+    mutation, this one kills it.
+    """
+
+    ts: int
+    equity: Decimal
+    peak_equity: Decimal
+    cash: Decimal
+    positions_value: Decimal
+    unrealised_pnl: Decimal
+
+
+def _equity_rows(db_path: Path) -> list[SeedEquityRow]:
+    """Every `equity_snapshots` row, oldest first.
+
+    `ORDER BY ts` and never by a money column: money is stored as an exact decimal
+    string, so SQL compares it lexicographically and decides '9.50' > '10000.00'. The
+    peak below is found in Python as `Decimal` for the same reason.
     """
     conn = sqlite3.connect(db_path)
     try:
-        row = conn.execute(
-            "SELECT equity, peak_equity FROM equity_snapshots ORDER BY ts DESC, rowid DESC "
-            "LIMIT 1"
-        ).fetchone()
+        rows = conn.execute(
+            "SELECT ts, " + ", ".join(EQUITY_COMPOSITION) + " FROM equity_snapshots "
+            "ORDER BY ts ASC, rowid ASC"
+        ).fetchall()
     finally:
         conn.close()
-    if row is None:
-        return None, None
-    return (
-        as_decimal(row[1], "equity_snapshots.peak_equity"),
-        as_decimal(row[0], "equity_snapshots.equity"),
+    return [
+        SeedEquityRow(
+            ts=int(row[0]),
+            **{
+                column: as_decimal(row[index], "equity_snapshots." + column)
+                for index, column in enumerate(EQUITY_COMPOSITION, start=1)
+            },
+        )
+        for row in rows
+    ]
+
+
+def _seed_equity_ticks(db_path: Path) -> tuple[SeedEquityRow, SeedEquityRow] | None:
+    """(the row that set the peak, the latest row), or None where there are none.
+
+    `safety`'s drawdown is `(peak_equity - equity) / peak_equity` on the **latest** row
+    - `architecture-context.md`'s input table says so - so those two rows are the whole
+    of what the replay has to reproduce, and they are replayed in that order because
+    the peak has to exist in the store before the drawdown can be measured against it.
+
+    The peak row is the one whose `equity` is the series maximum, which is the same row
+    that first set `peak_equity` to the value the latest row still carries. It is
+    found by walking the rows as `Decimal`, never by `SELECT MAX`.
+    """
+    rows = _equity_rows(db_path)
+    if not rows:
+        return None
+    peak = max(rows, key=lambda row: row.equity)
+    return peak, rows[-1]
+
+
+def _no_equity_row_written(live_path: Path) -> Outcome | None:
+    """FAIL, with a message, where engine 19 wrote no equity row at all.
+
+    Reported **before** the six readings are compared, because a null drawdown is not
+    a number `safety` disagrees about - it is no answer, and `as_decimal` raises on
+    it. A criterion that raises is still a FAIL, and that is the trap: the raise text
+    names the reading, so every induced-failure test asserting the reading is
+    *mentioned* keeps passing while the criterion has stopped running.
+    """
+    if _seed_equity_ticks(live_path) is not None:
+        return None
+    return failed(
+        "engine 19 wrote no equity_snapshots row, so `safety` has no drawdown to read. "
+        "The usual cause is a tick publishing a balance and no mark while the account "
+        "holds positions, which engine 19 refuses to value on cash alone."
     )
+
+
+def _equity_composition_disagreements(seed_path: Path, live_path: Path) -> Outcome | None:
+    """FAIL where engine 19's latest equity row is not the seed's latest equity row.
+
+    Reported **after** the six readings, because those are the criterion's thesis and
+    this is the fidelity underneath them. `safety` reads two of these five columns.
+    The other three are stored because the Phase 7 alpha attribution reads the curve
+    *including its cash periods* - `0001_initial.sql` says so - and nothing had ever
+    compared them, so a writer that dropped or transposed the composition kept every
+    `safety` reading intact and lost the attribution silently.
+
+    It is also what makes the replay's own arithmetic falsifiable. Engine 19 is handed
+    the seed row's `cash` and its `positions_value` and has to arrive at its `equity`.
+    Comparing the total alone would let a wrong mark through, because a replay that
+    derived the cash as `equity - positions_value` returns that total for any mark at
+    all - measured, and it survived the mutation that read the mark out of the wrong
+    column.
+    """
+    live = _seed_equity_ticks(live_path)
+    seed = _seed_equity_ticks(seed_path)
+    if live is None or seed is None:
+        return None
+
+    disagreements = [
+        f"{column}: seed={getattr(seed[1], column)} live={getattr(live[1], column)}"
+        for column in EQUITY_COMPOSITION
+        if getattr(seed[1], column) != getattr(live[1], column)
+    ]
+    if disagreements:
+        return failed(
+            "engine 19's latest equity_snapshots row is not the seed's - "
+            + "; ".join(disagreements)
+            + ". Equity is `cash + positions_value` and both components are stored, so a "
+            "row reaching the right total by the wrong split is still a wrong row: it is "
+            "the one Phase 7 attributes alpha from."
+        )
+    return None
 
 
 # --- rejections_survive_restart -------------------------------------------- #

@@ -327,13 +327,44 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # **not** re-placed lower, because re-placing at a worse price is chasing, and the
     # sentence says the price moved rather than that something failed.
     "post_only_would_cross": "The price moved before the order rested, so it was not placed",
-    # The crash-recovery case, and the sentence has to be the one an operator can act
-    # on: the order is real, it is at the exchange, and the system cannot describe it
-    # because `OrderState` carries no quantity or limit price. Naming the `userref` is
-    # engine 18's job — it publishes it — and this sentence says where to look.
+    # **Rewritten 2026-09-16, and the old sentence was describing a repaired defect.**
+    # It said the system "cannot describe" the order because `OrderState` carries no
+    # quantity or limit price. A's spec 84 amendment added `qty`, `limit_price` and
+    # `opened_at`, and B now builds the row, so the ordinary crash-recovery case has
+    # moved to `entry_recovered_from_exchange` below. What is left here is the one thing
+    # the amendment does not fix: the exchange answered with **no `opentm`**, so the
+    # order cannot be dated, and a clock reading substituted for it would be a time that
+    # never happened, written into the column research and this console read as a
+    # placement time.
+    #
+    # So the sentence names the *specific* gap rather than a general inability, and it
+    # still says what to do: the `userref` is published by engine 18 and is how an
+    # operator finds the order. "when it was placed" rather than "`opentm`", because the
+    # operator reads this screen and not Kraken's field list.
     "entry_unrecorded_at_exchange": (
-        "An order is resting at the exchange that this system has no record of; find it "
-        "by its reference"
+        "An order is resting at the exchange and this system cannot tell when it was "
+        "placed, so it was left unrecorded; find it by its reference"
+    ),
+    # The ordinary crash-recovery case, and **not** a refusal: the order came back fully
+    # described, engine 18 wrote the row, and engine 21 will cancel it in the usual
+    # unfilled window. Past tense, no apology. It has its own sentence rather than
+    # sharing `entry_already_placed`'s because the two say different things to an
+    # operator — that one is a tick re-run, this one is a process that died between
+    # placing the order and recording it, and only the second is worth a second look.
+    "entry_recovered_from_exchange": (
+        "An order already at the exchange was matched to this entry and recorded"
+    ),
+    # The exchange contradicting the placement: invariant 8 makes every entry a
+    # post-only buy limit, and the order under this entry's reference came back with no
+    # limit price. No row is written, because a limit order with a null price is one
+    # engine 21 cannot reason about.
+    #
+    # The sentence says **the exchange** reported it, not that the system failed, and
+    # that is the whole of its job: this is not the breaker's business — a raise here
+    # would become an `ERROR` block record and spend `safety.max_errors_in_window` on an
+    # exchange disagreeing with itself about one order.
+    "entry_at_exchange_is_not_a_limit": (
+        "The exchange reports this entry with no limit price, so it was not recorded"
     ),
     # The first **hold** reason to get a sentence, and deliberately not written as a
     # refusal. Nothing was rejected and nothing is wrong with the position: the guard
@@ -346,6 +377,79 @@ REASON_PROSE: Final[Mapping[str, str]] = {
         "Exits are paused while this tick's market data is rejected; the position is still "
         "watched"
     ),
+    # Engine 22 `exit`, B's spec 93. Four codes here, and `data_guard_blocked` above is
+    # the fifth — engine 22 spells its hold exactly as engine 21 does, on purpose, so
+    # one fact keeps one sentence rather than growing a near-duplicate. That is the same
+    # discipline that keeps "stop" and "stopped" out of one `trades` table.
+    #
+    # **Two of the four are not refusals and neither is an error.** Engine 22 is not a
+    # gate; `reason_code` is how every engine says what it did, so the successful tick
+    # and the quiet tick each need a sentence or the console narrates a placed exit as
+    # silence.
+    "exits_placed": "Exit orders are resting at the exchange for this position",
+    "nothing_to_exit": "No position reached a barrier on this bar",
+    # The re-run case, the same shape as `entry_already_placed` on the entry side and
+    # for the same reason — invariant 8, one order per `userref`. Meeting the order
+    # again is the mechanism working, not a fault.
+    "exit_already_placed": "The exit for this position was already placed",
+    # The one of the four that is a fault, and the sentence has to carry that the
+    # position is **still open**: `positions_closed` is false beside this code and the
+    # attempt repeats next tick. An operator told only "incomplete" would not know
+    # whether the exposure is still theirs.
+    "exit_incomplete": (
+        "This position could not be exited and is still open; the attempt repeats next bar"
+    ),
+    # Engine 9 `order_book`, C's spec 96. **None of these is a refusal**, and that is
+    # the engine's defining property rather than a detail: engine 9 never blocks on its
+    # own criteria — it returns `OK` from exactly one return point — and publishes no
+    # slippage estimate instead. Engine 10 `cost` is what refuses, on the absence.
+    #
+    # So every sentence says what is *not known*, never that something was rejected. An
+    # operator reading "refused" here would go looking for a gate that does not exist.
+    "book_fetch_failed": "The order book could not be read, so slippage is unknown",
+    "book_unusable": (
+        "The order book came back malformed, so slippage was not estimated from it"
+    ),
+    # Deliberately not "the book is thin" on its own. The fact that matters is that the
+    # estimate would have to run past the depth fetched, and the levels nobody fetched
+    # are the worst ones — so a guess here is optimistic by construction, which is
+    # exactly the direction that gets a trade taken.
+    "book_too_thin": (
+        "The order book is too shallow to price this size within the depth fetched"
+    ),
+    # `no_quote_balance` is engine 7's code and already has its sentence above; engine 9
+    # publishes the same spelling for the same fact and shares it, rather than adding a
+    # second wording for one thing.
+    #
+    # Like `scout_inputs_unavailable`, this one is about the *setup* and not the book:
+    # no candidate pair, no pair rules, no quote currency, a failed balance fetch, or
+    # `order_book.depth` missing. The book itself may be perfectly fine.
+    "order_book_inputs_unavailable": (
+        "The order-book check could not read what it needs to price this size"
+    ),
+    # Engine 14 `adaptive_router`, C's spec 97. **All four mean the same consequence —
+    # no weights — while meaning four different things to an operator**, which is why
+    # they are four codes and get four sentences rather than one shared line. Two are
+    # ordinary states and two are refusals to guess.
+    #
+    # A fresh clone. Not an error, and the sentence must not imply one.
+    "leaderboard_empty": "No model has been through the tournament yet",
+    # A refusal to weight on a partial view: the engine cannot see the whole table.
+    "leaderboard_unreadable": (
+        "The model leaderboard could not be read in full, so no weights were applied"
+    ),
+    # The subtler refusal, and the sentence says *longer than could be read* rather than
+    # *missing*: a windowed read came back exactly full, so rows beyond it exist.
+    # Weighting anyway would still sum to one, over the wrong set, and a version outside
+    # the window would be absent because nobody looked rather than zero because it had
+    # no edge — two states that are indistinguishable everywhere downstream.
+    "leaderboard_truncated": (
+        "The model leaderboard is longer than could be read, so no weights were applied"
+    ),
+    # A finding, not a fault, and the sentence says so plainly. Every version scored at
+    # or below its own base rate: the leaderboard is reporting that nothing on it has
+    # edge, which is information an operator wants stated rather than softened.
+    "no_model_beats_its_base_rate": "No model is currently beating its own base rate",
 }
 
 #: What a row with neither prose nor a mapped code shows. A statement of absence,
