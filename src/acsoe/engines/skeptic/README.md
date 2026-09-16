@@ -63,9 +63,15 @@ The reason is still recorded, because "the skeptic was reached and had nothing t
 different from "the skeptic did not run".
 
 **Only an explicit `is_buy: false` takes this path.** An absent `is_buy`, a `None`, or any
-value that is not a boolean (`"true"`, `1`) is not a non-BUY call: it is engine 8 publishing
-no usable verdict, and this gate blocks with `skeptic_unavailable` rather than reading the
+value that is not a boolean (`"true"`, `1`) is not a non-BUY call: it is engine 8 having made
+no call at all, and this gate blocks with `skeptic_unavailable` rather than reading the
 absence of a "no" as a pass. Invariant 3.
+
+Since spec 95 engine 8 **omits** `is_buy` on every refusal and publishes it only when the
+model scored, so the absence now says which of the two happened rather than merely being
+unusable. The block did not change and must not — it landed in spec 73, a phase before the
+payload did, and it is the reason nothing failed open in between. Only the sentence changed:
+it names engine 8's refusal instead of saying this gate cannot tell.
 
 With no candidate pair at all — neither `state["prediction"]["pair"]` nor
 `state["scout"]["pair"]` — the engine returns `PASS`: there is nothing on this tick to grade.

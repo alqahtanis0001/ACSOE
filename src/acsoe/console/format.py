@@ -116,6 +116,23 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     "below_costmin": "Position value would be below the pair's minimum order value",
     "insufficient_quote_balance": "Not enough quote currency held to open this position",
     "max_concurrent_positions": "Already holding the maximum number of positions",
+    # Engine 11 `risk`, B's spec 89, prose landed 2026-09-16 under spec 99. Invariant 6 —
+    # one open position per pair — became reachable in Phase 6 and needed a sentence the
+    # day the codes appeared; the enumeration went red within a day of B landing them,
+    # which is the return on that test.
+    #
+    # B's wording, kept verbatim, the same arrangement as engines 4, 7, 10 and 11: the
+    # producer writes the sentence and the consumer does not paraphrase it, so the two
+    # cannot drift. Deliberately not a variant of `max_concurrent_positions` above, which
+    # is a fact about the portfolio and is cleared by waiting; these are facts about *this
+    # pair*.
+    #
+    # Two sentences rather than one because the two states are cleared by different
+    # actions — a position is exited, a resting entry is cancelled — and the operator
+    # reading the rejection row needs to know which. B's contracts module says the same
+    # thing from the producing end.
+    "position_open_on_pair": "This pair already holds an open position",
+    "entry_resting_on_pair": "This pair already has an entry order resting on the book",
     "outside_universe": "Pair is outside the tradable universe at this balance",
     # Engine 7 `scout`, spec 46. The six per-exclusion codes, requested by B on
     # 2026-09-10 with B's own wording, kept verbatim so the producer and the consumer

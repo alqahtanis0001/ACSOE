@@ -21,6 +21,13 @@ contract rule 6 already lets any engine return `BLOCK`. A refusal here publishes
 `expected_move_pct` at all, so engine 10 fails closed on an absent key rather than on
 anything this engine has to tell it.
 
+**A refusal publishes no `is_buy` either, spec 95.** There are exactly two places in this
+module that build a `PredictionState`: `_blocked`, which takes no `is_buy` argument and so
+cannot set one, and the single `OK` return, which sets it from `is_buy_call(move)` on a
+model that has already scored. That is the invariant stated as a property of the code
+rather than as a rule — adding an `is_buy` parameter to `_blocked` is what would break it,
+and there is no reason to.
+
 ## What it refuses, and why each is a refusal rather than a default
 
 Everything about the artefact is checked before anything is predicted: the run id, the
@@ -362,10 +369,15 @@ class PredictionEngine(BaseEngine):
         di: float | None = None,
         di_threshold: float | None = None,
     ) -> EngineResult:
-        """A refusal, carrying no `expected_move_pct` at all.
+        """A refusal, carrying neither `expected_move_pct` nor `is_buy`.
 
         The reason is the operator's sentence and the code travels in `data["reason_code"]`,
         which is the arrangement engine 4 set and `console/format.py` maps.
+
+        **There is deliberately no `is_buy` parameter here**, spec 95. Every caller is a
+        path on which the model did not score, so there is no call to report; leaving the
+        field off the signature means no future refusal can report one by accident, which
+        is exactly how `is_buy: bool = False` came to be published on six refusal paths.
         """
         return EngineResult(
             engine=self.name,

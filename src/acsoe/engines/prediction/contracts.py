@@ -16,7 +16,9 @@ cross-chain too, read by engine 14 in Phase 6 and by the console.
 **No key here is published on a refusal.** A DI refusal and a load failure both publish a
 payload with no ``expected_move_pct`` at all, because engine 10's `_require` treats an
 absent key and a null identically and blocks — which is how the chain fails closed without
-engine 8 having to know what engine 10 does with it.
+engine 8 having to know what engine 10 does with it. ``is_buy`` follows the same shape for
+the same reason, spec 95: it is absent on every refusal and present only when the model
+scored, so a consumer can tell *no call* from *not a BUY*.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ __all__ = [
     "FEATURE_KEY",
     "FEATURE_PAIRS_FIELD",
     "FEATURE_VERSION_FIELD",
+    "IS_BUY_FIELD",
     "KEY_DI_PERCENTILE",
     "KEY_PREDICTION_RUN_ID",
     "MACRO_CONTEXT_KEY",
@@ -143,6 +146,14 @@ REASON_DI_PERCENTILE_MISMATCH: Final = "di_percentile_mismatch"
 # --------------------------------------------------------------------------- #
 
 EXPECTED_MOVE_FIELD: Final = "expected_move_pct"
+
+#: Whether the scored model called a BUY. **Published only when the model scored**, and
+#: absent from the payload on every refusal — spec 95. It used to be `bool = False`
+#: published unconditionally, which made a refusing engine 8 look exactly like a predictor
+#: that ran and called no BUY, and left engine 15's non-BUY pass one omission away from
+#: being reached on a tick where nothing was predicted at all.
+IS_BUY_FIELD: Final = "is_buy"
+
 DI_FIELD: Final = "di"
 DI_THRESHOLD_FIELD: Final = "di_threshold"
 SHAP_FIELD: Final = "shap"
@@ -154,6 +165,12 @@ class PredictionState(BaseModel):
     ``expected_move_pct`` is ``str | None`` rather than a float, and the `None` is load
     bearing: it is absent from the published mapping entirely on a refusal, so engine 10
     fails closed on a key that is not there rather than on a number it has to interpret.
+
+    ``is_buy`` is ``bool | None`` for the same reason and is the same shape, spec 95.
+    ``None`` is *no call was made*; ``False`` is *the model scored and called no BUY*.
+    Those are two different facts with two different readers — engine 15 blocks on the
+    first and passes on the second — and a default of ``False`` published on every path
+    made them one.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -166,19 +183,28 @@ class PredictionState(BaseModel):
     p_stop: float | None = None
     p_timeout: float | None = None
     expected_move_pct: str | None = None
-    is_buy: bool = False
+    is_buy: bool | None = None
     di: float | None = None
     di_threshold: float | None = None
     shap: dict[str, float] | None = None
     reason_code: str | None = None
 
     def to_state(self) -> dict[str, Any]:
-        """The JSON-serialisable form, with ``expected_move_pct`` **omitted** when absent.
+        """The JSON-serialisable form, with ``expected_move_pct`` and ``is_buy``
+        **omitted** when absent.
 
-        Omitted rather than null, and the difference matters at exactly one place: engine
-        10 treats an absent key and a null identically, so both fail closed, but a null
-        that travelled would look in a log like a prediction that produced no move rather
-        than like a prediction that never happened.
+        Omitted rather than null, and for ``expected_move_pct`` the difference matters at
+        exactly one place: engine 10 treats an absent key and a null identically, so both
+        fail closed, but a null that travelled would look in a log like a prediction that
+        produced no move rather than like a prediction that never happened.
+
+        For ``is_buy`` the difference is larger, because engine 15's reader distinguishes
+        three cases and not two. An explicit ``False`` is a non-BUY and passes; anything
+        that is not a ``bool`` — absent included — blocks with `skeptic_unavailable`. A
+        ``null`` here would satisfy that reader too, so the omission is not what makes
+        engine 15 safe; what it buys is that nothing downstream can read the key at all on
+        a tick where no model ran, which is the same guarantee ``expected_move_pct``
+        already gives engine 10. Spec 95.
         """
         payload: dict[str, Any] = {
             "pair": self.pair,
@@ -188,7 +214,6 @@ class PredictionState(BaseModel):
             "p_target": self.p_target,
             "p_stop": self.p_stop,
             "p_timeout": self.p_timeout,
-            "is_buy": self.is_buy,
             DI_FIELD: self.di,
             DI_THRESHOLD_FIELD: self.di_threshold,
             SHAP_FIELD: self.shap,
@@ -196,4 +221,6 @@ class PredictionState(BaseModel):
         }
         if self.expected_move_pct is not None:
             payload[EXPECTED_MOVE_FIELD] = self.expected_move_pct
+        if self.is_buy is not None:
+            payload[IS_BUY_FIELD] = self.is_buy
         return payload

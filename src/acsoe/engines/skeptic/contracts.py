@@ -80,8 +80,13 @@ PREDICTION_PAIR_FIELD: Final = "pair"
 #: calls, and a model asked to grade a call nobody made is answering a different question.
 #: **Turning a non-BUY into no trade is the decision engine's job in Phase 6**, not this
 #: gate's — a `BLOCK` here would record a veto that never happened. **Only an explicit
-#: `False`**: absent, `None` or a non-boolean is engine 8 publishing no usable verdict, and
+#: `False`**: absent, `None` or a non-boolean is engine 8 having made no call at all, and
 #: blocks with `REASON_UNAVAILABLE`. Invariant 3.
+#:
+#: **Engine 8 omits this key on every refusal**, spec 95, so absent is that engine's way of
+#: saying the model never scored — the same shape `expected_move_pct` has always had. The
+#: three-way read here predates it and is unchanged by it: a reader that collapsed absent
+#: into `False` would pass a tick on which nothing was predicted.
 PREDICTION_IS_BUY_FIELD: Final = "is_buy"
 
 #: The predictor's own three probabilities, in the order the manifest records them beside

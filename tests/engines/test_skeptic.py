@@ -43,6 +43,7 @@ require_module("sklearn", reason="scikit-learn is not installed")
 from acsoe.core.contracts import EngineStatus  # noqa: E402
 from acsoe.engines.prediction.contracts import (  # noqa: E402
     KEY_PREDICTION_RUN_ID,
+    REASON_DI_REFUSED,
 )
 from acsoe.engines.prediction.engine import PredictionEngine  # noqa: E402
 from acsoe.engines.skeptic.contracts import (  # noqa: E402
@@ -368,11 +369,15 @@ def test_an_is_buy_that_is_not_a_boolean_blocks_rather_than_reading_as_non_buy(
 ) -> None:
     """Only an explicit `False` is a non-BUY call. Invariant 3.
 
-    Absent, `None`, or a value that merely looks like a boolean is engine 8 publishing no
-    usable verdict. Read as "not a BUY" it returns `OK`, and that is the absence of a "no"
-    taken as a yes. The falsy cases (`absent`, `none`, `int-0`) are the ones a truthiness
-    check waves through as non-BUY; the truthy ones (`string-true`, `int-1`) are the ones it
-    would score as though engine 8 had said BUY.
+    Absent, `None`, or a value that merely looks like a boolean is engine 8 having made no
+    call. Read as "not a BUY" it returns `OK`, and that is the absence of a "no" taken as a
+    yes. The falsy cases (`absent`, `none`, `int-0`) are the ones a truthiness check waves
+    through as non-BUY; the truthy ones (`string-true`, `int-1`) are the ones it would score
+    as though engine 8 had said BUY.
+
+    **Spec 95 changed the sentence and not the verdict**, and the two assertions at the end
+    hold that line. The block landed in spec 73, a phase before engine 8 stopped publishing
+    `is_buy: false` on its refusals, and it is the reason nothing failed open in between.
     """
     state, context = predicted_state(engine_context, bars, root, run_id)
     prediction = {k: v for k, v in state["prediction"].items() if k != "is_buy"}
@@ -383,7 +388,84 @@ def test_an_is_buy_that_is_not_a_boolean_blocks_rather_than_reading_as_non_buy(
     assert result.blocks_trading is True
     assert result.data["reason_code"] == REASON_UNAVAILABLE
     assert result.data["vetoed"] is False
-    assert "no usable BUY verdict" in (result.reason or "")
+    assert "engine 8 made no call" in (result.reason or "")
+    assert NOT_A_BUY_CALL not in (result.reason or ""), (
+        "the refusal sentence calls this a non-BUY call, which is the one thing it is "
+        "not: spec 95 exists because those two facts used to be indistinguishable"
+    )
+
+
+def refused_prediction(
+    engine_context: Any, bar_rows: list[dict[str, Any]], root: Path, run_id: str
+) -> tuple[dict[str, Any], Any]:
+    """`state` carrying a payload **the real engine 8 published when it refused**.
+
+    The refusal is induced the way `tests/engines/test_prediction.py` induces it — one
+    feature family moved far outside the training range, which is what an unprecedented
+    market does to a feature vector — so the Dissimilarity Index declines and engine 8
+    blocks with `di_refused`. Nothing here hand-builds the payload: spec 95 is a change to
+    what engine 8 *publishes*, and a fabricated prediction would be this test agreeing
+    with itself about the very field under test. That is the seam Phase 4 found twice in
+    one day, and code-standards requires one test of it with no double on either side.
+    """
+    state, context = complete_state(engine_context, bar_rows, root, run_id)
+    context = context_with(context, root, **{KEY_PREDICTION_RUN_ID: run_id})
+    row = dict(state["feature"]["pairs"][PAIR])
+    for name in row:
+        if name.startswith(("log_return_", "realised_vol_", "volume_z_")):
+            row[name] = 500.0
+    state = {
+        **state,
+        "feature": {
+            **state["feature"],
+            "pairs": {**state["feature"]["pairs"], PAIR: row},
+        },
+    }
+    result = PredictionEngine().process(context, state)
+    assert result.status is EngineStatus.BLOCK, (
+        "engine 8 did not refuse this candidate, so there is no refusal payload to hand "
+        f"engine 15 and this test proves nothing: it returned {result.status}"
+    )
+    assert result.data["reason_code"] == REASON_DI_REFUSED, result.data["reason_code"]
+    return {**state, "prediction": dict(result.data)}, context
+
+
+def test_a_refusing_engine_8s_real_payload_blocks_naming_the_absence(
+    engine_context: Any, bars: list[dict[str, Any]], root: Path, run_id: str  # noqa: F811
+) -> None:
+    """Spec 95, both halves of it, through the real producer and the real consumer.
+
+    Before spec 95 this exact state reached engine 15 as `is_buy: false` — the payload of
+    a predictor that ran and called no BUY — and only engine 15's own spec 73 hardening
+    kept it from passing, because that hardening reads *three* cases and not two. Now the
+    payload itself says which happened: the key is absent, and the gate's sentence names
+    engine 8's refusal rather than describing a call that was never made.
+
+    Live this tick never reaches engine 15 at all, because engine 8's `BLOCK` stops the
+    opportunity chain under contract rule 6. That is exactly why the check belongs in a
+    test: the safety net downstream is one an operator cannot see, and engine 14
+    `adaptive_router` is about to read the same field from outside a gate.
+    """
+    state, context = refused_prediction(engine_context, bars, root, run_id)
+
+    assert "is_buy" not in state["prediction"], (
+        "engine 8's refusal published an is_buy, so the rest of this test would be "
+        "measuring the old behaviour"
+    )
+
+    result = judged(state, context, root, run_id)
+    assert result.status is EngineStatus.BLOCK
+    assert result.blocks_trading is True
+    assert result.data["reason_code"] == REASON_UNAVAILABLE
+    assert result.data["vetoed"] is False, "an unreachable skeptic recorded a veto"
+    assert result.data["p_wrong"] is None
+    assert "engine 8 made no call" in (result.reason or "")
+    assert "absent" in (result.reason or "")
+    assert result.data["reason"] != NOT_A_BUY_CALL
+    assert NOT_A_BUY_CALL not in (result.reason or ""), (
+        "a refusal by engine 8 was reported as a non-BUY call, which is the conflation "
+        "spec 95 removed from the payload"
+    )
 
 
 def test_a_candidate_with_no_prediction_published_blocks_rather_than_passing(

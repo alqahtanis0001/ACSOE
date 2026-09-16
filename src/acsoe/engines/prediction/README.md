@@ -50,8 +50,20 @@ this engine never imports another engine to find out what its keys are called.
 ## What it publishes
 
 `state["prediction"]` carries `pair`, `bar_ts`, `model_run_id`, `feature_version`,
-`p_target`, `p_stop`, `p_timeout`, `is_buy`, `di`, `di_threshold`, `shap` and `reason_code`,
-plus `expected_move_pct` when and only when it predicted.
+`p_target`, `p_stop`, `p_timeout`, `di`, `di_threshold`, `shap` and `reason_code`, plus
+**`expected_move_pct` and `is_buy` when and only when it predicted.**
+
+Those two are omitted rather than nulled on a refusal, and `is_buy` joined
+`expected_move_pct` in spec 95. It was `bool = False` published on every path, so an engine
+8 that refused — `di_refused`, an absent artefact, an incomplete vector — published
+`is_buy: false` in exactly the payload a predictor that ran and called no BUY publishes. The
+two are different facts with different readers: engine 15 `skeptic` blocks on the first and
+passes on the second, and engine 14 `adaptive_router` is the first reader outside a gate.
+Nothing failed open in between, because engine 8's own `BLOCK` already stopped the tick; what
+was wrong was that the payload could not say which of the two had happened.
+
+Engine 8 cannot publish a placeholder here even by mistake: the refusal helper takes no
+`is_buy` argument, so the only code path that can set one is the path that scored a model.
 
 `expected_move_pct` crosses as an **exact decimal string**, formatted once from the
 arithmetic through `repr`, the same way `research/labelling.py` crosses the same boundary.

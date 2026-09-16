@@ -814,3 +814,313 @@ def test_with_no_candidate_it_passes_rather_than_blocking(engine_context: Any) -
     assert result.status is EngineStatus.PASS
     assert result.blocks_trading is False
     assert result.data == {}
+
+
+# --------------------------------------------------------------------------- #
+# Spec 95 — `is_buy` says which of two things happened
+# --------------------------------------------------------------------------- #
+#
+# `is_buy` was `bool = False` published on every path, so a refusing engine 8 published
+# exactly the payload of a predictor that ran and called no BUY. Nothing failed open —
+# engine 8's own `BLOCK` stops the tick — but the two facts have different readers, and
+# engine 14 `adaptive_router` is the first of them that is not a gate.
+#
+# The claim these tests make is **"every refusal shape"**, not "the refusals we thought
+# of", so `test_no_refusal_shape_publishes_is_buy` drives ten shapes and a second test
+# asserts the reason codes they reach are the whole set the contracts module declares.
+# Without that second assertion a fifth code added tomorrow is a refusal nobody has asked
+# about.
+
+
+def refusal_shapes(
+    engine_context: Any,
+    bars: list[dict[str, Any]],
+    artefact_root: Path,
+    run_id: str,
+    tmp_path: Path,
+) -> list[tuple[str, Any]]:
+    """Every way engine 8 refuses, each driven end to end, as `(name, result)`.
+
+    Deliberately re-driven here rather than factored out of the ten tests above. Those
+    tests each assert one refusal's own reason and message; this one asserts a property
+    that must hold across all of them at once, and a shared helper would mean a shape
+    dropped from the list disappears from both claims in a single edit.
+    """
+    import numpy as np
+
+    from acsoe.modelling.artefacts import MANIFEST_NAME, sha256_file
+
+    out: list[tuple[str, Any]] = []
+
+    def observe(name: str, context: Any, state: dict[str, Any]) -> None:
+        result = run(PredictionEngine(), context, state)
+        assert result.status is EngineStatus.BLOCK, (name, result.status, result.reason)
+        out.append((name, result))
+
+    # --- the artefact cannot be loaded: six shapes, one reason code ---------- #
+
+    plain, plain_context = live_state(engine_context, bars)
+    observe(
+        "no run id configured",
+        context_with(plain_context, artefact_root, **{KEY_PREDICTION_RUN_ID: None}),
+        plain,
+    )
+    observe(
+        "a run id pointing nowhere",
+        context_with(
+            plain_context, artefact_root, **{KEY_PREDICTION_RUN_ID: "train-no-such-run"}
+        ),
+        plain,
+    )
+
+    tampered = tmp_path / "tampered"
+    shutil.copytree(artefact_root, tampered)
+    model_txt = tampered / run_id / "model.txt"
+    model_txt.write_bytes(model_txt.read_bytes() + b"\n")
+    observe(
+        "a failed hash",
+        context_with(plain_context, tampered, **{KEY_PREDICTION_RUN_ID: run_id}),
+        plain,
+    )
+
+    no_di = tmp_path / "no-di"
+    shutil.copytree(artefact_root, no_di)
+    (no_di / run_id / "di.npz").unlink()
+    no_di_manifest = no_di / run_id / MANIFEST_NAME
+    manifest = json.loads(no_di_manifest.read_bytes().decode("utf-8"))
+    manifest["files"].pop("di.npz", None)
+    no_di_manifest.write_bytes(
+        json.dumps(manifest, sort_keys=True, indent=2).encode("utf-8")
+    )
+    observe(
+        "an artefact with no di.npz",
+        context_with(plain_context, no_di, **{KEY_PREDICTION_RUN_ID: run_id}),
+        plain,
+    )
+
+    legacy_di = tmp_path / "legacy-di"
+    shutil.copytree(artefact_root, legacy_di)
+    di_path = legacy_di / run_id / "di.npz"
+    with np.load(di_path) as payload:
+        kept = {
+            name: payload[name]
+            for name in payload.files
+            if name not in {"exclusion_s", "decision_ts"}
+        }
+    np.savez_compressed(di_path, **kept)
+    legacy_manifest = legacy_di / run_id / MANIFEST_NAME
+    manifest = json.loads(legacy_manifest.read_bytes().decode("utf-8"))
+    manifest["files"]["di.npz"] = sha256_file(di_path)
+    legacy_manifest.write_bytes(
+        json.dumps(manifest, sort_keys=True, indent=2).encode("utf-8")
+    )
+    observe(
+        "a di.npz with no exclusion span",
+        context_with(plain_context, legacy_di, **{KEY_PREDICTION_RUN_ID: run_id}),
+        plain,
+    )
+
+    observe(
+        "a feature version that is not the manifest's",
+        context_with(plain_context, artefact_root, **{KEY_PREDICTION_RUN_ID: run_id}),
+        {
+            **plain,
+            "feature": {**plain["feature"], "feature_version": "f-not-the-manifests"},
+        },
+    )
+
+    # --- the inputs are incomplete: two shapes ------------------------------ #
+
+    complete, complete_context = complete_state(
+        engine_context, bars, artefact_root, run_id
+    )
+    scoring = context_with(
+        complete_context, artefact_root, **{KEY_PREDICTION_RUN_ID: run_id}
+    )
+
+    holed_row = dict(complete["feature"]["pairs"][PAIR])
+    holed_row[next(key for key in holed_row if key.startswith("log_return_"))] = None
+    observe(
+        "a null feature",
+        scoring,
+        {
+            **complete,
+            "feature": {
+                **complete["feature"],
+                "pairs": {**complete["feature"]["pairs"], PAIR: holed_row},
+            },
+        },
+    )
+    observe(
+        "no feature row for the candidate at all",
+        scoring,
+        {**complete, "feature": {**complete["feature"], "pairs": {}}},
+    )
+
+    # --- the model declines, and the operator's percentile disagrees -------- #
+
+    dissimilar = dict(complete["feature"]["pairs"][PAIR])
+    for name in dissimilar:
+        if name.startswith(("log_return_", "realised_vol_", "volume_z_")):
+            dissimilar[name] = 500.0
+    observe(
+        "a market unlike the training set",
+        scoring,
+        {
+            **complete,
+            "feature": {
+                **complete["feature"],
+                "pairs": {**complete["feature"]["pairs"], PAIR: dissimilar},
+            },
+        },
+    )
+    observe(
+        "a configured DI percentile that is not the artefact's",
+        context_with(
+            complete_context,
+            artefact_root,
+            **{KEY_PREDICTION_RUN_ID: run_id, KEY_DI_PERCENTILE: DI_PERCENTILE - 0.04},
+        ),
+        complete,
+    )
+    return out
+
+
+@pytest.fixture
+def refusals(
+    engine_context: Any, bars: list[dict[str, Any]], artefact_root: Path, run_id: str,
+    tmp_path: Path
+) -> list[tuple[str, Any]]:
+    """The ten refusals, driven end to end.
+
+    Function-scoped, and deliberately: `engine_context` is function-scoped in
+    `tests/conftest.py`, so a module-scoped cache here would have to build its own context
+    — a second construction of the thing every other test in this file receives, which is
+    exactly the "double that agrees with its caller" shape Phase 3 found four of. Each
+    shape copies an artefact directory and re-runs the real engines 3, 5 and 6, so two
+    readers pay for it twice; that is the price of the two tests below asking different
+    questions of the same evidence.
+    """
+    return refusal_shapes(engine_context, bars, artefact_root, run_id, tmp_path)
+
+
+def test_no_refusal_shape_publishes_is_buy(refusals: list[tuple[str, Any]]) -> None:
+    """Spec 95. The key is **absent**, not `False` and not `None`.
+
+    Absent is the shape `expected_move_pct` has always had, and the reason for matching it
+    is that a consumer reading `payload["is_buy"]` on a refused tick should get a
+    `KeyError` rather than a plausible boolean. `False` is the dangerous value in
+    particular: it is the same byte a scored non-BUY publishes, so every reader that
+    treats "not a BUY" as "do nothing" behaves identically on a tick where no model ran.
+    """
+    assert len(refusals) == 10, [name for name, _ in refusals]
+    for name, result in refusals:
+        assert "is_buy" not in result.data, (
+            f"the {name} refusal published is_buy={result.data.get('is_buy')!r}, which is "
+            "the payload of a predictor that ran and called no BUY"
+        )
+        assert "expected_move_pct" not in result.data, name
+
+
+def test_every_declared_reason_code_is_one_of_those_shapes(
+    refusals: list[tuple[str, Any]]
+) -> None:
+    """What turns "ten shapes" into "every refusal shape".
+
+    The shapes are a list somebody wrote, so on its own the test above is a claim about
+    ten cases rather than about the engine. The contracts module declares exactly the
+    reason codes this engine can emit — `tests/console/test_reason_prose.py` already
+    enumerates the same attributes to require operator prose for each — so comparing the
+    codes actually reached against that declaration is what makes the coverage checkable.
+    A fifth code added tomorrow turns this red until a shape reaching it joins the list.
+    """
+    from acsoe.engines.prediction import contracts
+
+    declared = {
+        value
+        for name, value in vars(contracts).items()
+        if name.startswith("REASON_") and isinstance(value, str)
+    }
+    reached = {result.data["reason_code"] for _name, result in refusals}
+    assert reached == declared, {
+        "reached": sorted(reached),
+        "declared": sorted(declared),
+    }
+
+
+def test_a_scored_non_buy_publishes_is_buy_false_rather_than_omitting_it(
+    predicted: Any,
+) -> None:
+    """The other half, and the one that stops "omit it" becoming "never publish it".
+
+    The `predicted` fixture runs on the window ending at the end of the constructed
+    series — the window `tests/engines/test_feature_chain_rehearsal.py` calls
+    `NOT_A_BUY_WINDOW_END`, where engine 8 scores the bar and calls no BUY. So this is a
+    real scored non-BUY rather than a fabricated one, and the assertion is that the
+    payload says so explicitly instead of saying nothing.
+
+    **The sign is asserted rather than assumed.** A retrained fixture model that moved
+    this window to a BUY would otherwise leave the non-BUY branch of engines 8 and 15
+    unexercised with every test still green.
+    """
+    from decimal import Decimal
+
+    assert predicted.status is EngineStatus.OK
+    move = Decimal(predicted.data["expected_move_pct"])
+    assert move <= 0, (
+        "the fixture window no longer produces a scored non-BUY, so this test and engine "
+        f"15's not-a-BUY pass are both unexercised: expected move {move}"
+    )
+    assert "is_buy" in predicted.data, (
+        "a scored call published no is_buy, so omitting it on a refusal has become "
+        "omitting it everywhere and engine 15 would block every tick"
+    )
+    assert predicted.data["is_buy"] is False
+
+
+def test_a_scored_buy_publishes_is_buy_true(
+    engine_context: Any, artefact_root: Path, run_id: str
+) -> None:
+    """The control for the test above, on a window where the same model does call a BUY.
+
+    Without it, "a scored non-BUY publishes `False`" is satisfied by an engine that
+    publishes `False` on every scored path — which is the defect spec 95 exists to remove,
+    reintroduced one field along.
+
+    The window ends 200 bars earlier, the same one the chain rehearsal uses for its BUY
+    scenarios, and the sign is asserted here for the reason it is asserted there.
+    """
+    from decimal import Decimal
+
+    from tests.research.test_training import candle_frame
+
+    frame = candle_frame(PAIR, interval_s=BAR, random_walk=False, days=140)
+    rows = [
+        {
+            "ts": int(row["ts"]),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": float(row["volume"]),
+            "trades": int(row["trades"]),
+        }
+        for row in frame.to_dicts()
+    ]
+    end = len(rows) - 200
+    buy_bars = rows[end - 300 : end]
+
+    state, context = complete_state(engine_context, buy_bars, artefact_root, run_id)
+    context = context_with(context, artefact_root, **{KEY_PREDICTION_RUN_ID: run_id})
+    result = run(PredictionEngine(), context, state)
+
+    assert result.status is EngineStatus.OK, (
+        result.data.get("reason_code"),
+        result.reason,
+    )
+    move = Decimal(result.data["expected_move_pct"])
+    assert move > 0, (
+        "the fixture window no longer produces a BUY, so nothing here separates a scored "
+        f"BUY from a scored non-BUY: expected move {move}"
+    )
+    assert result.data["is_buy"] is True

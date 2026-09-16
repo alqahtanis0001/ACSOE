@@ -30,9 +30,16 @@ into the one table the research reads that never happened, and the leaderboard w
 attribute to the skeptic every bar the predictor simply did not like.
 
 **Only an explicit `is_buy: false` is a non-BUY call.** An absent, `None` or non-boolean
-`is_buy` blocks with `skeptic_unavailable`: engine 8 published no usable verdict, and reading
-that as "not a BUY" is absence of a "no" taken as a yes. Invariant 3. With no candidate pair
-at all the engine still returns `PASS` — there is nothing on this tick to grade.
+`is_buy` blocks with `skeptic_unavailable`: engine 8 made no call, and reading that as "not a
+BUY" is absence of a "no" taken as a yes. Invariant 3. With no candidate pair at all the
+engine still returns `PASS` — there is nothing on this tick to grade.
+
+Since spec 95 the absence is also *informative* rather than merely unusable: engine 8 omits
+`is_buy` from its payload on every refusal and publishes it only when the model scored, so
+an absent key means the predictor declined and a present `false` means it answered and said
+no. The block here did not change and must not — the hardening landed before the payload did,
+and it is what kept the gate honest in between — but its sentence now names which of the two
+happened instead of saying it cannot tell.
 
 ## A non-finite score blocks
 
@@ -143,17 +150,26 @@ class SkepticEngine(BaseEngine):
                 duration_ms=(time.perf_counter() - started) * 1000.0,
             )
 
+        published = PREDICTION_IS_BUY_FIELD in prediction
         is_buy = prediction.get(PREDICTION_IS_BUY_FIELD)
         if not isinstance(is_buy, bool):
-            # Absent, None, or not a boolean at all: engine 8 did not say whether this was a
-            # BUY. Read as "not a BUY", that would be absence of a "no" taken as a pass.
+            # Absent, None, or not a boolean at all: engine 8 made no call. Read as "not a
+            # BUY", that would be absence of a "no" taken as a pass.
             return self._blocked(
                 started,
                 str(pair),
                 REASON_UNAVAILABLE,
-                f"engine 8 published no usable BUY verdict for this candidate "
-                f"({PREDICTION_KEY}.{PREDICTION_IS_BUY_FIELD} is {is_buy!r}), so there is no "
-                "call to grade and no way to know there was none.",
+                "engine 8 made no call on this candidate, so there is nothing to grade: "
+                + (
+                    f"it published {PREDICTION_KEY}.{PREDICTION_IS_BUY_FIELD} as "
+                    f"{is_buy!r}, which is not a verdict."
+                    if published
+                    else f"{PREDICTION_KEY}.{PREDICTION_IS_BUY_FIELD} is absent, which "
+                    "since spec 95 is how engine 8 reports a refusal — it publishes the "
+                    "key only when the model scored."
+                )
+                + " A verdict of exactly false would mean the model scored and declined, "
+                "which this gate passes on. This is not that.",
             )
         if is_buy is False:
             # Not a block. The skeptic grades BUY calls and has no opinion about the rest;
