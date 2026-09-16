@@ -33,7 +33,10 @@ below assert on the *content* of each PENDING as well as its result.
 from __future__ import annotations
 
 import ast
+import hashlib
+import re
 import shutil
+from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
 
@@ -60,6 +63,12 @@ PHASE6_CRITERIA = (
     "order_book_slippage_on_recorded_book",
     "adaptive_router_weights_on_fixture",
 )
+
+#: Spec 105's criterion, registered after spec 100's nine. Kept out of `PHASE6_CRITERIA`
+#: on purpose: those nine are PENDING on the real tree and the tests parametrised over
+#: them say so, while this one runs to a verdict today. Its own tests are at the end of
+#: this file.
+EQUITY_ACROSS_FILL = "paper_equity_continuous_across_fill"
 
 #: The seven that drive a trade through the gates and must therefore name their fee
 #: regime in their own message. Ruling 8 of the Phase 6 task list.
@@ -149,7 +158,10 @@ def test_all_nine_criteria_are_registered_for_phase_6(verify_module: ModuleType)
     """
     registered = [c.name for c in verify_module._REGISTRY[6]]
     every_phase = ("docs_vocabulary", "toolchain_green")
-    assert [name for name in registered if name not in every_phase] == list(PHASE6_CRITERIA)
+    assert [name for name in registered if name not in every_phase] == [
+        *PHASE6_CRITERIA,
+        EQUITY_ACROSS_FILL,
+    ]
 
 
 def test_every_phase_6_criterion_is_offline_and_never_live_only(
@@ -508,3 +520,155 @@ def test_the_trained_subject_is_shared_across_criteria_and_the_database_is_not(
     for forbidden in ("store", "db", "broker", "ledger", "conn"):
         assert not hasattr(cached, forbidden), forbidden
     assert cached.seconds > 0, "the training cost was not recorded"
+
+
+# --------------------------------------------------------------------------- #
+# Spec 105 — paper_equity_continuous_across_fill
+# --------------------------------------------------------------------------- #
+#
+# PENDING, PASS and FAIL, each observed. The FAIL is the named wrong implementation: the
+# broker as it was before spec 103, whose balance leaves out a fill engine 19 has not
+# recorded yet. The break is made in the **copied** tree, never in the real file,
+# because this test runs inside `toolchain_green` and other pytest runs share the
+# checkout. The in-place run against the real file was made once, by hand, with a byte
+# copy and a hash-checked restore; the build log has it.
+
+#: The one line spec 103 added the executed-but-unrecorded fills with, and its broken form.
+#: A's spec 87 used the same break for the same proof.
+BROKER_ANCHOR = b"        for userref, executed in list(self._executed.items()):\n"
+BROKER_BROKEN = b"        for userref, executed in []:\n"
+
+_MOVED = re.compile(r"it moved (-?[0-9.]+)\. The fill's own cost is (-?[0-9.]+): fee (-?[0-9.]+) ")
+
+
+def moved_and_bound(outcome: object) -> tuple[Decimal, Decimal, Decimal]:
+    """`(moved, tolerance, fee)` as the criterion reported them.
+
+    Parsed rather than searched, so a message that merely mentions the words cannot
+    pass. A message from a criterion that raised is refused outright: it has judged
+    nothing.
+    """
+    message = str(getattr(outcome, "message", outcome))
+    assert "criterion raised" not in message, message
+    found = _MOVED.search(message)
+    assert found is not None, "not an equity-across-fill verdict: " + message
+    return Decimal(found[1]), Decimal(found[2]), Decimal(found[3])
+
+
+def assert_names_tier_3(outcome: object) -> None:
+    message = str(getattr(outcome, "message", outcome))
+    assert "at fee tier 3" in message, message
+    assert "no-trade regime" in message, message
+
+
+def test_equity_across_fill_is_pending_on_a_tree_with_nothing_built(
+    verify_module: ModuleType, unbuilt_tree: Path
+) -> None:
+    """An empty `acsoe` package: PENDING, naming the first engine it needs and its spec.
+
+    **`unbuilt_tree`, not `bare_tree`.** On `bare_tree` the editable install resolves
+    `acsoe` to the real repository, so this criterion ran the whole chain and reported
+    PASS there. The first version of this test did exactly that; the build log has it.
+    An empty package in the tree shadows the real one, which is the honest picture of
+    nothing built.
+    """
+    outcome = run(verify_module, EQUITY_ACROSS_FILL, unbuilt_tree)
+    assert_pending(outcome, verify_module)
+    assert "engine 9 `order_book`" in outcome.message, outcome.message
+    assert "spec 96" in outcome.message, outcome.message
+    assert_names_tier_3(outcome)
+
+
+def test_equity_across_fill_is_pending_without_the_paper_broker(
+    verify_module: ModuleType, phase6_tree: Path
+) -> None:
+    """Every engine present and the broker absent: PENDING naming the broker's spec.
+
+    Checked before anything is trained, so this costs nothing and says who owes the
+    subject rather than failing on an import.
+    """
+    shutil.rmtree(phase6_tree / "src" / "acsoe" / "clients" / "paper")
+    outcome = run(verify_module, EQUITY_ACROSS_FILL, phase6_tree)
+    assert_pending(outcome, verify_module)
+    assert "acsoe.clients.paper" in outcome.message, outcome.message
+    assert "spec 88" in outcome.message, outcome.message
+    assert_names_tier_3(outcome)
+
+
+def test_equity_across_fill_passes_on_the_real_tree(
+    verify_module: ModuleType, repo_root: Path
+) -> None:
+    """The real chain places, fills and records an entry, and equity moves by the fee.
+
+    Engine 21 values a position opened this tick at its fill price, so the mark-to-bid
+    part of the bound is zero on the fill tick and the tolerance is the maker fee alone.
+    The equity row therefore moves by exactly minus the fee, which is asserted, so a
+    criterion whose bound had drifted wide would not pass this test by being loose.
+    """
+    outcome = run(verify_module, EQUITY_ACROSS_FILL, repo_root)
+    assert outcome.result is verify_module.Result.PASS, outcome
+    moved, bound, fee = moved_and_bound(outcome)
+    assert fee > 0, outcome.message
+    assert bound == fee, "the fill tick carries a mark gap, so the bound is wider than the fee"
+    assert moved == -fee, outcome.message
+    assert_names_tier_3(outcome)
+
+
+def test_equity_across_fill_fails_when_the_broker_leaves_out_an_unrecorded_fill(
+    verify_module: ModuleType, phase6_tree: Path, repo_root: Path
+) -> None:
+    """The defect put back, in the copy, and the criterion names it.
+
+    On the fill tick the broken ledger still holds the cash the entry spent while engine
+    21 counts the position, so equity jumps by the whole notional: far outside the fee.
+    The real broker is hashed on both sides, so this test is shown not to have touched it.
+    """
+    real = repo_root / "src" / "acsoe" / "clients" / "paper" / "broker.py"
+    real_before = hashlib.sha256(real.read_bytes()).hexdigest()
+    copy = phase6_tree / "src" / "acsoe" / "clients" / "paper" / "broker.py"
+    source = copy.read_bytes()
+    assert source.count(BROKER_ANCHOR) == 1, "the anchor moved; the break would not apply"
+    copy.write_bytes(source.replace(BROKER_ANCHOR, BROKER_BROKEN))
+
+    outcome = run(verify_module, EQUITY_ACROSS_FILL, phase6_tree)
+
+    assert hashlib.sha256(real.read_bytes()).hexdigest() == real_before
+    assert_fail(outcome, verify_module)
+    moved, bound, fee = moved_and_bound(outcome)
+    assert moved > bound >= fee > 0, outcome.message
+    assert "counted twice" in outcome.message, outcome.message
+    assert_names_tier_3(outcome)
+
+
+#: Engine 19's equity call, and a copy that skips the row on the tick engine 18 ran.
+MEMORY_EQUITY_ANCHOR = b"        equity, peak, skipped = self._write_equity(\n"
+MEMORY_SKIPS_ENTRY_TICK = (
+    b"        if EXECUTION_KEY in state:\n"
+    b"            exchange = None\n"
+    b"        equity, peak, skipped = self._write_equity(\n"
+)
+
+
+def test_equity_across_fill_fails_when_the_entry_tick_wrote_no_equity_row(
+    verify_module: ModuleType, phase6_tree: Path
+) -> None:
+    """"The tick before" means the entry tick, not the last row that happens to exist.
+
+    Engine 19 is made, in the copy, to write no equity row on the tick engine 18 ran.
+    The last row before the fill is then the quiet tick's, which holds the same cash and
+    would compare clean. A criterion that took it would pass over a gap in the series on
+    exactly the tick before a fill. This test exists because the check survived the
+    sweep without it.
+    """
+    engine = phase6_tree / "src" / "acsoe" / "engines" / "memory" / "engine.py"
+    source = engine.read_bytes()
+    assert source.count(MEMORY_EQUITY_ANCHOR) == 1, "the anchor moved; the skip would not apply"
+    engine.write_bytes(source.replace(MEMORY_EQUITY_ANCHOR, MEMORY_SKIPS_ENTRY_TICK))
+
+    outcome = run(verify_module, EQUITY_ACROSS_FILL, phase6_tree)
+
+    assert_fail(outcome, verify_module)
+    message = outcome.message
+    assert "criterion raised" not in message, message
+    assert "so the entry tick wrote none" in message, message
+    assert_names_tier_3(outcome)

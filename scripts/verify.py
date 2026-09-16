@@ -9031,8 +9031,14 @@ def _constructed_dataset(
     training: ModuleType,
     engine_config: Any,
     candles_builder: CandleBuilder | None = None,
+    *,
+    macro_archive: Mapping[str, str] | None = None,
 ) -> tuple[Any, Outcome | None]:
     """The pooled, labelled, featured, weighted frame the trainer takes.
+
+    `macro_archive` is `build_dataset`'s own argument, passed only when a caller names one:
+    the Phase 5 criteria train without macro columns, and spec 105's subject trains with
+    them because engines 8 and 15 assemble their vectors from engine 6 as well.
 
     Built through the **real** labeller and the **real** feature module: only the prices
     are this criterion's. Fabricate the subject, never the contract.
@@ -9068,7 +9074,10 @@ def _constructed_dataset(
         )
         candles[pair] = frame
         labelled[pair] = labels
-    dataset = builder(labelled, candles, config=engine_config)
+    if macro_archive is None:
+        dataset = builder(labelled, candles, config=engine_config)
+    else:
+        dataset = builder(labelled, candles, config=engine_config, macro_archive=macro_archive)
     del ctx
     return dataset, None
 
@@ -9082,6 +9091,7 @@ def _trained(
     now: datetime | None = None,
     overrides: Mapping[str, Any] | None = None,
     candles_builder: CandleBuilder | None = None,
+    macro_archive: Mapping[str, str] | None = None,
 ) -> tuple[tuple[Any, Any, Any] | None, Outcome | None]:
     """`(report, dataset, config)` from one training run into a temporary models root.
 
@@ -9110,7 +9120,7 @@ def _trained(
         return None, _with_contract(problem, "train_walkforward is absent", TRAINING_CONTRACT)
 
     dataset, problem = _constructed_dataset(
-        ctx, polars, training, engine_config, candles_builder
+        ctx, polars, training, engine_config, candles_builder, macro_archive=macro_archive
     )
     if dataset is None:
         return None, problem
@@ -11401,6 +11411,478 @@ def check_adaptive_router_weights_on_fixture(ctx: VerifyContext) -> Outcome:
         )
 
 
+# --- paper_equity_continuous_across_fill, spec 105 ------------------------- #
+#
+# Operator ruling 2026-09-16: "a criterion, not just a fix". A's spec 87 rehearsal found
+# that on the tick a resting entry filled, the paper ledger had not yet spent the cash
+# while engine 21 already counted the position, so engine 19 wrote the notional twice,
+# `peak_equity` kept it, and engine 17 froze the account on the next tick. Spec 103 fixed
+# the broker. This is the assertion that would have caught it, and it is proved capable of
+# failing by putting the defect back.
+#
+# **The bound is the fill's own cost, and it is computed from the rows the store holds.**
+# Buying a position swaps cash for the position, so equity should be unchanged except for
+# two things: the maker fee paid, and the difference between the price paid and the price
+# the position is marked at. The fee, the quantity and the fill price come from the
+# `orders` row engine 19 wrote for the entry; the mark comes from the `positions` row it
+# wrote on the same tick. Nothing here is a constant, and a tolerance that were one would
+# be a tolerance nobody could defend the day the fixture moved.
+#
+# **The chains are built by hand, in registry order, because spec 82 has not registered
+# them.** The operator wants PASS and FAIL observable now rather than a PENDING that waits
+# on registration. Once spec 82 lands, this criterion should read the registered chains
+# from `bootstrap.py` instead. Until then the order is the one in `engine-contracts.md`, and
+# every engine is the real class.
+#
+# **The subject is A's spec 87 rehearsal, reproduced.** It uses the constructed
+# deterministic series (`_constructed_candles` is the same formula as
+# `tests/research/test_training.py`), trained through the real trainer with the `btc`
+# macro column joined from `AAAUSD` over four folds. It replays the window ending
+# `FILL_SUBJECT_WINDOW_END` bars before the series end, on which A measured the real chain
+# approving a BUY and engine 18 placing it at fee tier 3. Only the prices are this file's.
+
+#: The universe the scripted market streams. BTC and ETH are the two macro assets the
+#: committed config names, which is what lets engine 6 run for real.
+FILL_SUBJECT_PAIRS: Final[tuple[str, ...]] = ("BTC/USD", "ETH/USD", "SOL/USD")
+
+#: `{asset: archive pair}` joined as macro columns when the subject is trained.
+FILL_SUBJECT_MACRO: Final[dict[str, str]] = {"btc": "AAAUSD"}
+
+#: Folds trained. Fold 0 trains no skeptic (spec 69), so one fold would leave engine 15
+#: unconfigured and the chain would stop there.
+FILL_SUBJECT_FOLDS: Final = 4
+
+#: Where the replayed window ends, in bars before the end of the constructed series, and
+#: how long it is. The window A's probe found engine 8 calling a BUY on.
+FILL_SUBJECT_WINDOW_END: Final = 200
+FILL_SUBJECT_WINDOW_BARS: Final = 300
+
+#: Flat bars planted after the window, so the ticks below have a continuous candle series
+#: behind them and engine 4 never reports a missing candle.
+FILL_SUBJECT_FLAT_BARS: Final = 4
+
+#: The quoted spread above the best bid. The stream quote and the REST book are pinned to
+#: the same prices, because engine 18 and the broker read different ones.
+FILL_SUBJECT_SPREAD: Final = Decimal("0.010")
+
+#: Every engine the subject runs, in registry order within each chain. The (module,
+#: class) pairs are imported rather than listed as objects, so a missing engine is a
+#: PENDING that names it rather than an `ImportError` at the top of this file.
+FILL_SUBJECT_CHAINS: Final[dict[str, tuple[tuple[str, str], ...]]] = {
+    "guard": (
+        ("exchange", "ExchangeEngine"),
+        ("market_data_recorder", "MarketDataRecorderEngine"),
+        ("market_sensor", "MarketSensorEngine"),
+        ("data_guard", "DataGuardEngine"),
+        ("safety", "SafetyEngine"),
+    ),
+    "opportunity": (
+        ("feature", "FeatureEngine"),
+        ("macro_context", "MacroContextEngine"),
+        ("scout", "ScoutEngine"),
+        ("regime", "RegimeEngine"),
+        ("anomaly", "AnomalyEngine"),
+        ("prediction", "PredictionEngine"),
+        ("order_book", "OrderBookEngine"),
+        ("cost", "CostEngine"),
+        ("risk", "RiskEngine"),
+        ("adaptive_router", "AdaptiveRouterEngine"),
+        ("skeptic", "SkepticEngine"),
+        ("decision", "DecisionEngine"),
+        ("execution", "ExecutionEngine"),
+    ),
+    "manage": (
+        ("position_manager", "PositionManagerEngine"),
+        ("exit", "ExitEngine"),
+        ("memory", "MemoryEngine"),
+    ),
+}
+
+
+def _symbol(module_name: str, attr: str | None) -> tuple[Any, Outcome | None]:
+    """One named symbol, or the module itself when `attr` is None, or the PENDING (or
+    FAIL) that says why it is not there."""
+    module, problem = try_import(module_name)
+    if module is None:
+        return None, problem or pending(f"{module_name} is unavailable")
+    if attr is None:
+        return module, None
+    value, missing = module_attr(module, attr)
+    if value is None:
+        return None, pending(missing)
+    return value, None
+
+
+@dataclass(frozen=True)
+class FillSubjectModel:
+    """The trained run spec 105's subject loads, and what it cost to produce.
+
+    Read-only once written, so it is shared across calls for one repository root, the
+    same arrangement as `_TRADE_SUBJECTS`. The database, the broker and the store are
+    built fresh for every run of the criterion and never cached.
+    """
+
+    models_dir: Path
+    run_id: str
+    seconds: float
+
+
+_FILL_SUBJECTS: dict[str, FillSubjectModel] = {}
+_FILL_SUBJECT_DIRS: list[Any] = []
+
+
+def _fill_subject_model(ctx: VerifyContext) -> tuple[FillSubjectModel | None, Outcome | None]:
+    """A's rehearsal subject, trained once per repository root per process."""
+    key = str(ctx.root)
+    cached = _FILL_SUBJECTS.get(key)
+    if cached is not None:
+        return cached, None
+    started = time.monotonic()
+    holder = tempfile.TemporaryDirectory(prefix="acsoe-fill-subject-", ignore_cleanup_errors=True)
+    _FILL_SUBJECT_DIRS.append(holder)
+    tmp = Path(holder.name)
+    result, problem = _trained(
+        ctx,
+        tmp,
+        name="fill",
+        max_folds=FILL_SUBJECT_FOLDS,
+        macro_archive=FILL_SUBJECT_MACRO,
+    )
+    if result is None:
+        return None, problem
+    report, _dataset, _config = result
+    fold_runs = list(getattr(report, "fold_runs", ()) or ())
+    if not fold_runs:
+        return None, failed(
+            "the training run for spec 105's subject produced no fold artefacts, so "
+            "engines 8, 13 and 15 have nothing to load"
+        )
+    run_id = str(fold_runs[-1])
+    models_dir = Path(getattr(report, "models_dir", tmp / "fill" / "models"))
+    for artefact in ("di.npz", "anomaly.joblib", "skeptic.txt"):
+        if not (models_dir / run_id / artefact).is_file():
+            return None, failed(
+                f"the latest fold {run_id} fitted no {artefact}, so the chain would stop "
+                "before engine 18 and the criterion could not reach its assertion"
+            )
+    subject = FillSubjectModel(
+        models_dir=models_dir, run_id=run_id, seconds=time.monotonic() - started
+    )
+    _FILL_SUBJECTS[key] = subject
+    return subject, None
+
+
+def _fill_subject_tools() -> tuple[dict[str, Any] | None, Outcome | None]:
+    """Every class and function the drive needs, or the first thing that is missing.
+
+    Phase 6's own engines are checked first through `_phase6_engines`, so a missing one is
+    reported by number and owning spec. Everything is imported inside the caller's
+    `root_import_path`, so a fabricated tree is judged on its own code.
+    """
+    problem = _phase6_engines(
+        "order_book", "adaptive_router", "decision", "execution", "position_manager",
+        "exit", "memory",
+    )
+    if problem is None:
+        problem = _paper_broker_module()
+    if problem is not None:
+        return None, problem
+    tools: dict[str, Any] = {}
+    wanted: list[tuple[str, str, str | None]] = [
+        ("broker", "acsoe.clients.paper.broker", "PaperBroker"),
+        ("store", "acsoe.clients.store.client", "StoreClient"),
+        ("migrate", "acsoe.clients.store.migrations", "apply_migrations"),
+        ("contracts", "acsoe.clients.store.contracts", None),
+        ("chains", "acsoe.core.contracts", "Chains"),
+        ("orchestrator", "acsoe.core.orchestrator", "Orchestrator"),
+        ("doubles", "tests.harness.doubles", None),
+        ("fake_kraken", "tests.harness.fake_kraken", None),
+        ("market_script", "tests.harness.market_script", None),
+    ]
+    for label, module_name, attr in wanted:
+        value, problem = _symbol(module_name, attr)
+        if value is None:
+            return None, problem
+        tools[label] = value
+    for chain, engines in FILL_SUBJECT_CHAINS.items():
+        built: list[Any] = []
+        for engine, class_name in engines:
+            cls, problem = _symbol(f"acsoe.engines.{engine}.engine", class_name)
+            if cls is None:
+                return None, problem
+            built.append(cls)
+        tools[chain] = built
+    return tools, None
+
+
+def _equity_across_fill(subject: FillSubjectModel, tier: str) -> Outcome:
+    """Drive a real entry to a real fill, then judge the two equity rows around it."""
+    tools, problem = _fill_subject_tools()
+    if tools is None:
+        return _awaiting(problem, tier)
+    polars, problem = _polars()
+    if polars is None:
+        return _awaiting(problem, tier)
+    doubles, fake_kraken, market_script = (
+        tools["doubles"], tools["fake_kraken"], tools["market_script"]
+    )
+    contracts = tools["contracts"]
+
+    base = doubles.load_default_config()
+    data = base.as_dict()
+    for field in ("prediction_run_id", "anomaly_run_id", "skeptic_run_id"):
+        data["models"][field] = subject.run_id
+    config = doubles.MappingConfig(data)
+    interval_s = int(config.get(KEY_DECISION_BAR_S))
+    tick_s = int(config.get("timeframes.loop_tick_s"))
+
+    bar_cls = market_script.Bar
+    rows = _constructed_candles(
+        polars, pair=CONSTRUCTED_PAIRS[0], interval_s=interval_s
+    ).to_dicts()
+    end = len(rows) - FILL_SUBJECT_WINDOW_END
+    window = [
+        bar_cls(
+            ts=int(row["ts"]),
+            open=Decimal(str(row["open"])),
+            high=Decimal(str(row["high"])),
+            low=Decimal(str(row["low"])),
+            close=Decimal(str(row["close"])),
+            volume=Decimal(str(row["volume"])),
+            trades=int(row["trades"]),
+        )
+        for row in rows[end - FILL_SUBJECT_WINDOW_BARS : end]
+    ]
+    last = window[-1].ts
+    clock = doubles.FixedClock(datetime.fromtimestamp(last, tz=UTC))
+    market = market_script.ScriptedMarket(
+        clock=clock, interval_s=interval_s, published_bars=200, pairs=FILL_SUBJECT_PAIRS
+    )
+    profile = market.use_fee_tier(3)
+    if profile.tier != 3:
+        return failed(f"the harness applied fee tier {profile.tier} when asked for 3; " + tier)
+    bid = window[-1].close.quantize(Decimal("0.001"))
+    ask = bid + FILL_SUBJECT_SPREAD
+    flat = [
+        bar_cls.flat(last + interval_s * k, str(bid), trades=17 + (k * 7) % 23)
+        for k in range(1, FILL_SUBJECT_FLAT_BARS + 1)
+    ]
+    for pair in FILL_SUBJECT_PAIRS:
+        market.plant(pair, window)
+        market.plant(pair, flat)
+        market.set_quote(pair, bid=str(bid), ask=str(ask))
+        market.set_order_book(pair, bids=[(str(bid), "1000")], asks=[(str(ask), "1000")])
+
+    holder = tempfile.TemporaryDirectory(prefix="acsoe-fill-drive-", ignore_cleanup_errors=True)
+    try:
+        db = Path(holder.name) / "acsoe.sqlite"
+        tools["migrate"](db)
+        store = tools["store"](db, models_dir=subject.models_dir)
+        try:
+            return _judge_fill(
+                tools, contracts, fake_kraken, store, market, clock, config,
+                entry_at=last + interval_s + 1, tick_s=tick_s, tier=tier,
+            )
+        finally:
+            store.close()
+    finally:
+        holder.cleanup()
+
+
+def _judge_fill(
+    tools: dict[str, Any],
+    contracts: Any,
+    fake_kraken: Any,
+    store: Any,
+    market: Any,
+    clock: Any,
+    config: Any,
+    *,
+    entry_at: int,
+    tick_s: int,
+    tier: str,
+) -> Outcome:
+    """Three ticks - quiet, entry, fill - and the verdict read from the store alone."""
+    store.append_command(
+        contracts.CommandRow(
+            command=contracts.CommandName.ACTIVATE.value,
+            source=contracts.CommandSource.CONSOLE,
+            reason="verify.py spec 105",
+            created_at=1,
+            updated_at=1,
+        )
+    )
+    broker = tools["broker"](market, store=store, config=config, clock=clock)
+    orchestrator = tools["orchestrator"](
+        config=config,
+        clock=clock,
+        clients=tools["doubles"].FakeClients(
+            kraken=broker, store=store, recorder=fake_kraken.FakeRecorder()
+        ),
+        chains=tools["chains"](
+            guard=[cls() for cls in tools["guard"]],
+            opportunity=[cls() for cls in tools["opportunity"]],
+            manage=[cls() for cls in tools["manage"]],
+        ),
+        run_id="verify-phase-6-fill",
+    )
+
+    def tick(at: int) -> dict[str, Any]:
+        clock.set(datetime.fromtimestamp(at, tz=UTC))
+        return dict(orchestrator.tick())
+
+    quiet = tick(entry_at - tick_s)
+    if "trading_blocked_by" in quiet:
+        return failed(
+            f"the quiet tick before the entry was blocked by {quiet['trading_blocked_by']}: "
+            f"{quiet.get('block_reason')}; {tier}"
+        )
+    entry = tick(entry_at)
+    execution = entry.get("execution") or {}
+    if "trading_blocked_by" in entry or execution.get("placed") is not True:
+        return failed(
+            "the subject placed no entry, so there was no fill to judge: blocked by "
+            f"{entry.get('trading_blocked_by')!r} ({entry.get('block_reason')!r}), "
+            f"engine 18 said {execution.get('reason_code')!r}. A's spec 87 probe placed one "
+            f"on this window; {tier}"
+        )
+    userref = int(execution["userref"])
+    pair = str(execution.get("pair"))
+    resting = store.order_by_userref(userref)
+    if resting is None or resting.limit_price is None:
+        return failed(
+            f"engine 18 placed entry {userref} and engine 19 recorded no resting row with a "
+            f"limit price for it; {tier}"
+        )
+    # One trade strictly below the limit, between the entry tick and the next: a resting
+    # post-only buy fills at its own price (spec 88).
+    market.plant_trade(
+        pair,
+        at=datetime.fromtimestamp(entry_at + tick_s // 2, tz=UTC),
+        price=str(resting.limit_price * Decimal("0.999")),
+    )
+    filled_tick = tick(entry_at + tick_s)
+
+    order = store.order_by_userref(userref)
+    if order is None or str(order.status.value) != "filled":
+        return failed(
+            f"a trade below the limit of entry {userref} did not fill it: the stored order is "
+            f"{None if order is None else order.status.value!r}; {tier}"
+        )
+    if order.avg_fill_price is None or order.fee is None:
+        return failed(
+            f"entry {userref} is recorded filled without a fill price or a fee, so its own "
+            f"cost cannot be computed; {tier}"
+        )
+    run_id = orchestrator.run_id
+    series = [row for row in store.equity_series() if row.run_id == run_id]
+    at_fill = [index for index, row in enumerate(series) if row.cycle_id == order.cycle_id]
+    if len(at_fill) != 1 or at_fill[0] == 0:
+        memory = filled_tick.get("memory") or {}
+        return failed(
+            f"the fill tick (cycle {order.cycle_id}) has {len(at_fill)} equity row(s) with "
+            f"{at_fill[0] if at_fill else 0} before it; engine 19 said "
+            f"{memory.get('equity_skipped_reason')!r}. A fill tick with no equity row is a "
+            f"gap in the series engine 17 reads; {tier}"
+        )
+    before, after = series[at_fill[0] - 1], series[at_fill[0]]
+    if before.cycle_id != order.cycle_id - 1:
+        return failed(
+            f"the equity row before the fill tick is from cycle {before.cycle_id}, not "
+            f"{order.cycle_id - 1}, so the entry tick wrote none; {tier}"
+        )
+    position_ids = [
+        str(found[0])
+        for found in store.connection.execute(
+            "SELECT position_id FROM positions WHERE entry_userref = ?", (userref,)
+        ).fetchall()
+    ]
+    position = store.position(position_ids[0]) if len(position_ids) == 1 else None
+    if position is None:
+        return failed(
+            f"entry {userref} filled and the store holds {len(position_ids)} position(s) "
+            "for it, not one; " + tier
+        )
+    qty, price, fee = order.filled_qty, order.avg_fill_price, order.fee
+    if position.qty != qty or after.open_position_count != 1:
+        return failed(
+            f"the position holds {position.qty}, the fill recorded {qty}, and the fill "
+            f"tick's equity row counts {after.open_position_count} open position(s); "
+            "the fill's cost can only be read off one position that matches its fill; "
+            + tier
+        )
+    # The mark, from the store either way. Engine 21 does not re-mark a position opened
+    # by this tick's fill: it values it at the fill price and leaves `last_price` empty
+    # until the next tick. So an empty mark is accepted only if the equity row really
+    # valued the position at its fill price, and then the mark-to-bid gap is zero. Any
+    # other value with no mark is a FAIL, never a wider tolerance.
+    if position.last_price is not None:
+        mark = position.last_price
+    elif after.positions_value == qty * price:
+        mark = price
+    else:
+        return failed(
+            f"entry {userref}'s position carries no mark on its fill tick and the equity "
+            f"row values it at {after.positions_value}, not its cost {qty * price}, so the "
+            "mark-to-bid part of the fill's cost cannot be read from the store; " + tier
+        )
+    if after.positions_value != qty * mark:
+        return failed(
+            f"the fill tick's equity row values the position at {after.positions_value}, "
+            f"not {qty} x its mark {mark}; " + tier
+        )
+    mark_gap = qty * abs(mark - price)
+    tolerance = fee + mark_gap
+    moved = after.equity - before.equity
+    detail = (
+        f"equity {before.equity} on cycle {before.cycle_id} and {after.equity} on the fill "
+        f"tick, cycle {after.cycle_id}: it moved {moved}. The fill's own cost is {tolerance}: "
+        f"fee {fee} + {qty} x |mark {mark} - fill {price}|, recorded for "
+        f"{pair} entry {userref} (notional {qty * price})"
+    )
+    if abs(moved) <= tolerance:
+        return passed(detail + "; " + tier)
+    return failed(
+        detail + ". Equity moved by more than the fill cost, so the cash and the position "
+        "disagree about when the fill happened. The paper ledger must count every fill the "
+        "broker has executed, recorded or not (invariant 2, spec 103); otherwise the notional "
+        "is counted twice and peak_equity carries it into engine 17's drawdown; " + tier
+    )
+
+
+def check_paper_equity_continuous_across_fill(ctx: VerifyContext) -> Outcome:
+    """Equity on the tick an entry fills equals the tick before, within the fill's own cost.
+
+    Spec 105, operator ruling 2026-09-16. The criterion drives real orchestrator ticks at
+    fee tier 3 against B's paper broker, with engine 19 recording to a real `StoreClient`.
+    A quiet tick, then the entry tick (the whole chain approves and engine 18 places a
+    post-only buy), then the fill tick (a planted trade below the limit, which engine 21
+    observes). The verdict is read from the store only: the two `equity_snapshots` rows,
+    the entry's `orders` row (quantity, fill price, fee) and the new `positions` row (its
+    mark). The tolerance is the fee plus the quantity times the gap between mark and fill
+    price, and never a constant.
+
+    The chains are assembled here in registry order because spec 82 has not registered
+    them. When it does, this criterion should read the registered chains from
+    `bootstrap.py` instead.
+
+    The named wrong implementation is the pre-spec-103 broker, whose balance leaves out a
+    fill that engine 19 has not recorded yet. On the fill tick the cash is then unspent
+    while the position is counted, and equity jumps by the whole notional.
+    """
+    with root_import_path(ctx.root):
+        tier, problem = _tier_sentence(3)
+        if tier is None:
+            return _awaiting(problem, "at fee tier 3")
+        _, problem = _fill_subject_tools()
+        if problem is not None:
+            return _awaiting(problem, tier)
+        subject, problem = _fill_subject_model(ctx)
+        if subject is None:
+            return _awaiting(problem, tier)
+        return _equity_across_fill(subject, tier)
+
+
 # --------------------------------------------------------------------------- #
 # Registration
 # --------------------------------------------------------------------------- #
@@ -11679,6 +12161,15 @@ register(
     6,
     Criterion(
         "adaptive_router_weights_on_fixture", check_adaptive_router_weights_on_fixture
+    ),
+)
+# Spec 105, operator ruling 2026-09-16 on A's spec 87 finding 1: the assertion that would
+# have caught every paper fill freezing the account. Registered after spec 100's nine and
+# runnable today, because the operator wanted PASS and FAIL observable before spec 82.
+register(
+    6,
+    Criterion(
+        "paper_equity_continuous_across_fill", check_paper_equity_continuous_across_fill
     ),
 )
 

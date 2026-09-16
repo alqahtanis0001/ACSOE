@@ -29,6 +29,19 @@ row (`ERROR`, `engine_errored`, primary) and no rejection, and the equity row is
 orchestrator with engine 18 really raising. Six mutations, all six killed by the tests written
 for them; control E1 survived narrow (39) and wide (1259). ruff and mypy are clean over the
 whole gate paths. No contract mismatch found. Full account in the build log.
+Committed by the lead as `3e1ded8`.
+
+#### 105 — DONE, not committed; gate run, final report to the lead
+
+`paper_equity_continuous_across_fill` is registered for phase 6. It uses real chains in
+registry order (hand-built, since spec 82 is held), fee tier 3, the paper broker and a real
+store. The tolerance is `fee + qty x |mark - fill|`, taken from the stored order, position and
+equity rows. Observed: PASS on the real tree (moved exactly minus the fee), FAIL with the
+broker broken both in place (once, hash-restored) and in the copied tree (committed test),
+and PENDING on `unbuilt_tree`. Criterion sweep: V1-V5 and V7 killed (V7 only after a test
+written for it), V6 is a checked negative, and control E2 survived. No ninth red. Findings
+for the lead: engine 21 leaves `last_price` NULL on the fill tick; spec 100's
+`test_pending_on_a_tree_with_nothing_built` uses `bare_tree`, which runs the real repository.
 
 ### CLAIM 2026-09-16 — Phase 6, the engines-and-models half of lane C (C-5, Opus 5 1M)
 

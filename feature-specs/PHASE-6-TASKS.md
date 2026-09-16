@@ -17,6 +17,12 @@ Plus A's one-line follow-up: remove the strict `xfail` in `test_trade_chain_rehe
 **Registration (82) is still held.** The sequence is: B's 94 → B's 103 → A's xfail →
 C's 104 → C's 105 → the lead reports to the operator → 82.
 
+**Status 2026-09-16 21:20 local: all of that sequence is done and committed** — 94 `49e369a`,
+103 `178a0a8`, A's xfail `ab2bf4f`, 104 `3e1ded8`, 105 in the commit after this line. Gate:
+pytest only spec 100's known 8; `verify --phase 6` 12 criteria, 2 PASS, 1 FAIL
+(`toolchain_green`, the same 8), 9 PENDING. **Next: the operator's word on registration (82),
+then spec 100's criteria bodies (C), then the gate.**
+
 ## HANDOFF 3, 2026-09-16 07:40Z — all six engines are committed; the order from here is forced
 
 **Read this first. HANDOFF 2 and HANDOFF 1 below are history.** Every ruling and finding of the

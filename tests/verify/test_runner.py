@@ -214,6 +214,8 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
         "console_shows_position_live",
         "order_book_slippage_on_recorded_book",
         "adaptive_router_weights_on_fixture",
+        # Spec 105, operator ruling 2026-09-16 on spec 87's first finding.
+        "paper_equity_continuous_across_fill",
     }
     for phase in range(7, verify_module.MAX_PHASE + 1):
         assert {c.name for c in verify_module._REGISTRY[phase]} == every_phase

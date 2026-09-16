@@ -100,8 +100,30 @@ The lead landed `state["block_status"]` in `core/` so engine 19 reads the status
 inferring it from an empty payload; the engine change is spec 104 (C). Consequence stated: engine
 17's error rate now counts opportunity-chain errors too.
 
-**Registration (spec 82) stays held**, as it was: the operator asked to see the rehearsal findings
-first, and spec 94 has not run yet.
+**Both defects are closed, 2026-09-16.** Defect 1: spec 103 (B, `178a0a8`) — the broker's
+balance counts executed fills, restart proven; A's rehearsal test is a plain test again
+(`ab2bf4f`) and goes red on the original `8332.414226591` when the fix is reverted. The criterion
+`paper_equity_continuous_across_fill` (spec 105, C) PASSes with equity moving by exactly the
+maker fee, and was observed to FAIL with the broker broken in place, reporting the same
+`8332.414226591`. Defect 2: spec 104 (C, `3e1ded8`) — engine 19 writes the `engine_errored` block
+record, proven through the real orchestrator with a real raising engine 18.
+
+**Spec 94 (B, `49e369a`) found nothing** against engines 9, 14, 10 or 15. On the thin book —
+the recorded BTC/USD snapshot, four levels walked — engine 9's estimate is nonzero and engine
+10's friction equals the recomputation from the published parts, and differs without the
+slippage term; the mutation "engine 10 drops the slippage term" is killed only there.
+
+**Open, for the operator:** (1) B's spec 103 choice that a due fill with no fee tier makes
+`balance()` a failed fetch (`KrakenUnavailableError`) rather than an `ERROR`, so engine 1 keeps
+`pair_rules` and engine 10 blocks on the absent fee tier; (2) whether engine 11's paper-mode
+fallback to `paper.starting_balances` should survive the ledger ruling — unreachable on the
+outage path today because engine 10 blocks first. **Observations, not defects:** engine 21
+stores a position opened on this tick with `last_price` NULL although its `_mark` docstring says
+the mark is the fill price (B); spec 100's `test_pending_on_a_tree_with_nothing_built` must move
+from `bare_tree` to `unbuilt_tree` when the criteria bodies are written, because the editable
+install resolves the real package there (C).
+
+**Registration (spec 82) stays held for the operator's word.**
 
 ### FINDING: a defect mutation testing structurally cannot reach
 

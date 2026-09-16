@@ -2194,3 +2194,193 @@ tests/verify/test_phase4_criteria.py tests/core`: `1259 passed, 1 warning in 363
 (`logs/verify/c104-wide-baseline.log`). E1 over the same set: `1259 passed, 1 warning in
 357.71s`. No crash and no native fault in either run. After the sweep the file's hash is the
 same as before it, and `git status` shows only my lane's files.
+
+### Spec 105, first runs — the new position carries no mark on its fill tick, and one unexplained raise
+
+**Agent:** C (interface and models) · **Task:** spec 105 · **Date:** 2026-09-16
+
+**What happened (1).** The first complete run of `paper_equity_continuous_across_fill` on the
+real tree reached the fill and returned FAIL: `entry 1690626088 filled and the store holds 1
+position(s) for it with no mark`. The chain did approve, place and fill the entry at tier 3,
+and engine 19 wrote both equity rows. What stopped the criterion was my own reading of "the
+mark": I took it from `positions.last_price`, and on the fill tick that column is NULL.
+
+**Why.** Engine 21's `_mark` (B's) does not re-mark a position opened by this tick's fill.
+It adds `qty * entry_price` to `positions_value` and publishes the row without `last_price`
+or `unrealised_pnl`. Its docstring says such a position "is worth what was just paid for it,
+and `last_price` on a position that has existed for no time is the fill price". So on the
+fill tick the mark **is** the fill price, but it is recorded only through the equity row's
+`positions_value`, never on the position row. From the next tick on, `last_price` is the bid.
+
+**How the bound handles it.** I did not widen it. The mark now comes from the store in one of
+two ways, and each is checked rather than assumed:
+
+- if the position row carries a `last_price`, that is the mark;
+- if it does not, the equity row's `positions_value` must equal `qty x fill price` **exactly**,
+  with exactly one open position, and the mark-to-bid gap is then zero.
+
+A position valued at anything else with no mark is a FAIL. The tolerance on the fill tick is
+therefore the maker fee alone, which is the tightest honest bound.
+
+**For B, not changed by me.** The docstring's "`last_price` ... is the fill price" reads as a
+statement about the stored row, and the stored row says NULL. The console would show that
+position with no mark for one tick. This is reported to the lead as an observation, not a
+defect; the engine is B's.
+
+**What happened (2).** The very first invocation, through a throwaway script that called
+`run_criterion`, returned after 0.7 s with `criterion raised - TypeError: 'float' object is
+not callable`. That is before any training could have started. I did not keep a traceback.
+Three later runs of the same code (one calling the check directly, two with a traceback
+handler) did not reproduce it. The shape, a nonsensical `TypeError` once with no
+reproduction, fits the registered native fault's corrupted-interpreter family (B's
+`'MappingEndEvent' has no len()` today). I checked the other mechanisms: no stale `.pyc`
+(`PYTHONDONTWRITEBYTECODE=1`), no concurrent writer (I am alone in the checkout), and no
+tmp-dir sweeper symptom. Without the traceback this cannot be proven, so it is recorded as
+**consistent with the native fault, not attributed**. The harness now keeps tracebacks.
+
+### Spec 105 — my PENDING test ran the whole chain and reported PASS, because `bare_tree` is not an absent subject
+
+**Agent:** C (interface and models) · **Task:** spec 105 · **Date:** 2026-09-16
+
+**What happened.** My first PENDING test pointed the criterion at `bare_tree`, as spec 100's
+`test_pending_on_a_tree_with_nothing_built` does. It came back **PASS**: the criterion
+trained its subject, drove three ticks and judged the fill, all against a tree with no
+`src/`.
+
+**Why.** The editable install makes the real `acsoe` importable from any directory, and
+pytest puts the repository root on `sys.path`, so `tests.harness` resolves as well.
+`root_import_path` only shadows what the tree actually carries. `unbuilt_tree` in
+`tests/verify/conftest.py` exists for exactly this and says so in its docstring. I had not
+read it.
+
+**Fix.** The test uses `unbuilt_tree`, an empty `acsoe` package that shadows the real one.
+There the criterion is PENDING and names engine 9 and spec 96, the first engine it needs.
+
+**For the lead, and it is spec 100's rather than mine.** Spec 100's nine criteria pass
+`test_pending_on_a_tree_with_nothing_built` on `bare_tree` only because their bodies end
+in a hard-coded PENDING ("not written yet"). The day a body is written, the same test will
+run the real chain from the real repository and report PASS or FAIL on "a tree with nothing
+built". That test should move to `unbuilt_tree` when the bodies land.
+
+### Spec 105 — the criterion, observed PENDING, PASS and FAIL, and the broker broken in place
+
+**Agent:** C (interface and models) · **Task:** spec 105 · **Date:** 2026-09-16
+
+**What landed.**
+
+- `scripts/verify.py`: `check_paper_equity_continuous_across_fill`, registered for phase 6 after
+  spec 100's nine. `_trained` and `_constructed_dataset` gain an optional `macro_archive`,
+  passed to `build_dataset` only when given, so the Phase 5 criteria train exactly as before.
+- `tests/verify/test_phase6_criteria.py`: five tests. `EQUITY_ACROSS_FILL` is kept out of
+  `PHASE6_CRITERIA`, so the parametrised real-tree PENDING test does not gain a ninth red.
+- `tests/verify/test_runner.py`: the phase-6 set now includes the new name.
+
+**The subject** is A's spec 87 rehearsal, rebuilt from verify.py's own pieces.
+`_constructed_candles` is the same formula as `tests/research/test_training.py`, trained over
+four folds with `btc` joined from `AAAUSD`, and the replay window ends 200 bars before the
+series end. All 21 engines are real and run in registry order. The chains are hand-built
+because spec 82 is held, and the docstring says to read `bootstrap.py` once it lands. The
+market is the scripted market at fee tier 3 behind `PaperBroker`, and the store is a real
+`StoreClient` in a temporary directory. The ticks are quiet, entry, then a planted trade at
+`limit x 0.999`, then the fill tick. Training costs about 30 s and is cached per repository
+root, like `_TRADE_SUBJECTS`; the store and the broker are never cached. A whole run takes
+about 32 s.
+
+**The tolerance.** It is read from the store alone:
+
+- the fee, quantity and fill price come from the entry's `orders` row;
+- the mark comes from the `positions` row's `last_price`, or, when that is empty, the fill
+  price, but only if the equity row's `positions_value` is exactly `qty x fill price` with one
+  open position;
+- `tolerance = fee + qty x |mark - fill price|`, and the verdict is
+  `|equity(fill tick) - equity(entry tick)| <= tolerance`.
+
+It also checks that the row before the fill is the entry tick's (`cycle_id - 1`). On this
+subject the mark gap is zero, so the bound is the maker fee alone, and equity moved by exactly
+minus the fee.
+
+**Observed messages, verbatim.**
+
+PASS (real tree, `logs/verify/c105-probe-real-3.log`):
+
+> equity 5000.00 on cycle 2 and 4996.3343443507499 on the fill tick, cycle 3: it moved -3.6656556492501. The fill's own cost is 3.6656556492501: fee 3.6656556492501 + 26.26015939 x |mark 126.9 - fill 126.9|, recorded for BTC/USD entry 1690626088 (notional 3332.414226591); at fee tier 3, reference friction about 0.65% round trip and a hurdle of 1.625%; tier 1 is a no-trade regime at the current barriers
+
+FAIL (the real `broker.py` broken in place, arm B1, `logs/verify/c105-inplace-B1-unrecorded-fill-excluded.log`):
+
+> equity 5000.00 on cycle 2 and 8332.414226591 on the fill tick, cycle 3: it moved 3332.414226591. The fill's own cost is 3.6656556492501: fee 3.6656556492501 + 26.26015939 x |mark 126.9 - fill 126.9|, recorded for BTC/USD entry 1690626088 (notional 3332.414226591). Equity moved by more than the fill cost, so the cash and the position disagree about when the fill happened. The paper ledger must count every fill the broker has executed, recorded or not (invariant 2, spec 103); otherwise the notional is counted twice and peak_equity carries it into engine 17's drawdown; at fee tier 3, reference friction about 0.65% round trip and a hurdle of 1.625%; tier 1 is a no-trade regime at the current barriers
+
+`8332.414226591` is A's finding-1 figure to the digit.
+
+PENDING (`unbuilt_tree`): the message names engine 9 `order_book` and spec 96, and then "will run
+at fee tier 3 ...".
+
+**The in-place cross-lane run**, approved by the lead and made once through
+`scratchpad/c104/sweep105.py`. It takes a byte copy of `src/acsoe/clients/paper/broker.py`
+(0 CRLF, anchor `for userref, executed in list(self._executed.items()):` exactly once, and no
+test or script anchors on it), restores in a `finally`, and compares the sha256 in the same
+statement. `PYTHONDONTWRITEBYTECODE=1`, `sys.executable`, `-X faulthandler`.
+
+| Arm | Mutation | Mutant sha256 | Result |
+|---|---|---|---|
+| B1 attempt 1 | `... in []:` | `c15e1c2a…bfa0a4c1` (A's B1, identical) | **no result**: exit `0xC0000005`, empty output. The registered native fault, not counted. Log moved to `logs/verify/c105-crashed/B1-attempt1.log` |
+| B1 attempt 2 | same | same | **FAIL**, quoted above |
+| B0 control | `list(...)` → `tuple(...)` | `f5a55ae4…73cc8d7` | PASS, identical numbers to the real tree |
+
+The broker's sha256 was `98c0df710256e4fb65c0e9dc6bf58acca6547eb2e38c7a088be01e28c70e6201`
+before and after every arm, and `git status` never showed it modified. The committed FAIL test
+makes the same break in the copied `phase6_tree`, never in the real file, and hashes the real
+file on both sides.
+
+### Spec 105 — eight mutations of the criterion: six killed, one equivalent, one control
+
+**Agent:** C (interface and models) · **Task:** spec 105 · **Date:** 2026-09-16
+
+Harness: `scratchpad/c104/sweep105v.py`, the spec 104 harness pointed at `scripts/verify.py`
+(0 CRLF; every anchor exactly once in the file and absent from `tests/`), with a byte copy, a
+`finally` restore and the sha256 in the same statement. File sha256 before and after every
+arm: `f2299ae8fb19a000b633e4e29833e629a6348858fbdb539826c42ed03b5e0844`. Narrow target:
+`test_phase6_criteria.py -k equity_across_fill`, baseline `4 passed` (then `5 passed` once
+the V7 test existed).
+
+| Arm | Mutation | Mutant | Verdict | Killing test |
+|---|---|---|---|---|
+| V1 | tolerance also admits the notional | `87a0e497…` | killed, 2 failed | `…fails_when_the_broker_leaves_out_an_unrecorded_fill` (the defect passes); `…passes_on_the_real_tree` (bound != fee) |
+| V2 | the comparison is `if True:` | `73308f43…` | killed, 1 failed | `…fails_when_the_broker_leaves_out…` |
+| V3 | tolerance is `Decimal("5")` | `0b23fa5d…` | killed, 1 failed | `…passes_on_the_real_tree` (bound != fee). The FAIL test stayed red because 5 is below the notional, so a constant is caught only by the test that pins the bound to the fee |
+| V4 | the fee is left out of the bound | `87afe97b…` | killed, 2 failed | `…passes_on_the_real_tree` (moved -fee is outside a zero bound) |
+| V5 | PASS message without the tier sentence | `b60f05b4…` | killed, 1 failed | `…passes_on_the_real_tree` |
+| V6 | the no-mark branch accepts any value (`elif True:`) | `9e2af240…` | survived narrow and wide (checked negative) | — the very next check (`positions_value != qty x mark`) refuses the same values, so the branch only chooses the message. Recorded as a checked negative, not a survivor |
+| V7 | the entry-tick check becomes `if False:` | `5c64c500…` | **survived the first sweep**; killed after a new test, 1 failed | `…fails_when_the_entry_tick_wrote_no_equity_row`, written for it. It makes engine 19 skip the entry tick's equity row in the copied tree, so the last earlier row is the quiet tick's, which compares clean |
+| E2 | control: `moved = -(before - after)` | `b62a5c03…` | survived narrow and wide | — |
+
+**Survivors against the wider set.** The wider set was the whole of
+`tests/verify/test_phase6_criteria.py` and `tests/verify/test_runner.py`. The baseline was
+`8 failed, 53 passed`, and the 8 are the known
+`test_pending_on_the_real_tree_names_the_subject_and_the_spec` parametrisations
+(`logs/verify/c105-verify-wide-baseline.log`). V6 and E2 each gave `8 failed, 53 passed` with
+**the same eight**. My harness printed "KILLED" for both because it reads the exit code and
+does not compare against the baseline set; the failing sets are identical, so both survived.
+**A correction to my own tool, recorded rather than hidden:** a verdict over a red baseline
+has to compare failing sets, which `code-standards.md` already says.
+
+**No ninth red.** The new criterion runs to PASS on the real tree, so it is not in
+`PHASE6_CRITERIA` and does not join that parametrised test's failures.
+
+### Spec 105 — the gate at the spec 105 boundary
+
+**Agent:** C (interface and models) · **Date:** 2026-09-16
+
+The tree is `3e1ded8` plus `scripts/verify.py`, `tests/verify/test_phase6_criteria.py`,
+`tests/verify/test_runner.py`, this log and my progress file. I was the only agent in the
+checkout, and nothing was running beside the gate. The four commands ran one after another,
+each redirected to its own file, and each file was read in full.
+
+| Command | Result | Log |
+|---|---|---|
+| `pytest tests/ -q` | `8 failed, 3197 passed, 2 skipped, 3 warnings in 1383.05s`; all 8 are the known `test_pending_on_the_real_tree_names_the_subject_and_the_spec` parametrisations | `logs/verify/c105-gate-pytest.log` |
+| `mypy --strict src/ scripts/` | `Success: no issues found in 153 source files` | `logs/verify/c105-gate-mypy.log` |
+| `ruff check src/ tests/ scripts/` | `All checks passed!` | `logs/verify/c105-gate-ruff.log` |
+| `verify.py --phase 6` | `12 criteria: 2 PASS, 1 FAIL, 9 PENDING`; `paper_equity_continuous_across_fill` PASS, and `toolchain_green` FAIL on the same 8 (its own run: `8 failed, 3197 passed, 2 skipped`, no other failure) | `logs/verify/c105-gate-verify.log`, `logs/verify/toolchain_green/20260916T201415_806009-pytest-attempt1.log` |
+
+The suite grew by 5 tests over spec 104's boundary (A's gate had 3165 passed). No native fault
+crashed any of the four runs.
