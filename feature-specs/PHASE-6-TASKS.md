@@ -1,5 +1,81 @@
 # Phase 6 — shared task list
 
+## HANDOFF 1, 2026-09-16 00:00Z — all four teammates died at the usage limit. Read this first.
+
+**What happened.** A, B, C-models and C-verify all hit the session limit within 40 seconds of
+each other at 23:49Z, **one minute before the limit reset**. Nobody was stopped, nothing was
+abandoned by choice, and no message they sent went unread. A dead session is not a refusal: read
+the files below rather than inferring anything from silence.
+
+**What survived, and why.** Every one of the four had written its progress file **before** its
+work and its build-log entries **at diagnosis**, so the only thing lost is in-flight reasoning —
+no claim, no finding and no mutation table went with them. That is the "write before, not after"
+rule paying for itself for the second time in this project (Phase 3 lost three build logs the
+other way round). `context/progress/{a-platform,b-store,c-interface}.md` and
+`docs/build-log/phase-6/*.md` are accurate as of the deaths.
+
+**What was running, and what it cost: nothing.** Only `scripts/record.py` (x2) and
+`scripts/recording/supervise.py` (x2) were alive, as they have been since 14:49, and they are
+untouched. **No daemon has ever run in Phase 6**, which is why A's `drain_gaps` finding below has
+cost the archive nothing so far.
+
+### State on disk, per spec, verified by the lead rather than taken from a report
+
+| Spec | Owner | State |
+|---|---|---|
+| 84 order surface | A | **Done**, 60 tests, 15 mutations killed. Seam test discharged by 86. |
+| 85 trade ranges | A | **Done**, reworked onto `context.previous_now`, sweep re-run from scratch. |
+| 86 wiring + book cutter | A | **Done**, 7 + 23 tests, 16 mutations killed. Cutter dry-run against the real archive, read-only. |
+| 87 rehearsal of 18/21/22 | A | Not started, correctly — waits on B's 91 and 93. |
+| 88 paper broker + ledger | B | **Done**, 250 tests in lane, 13 mutations (12 killed + 1 equivalent control that survived as designed). |
+| 89 one position per pair | B | **Built**, 48 tests, 11 mutations killed. **The lead's precedence reversal is NOT applied** — see below. |
+| 90 engine 16 | B | Not started. Unblocked since `5f84df3`. |
+| 91 engine 18 | B | Not started. |
+| 92 engine 21 | B | **Built, incomplete**: 632-line engine, 226-line contracts, README, 857 lines of tests, 40 passing. **Mutation sweep not run.** |
+| 93 engine 22 | B | Not started. |
+| 94 rehearsal of 9/14 | B | Not started. |
+| 95 is_buy | C-models | **Done**, 4 mutations killed. Cross-chain key row added by the lead. |
+| 96 engine 9 | C-models | Not started. |
+| 97 engine 14 | C-models | Not started. |
+| 98 engine 19 records 18 and 22 | C-models | Not started. **Grew a defect** — see below. |
+| 99 reason prose | C-verify | **Partly done**: the two spec 89 codes are in `REASON_PROSE`. The walking test is not written. |
+| 100 Phase 6 criteria | C-verify | Not started. |
+| 101 console live position | C-verify | Not started. |
+| 102 DI at size | C-models | **Half-applied on disk** — see below. |
+
+### Four things waiting, and two of them are half-applied edits the deaths left behind
+
+1. **`src/acsoe/modelling/di.py` names `score_many` in `__all__` and does not define it.**
+   C-models had landed `_BLOCK_ELEMENTS` and the export before it died. The module imports and
+   compiles; `from acsoe.modelling.di import *` would not. **C-models finishes it** — do not
+   revert it, the reasoning in the `_BLOCK_ELEMENTS` comment is worth keeping.
+2. **`PaperBroker` forwards six of `MarketStreamProtocol`'s seven methods and drops
+   `drain_gaps`.** Found by A, measured, reported to B, never fixed — B died first. Engine 2 then
+   records **no `gap` line** into `data/raw/`, so a recording made through the daemon would claim
+   to be continuous while spanning reconnects (invariant 11, and it disarms the book cutter's gap
+   refusal). **Nothing has been recorded through the daemon, so the archive is intact.** B fixes
+   it with A's test that walks `MarketStreamProtocol.__protocol_attrs__` rather than a test per
+   method — nobody writes a test for the method they forgot.
+3. **B's precedence reversal is outstanding.** The lead ruled the per-pair refusal goes *ahead*
+   of the portfolio cap; `engines/risk/engine.py` still checks the cap first and its comment still
+   argues the old way. B applies it, inverts the test that pinned it, and appends the reversal to
+   the Decision entry rather than editing it.
+4. **B's tripwire is now red on purpose.** `test_the_two_codes_spec_89_added_are_still_waiting_on_cs_prose`
+   asserts the two codes are absent from `REASON_PROSE`; C-verify landed the prose, so it fires.
+   **B deletes the tripwire and moves the codes into its renderable list**, which is exactly what
+   the tripwire's failure message says to do. Until then it is one known, expected red.
+
+### The two-enum trap, now a standing rule
+
+B lost thirteen tests to it and wrote it up: `clients/store/contracts.py` and
+`clients/kraken/contracts.py` both declare `OrderStatus`, `OrderSide` and `OrderType` with
+matching spellings **on purpose**, so they compare equal and are never identical — `is` between
+them is always `False`. B's engine 21 read every resting entry as "nothing resting" and published
+`entry_orders_cancelled: True` with a live post-only buy on the book. `mypy --strict` cannot see
+it, because `context.clients.kraken` is `Any`. **Alias one on import** and compare a client answer
+only against the client enum. Now in `context/code-standards.md` under Money and numbers.
+
+
 **Phase 6 — Decision and execution.** Engines 9 `order_book`, 14 `adaptive_router`, 16 `decision`,
 18 `execution`, 21 `position_manager`, 22 `exit`, plus the fill simulator. Specs 80 to 99 in
 `feature-specs/`. Approved by the operator 2026-09-16 with five rulings, all recorded below.

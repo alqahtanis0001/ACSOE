@@ -1,5 +1,155 @@
 # Agent B — Store and trading
 
+## Phase 6 — Decision and execution, current session
+
+### Spec 89 — BUILT AND GREEN IN MY LANE 2026-09-16; the four gates are not yet run
+
+Claimed 2026-09-16 before any code, per rule 1. Files touched, and nothing else:
+
+- `src/acsoe/engines/risk/contracts.py` — two `Final` reason codes.
+- `src/acsoe/engines/risk/engine.py` — `RiskEngine._pair_exposure` and the refusal.
+- `src/acsoe/engines/risk/README.md`.
+- `tests/engines/test_risk.py`.
+
+**No schema change, no migration, no new `StoreClient` method.** `open_positions()` and
+`resting_orders(intent=OrderIntent.ENTRY)` already exist and already carry `pair`, so spec 89
+step 3's "if a per-pair read is needed" never fired.
+
+**Not marked complete.** My own Phase 3 rule stands: a spec is complete here only once its four
+gates are green, never in the edit that claims it. What is green so far:
+
+```
+pytest tests/engines/test_risk.py -q                    48 passed
+pytest tests/engines/test_scout.py \
+       tests/engines/test_feature_chain_rehearsal.py -q 92 passed
+ruff  check src/acsoe/engines/risk/ tests/engines/test_risk.py   All checks passed
+mypy  --strict src/acsoe/engines/risk/                  3 source files, clean
+```
+
+The four gates need a full-suite run, and **rule 6 requires the lead's explicit stop before any
+baseline run** — three of us are in this checkout. Asked; waiting.
+
+**Eleven mutations, eleven killed**, each named with the test that killed it, each applied to a
+byte copy and restored with the sha256 compared in the same statement. Table and reasoning in
+`docs/build-log/phase-6/b-store.md`. The finding: M1 (pair comparison removed), M3 (every
+resting order counts, not only entries) and M4 (a closed position counts) were each killed by
+the **negative** half of their parametrised pair and by nothing else in 48 tests — the block
+halves die to six tests each and prove almost nothing alone.
+
+**One decision the lead or the operator may want to overturn**, recorded as a Decision entry in
+the build log and pinned by a test: when the portfolio cap and the per-pair rule are both true
+on one tick, the **cap** is reported. Both block, so only the `reason_code` differs, and I kept
+the cap first so no rejection recorded before spec 89 changes code because spec 89 landed. The
+cost is real: a query counting how often invariant 6's per-pair clause fires undercounts on
+exactly those ticks. One line to reverse.
+
+**For C, spec 99 — two codes are not renderable yet.** `position_open_on_pair` and
+`entry_resting_on_pair` are absent from `REASON_PROSE`, so the console renders "No reason was
+recorded." for both, silently. Handed to C by message with suggested prose.
+`test_the_two_codes_spec_89_added_are_still_waiting_on_cs_prose` asserts their **absence** and
+**will go red the moment C maps either one** — deliberately, with a failure message saying to
+move them into the renderable test and delete the tripwire. A "renderable if present" test would
+have been green in both states forever. Also added `no_fx_rate` to that renderable list; it has
+been mapped since Phase 3 and emitted since spec 43 and was never checked.
+
+### Spec 88 — BUILT AND GREEN IN MY LANE 2026-09-16; the four gates are not yet run
+
+Claimed before any code. Files touched: `src/acsoe/clients/paper/` (`__init__.py`, `broker.py`,
+`fills.py`, `README.md`), `tests/clients/paper/` (`test_fills.py`, `test_broker.py`), plus
+`StoreClient.filled_orders()` in `src/acsoe/clients/store/client.py` with its four tests in
+`tests/clients/store/test_store.py`. All in my lane; no migration, no schema change.
+
+```
+pytest tests/clients/paper/ tests/clients/store/ -q      250 passed
+pytest tests/cli/test_paper_broker_wiring.py \
+       tests/clients/paper/ -q                            61 passed   (A's seam, below)
+ruff  check src/acsoe/clients/ tests/clients/             All checks passed
+mypy  --strict src/acsoe/clients/                         22 source files, clean
+```
+
+**Thirteen mutations: twelve killed, one equivalent control that survived as required.** Table
+in the build log. Five of the twelve — look-ahead through the simulator, pair isolation,
+invariant 8's idempotency, not draining the window engine 3 needs, and the ledger's status
+filter — were each killed by **exactly one test in 150**.
+
+**The seam with A is closed on both sides with no double.** A read my constructor message,
+including the `clock` amendment, and `cli/engine.py:130` now reads
+`PaperBroker(real, store=store, config=config, clock=clock)` behind `if config.mode == "paper"`.
+A's `tests/cli/test_paper_broker_wiring.py` passes against my real broker and my
+`test_the_broker_and_engine_three_see_the_same_trades_on_one_tick` runs A's real engine 3
+against it. Neither side mocks the other.
+
+**Two things for the lead, both in the build log with full reasoning:**
+
+1. **Spec 88 step 3 names a method nothing calls.** It says engine 3 *drains* trades;
+   `engines/market_sensor/engine.py` reads `recent_trades()`, a rolling window that
+   deliberately does not clear. `drain_trades()` exists on the client, on `ws.py` and in A's
+   protocol and **no caller in `src/` uses it**. The spec's conclusion holds — the broker is in
+   the path — and its mechanism does not, so the broker keeps no observation buffer.
+2. **A deviation from spec 88 step 2 that I did not treat as settled.** The drain was going to
+   be the tick boundary at which `_pending` is dropped. With no tick edge the broker can see,
+   `_pending` is pruned by *recording* instead: the store's row wins the moment it exists.
+   Stricter than the spec on the normal path, safer on the abnormal one. Flagged rather than
+   assumed.
+
+Not marked complete: the four gates need a full-suite run and rule 6 requires the lead's stop.
+
+*Original claim, kept because the decisions in it were made before the code and two of them
+moved:*
+
+**A's spec 84 has landed**, so this is built against the real surface and not a mock:
+`OrderRequest`, `OrderAck`, `OrderAckStatus`, `OrderState`, `OrderStatus`,
+`TERMINAL_ORDER_STATUSES` and `OrderClientProtocol` are all in
+`src/acsoe/clients/kraken/contracts.py`, and `OrderClientProtocol` has **four** calls, not the
+three spec 88 names: `add_order`, `cancel_order`, `query_orders` and `open_orders`.
+
+Decisions settled from the documents before writing, so they are visible rather than embedded:
+
+- **Constructor.** `PaperBroker(real, *, store, config, clock)`. Keyword-only after `real`,
+  because Phase 5 cost us a collision where `models_dir` landed positional after I had told A it
+  would be keyword-only. **`clock` is an amendment to what I first sent A** and the reason is
+  `BalancesSnapshot.fetched_at`: the ledger must answer whether or not the real `Balance` call
+  works, so it cannot borrow the real snapshot's timestamp, and invariant 9's injected clock is
+  the only other source. A told.
+- **The ledger is quote-side only, and that is spec 88's own wording** — "minus every filled
+  entry's notional and fee, plus every filled exit's proceeds less fee". It does **not** credit
+  the base currency on a buy. Engine 19 computes `equity = cash + positions_value` where `cash`
+  is `balances[reporting_currency]`, so the base leg is already represented by the `positions`
+  row; crediting it here would be a second representation of one exposure, and the two would
+  drift the first time a fill and a position row disagreed.
+- **`pair` → quote currency comes from `real.asset_pairs()`**, which is TTL-cached in
+  `rest.py`, never from splitting the pair name. `OrderRow` carries no `quote` column and
+  Kraken pair names are not reliably `BASE/QUOTE`.
+- **The broker sees trades by being in the path.** Engine 3 calls `drain_trades()` through
+  `clients.kraken`, which in paper mode is the broker, so the broker's `drain_trades()` forwards,
+  keeps what passed through and returns it. It must not call `drain_trades()` itself — that
+  empties the buffer and engine 3 and the broker would then disagree about which trades happened,
+  which is the one thing spec 88 asserts they cannot.
+- **A restart loses the observed trades and nothing else.** Resting orders are the store's rows,
+  per spec 88 step 2, but the trade observations are per-process like the stream itself. After a
+  restart nothing fills until new trades arrive, which is the pessimistic direction. README.
+
+### CLAIMED 2026-09-16 — spec 92, engine 21 `position_manager`
+
+**Taken out of the lead's stated order, deliberately, and this note is the reason.** The order
+was 90 → 91 → 92 → 93. Spec 90 is **held** by its own scope limit until the lead's registry and
+invariant edits land (spec 80), and spec 91 reads engine 16's intent under spec 90 option 2, so
+both are blocked on the same thing. The Phase 6 task list says waves are dependency order and
+not permission to idle. Spec 92 depends on nothing that is missing:
+
+- the store reads — `resting_orders(intent=entry)`, `open_positions()` — are mine and exist;
+- `query_orders` is my own broker, landed under spec 88;
+- `state["market_sensor"]["quotes"]` and `["trade_ranges"]` are A's spec 85 and have landed;
+- `state["execution"]["orders"]` is read **only when present**, which is spec 92's own wording,
+  so engine 18 not existing yet is a case the engine must handle rather than a blocker.
+
+Files: `src/acsoe/engines/position_manager/` and `tests/engines/test_position_manager.py`.
+
+### Claimed after it, in order
+
+Spec 88 (`clients/paper/`, `tests/clients/paper/`) → spec 90 (**held** until the lead says the
+registry Gate column and the invariant 3 and 4 edits have landed) → specs 91, 92, 93 → spec 94.
+
 ## Claimed
 
 - **Spec 11** — `db/migrations/`, SQLite schema and forward-only migration runner. *Complete.*

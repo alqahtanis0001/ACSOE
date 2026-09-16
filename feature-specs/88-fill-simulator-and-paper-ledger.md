@@ -37,8 +37,18 @@ before it is claimed.*
    last-known-good retention) to `real`. Implements spec 84's `OrderClientProtocol` and
    `balance()`.
 2. **No in-memory order book of its own that a restart can lose.** Resting orders are the store's
-   `orders` rows (written by engine 19); the broker reads them. What it accepted this tick but 19
-   has not yet recorded it holds only until the tick's end, keyed by `userref`.
+   `orders` rows (written by engine 19); the broker reads them. What it accepted but engine 19 has
+   not yet recorded it holds keyed by `userref`.
+
+   **Amended 2026-09-16, by the lead, on B's escalation.** This step said "only until the tick's
+   end", and the tick's end was going to be the drain that step 3 wrongly assumed. There is no
+   tick edge a client can see — a client is not an engine and is handed no `context`. So the
+   broker prunes **by recording**: the store's row wins the moment engine 19 writes it, and the
+   broker's copy is dropped then. That is stricter than the literal reading on the normal path
+   (the entry leaves `_pending` before the tick ends) and safer on the abnormal one: an order
+   engine 19 failed to record **lingers** rather than vanishing from a system that has already
+   accepted it. Vanishing is the worse failure, because the broker would then accept a second
+   order for the same `userref` while the exchange side of the simulation still held the first.
 3. `clients/paper/fills.py`, pure functions, no clock, no I/O:
    - **Post-only placement.** A buy limit at or above the best ask is **rejected** with
      `post_only_would_cross` — Kraken cancels such an order and so does the simulator.
@@ -46,12 +56,18 @@ before it is claimed.*
      L** after the order was placed. Touching L is not a fill: queue position is unknown and the
      pessimistic reading cannot flatter the strategy. Partial fills are not simulated, and the
      README says so.
-   - **Where the broker sees trades.** A client cannot read `state`, so it cannot read spec 85's
-     `trade_ranges`. It does not need to: engine 3 drains trades through `clients.kraken`, which in
-     paper mode *is* the broker, so the broker observes the same drained tuple engine 3 builds
-     `trade_ranges` from and the two cannot disagree about which trades happened. Trades drained
-     before an order's `placed_at` never fill it — engine 18 places after engine 3 has drained on
-     the same tick. A test asserts the broker and engine 3 agree on the range for one tick.
+   - **Where the broker sees trades. CORRECTED 2026-09-16, by B, against the code.** This step
+     said engine 3 *drains* trades through `clients.kraken` and the broker therefore observes the
+     same drained tuple. **It does not.** `engines/market_sensor/engine.py` reads
+     `recent_trades()`, a rolling window that `ws.py` documents as deliberately **not** clearing,
+     because engine 3 rebuilds one 15-minute bar across the fifteen ticks it spans and is
+     stateless across cycles. `drain_trades()` exists on `KrakenClient`, on `ws.py` and in A's
+     `MarketStreamProtocol`, and **nothing in `src/` calls it** — the broker would have been its
+     only caller, and draining would have taken the trades engine 3 needs out from under it.
+     The conclusion the step drew was right and its mechanism was wrong: the broker is in the
+     path, so read the same source engine 3 reads, `recent_trades()`, keep no observation buffer
+     of its own, and let a test count the drains and require **zero**. Trades observed before an
+     order's `placed_at` never fill it.
    - **A market sell walks the bid side** of the order book fetched that tick, level by level,
      for the full quantity; fill price is the volume-weighted average. If the fetched depth cannot
      absorb the quantity, the remainder is priced at the worst fetched level and the fill records

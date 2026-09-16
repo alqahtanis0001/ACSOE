@@ -46,6 +46,32 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
 
 ## Money and numbers
 
+- **Two enums with the same members are equal and never identical, and `is` between them is
+  always `False`.** `clients/store/contracts.py` and `clients/kraken/contracts.py` both declare
+  `OrderStatus`, `OrderSide` and `OrderType`, with matching spellings **on purpose**: a status
+  must be able to cross from an exchange answer into a stored row without a translation table
+  nobody maintains. `StrEnum` makes them compare equal under `==`. It cannot make them the same
+  object, so `client_answer.status is StoreOrderStatus.RESTING` is `False` for every value,
+  forever.
+
+  B hit this building engine 21 (Phase 6, spec 92) and the failure is the worst shape in this
+  system: every resting entry fell into the branch meaning *nothing is resting*, so a stale entry
+  was never cancelled, a filled entry never became a position, and engine 21 published
+  `entry_orders_cancelled: True` **with a live post-only buy still on the book** — the
+  orchestrator would then clear `close_intent`, mark the `close_all` row consumed, and leave an
+  order to fill minutes after the emergency stop. That is invariant 8's named failure, reached
+  with no error anywhere: `OK` status, well-formed payload, liquidation reported complete.
+
+  **`mypy --strict` cannot see it.** `context.clients.kraken` is structural and typed `Any` — for
+  the same good reason A's coercion helpers are — so there is no type on either side to disagree.
+  Thirteen red tests were the only thing that caught it.
+
+  So, for any module that touches both an exchange answer and a stored row: **alias one of the
+  two on import** (`OrderStatus as ClientOrderStatus`) so the name always says which side it came
+  from, and compare a client answer **only** against the client enum. Keep `is` rather than `==`
+  once aliased: `==` would also silently accept a bare string, which is the shape that hid this
+  one. The same caution applies to any future pair of enums that deliberately share spellings
+  across a client boundary.
 
 - **Never let SQLite compare a money column.** Money is stored as an exact decimal *string*,
   so SQL comparison is lexicographic and decides `'9.50' > '10000.00'`. No `MAX()`, `MIN()`,

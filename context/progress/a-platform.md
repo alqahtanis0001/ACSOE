@@ -3,6 +3,257 @@
 Your file. Only you write here. The lead merges into `context/progress-tracker.md`.
 Never edit the tracker directly.
 
+## PHASE 6 — CLAIMED 2026-09-15, before any code was written
+
+Per `feature-specs/PHASE-6-TASKS.md` and ownership rule 5, A claims **specs 84, 85, 86 and 87**,
+in that order. Nobody else may start them.
+
+| Spec | What | Files I will touch | State |
+|---|---|---|---|
+| 84 | The order surface — `OrderRequest`, `OrderAck`, `OrderState`, `OrderClientProtocol`; the live client refuses every order call until Phase 8 | `src/acsoe/clients/kraken/contracts.py`, `rest.py`, `client.py`, `__init__.py`, `README.md`, `tests/clients/kraken/test_orders.py` | **LANDED 2026-09-16** |
+| 85 | Engine 3 publishes each pair's trade low, high and count since the previous tick | `src/acsoe/engines/market_sensor/{contracts,engine,README}.py`, `tests/engines/test_market_sensor.py` | **LANDED 2026-09-16** |
+| 86 | Paper broker wired into `build_clients` in paper mode only; `scripts/cut_book_fixture.py` | `src/acsoe/cli/engine.py`, `scripts/cut_book_fixture.py`, `tests/cli/test_paper_broker_wiring.py`, `tests/scripts/test_cut_book_fixture.py` | **LANDED 2026-09-16** |
+| 87 | Rehearse B's engines 18, 21, 22 through real orchestrator ticks | `tests/engines/test_trade_chain_rehearsal.py` | claimed, blocked on specs 91/92/93 |
+
+Spec 84 is first because nothing else in the phase can start without it: B's paper broker (88)
+implements it and engines 18, 21 and 22 call it. The concrete signatures are under
+**SPEC 84 — THE ORDER SURFACE, FOR B** immediately below.
+
+## SPEC 86 — THE WIRING AND THE BOOK CUTTER — LANDED 2026-09-16
+
+### Step 1: the paper broker is wired in, paper mode only
+
+`cli/engine.py::build_clients` wraps `KrakenClient` in B's `PaperBroker` when
+`config.mode == "paper"`, and in no other mode. **No mock was needed** — B's
+`clients/paper/broker.py` landed while I was on spec 85, built against my spec 84 contract
+unchanged, so the wiring went straight onto the real constructor:
+`PaperBroker(real, *, store, config, clock)`.
+
+Written as `== "paper"`, **not** `!= "live"`. The two read the same today and stop reading the
+same the moment a fourth mode exists, at which point the negative form wraps it silently. There
+is a `replay` case in the test parametrisation for exactly that, and mutation P3 — the negative
+form — is killed by the replay case *alone*.
+
+Every assertion goes through `build_clients`, never a hand-built `Clients`. That is A-2's
+Phase 2 lesson: a tripwire written to fire when the daemon was wired to real clients stayed
+green through exactly that change, because it built the empty `Clients()` itself.
+
+**This is also where spec 84's owed seam test landed.**
+`test_an_order_in_paper_mode_never_reaches_the_live_client_s_refusal` has no double on either
+side — B's real broker, built by the real `build_clients`, called with A's real `OrderRequest`
+through A's real protocol. It asserts on **where the failure comes from**: with no credentials
+the call fails either way, and the live client's refusal names Phase 8, so the absence of that
+string is the proof the broker answered. An `isinstance` check against `OrderClientProtocol`
+cannot show it — a `runtime_checkable` Protocol only checks the four names exist, and the bare
+`KrakenClient` has all four; they are the ones that refuse.
+
+### Step 2: `scripts/cut_book_fixture.py` — FOR C, spec 96
+
+```
+python scripts/cut_book_fixture.py \
+    --pairs BTC/USD XRP/USD \
+    --from 2026-09-15T04:00:00Z --to 2026-09-15T04:10:00Z \
+    --out tests/fixtures/book_sample.jsonl --write
+```
+
+Dry run without `--write`. Exit 0 on success, **2 on a refusal** with the reason on stderr.
+Also takes `--source-dir` (default `data/raw`) and `--prefix`.
+
+**It chooses nothing** — not the pairs, not the window, not the destination. Those are C's.
+
+**Output shape.** Line 1 is a header object carrying `_fixture`, the window (`[from, to)`), the
+pairs, the source files, per-pair counts by frame type, and a **sha256 of the body**. Every line
+after it is a recorded `book` frame **byte-for-byte as recorded** — the original bytes, never
+re-serialised, because a Kraken book frame carries a checksum over what the exchange sent.
+Written as bytes, no CRLF, because `tests/fixtures/` is `-text` and has no clean filter.
+
+**Five refusals, each naming what it found:**
+
+1. an output path inside `data/raw/` (invariant 11);
+2. **a recorded gap intersecting the window** — tested on the gap's *interval*, not the
+   marker's timestamp, because a marker is written at reconnect and a break that started inside
+   the window and ended after it has its marker outside entirely;
+3. a window the archive does not cover at both ends — the open gap no marker describes;
+4. more than one archive file contributing — the doubled recording from 2026-09-09T13:19, which
+   would give a slippage walk twice the depth;
+5. a named pair with no book frame in the window.
+
+**Confirmed on the real archive, read-only, dry run.** 2026-09-11, two files, 3.7 GB, 3m02s,
+and it refused: no BTC/USD book frame in that window. Expect minutes, not seconds — the window
+is short but the scan is the whole file.
+
+## SPEC 85 — `trade_ranges`, FOR B — LANDED 2026-09-16
+
+`state["market_sensor"]["trade_ranges"]`, per pair, exactly four keys:
+
+```python
+{"BTC/USD": {"low": "99.25", "high": "101.50", "trades": 3, "since_ts": 1772323740000000}}
+```
+
+`low` and `high` are exact decimal strings, `trades` an int, `since_ts` microseconds. No `pair`
+inside the value — the map key carries it and a second copy is one more thing that can disagree.
+
+**Four things you need to know before you read it in engines 21, 22 and the broker:**
+
+1. **A pair with no trade since the previous tick is ABSENT.** Not `{"trades": 0}`, not a copied
+   price. `TradeRange` refuses `trades=0` at construction, so it cannot happen. Your code gets a
+   `KeyError` for a silent pair, which is a question you have to answer — a range of nothing at
+   a copied price would tell a barrier check the market touched it.
+2. **It is trades, not quotes.** A book that quoted 100 and never traded there has no range at
+   100.
+3. **The window is `(since_ts, now]`** — half-open at the bottom, so consecutive ticks tile
+   without overlap and no trade is in two ranges. A trade exactly on `since_ts` belongs to the
+   *earlier* tick.
+4. **`trade_ranges` is `{}` on the first tick of a run**, including the first tick after a
+   restart, because there is no previous tick to measure from. Engine 3 reads
+   `state["cycle_id"]` to know this — it is stateless across cycles and that is the only place
+   the answer exists.
+
+**`since_ts` is `context.previous_now`** — the *real* stamp of the previous tick, not `now`
+minus `loop_tick_s`. The lead added that field to `EngineContext` this session after I raised
+the hole: under the arithmetic, a loop that ran late left the trades in the overshoot in **no**
+range at all, and a stop touched there was missed by engines 21 and 22. With the real stamp a
+late loop produces a **longer** range instead of a hole. (`bar_closed` still uses `now -
+loop_tick_s` and is still right to: it asks about an *index* and fires once however late the
+loop ran. An interval is the different case.)
+
+Evidence: 38 tests in `tests/engines/test_market_sensor.py` (16 new), **13 mutations, 12 killed,
+1 checked negative** (an equivalent mutant, filed with its non-equivalent twin rather than as a
+survivor). Sweep scoped to the three files in A's lane that drive engine 3 for real so an
+incidental kill would be visible — none was. The sweep was **re-run from scratch** after the
+rework, because a mutation table for code that no longer exists reads as coverage. Build log has
+both tables and the red messages.
+
+**The mutation worth knowing about: N12** puts the `now - loop_tick_s` arithmetic back, and
+exactly **one** test out of thirty-eight objects. That is the honest shape of the defect — a
+range that is correct on every tick where the loop ran on time and silently short on the ones
+where it did not — and a reminder that a green suite says nothing about a defect whose whole
+nature is that it appears only under a condition no other test creates.
+
+## SPEC 84 — THE ORDER SURFACE, FOR B — LANDED 2026-09-16
+
+**This is the contract. It is on disk, it is green, and it will not change without a message to
+B first.** `src/acsoe/clients/kraken/contracts.py`, exported from `acsoe.clients.kraken`.
+Spec 88's broker implements `OrderClientProtocol`; engines 18, 21 and 22 call it through
+`context.clients.kraken`.
+
+```python
+from acsoe.clients.kraken import (
+    OrderAck, OrderAckStatus, OrderClientProtocol, OrderRequest,
+    OrderSide, OrderState, OrderStatus, OrderType,
+    TERMINAL_ORDER_STATUSES, USERREF_MAX, USERREF_MIN,
+)
+
+class OrderClientProtocol(Protocol):
+    async def add_order(self, request: OrderRequest) -> OrderAck: ...
+    async def cancel_order(self, userref: int) -> OrderState: ...
+    async def query_orders(self, userrefs: Sequence[int]) -> tuple[OrderState, ...]: ...
+    async def open_orders(self) -> tuple[OrderState, ...]: ...
+```
+
+Async, like every other call on the client. `platform/aio.py` is still the one place a
+synchronous engine runs an async client call.
+
+### The three models
+
+Every one is `frozen=True, extra="forbid"`; money is `Money` (`Decimal` in, a `float`
+**refused** not coerced); each has `state_dict()` rendering money as strings for
+`EngineResult.data`, which refuses a `Decimal` outright and silently accepts a `float`.
+
+```python
+class OrderRequest:
+    pair: str
+    side: OrderSide            # "buy" | "sell"
+    order_type: OrderType      # "limit" | "market"
+    qty: Money                 # > 0
+    limit_price: Money | None = None   # > 0 when present
+    post_only: bool            # NO DEFAULT — you must state it
+    userref: UserRef           # USERREF_MIN .. USERREF_MAX, inclusive
+
+class OrderAck:
+    userref: UserRef
+    order_id: str
+    status: OrderAckStatus     # "resting" | "filled" | "rejected"
+    reason: str | None = None  # present and non-empty iff rejected
+
+class OrderState:
+    userref: UserRef
+    order_id: str
+    status: OrderStatus        # "resting" | "filled" | "cancelled" | "rejected" | "expired"
+    filled_qty: Money          # >= 0
+    avg_fill_price: Money | None = None
+    fee: Money                 # >= 0
+    closed_at: int | None = None       # microseconds since epoch, like fetched_at
+```
+
+### The couplings, because they will refuse things if you do not know them
+
+Each is enforced at construction and each has a passing test and a failing test.
+
+- **`OrderRequest`** — a `limit` order **must** carry `limit_price`; a `market` order **must
+  not**; `post_only=True` on a `market` order is refused (it is Kraken's `oflags=post`, a
+  limit-order flag, and a market order always takes). `market` exists only because invariant 14's
+  liquidation exits as a taker — engine 18 must never construct one, and that is asserted in
+  engine 18's own tests, not in mine.
+- **`OrderAck`** — `reason` is present and non-empty **exactly when** `status` is `rejected`,
+  and absent otherwise. A post-only order that would have crossed is the ordinary rejection and
+  it names that cause.
+- **`OrderState`** — `avg_fill_price` present **exactly when** `filled_qty > 0`; an order that
+  filled nothing paid **no** fee; `status == filled` requires `filled_qty > 0`; `closed_at`
+  present **exactly when** the status is terminal (`TERMINAL_ORDER_STATUSES`, i.e. everything
+  except `resting`).
+
+**Two shapes that are deliberately allowed**, both with tests, because they are the ones the
+broker and engine 21 need: a **partially filled order still `resting`** (fill, price, fee, no
+`closed_at`), and a **partially filled order `cancelled`** at the unfilled-entry window (fill,
+price, fee, `closed_at`). If you need a shape these refuse, message me — it is one line on my
+side, not a workaround on yours.
+
+### Three things about the design that will save you a round trip
+
+1. **`userref` is the key everywhere, not `order_id`.** `cancel_order` and `query_orders` both
+   take `userref`. Invariant 8 makes it the idempotency token: the system chooses it *before*
+   the order exists, so it is the only identifier that survives a placement whose answer never
+   came back. `order_id` is the exchange's, arrives afterwards, and is for reconciliation.
+   The bound is one shared `UserRef` annotation on all three models, so the request cannot
+   refuse a value the ack would accept.
+2. **A call that cannot be completed raises; it never returns an empty result.** Invariant 3.
+   An `open_orders()` answering `()` during an outage would tell engine 21 there was nothing
+   resting to cancel.
+3. **Nothing in the models knows a fee, a minimum, a tick size or a precision.** Sizes and
+   prices arrive **already rounded** by the caller using the pair's own `lot_decimals` and
+   `pair_decimals` from `AssetPairs`, rounded **down** for quantity. The contract will not do
+   it for you and will not check it.
+
+### What the live client does
+
+`KrakenRestClient` and the `KrakenClient` facade implement all four and **refuse**, raising
+`KrakenUnavailableError` naming the method and Phase 8, before the limiter, the nonce, the
+signature or any request. `rest.py` owns the refusal; the facade forwards, so there is one copy
+to remove in Phase 8. There is no flag that turns it off. `rest.ORDER_CALLS` is the list, and a
+test compares it against the protocol's own attributes so a fifth call cannot be added without
+a refusal.
+
+`KrakenClientProtocol` (the four read-only calls) is unchanged and is **separate** from
+`OrderClientProtocol`, so a consumer that only reads the market cannot be handed an object that
+can place an order — and so your broker can implement one and forward the other.
+
+### Evidence
+
+60 tests in `tests/clients/kraken/test_orders.py`; 149 in `tests/clients/kraken/`, green.
+`mypy --strict src/ scripts/` clean on 131 files, `ruff check src/ tests/ scripts/` clean.
+**Fifteen mutations, fifteen killed, no survivors**, each restored from a byte copy with the
+sha256 compared in the same statement and each verdict naming its killing test — table and red
+messages in `docs/build-log/phase-6/a-platform.md`.
+
+**What is not proven yet, and it is yours and mine jointly.** There is no consumer of this
+contract on disk, so every test of it is a test of my own models and my own refusal. Phase 4's
+lesson — A built engine 23 against `label_bars(...)`, agreed by message, which **never existed**,
+and nothing went red because everything drove a double — applies exactly here. The seam test
+with no double on either side is owed by **spec 86** (the `build_clients` wiring) and **spec 87**
+(the rehearsal), both of which run your real broker against this real protocol. Until one of
+those lands, a green test of the order surface is a test of a mock.
+
 ## RESUMED 2026-09-13 09:50 — spec 61's `training` section, then spec 78
 
 Three things were asked of A this session, in order: the `training` config section, spec 78

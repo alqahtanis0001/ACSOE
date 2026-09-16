@@ -238,3 +238,87 @@ command stamp), so a per-read step measures how many times unrelated paths looke
 clock the test holds steady and advances explicitly between ticks makes the interval exact. The
 failure looked like the feature and was the instrument — the same shape as the benchmark lesson in
 `code-standards.md`, arriving in a test rather than a measurement.
+
+### All four teammates died one minute before the limit reset, and the write-before rule paid
+
+**Agent:** Lead · **Task:** Phase 6 team · **Date:** 2026-09-16
+
+**What happened.** A, B, C-models and C-verify all hit the usage limit within 40 seconds of each
+other at 23:49Z, one minute before it reset. Nobody was stopped and nothing was abandoned by
+choice. The tree was left exactly as four sessions mid-task left it.
+
+**What it cost, measured rather than assumed.** Every one of the four had written its claim into
+`context/progress/<agent>.md` **before** starting and its findings into
+`docs/build-log/phase-6/<agent>.md` **at diagnosis**. So the specs, the mutation tables, the two
+findings raised in the last hour and every state-of-play line survived on disk; what was lost is
+in-flight reasoning and nothing else. Phase 3 lost three build logs to an interruption because
+they were being written *after* the work; this is the same event with the rule applied, and the
+difference is the whole argument for it.
+
+**What it did not cost.** No daemon has run at any point in Phase 6 — only the two `record.py`
+processes and their supervisor, alive since 14:49 and untouched — so A's `drain_gaps` finding
+(engine 2 records no `gap` markers through the paper broker) has damaged no recording. The
+archive is intact and the fix is a one-line forward in B's lane.
+
+**Two half-applied edits the deaths left, both found by reading the tree rather than the
+reports.** `modelling/di.py` exports `score_many` in `__all__` and does not define it — C-models
+landed the export and the `_BLOCK_ELEMENTS` reasoning and died before the function. And
+`engines/risk/engine.py` still checks the portfolio cap before the per-pair refusal, with a
+comment arguing the old order: the reversal I ruled had not been applied when B died. Neither is
+a defect anybody introduced; both are what an interrupted edit looks like, and both are in the
+handoff at the top of `feature-specs/PHASE-6-TASKS.md` rather than in anybody's memory.
+
+**One red that is a tripwire working.** C-verify landed the two `REASON_PROSE` entries B was
+waiting on, which fires B's `test_the_two_codes_spec_89_added_are_still_waiting_on_cs_prose` —
+a test written to go red at exactly this moment and to tell whoever sees it what to do. It is
+expected, it is B's to delete, and it is named here so the next reader does not diagnose it.
+
+**Procedural note for the next time, and there will be one.** Four simultaneous deaths is not
+four independent events: every session in this team shares one usage limit, so the limit is a
+single point of failure for the whole team and it will always take them together. The mitigation
+is not more agents, it is the discipline that made this cheap — claim before, diagnose before,
+and a lead who reads the tree instead of the transcript.
+
+### The baseline: two independent reds, one of them mine, and `compileall` was the wrong check
+
+**Agent:** Lead · **Task:** Phase 6 baseline · **Date:** 2026-09-16
+
+**What happened.** `verify.py --phase 6` on the quiet tree left by the four deaths:
+`2 criteria: 1 PASS, 1 FAIL`. `toolchain_green` reported **56 failed, 2570 passed, 124 errors**
+in 551 s, plus `mypy` and `ruff` each naming `src/acsoe/modelling/di.py`. Log:
+`logs/verify/phase6-20260916-baseline-lead.log`, full pytest output under
+`logs/verify/toolchain_green/20260916T000131_807204-pytest-attempt1.log`.
+
+**Attribution, by counting rather than by path.** `_CHUNK` appears **359 times** in that output.
+Every failing and erroring file except two is downstream of one broken module: C-models renamed
+`_CHUNK` to `_BLOCK_ELEMENTS` at the top of `di.py` and died before renaming its two uses inside
+`_mean_nearest`. Tournament, skeptic, prediction, anomaly, the DI's own tests, the training and
+research suites and nine Phase 5 criteria all error on a `NameError` in a module they import.
+
+**My earlier assessment of that file was wrong, and the way it was wrong is the lesson.** I ran
+`python -m compileall` over `src/`, got a clean exit, and wrote that the module "imports and
+compiles" and that only `from ... import *` would break. `compileall` checks **syntax**, not name
+resolution: an undefined global inside a function body is a perfectly valid parse and a
+`NameError` at call time. The check I ran could not have told me what I used it to conclude —
+a check whose output resembles the claim while the claim is untrue, which is this project's most
+repeated defect, committed by the lead in the middle of assessing somebody else's. `ruff`
+(`F821`) and `mypy` (`name-defined`) both name it in one line, and I had run neither on that file.
+
+**Fix.** The partial edit is saved to the scratchpad as `di-102-partial.diff` and quoted in the
+handoff; `di.py` is restored to its committed state so the tree is usable by everyone else. It is
+twelve insertions containing a rename and a comment and **no finished work** — `score_many` was
+never written — so nothing of value is lost, and C-models re-applies it as part of a complete
+spec 102 change. Restoring an uncommitted, half-applied edit by a dead session is not patching a
+teammate's work: it is returning a shared tree to its last known good state, and the diff was
+preserved before the file was touched.
+
+**The second red is mine and it is correct.** `test_is_gate_parses_the_registry_out_of_the_document`
+pins the set of gates parsed out of `engine-contracts.md`, and spec 80 added the **Y** for engine
+16 by operator ruling. The test is doing its job: the gate list grew, and it is meant to take a
+human decision to agree. It is C's file, so C-verify updates the expected set — the point of that
+test is that nobody widens the gate list silently, including me.
+
+**The third red is B's tripwire firing exactly as designed** and is B's to delete.
+
+**So the baseline's verdict, stated honestly: one broken module, one document change awaiting its
+test, one deliberate tripwire. No defect in any of the work the four sessions completed.**

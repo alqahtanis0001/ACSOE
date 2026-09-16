@@ -5,6 +5,38 @@ Never edit the tracker directly.
 
 ## Current Task
 
+### CLAIM 2026-09-16 — Phase 6, the engines-and-models half of lane C (C-5, Opus 5 1M)
+
+Written before any code, per Phase 6 rule 1. This session is **specs 95, 102, 96, 97 and 98
+only**, in that order. A second C session may take the verification-and-interface half (99, 100,
+101); those files are **not mine** and I will not write them — `scripts/verify.py`,
+`tests/verify/`, `tests/harness/`, `console/`, `tests/console/`. Where a spec of mine needs a
+console reason-code line (spec 95 may), I hand it over by message rather than editing
+`console/format.py`.
+
+| Spec | Files I will touch |
+|---|---|
+| **95** — engine 8 omits `is_buy` on a refusal; engine 15's read in the same change | `engines/prediction/contracts.py`, `engines/prediction/engine.py`, `engines/prediction/README.md`, `engines/skeptic/engine.py`, `engines/skeptic/contracts.py`, `engines/skeptic/README.md`, `tests/engines/test_prediction.py`, `tests/engines/test_skeptic.py` |
+| **102** — the DI's fit and score at size, plus the peak-memory test | `src/acsoe/modelling/di.py`, `src/acsoe/research/training.py`, `tests/modelling/test_di.py`, `tests/research/test_di.py` |
+| **96** — engine 9 `order_book` and the book fixture | `engines/order_book/` (four files), `tests/engines/test_order_book.py`, `tests/fixtures/book_sample.jsonl`, `tests/fixtures/README.md` |
+| **97** — engine 14 `adaptive_router` and the leaderboard fixture | `engines/adaptive_router/` (four files), `tests/engines/test_adaptive_router.py`, `tests/fixtures/leaderboard_sample.json`, `tests/fixtures/README.md` |
+| **98** — engine 19 records what 18 and 22 publish | `engines/memory/engine.py`, `engines/memory/contracts.py`, `engines/memory/README.md`, `tests/engines/test_memory_rows.py` |
+
+**Held for the lead before I build them:** engine 14's weighting rule (spec 97 step 3 — a
+methodology choice, proposed in the build log and approved before any code); `order_book.depth`
+and any other new config key (spec 80); registration of engines 9 and 14 in `bootstrap.py`
+(spec 82). **Held for a stop from the lead:** every baseline run and every timing or memory
+benchmark in spec 102, which is worthless under contention.
+
+**Seams I owe a message on:** B, for spec 98's payload shapes from engines 18 and 22 (specs 91,
+93) before either side lands; A, for `scripts/cut_book_fixture.py` (spec 86) — I choose the two
+pairs and the window and deposit the fixture, and I build engine 9 against the fake client's
+book while I wait.
+
+#### 95 — status
+
+Claimed 2026-09-16. In progress.
+
 ### DONE 2026-09-15 — C-3 (Opus 5): the DI's leave-one-out excludes every pair within 48 bars (operator ruling 2026-09-15, amending ruling 6). Not committed.
 
 `modelling/di.py` `fit(..., decision_ts, exclusion_s)` (keyword-only, required; three new refusals), `DiFit`/`di.npz` record `decision_ts` and `exclusion_s`, `load` refuses an npz without a positive span (engine 8 turns it into `prediction_unavailable`); `research/training.py` passes `backtest.embargo_bars x timeframes.decision_bar_s` and manifest `extras.di.exclusion_s`. New Phase 5 criterion `di_leave_one_out_excludes_48_bars` in `scripts/verify.py` (own subject percentile 0.90, recomputes both distributions, plus a boundary probe): **PASS**. Tests in `tests/modelling/test_di.py`, `tests/research/test_di.py`, `tests/engines/test_prediction.py`, `tests/verify/test_phase5_criteria.py`. Mutations (a) row-only, (b) `<`, (c) embargo ignored / span 0, (d) `load` accepting legacy: all red in round two; the criterion survived (b) in round one and gained the boundary probe. Targeted suite 446 passed; mypy and ruff clean on these files. `verify --phase 5`: 12 PASS, 1 PENDING (`di_fitted_on_predictor_training_set`, `di_percentile`), 1 FAIL `toolchain_green` — pytest timeout at 900 s under load, `bootstrap.py` I001 and a `test_skeptic.py` case that was C-4's mutation arm on disk (05:12:40 to 05:14:29), not a defect; all from other sessions' concurrent edits. Details: `docs/build-log/phase-5/c-interface.md`, last entry.
@@ -1642,3 +1674,25 @@ five-phase passes, one error, and the run straight after it was green.
 - Tests: 129 passed across `test_skeptic.py` and `test_reason_prose.py`. ruff and mypy --strict are clean.
 - Sweep 1: mutations (a), (b), (c1) and (c2) were all observed red; kills are in the build log. Sweep 2 (a to d, on the final code) is pending.
 - Open for engine 8's owner: its refusal publishes `is_buy: False` by default, so engine 15 returns `OK` on a tick engine 8 already blocked. That doesn't fail open, but it conflates "no call" with "not a BUY".
+
+## C-verification (specs 99, 100, 101) — 2026-09-16
+
+**This heading is mine and nothing under it is another session's.** Lane C is split for
+Phase 6: `C-models` owns 95, 96, 97, 98, 102 and writes under its own heading; this session
+owns **99, 100, 101** and the files `src/acsoe/console/`, `scripts/verify.py`, `tests/verify/`,
+`tests/harness/`, `tests/console/`.
+
+### Claimed now — spec 99, the first two codes
+
+Claiming `src/acsoe/console/format.py` (`REASON_PROSE`) and `tests/console/test_reason_prose.py`.
+
+First increment only: prose for B's spec 89 codes `position_open_on_pair` and
+`entry_resting_on_pair`, which is the one red on the tree and is blocking the team's baseline
+run. The rest of spec 99 — the walking test over **every** engine's contracts, and the codes
+still arriving from B (engines 16, 18, 21, 22) and `C-models` (9, 14) — comes after the lead
+releases me.
+
+**Landing this turns one of B's tests red on purpose.**
+`tests/engines/test_risk.py::test_the_two_codes_spec_89_added_are_still_waiting_on_cs_prose`
+asserts both codes are *absent* from the map; it is B's tripwire and B deletes it. That file is
+B's and I did not touch it. Lead and B told at the moment the prose landed.
