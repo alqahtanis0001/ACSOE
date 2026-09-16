@@ -459,6 +459,13 @@ def _write_rows(
                 n_trades=score.n_trades,
                 win_rate=score.win_rate,
                 brier=score.brier,
+                # Migration 0004. It was computed here and discarded for want of a
+                # column, which meant engine 14 could not tell a model with edge from
+                # one without — and it **cannot** be recovered downstream from
+                # `win_rate`: `brier` and `base_rate_brier` are over every fold row
+                # while `win_rate` is over the BUY subset only, so a skill score from
+                # those two divides quantities measured on different populations.
+                base_rate_brier=score.base_rate_brier,
                 net_pnl=score.net_pnl,
                 reporting_currency=currency,
                 # Phase 7's, every one of them. A number here would be read as a measurement.

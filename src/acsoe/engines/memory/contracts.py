@@ -37,6 +37,7 @@ __all__ = [
     "CYCLE_ID_KEY",
     "ECONOMICS_FIELDS",
     "EXCHANGE_KEY",
+    "EXECUTION_KEY",
     "EXIT_KEY",
     "GUARD_BLOCKERS_KEY",
     "HOLD_REASON_FIELD",
@@ -99,7 +100,23 @@ POSITIONS_VALUE_FIELD: Final = "positions_value"
 UNREALISED_PNL_FIELD: Final = "unrealised_pnl"
 HOLD_REASON_FIELD: Final = "hold_reason"
 
-#: Engine 22 `exit` (B), Phase 6. Round trips that closed on this tick.
+#: Engine 18 `execution` (B), Phase 6, spec 98. The entry order it placed — or the
+#: rejection row for one the exchange refused — on the **opportunity** chain, the same
+#: tick. Engine 19 is the single writer of relational rows, so an order engine 18
+#: published and engine 19 does not read is an order that never reaches the store.
+#:
+#: Absent on the fourteen ticks in fifteen with no decision bar, and absent on a bar tick
+#: where the chain stopped at an earlier gate. **Absent means nothing to record**, never a
+#: zero — the distinction `sources_present` exists to keep visible.
+EXECUTION_KEY: Final = "execution"
+
+#: Engine 22 `exit` (B), Phase 6. Round trips that closed on this tick, the exit orders it
+#: placed, and the positions it closed.
+#:
+#: `ORDERS_FIELD` and `POSITIONS_FIELD` are read from **three** publishers between them —
+#: 18, 21 and 22 for orders, 21 and 22 for positions — and the field names are the same on
+#: each because the row shapes are the store's, not the publisher's. The write **order**
+#: is what separates them, and it is load-bearing: see `WRITTEN_TABLES` below.
 EXIT_KEY: Final = "exit"
 CLOSED_TRADES_FIELD: Final = "closed_trades"
 
@@ -114,10 +131,22 @@ ECONOMICS_FIELDS: Final[tuple[tuple[str, str], ...]] = (
     ("hurdle_pct", "hurdle_pct"),
 )
 
-#: Every table engine 19 writes, in the order it writes them. The order is load-bearing:
-#: `positions` and `trades` are written **before** `equity_snapshots`, because the
-#: snapshot's ``open_position_count`` and ``realised_pnl_cum`` are read back out of the
-#: store after this tick's rows have landed.
+#: Every table engine 19 writes, in the order it writes them. The order is load-bearing
+#: three times over, and every one of the three is silent when it is wrong.
+#:
+#: 1. `positions` and `trades` before `equity_snapshots`, because the snapshot's
+#:    ``open_position_count`` and ``realised_pnl_cum`` are read back out of the store
+#:    after this tick's rows have landed.
+#: 2. **Within `positions`: engine 21's rows, then engine 22's.** Both publish rows for
+#:    the same `position_id` on a tick where a position is marked and then closed, and
+#:    `write_position` upserts, so whichever engine 19 writes *last* is the stored state.
+#:    Engine 22 runs after 21 in the manage chain, so closed must win. The other order
+#:    records a position closed this tick as still open with a mark on it — a row the
+#:    console renders and `safety` counts. Lead ruling, 2026-09-16.
+#: 3. **Within `orders`: engine 18's, then 21's, then 22's.** Same upsert, same reason,
+#:    keyed on `userref`: an entry 18 placed and 21 immediately cancelled must end as
+#:    cancelled. 18 runs on the opportunity chain and 21 and 22 on the manage chain, so
+#:    this is chain order, not a preference.
 WRITTEN_TABLES: Final[tuple[str, ...]] = (
     "block_records",
     "positions",

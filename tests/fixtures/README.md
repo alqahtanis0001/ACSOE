@@ -32,9 +32,58 @@ the shared fixtures, not its contents.
 | `labels_hand_verified.json` | C | `labeller_matches_hand_verified_labels` | 4 |
 | `candles_sample.parquet` | C | `features_reproduce_in_replay` and the Phase 5 training criteria | 5 |
 | `walkforward_digest.json` | C | `walkforward_weekly_retrain_reports_oos` | 5 |
+| `book_sample.jsonl` | C | engine 9 `order_book`'s slippage walk, on a thin and a deep pair | 6 |
+| `leaderboard_sample.json` | C | engine 14 `adaptive_router`'s weighting rule | 6 |
 | `kraken/*.json` | C | recorded responses backing the fake Kraken client | 0 |
 
 `walkforward_digest.json` is the **partial** digest of the full 234-pair run `train-20260913T205245-067b2b9d`: 405 of 457 folds, because the run died in the skeptic's uncapped matrix build at fold 405. It was rebuilt from the 405 fold artefacts by `docs/dataset/rebuild-walkforward-2026-09-14.py`, every fold reproduced against its manifest, and its own `coverage` block says so (operator ruling 2026-09-14).
+
+`book_sample.jsonl` is 30 seconds of live Kraken v2 order-book traffic for **ADA/USD and
+BTC/USD**, cut from `data/raw/kraken_v2__msi__2026-09-16.jsonl` by A's
+`scripts/cut_book_fixture.py` (spec 86) and copied byte for byte. Two pairs because spec 96
+requires the walk hand-checked on a **thin** book and a **deep** one, and `book_too_thin` is
+only reachable against a ladder that genuinely runs out inside the fetched depth. Line 1 is a
+header object, not a recorded line: it carries the window, the pairs, per-pair frame counts by
+type, and a sha256 of the body. Its own reader skips it.
+
+**The window opens 48 ms after a reconnect, and that is the whole of its correctness.** Kraken
+v2 sends book **deltas** — a `qty` of `0.0` deletes a level, anything else replaces one — and
+the only absolute book is a `type: "snapshot"` frame, which arrives *only at subscribe*. A cut
+taken from a quiet moment mid-stream is therefore full of real, well-formed, byte-exact frames
+and still cannot say what the bid side was at any instant: reconstruction would start from an
+empty book, fill in only the levels that happened to change, and produce a plausible four- or
+five-level ladder that a slippage walk prices as far thinner than the market was. That is a
+wrong answer in range, running in the direction that makes the cost gate refuse for a
+fabricated reason. So the window opens at `00:17:06.100000Z`, which does **not** intersect the
+gap interval the cutter refuses on and **does** contain one `snapshot` per pair ahead of every
+delta: `ADA/USD` 1 snapshot and 451 updates, `BTC/USD` 1 snapshot and 524 updates.
+
+**What it does not validate, stated here as well as in the engine's README.** Thirty seconds of
+two pairs on one day. The historical archive carries no book at all, so there is no way to
+extend this across regimes, sizes or years, and every slippage number this system reports
+inherits that bound.
+
+`leaderboard_sample.json` is **fabricated, and it is the one file here that is.** Its
+`provenance` field says so in capitals inside the file, and a test asserts that: these rows
+describe no trained model and no real run, and a reader who took them for a measurement
+would conclude the predictor beats its base rate by a wide margin.
+
+It is fabricated because the real leaderboard **cannot** exercise engine 14's weighting
+rule. The walk-forward trains one predictor per fold and the fold's artefact run id *is*
+the model version, so every real version has exactly one row: the unweighted mean across
+folds, the most recent fold and a fold-count-weighted mean all give the same answer, one
+model family means the family filter never fires, and a single version always weighs 1.0.
+Every one of those is a branch that would be green and unreached.
+
+So each row carries a `why` field naming the single property it exists to make observable,
+and a test asserts every row has one: a two-fold version so the mean is actually computed;
+a superseded duplicate of one `(version, fold)` whose brier would move the weight a long
+way if it were averaged as a second fold or allowed to win; a version worse than its own
+base rate, which must score zero **and** must not inflate the others by shrinking the
+denominator; and a second `model_id` carrying the best score in the file, which must be
+excluded entirely. The expected weights are recomputed in the test from the rows by a
+second implementation of the rule — the `expected` block in the file is for a human
+reading it and the test does not import it.
 
 `labelled_sample.parquet` carries its own provenance **inside the file**, as parquet
 key-value metadata under `acsoe_provenance`: which archive, which span, the barrier

@@ -45,7 +45,9 @@ contract rule 3 forbids importing another engine to find out what a key is calle
 | `state["<blocker>"]["reason_code"]` and its economics | the gate that refused | the `rejections` columns |
 | `state["exchange"]["balances"]` | 1 `exchange` (A) | cash, and therefore whether an equity row can be written at all |
 | `state["position_manager"]` | 21 (B), Phase 6 | positions, resting orders, position value, `hold_reason` |
+| `state["execution"]["orders"]` | 18 (B), Phase 6 | the entry order it placed, on the **opportunity** chain, same tick |
 | `state["exit"]["closed_trades"]` | 22 (B), Phase 6 | one `trades` row per closed round trip |
+| `state["exit"]["orders"]`, `["positions"]` | 22 (B), Phase 6 | the exit orders it placed and the positions it closed |
 
 ## What it writes into `state`
 
@@ -65,6 +67,38 @@ the running maximum read from storage, never recomputed from `state`: `state` is
 every tick and has never seen the series, so an engine taking the maximum of this tick
 alone reports a peak equal to the current equity, a drawdown of permanently zero, and a
 breaker that never fires on a drawdown again.
+
+**Within `positions` and `orders` the publisher order is chain order, and it decides
+which row survives the upsert.** Three engines publish orders and two publish positions,
+and the store upserts on `userref` and `position_id`, so the row engine 19 writes *last*
+is the stored state.
+
+- **positions: 21, then 22.** Engine 21 marks every open position and engine 22 closes
+  the ones that hit a barrier, both on the same tick and both for the same
+  `position_id`. Engine 22 runs after 21, so closed must win. The other order stores a
+  position closed this tick as open with a mark on it — a row the console renders as
+  live and `safety` counts towards its escalation precondition.
+- **orders: 18, then 21, then 22.** An entry engine 18 placed and engine 21 immediately
+  cancelled must end as cancelled. Written the other way it is stored as resting, which
+  is a live post-only buy to everything that reads the table, and invariant 8 exists
+  for exactly that order.
+
+**An open position with no mark writes no equity row at all.** `positions_value` and
+`unrealised_pnl` absent means engine 21 could not take a mark this tick — spec 92 has it
+publish them absent, never zero — and `equity = cash + 0` would drop the position's whole
+value out of that tick of the series. On a fully invested account that is a drawdown
+approaching 100% against a `safety.max_drawdown_pct` of 0.10, so the account freezes over
+a missing quote. The count that decides comes from `store.count_open_positions()` after
+this tick's positions have landed: with nothing open, an absent mark is not a missing
+mark and the row stands on cash alone. The skip names itself in
+`equity_skipped_reason`, because a silent gap in the equity curve is indistinguishable
+from a silent bug.
+
+**`positions.hold_reason` is written on every position engine 21 marked, and set to
+`None` on every tick that did not hold.** The clearing is the load-bearing half:
+`write_position` upserts every column, so writing null is what removes the previous
+tick's reason, and skipping the assignment instead would render an hour-old hold forever
+— reporting a paused manage chain over one running normally.
 
 ## What it deliberately does not do
 

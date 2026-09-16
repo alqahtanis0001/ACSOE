@@ -61,6 +61,7 @@ from acsoe.engines.memory.contracts import (
     CYCLE_ID_KEY,
     ECONOMICS_FIELDS,
     EXCHANGE_KEY,
+    EXECUTION_KEY,
     EXIT_KEY,
     GUARD_BLOCKERS_KEY,
     HOLD_REASON_FIELD,
@@ -71,6 +72,7 @@ from acsoe.engines.memory.contracts import (
     REASON_CODE_FIELD,
     STATE_KEY,
     TRADING_BLOCKED_BY_KEY,
+    UNREALISED_PNL_FIELD,
     WRITTEN_TABLES,
     MemoryState,
     MissingInputError,
@@ -98,6 +100,7 @@ class MemoryEngine(BaseEngine):
             store, context, state, cycle_id=cycle_id, ts=ts
         )
 
+        executing = self._payload(state, EXECUTION_KEY)
         manager = self._payload(state, POSITION_MANAGER_KEY)
         exiting = self._payload(state, EXIT_KEY)
         exchange = self._payload(state, EXCHANGE_KEY)
@@ -105,10 +108,20 @@ class MemoryEngine(BaseEngine):
         # Positions and trades land before the equity snapshot, because the snapshot's
         # `open_position_count` and `realised_pnl_cum` are read back out of the store
         # once this tick's rows are in it. Reordering these is silent.
+        #
+        # Within each table the publisher order is chain order and it decides which row
+        # survives the upsert — 21 then 22 for positions, 18 then 21 then 22 for orders.
+        # `WRITTEN_TABLES` in `contracts.py` carries the reasoning; the short version is
+        # that a position closed this tick must not be stored as open with a mark on it,
+        # and an entry placed and immediately cancelled must be stored as cancelled.
         written["positions"] = self._write_positions(
             store, context, manager, cycle_id=cycle_id, ts=ts
+        ) + self._write_positions(store, context, exiting, cycle_id=cycle_id, ts=ts)
+        written["orders"] = (
+            self._write_orders(store, context, executing, cycle_id=cycle_id, ts=ts)
+            + self._write_orders(store, context, manager, cycle_id=cycle_id, ts=ts)
+            + self._write_orders(store, context, exiting, cycle_id=cycle_id, ts=ts)
         )
-        written["orders"] = self._write_orders(store, context, manager, cycle_id=cycle_id, ts=ts)
         closed = self._write_trades(store, context, exiting, cycle_id=cycle_id, ts=ts)
         written["trades"] = len(closed)
         written["rejections"] = self._write_rejection(
@@ -134,6 +147,7 @@ class MemoryEngine(BaseEngine):
                 key
                 for key, payload in (
                     (EXCHANGE_KEY, exchange),
+                    (EXECUTION_KEY, executing),
                     (POSITION_MANAGER_KEY, manager),
                     (EXIT_KEY, exiting),
                 )
@@ -309,10 +323,18 @@ class MemoryEngine(BaseEngine):
         ts: int,
     ) -> int:
         rows = self._rows(manager, POSITIONS_FIELD)
+        hold = self._hold_reason(manager)
         for row in rows:
-            store.write_position(
-                PositionRow.model_validate(self._stamped(row, context, cycle_id=cycle_id, ts=ts))
-            )
+            stamped = self._stamped(row, context, cycle_id=cycle_id, ts=ts)
+            # The hold is a property of the **tick**, published once by engine 21, and it
+            # lands on every position that tick marked. Written unconditionally rather
+            # than only when there is one, because `write_position` upserts every column:
+            # setting it to `None` on a tick that did not hold is what *clears* the
+            # previous tick's reason. Skipping the assignment instead would carry an
+            # hour-old hold forward forever, rendering a paused manage chain over one
+            # running normally. Lead ruling, 2026-09-16, condition 2.
+            stamped[HOLD_REASON_FIELD] = hold
+            store.write_position(PositionRow.model_validate(stamped))
         return len(rows)
 
     def _write_orders(
@@ -473,12 +495,35 @@ class MemoryEngine(BaseEngine):
             return None, None, f"no {currency} balance in this tick's fetch"
 
         cash = decimal_field(balances, currency, where=f"{EXCHANGE_KEY}.{BALANCES_FIELD}")
+
+        # **An unmarked position is not a position worth nothing.** `decimal_field`
+        # returns `Decimal(0)` for an absent field, which is right for a flat account and
+        # catastrophic for an invested one: `equity = cash + 0` drops the position's whole
+        # value out of that tick of the series, engine 17 computes
+        # `(peak_equity - equity) / peak_equity` against a peak read from the store, and on
+        # a fully invested account one unmarked tick is a drawdown approaching 100% against
+        # a `safety.max_drawdown_pct` of 0.10. The account freezes over a missing quote.
+        #
+        # Spec 92 has engine 21 publish `positions_value` **absent**, never zero, precisely
+        # so this is detectable — but only if the two cases are told apart, and
+        # `decimal_field`'s default makes them identical. The count comes from the store
+        # rather than from `state`, and it is read here rather than at the write below
+        # because this tick's positions have already landed: it is the count that decides
+        # whether a cash-only equity is the truth or a hole. Lead ruling, 2026-09-16.
+        open_positions = int(store.count_open_positions())
+        marked = manager or {}
+        for field in (POSITIONS_VALUE_FIELD, UNREALISED_PNL_FIELD):
+            if open_positions and marked.get(field) is None:
+                return None, None, (
+                    f"{open_positions} open position(s) and no {field} this tick, so the "
+                    "only equity available is cash and a cash-only equity on an invested "
+                    "account is a drawdown that did not happen"
+                )
+
         positions_value = decimal_field(
-            manager or {}, POSITIONS_VALUE_FIELD, where=POSITION_MANAGER_KEY
+            marked, POSITIONS_VALUE_FIELD, where=POSITION_MANAGER_KEY
         )
-        unrealised = decimal_field(
-            manager or {}, "unrealised_pnl", where=POSITION_MANAGER_KEY
-        )
+        unrealised = decimal_field(marked, UNREALISED_PNL_FIELD, where=POSITION_MANAGER_KEY)
         equity = cash + positions_value
 
         # The whole previous row, not `store.peak_equity()`, because this tick needs the

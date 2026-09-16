@@ -40,8 +40,10 @@ from acsoe.engines.memory.contracts import (
     CLOSED_TRADES_FIELD,
     CYCLE_ID_KEY,
     EXCHANGE_KEY,
+    EXECUTION_KEY,
     EXIT_KEY,
     GUARD_BLOCKERS_KEY,
+    HOLD_REASON_FIELD,
     ORDERS_FIELD,
     POSITION_MANAGER_KEY,
     POSITIONS_FIELD,
@@ -505,6 +507,15 @@ def test_the_position_count_comes_from_the_store_not_from_this_tick_s_state(
     **This test exists because a mutation survived without it.** Every earlier fixture
     happened to supply the same number on both sides, so no assertion could tell the two
     sources apart.
+
+    **Both ticks now publish a mark, and that is spec 98 rather than a workaround.** Until
+    spec 98 an absent `positions_value` read as `Decimal(0)`, so this test was green over
+    two equity rows that valued an open position at nothing — and on tick 2, where `state`
+    said nothing at all, the row it asserted `open_position_count == 1` on carried an
+    equity of cash alone. Engine 19 now writes no row in that case, so the mark has to be
+    supplied for the count assertion to be reachable at all. The subject is sharper for it:
+    tick 2's `state` carries a mark and **no positions list**, so the store says one open
+    position while `state` says none, and a count taken from `state` reports zero.
     """
     engine = MemoryEngine()
     engine.process(
@@ -512,11 +523,24 @@ def test_the_position_count_comes_from_the_store_not_from_this_tick_s_state(
         tick(
             1,
             **balances("500.00"),
-            **{POSITION_MANAGER_KEY: {POSITIONS_FIELD: [a_position(fixed_now)]}},
+            **{
+                POSITION_MANAGER_KEY: {
+                    POSITIONS_FIELD: [a_position(fixed_now)],
+                    "positions_value": "350.00",
+                    "unrealised_pnl": "0.00",
+                }
+            },
         ),
     )
-    # Tick 2 publishes no position_manager key at all. The position is still open.
-    engine.process(context_at(1), tick(2, **balances("500.00")))
+    # Tick 2 publishes a mark and no positions list. The position is still open.
+    engine.process(
+        context_at(1),
+        tick(
+            2,
+            **balances("500.00"),
+            **{POSITION_MANAGER_KEY: {"positions_value": "352.10", "unrealised_pnl": "2.10"}},
+        ),
+    )
 
     rows = rows_in(migrated_db, "equity_snapshots")
     assert [row["open_position_count"] for row in rows] == [1, 1]
@@ -589,3 +613,414 @@ def test_a_published_payload_of_the_wrong_shape_raises(context_at: Any) -> None:
         MemoryEngine().process(
             context_at(0), tick(1, **{POSITION_MANAGER_KEY: {POSITIONS_FIELD: "pos-1"}})
         )
+
+
+# --------------------------------------------------------------------------- #
+# Spec 98 — engines 18 and 22 reach the store, and an unmarked position does not
+# become a drawdown
+# --------------------------------------------------------------------------- #
+#
+# Engine 19 is the single writer of relational rows, so a row engine 18 or 22 publishes
+# and engine 19 does not read is a row that never exists. The tests below are in two
+# groups: the three new sources, and the equity defect the lead found while confirming
+# the first group.
+
+
+def a_filled_entry(fixed_now: Any, userref: int = 4242) -> dict[str, Any]:
+    """The same order as `a_resting_entry`, filled. Engine 18 places, 21 resolves."""
+    stamp = to_micros(fixed_now)
+    return OrderRow(
+        userref=userref,
+        run_id="whatever-the-publisher-said",
+        cycle_id=999,
+        pair="AAA/USD",
+        side=OrderSide.BUY,
+        intent=OrderIntent.ENTRY,
+        order_type=OrderType.LIMIT,
+        oflags="post",
+        status=OrderStatus.CANCELLED,
+        qty=Decimal("3.5"),
+        limit_price=Decimal("99.50"),
+        filled_qty=Decimal("0"),
+        placed_at=stamp,
+        updated_at=stamp,
+    ).model_dump(mode="json")
+
+
+def an_exit_order(fixed_now: Any, userref: int = 7777) -> dict[str, Any]:
+    stamp = to_micros(fixed_now)
+    return OrderRow(
+        userref=userref,
+        run_id="whatever-the-publisher-said",
+        cycle_id=999,
+        pair="AAA/USD",
+        side=OrderSide.SELL,
+        intent=OrderIntent.EXIT,
+        order_type=OrderType.LIMIT,
+        oflags="post",
+        status=OrderStatus.RESTING,
+        qty=Decimal("3.5"),
+        limit_price=Decimal("103.00"),
+        filled_qty=Decimal("0"),
+        placed_at=stamp,
+        updated_at=stamp,
+    ).model_dump(mode="json")
+
+
+def a_closed_position(fixed_now: Any, position_id: str = "pos-1") -> dict[str, Any]:
+    """The same position as `a_position`, as engine 22 publishes it once it is closed."""
+    closed = dict(a_position(fixed_now, position_id))
+    closed["status"] = PositionStatus.CLOSED.value
+    return closed
+
+
+def test_the_entry_order_engine_18_places_reaches_the_store(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """Spec 98's first new source, and the one with no other route into the store.
+
+    Engine 18 runs on the **opportunity** chain and engine 19 on the manage chain, both
+    on the same tick. Before this spec engine 19 read `orders` from engine 21 alone, so
+    an entry placed and then filled or cancelled before engine 21 next published it would
+    have no `orders` row at all — and `orders` is where the `userref` idempotency check
+    invariant 8 requires is answered from.
+    """
+    MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **balances("500.00"),
+            **{EXECUTION_KEY: {ORDERS_FIELD: [a_resting_entry(fixed_now)]}},
+        ),
+    )
+    rows = rows_in(migrated_db, "orders")
+    assert [row["userref"] for row in rows] == [4242]
+    assert rows[0]["status"] == OrderStatus.RESTING.value
+    assert rows[0]["run_id"] == RUN, (
+        "engine 19 stamps the tick that recorded the row; a publisher's run_id cannot be "
+        "joined to that tick's block record"
+    )
+
+
+def test_the_exit_orders_and_closed_positions_engine_22_publishes_reach_the_store(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """Spec 98's other two new sources. Engine 22 already had `closed_trades` read; its
+    orders and its positions did not, so an exit order was placed and recorded nowhere
+    and a position closed by engine 22 stayed `open` in the table forever."""
+    MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **balances("500.00"),
+            **{
+                EXIT_KEY: {
+                    ORDERS_FIELD: [an_exit_order(fixed_now)],
+                    POSITIONS_FIELD: [a_closed_position(fixed_now)],
+                }
+            },
+        ),
+    )
+    orders = rows_in(migrated_db, "orders")
+    positions = rows_in(migrated_db, "positions")
+    assert [row["userref"] for row in orders] == [7777]
+    assert [row["status"] for row in positions] == [PositionStatus.CLOSED.value]
+
+
+def test_an_absent_execution_or_exit_key_records_nothing_and_not_a_zero(
+    context_at: Any, migrated_db: Path
+) -> None:
+    """The governing rule of this file, extended to the three new sources.
+
+    Fourteen ticks in fifteen close no decision bar, so engine 18 is absent on almost
+    every tick, and absent on a bar tick where the chain stopped at an earlier gate.
+    `sources_present` is what keeps "did not publish" distinguishable from "published
+    nothing" — a count of zero cannot.
+    """
+    result = MemoryEngine().process(context_at(0), tick(1, **balances("500.00")))
+    assert rows_in(migrated_db, "orders") == []
+    assert rows_in(migrated_db, "positions") == []
+    assert result.data["written"]["orders"] == 0
+    assert EXECUTION_KEY not in result.data["sources_present"]
+    assert EXIT_KEY not in result.data["sources_present"]
+
+
+def test_execution_is_named_in_sources_present_when_it_published(
+    context_at: Any, fixed_now: Any
+) -> None:
+    """The other half, so the test above is not satisfied by an engine that never names
+    any source at all."""
+    result = MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **balances("500.00"),
+            **{EXECUTION_KEY: {ORDERS_FIELD: [a_resting_entry(fixed_now)]}},
+        ),
+    )
+    assert EXECUTION_KEY in result.data["sources_present"]
+
+
+def test_a_placement_and_its_same_tick_cancel_end_as_cancelled(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """Spec 98 step 4, tested rather than assumed.
+
+    Engine 18 places an entry on the opportunity chain and engine 21 cancels it on the
+    manage chain, same tick, same `userref`. `write_order` upserts, so the stored row is
+    whichever engine 19 wrote **last** — and engine 18 runs first, so 18's row must be
+    written first and 21's must overwrite it. The reverse order stores a cancelled order
+    as resting, which is a live post-only buy as far as anything reading the table is
+    concerned, and invariant 8 is about exactly that order.
+
+    One row, not two: the assertion is on the count as well as the status, because an
+    upsert that had silently become an insert would leave both rows present and the
+    status assertion would pass on whichever came back first.
+    """
+    MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **balances("500.00"),
+            **{
+                EXECUTION_KEY: {ORDERS_FIELD: [a_resting_entry(fixed_now)]},
+                POSITION_MANAGER_KEY: {ORDERS_FIELD: [a_filled_entry(fixed_now)]},
+            },
+        ),
+    )
+    rows = rows_in(migrated_db, "orders")
+    assert len(rows) == 1, f"the upsert on userref did not collapse the two writes: {rows}"
+    assert rows[0]["status"] == OrderStatus.CANCELLED.value, (
+        "the placement overwrote the cancel, so a cancelled entry is stored as resting — "
+        "which is a live post-only buy to everything that reads this table"
+    )
+
+
+def test_a_position_marked_and_closed_on_one_tick_ends_closed(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """The same rule for `positions`, and the lead's ruling of 2026-09-16.
+
+    Engine 21 marks every open position and engine 22 closes the ones that hit a barrier,
+    both on the same tick and both publishing a row for the same `position_id`. Engine 22
+    runs after 21 in the manage chain, so closed must win. Written the other way, a
+    position closed this tick is stored as open with a mark on it — a row the console
+    renders as a live position and `safety` counts towards its escalation precondition.
+    """
+    MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **balances("500.00"),
+            **{
+                POSITION_MANAGER_KEY: {
+                    POSITIONS_FIELD: [a_position(fixed_now)],
+                    POSITIONS_VALUE_FIELD: "350.00",
+                    "unrealised_pnl": "0.00",
+                },
+                EXIT_KEY: {POSITIONS_FIELD: [a_closed_position(fixed_now)]},
+            },
+        ),
+    )
+    rows = rows_in(migrated_db, "positions")
+    assert len(rows) == 1, f"the upsert on position_id did not collapse the two writes: {rows}"
+    assert rows[0]["status"] == PositionStatus.CLOSED.value, (
+        "engine 21's mark overwrote engine 22's close, so a position closed this tick is "
+        "stored as open"
+    )
+
+
+def test_the_hold_reason_is_written_and_then_cleared(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """B3's column, and the condition that makes it safe rather than misleading.
+
+    Engine 21 publishes `hold_reason` once per tick, not per position, and engine 19 is
+    the only writer of the column. **The clearing half is the load-bearing one**: a hold
+    written and never cleared renders an hour-old hold forever and reports a paused
+    manage chain over one running normally. `write_position` upserts every column, so
+    writing `None` on a tick that did not hold is what clears it — and skipping the
+    assignment instead would carry it forward, which is the defect this pins.
+
+    B3 pins the same property at the store boundary. This pins it **through engine 19**,
+    which is where it can actually go wrong: the store cannot know whether engine 19
+    chose not to write the field or engine 21 chose not to publish one.
+
+    **The two sources are given different values on purpose, and the first version of
+    this test did not do that.** `a_position` dumps a real `PositionRow`, which carries
+    `hold_reason: None` as a model default — so the *row* already said null on tick 2,
+    the column came out null whether or not engine 19 assigned anything, and a mutation
+    setting the field only when there is a reason survived the whole sweep. Here tick 2's
+    row carries a **stale** reason, which is not a contrivance: engine 21 builds its
+    published rows from the open positions it read out of the store, so last tick's value
+    is exactly what comes back. Only engine 19's tick-level assignment can clear it.
+    """
+    engine = MemoryEngine()
+
+    def marked(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            POSITIONS_FIELD: [row],
+            POSITIONS_VALUE_FIELD: "350.00",
+            "unrealised_pnl": "0.00",
+        }
+
+    fresh = a_position(fixed_now)
+    assert fresh[HOLD_REASON_FIELD] is None, (
+        "the row already carries a hold reason, so tick 1 cannot show that engine 19 is "
+        "the one that put it there"
+    )
+    engine.process(
+        context_at(0),
+        tick(
+            1,
+            **balances("500.00"),
+            **{POSITION_MANAGER_KEY: {**marked(fresh), HOLD_REASON_FIELD: "data_guard"}},
+        ),
+    )
+    assert [row["hold_reason"] for row in rows_in(migrated_db, "positions")] == ["data_guard"], (
+        "the row said null and the tick said `data_guard`, so a stored null means engine "
+        "19 is not applying the tick's reason at all"
+    )
+
+    # Tick 2 did not hold. The row still carries last tick's reason, because engine 21
+    # republishes what the store gave it; the tick-level key is absent.
+    stale = {**a_position(fixed_now), HOLD_REASON_FIELD: "data_guard"}
+    engine.process(
+        context_at(1), tick(2, **balances("500.00"), **{POSITION_MANAGER_KEY: marked(stale)})
+    )
+    assert [row["hold_reason"] for row in rows_in(migrated_db, "positions")] == [None], (
+        "last tick's hold reason survived a tick that did not hold, so the console shows "
+        "an hour-old hold on a manage chain that is running normally"
+    )
+
+
+# --- the equity defect ------------------------------------------------------ #
+
+
+def test_an_open_position_with_no_mark_writes_no_equity_row(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """The defect, and it is the most expensive thing in spec 98.
+
+    `decimal_field` returns `Decimal(0)` for an absent field. That is right for a flat
+    account and catastrophic for an invested one: `equity = cash + 0` drops the position's
+    entire value out of that tick of the series, and engine 17 computes
+    `(peak_equity - equity) / peak_equity` against a peak read from the store. On a fully
+    invested account one unmarked tick is a drawdown approaching 100% against a
+    `safety.max_drawdown_pct` of 0.10 — the account freezes over a missing quote.
+
+    Spec 92 has engine 21 publish `positions_value` **absent**, never zero, precisely so
+    this is detectable. It is only detectable if the two cases are told apart, and the
+    default made them identical.
+    """
+    MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **balances("500.00"),
+            **{POSITION_MANAGER_KEY: {POSITIONS_FIELD: [a_position(fixed_now)]}},
+        ),
+    )
+    assert rows_in(migrated_db, "equity_snapshots") == [], (
+        "an equity row was written valuing an open position at nothing, which is a "
+        "drawdown that did not happen"
+    )
+    assert len(rows_in(migrated_db, "positions")) == 1, (
+        "the position itself must still be recorded; the skip is the equity row alone"
+    )
+
+
+def test_the_skipped_equity_row_says_why(
+    context_at: Any, fixed_now: Any
+) -> None:
+    """A silent gap in the equity curve is indistinguishable from a silent bug, which is
+    why `equity_skipped_reason` exists and why this asserts on it rather than only on the
+    absence of a row."""
+    result = MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **balances("500.00"),
+            **{POSITION_MANAGER_KEY: {POSITIONS_FIELD: [a_position(fixed_now)]}},
+        ),
+    )
+    reason = result.data["equity_skipped_reason"]
+    assert reason is not None
+    assert POSITIONS_VALUE_FIELD in reason, reason
+    assert "1 open position" in reason, reason
+    assert result.data["written"]["equity_snapshots"] == 0
+
+
+def test_a_flat_account_still_writes_its_equity_row(
+    context_at: Any, migrated_db: Path
+) -> None:
+    """The other half, and without it the fix is satisfied by an engine that never writes
+    an equity row at all — which would be a silent, permanent hole in the one series the
+    drawdown breaker reads.
+
+    With no open position, an absent `positions_value` is not a missing mark: there is
+    nothing to mark, `cash` is the whole of equity, and the row stands. These two tests
+    differ in exactly one input — whether a position was published — and that is the
+    distinction `decimal_field`'s default could not make.
+    """
+    result = MemoryEngine().process(context_at(0), tick(1, **balances("500.00")))
+    rows = rows_in(migrated_db, "equity_snapshots")
+    assert len(rows) == 1, "a flat account wrote no equity row"
+    assert rows[0]["equity"] == "500.00"
+    assert rows[0]["open_position_count"] == 0
+    assert result.data["equity_skipped_reason"] is None
+
+
+def test_an_open_position_with_a_mark_writes_the_marked_equity(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """The third case, so "skip when invested" is not satisfied by skipping always.
+
+    The witness rule: `cash` and `positions_value` are given **different** values, so an
+    engine that summed the wrong one twice, or dropped either, produces a number this
+    assertion can see. Exact `Decimal`, never `approx` — this is money.
+    """
+    MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **balances("500.00"),
+            **{
+                POSITION_MANAGER_KEY: {
+                    POSITIONS_FIELD: [a_position(fixed_now)],
+                    POSITIONS_VALUE_FIELD: "352.10",
+                    "unrealised_pnl": "2.10",
+                }
+            },
+        ),
+    )
+    rows = rows_in(migrated_db, "equity_snapshots")
+    assert len(rows) == 1
+    assert Decimal(rows[0]["equity"]) == Decimal("500.00") + Decimal("352.10")
+    assert Decimal(rows[0]["cash"]) == Decimal("500.00")
+    assert Decimal(rows[0]["positions_value"]) == Decimal("352.10")
+    assert Decimal(rows[0]["unrealised_pnl"]) == Decimal("2.10")
+    assert rows[0]["open_position_count"] == 1
+
+
+def test_an_open_position_with_a_value_but_no_unrealised_pnl_also_skips(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """`unrealised_pnl` gets the same treatment as `positions_value`, and for the same
+    reason: an absent one reads as zero, and a zero unrealised PnL on an invested account
+    is a claim that the position is exactly at its entry price — which Phase 7's
+    attribution would read as fact."""
+    MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **balances("500.00"),
+            **{
+                POSITION_MANAGER_KEY: {
+                    POSITIONS_FIELD: [a_position(fixed_now)],
+                    POSITIONS_VALUE_FIELD: "352.10",
+                }
+            },
+        ),
+    )
+    assert rows_in(migrated_db, "equity_snapshots") == []
