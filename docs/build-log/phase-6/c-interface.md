@@ -2059,3 +2059,138 @@ A/B in a shared checkout, and I did not. The honest statement is that the eviden
 consistent with B3 mid-save and I cannot rule out the native fault. Recorded as B's, not
 chased, and flagged to B3 rather than filed as a defect. Re-running in isolation passed,
 which tells me nothing and is noted only so nobody treats it as having told me something.
+
+### Spec 104, diagnosis — engine 19 read an errored engine as a refusal with no code
+
+**Agent:** C (interface and models) · **Task:** spec 104 · **Date:** 2026-09-16
+
+The diagnosis is A's (`a-platform.md`, "an ERROR anywhere in the opportunity chain leaves the
+tick unrecorded"). This is where in engine 19 it happens, re-derived from the code and
+reproduced before any change.
+
+**What happened.** On a tick where an opportunity-chain engine raises, engine 19 raises too, so
+the tick has no `block_records` row, no `rejections` row and no `equity_snapshots` row.
+Reproduced on unmodified engines with a lighter chain than A's: guard 1, 2, 3, 4, 17;
+opportunity 5, 7, 18 (no engine 16, so a real engine 18 raises `ExecutionError: decision.intent
+is absent`); manage 19; the scripted market at tier 3 behind B's paper broker. Tick 2 logged two
+`engine_error`s, engine 18's and engine 19's `MissingInputError: engine 'execution' refused
+'BTC/USD' without publishing a 'reason_code'`, and `state["memory"] == {}`.
+Probe: `scratchpad/c104/probe_error.py`, output `probe_error.log`. No model is trained: engine 7
+ranks alphabetically while `scout.rank_feature` is absent, so engines 5 and 7 produce a real
+candidate on flat bars, which is all the defect needs.
+
+**Why, in `src/acsoe/engines/memory/engine.py`.** Two functions, each right about the case it
+was written for:
+
+- `_write_block_records` writes rows from `state["guard_blockers"]` only. An opportunity-chain
+  blocker never enters that list (the orchestrator appends only in the guard chain), so no row
+  can exist for it whatever its status.
+- `_write_rejection` decides "this is a rejection" from two facts: the primary blocker is not a
+  guard, and scout published a pair. **Neither fact says whether the blocker decided anything.**
+  It then reads `reason_code` from the blocker's payload, which rule 7 has emptied, and raises
+  on purpose. The raise comes after positions and orders are written and before
+  `_write_equity`, so the tick is half recorded.
+
+Until the lead's `state["block_status"]` landed, the only way to tell an error from a refusal
+here was the empty payload, and that is also exactly what a gate that blocked **without** its
+code looks like — the case the raise exists for. Now the orchestrator publishes the status, so
+engine 19 can read the fact instead of inferring it.
+
+**What the fix must keep.** A `BLOCK` with no `reason_code` still raises (a gate breaking its
+contract). A guard that errored is still recorded from `guard_blockers` alone, with no second
+row. And `is_primary` on the new row is true because the opportunity chain runs only when no
+guard blocked, so the unique primary index cannot be hit twice on one tick.
+
+### Spec 104, fix — engine 19 reads `block_status`, and the errored engine gets one row
+
+**Agent:** C (interface and models) · **Task:** spec 104 · **Date:** 2026-09-16
+
+**Fix**, in `src/acsoe/engines/memory/` only:
+
+1. `contracts.py`: `BLOCK_STATUS_KEY = "block_status"` and `REASON_ENGINE_ERRORED =
+   "engine_errored"`, both exported. The comment on `TRADING_BLOCKED_BY_KEY` no longer says
+   that every non-guard blocker is a rejection.
+2. `engine.py`: one helper, `_errored_opportunity_engine(state)`, returns the blocker's name
+   only when `state["block_status"] == "ERROR"` and the blocker is not in `guard_blockers`.
+   `_write_block_records` writes the guard rows exactly as before, then, if the helper names
+   an engine, one more row: that name, `status` `ERROR`, `block_reason` `engine_errored`,
+   `is_primary` true. `_write_rejection` returns 0 for the same case **after** the guard check
+   and **before** it reads the candidate or any `reason_code`. Nothing else moved, so
+   positions, orders and the equity row are written in their usual order.
+3. `console/format.py`: `engine_errored` → "A check failed with an error before it could
+   decide, so nothing was traded; the log for this tick says why". It says *failed* and not
+   *refused*, and it points at the log, because the engine's own error is not on the row. My
+   first draft also said repeated errors would freeze trading. I cut it: that is a threshold
+   the row does not carry, and the table's rule is that no sentence adds one.
+4. `README.md`: a section for the errored engine and the two neighbouring cases, and
+   `block_status` in the table of keys read.
+
+**Decisions made on the way.**
+
+- **An absent `block_status` reads as "not an error".** The orchestrator always publishes it
+  beside `trading_blocked_by`, so absence comes only from a hand-built `state`. The alternative
+  was refusing the tick, which would turn every older hand-built test red without protecting
+  anything the orchestrator can produce. With the key absent, a blocker with no code still
+  raises, which is the fail-loud direction. `a_rejection()` in the test file now carries
+  `block_status: "BLOCK"`, so the fixture looks like what the orchestrator actually publishes.
+- **`block_reason` is `engine_errored`, not the orchestrator's `unhandled X: ...` text.** The
+  spec and invariant 12 both say so. The exception text is in the log line the orchestrator
+  writes for the same `(run_id, cycle_id)`, and the prose sends the operator there.
+- **`is_primary` is hard-coded true, not derived.** The opportunity chain runs only when no
+  guard blocked, so there is nothing to be primary against. If a hand-built `state` ever had
+  both, the unique index `ux_block_records_primary` would refuse the second primary, and that
+  refusal is the visible symptom this engine already relies on.
+
+**A wrong turn, mine.** The first run of the new tests failed one of them with
+`tick() got multiple values for keyword argument 'exchange'`: the guard-error test passed
+balances *and* an empty `exchange` payload. The empty payload is the right one (an errored
+guard's payload is `{}`), so the balances went. That one is a test typo, not a finding.
+
+**The lighter chain, and why it counts as "a real raising engine".** The orchestrator test
+runs guard 1, 2, 3, 4, 17; opportunity 5, 7, 18; manage 19, all real, at fee tier 3 behind
+B's paper broker, with no trained model. Engine 18 raises its own `ExecutionError` because
+engine 16 is not in the chain. That is the same raise A's probe produced with the full chain,
+reached for less. Nothing about the status is hand-built. The test asserts that the tick had a
+real candidate (`state["scout"]["pair"]`), because without one the old code never reached
+the raise and the test could not have gone red.
+
+### Spec 104 — six mutations of engine 19, six killed, and a control that survived everywhere
+
+**Agent:** C (interface and models) · **Task:** spec 104 · **Date:** 2026-09-16
+
+Harness: `scratchpad/c104/sweep104.py`. It takes a byte copy first, checks every anchor
+occurs exactly once, sets `PYTHONDONTWRITEBYTECODE=1`, passes `-p no:cacheprovider`, uses
+`sys.executable`, and restores in a `finally` before the next arm with the sha256 compared in
+the same statement. It gives no verdict without a pytest summary line. `engine.py` is 0 CRLF,
+LF only, counted in Python before the sweep. Before the sweep I also checked the `tests/verify/`
+patchers that anchor on this file's text (`test_phase4_criteria.py`, ten anchors): each still
+occurs exactly once after the change, and the control's line (`return len(blockers) + 1`)
+occurs nowhere in `tests/` or `scripts/`. File sha256 before and after every arm:
+`5b10da0c08f0eaf72f237a388e8eb1f7f2122bb213745d4084ab9778aa782712`. Narrow target:
+`tests/engines/test_memory_rows.py`, with a baseline of `39 passed`. Logs:
+`logs/verify/c104-sweep-*`.
+
+| Arm | Mutation | Mutant sha256 | Verdict | Killing test (written for it) | Red message |
+|---|---|---|---|---|---|
+| M1 | the ERROR skip in `_write_rejection` → `if False:` (**ERROR treated as a rejection**) | `feb9c7858147…` | killed, `4 failed, 35 passed` | `test_an_engine_that_raised_is_recorded_through_the_real_orchestrator` (spec 104's named check) | `engine 19 raised on the errored tick` — the orchestrator logged `MissingInputError: engine 'execution' refused … without publishing a 'reason_code'` |
+| M2 | `status=BlockStatus.ERROR` → `BLOCK` | `821d40b207e0…` | killed, `3 failed` | `test_an_errored_engine_writes_a_block_record_no_rejection_and_the_equity_row` | `engine 17's error rate counts status = 'ERROR'` / `'BLOCK' == 'ERROR'` |
+| M3 | a `RejectionRow` written as well (`reason_code=engine_errored`) | `adb4d27cc819…` | killed, `4 failed` | orchestrator test, and `…writes_a_block_record_no_rejection…` | `an engine that raised refused nothing` |
+| M4 | `process` returns before `_write_equity` on the errored path | `2c6d545b2c98…` | killed, `2 failed` | orchestrator test, and `…writes_a_block_record_no_rejection_and_the_equity_row` | `the errored tick has no equity row, so the tick was lost` / `assert 0 == 1` |
+| M5 | the error inferred from an empty payload (`state.get(str(blocked_by)) != {}`) instead of `block_status` | `a7eddcb9d892…` | killed, `3 failed` | `test_an_engine_that_raised_and_a_gate_that_blocked_without_a_code_are_different_facts` and `test_an_errored_engine_is_never_asked_for_a_reason_code` | `DID NOT RAISE MissingInputError` / `[] == ['engine_errored']` |
+| M6 | `is_primary=True` → `False` | `0dfa8ea5d79e…` | killed, `3 failed` | orchestrator test, `…with_no_candidate…`, `…writes_a_block_record…` | `(…, 0)] == [(…, 1)]` |
+| E1 | **equivalent control**: `return len(blockers) + 1` → `return 1 + len(blockers)` | `58a20dffce58…` | survived: `39 passed` narrow; `1259 passed` wide | — | — |
+
+**Which test killed what.** Every kill landed on a test written for that property. Two notes
+beside them. M5 also killed the older `test_a_refusal_without_a_reason_code_raises…`, which is
+the same fact seen from spec 50's side, so it is not an incidental kill. M1 also killed
+`…different_facts`, whose second half runs the errored tick. The orchestrator test is red
+under M1, M2, M3, M4 and M6, which is what spec 104's "Check When Done" asks of it. It is
+**not** red under M5, and it should not be: its payload is `{}`, so inferring the error from
+the emptiness gives the right answer there. The two hand-built tests are the ones that tell
+the two readings apart.
+
+**The control against the wider suite.** Baseline over `tests/engines tests/console
+tests/verify/test_phase4_criteria.py tests/core`: `1259 passed, 1 warning in 363.50s`
+(`logs/verify/c104-wide-baseline.log`). E1 over the same set: `1259 passed, 1 warning in
+357.71s`. No crash and no native fault in either run. After the sweep the file's hash is the
+same as before it, and `git status` shows only my lane's files.

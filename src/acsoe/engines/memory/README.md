@@ -41,6 +41,7 @@ contract rule 3 forbids importing another engine to find out what a key is calle
 | `state["guard_blockers"]` | orchestrator | one `block_records` row each, `is_primary` on the first |
 | `state["cycle_id"]` | orchestrator | the tick half of `(run_id, cycle_id)` |
 | `state["trading_blocked_by"]`, `state["block_reason"]` | orchestrator | whether this tick was a *rejection* and what the operator is told |
+| `state["block_status"]` | orchestrator | `BLOCK` or `ERROR`: whether the opportunity-chain blocker refused or raised. Read, never inferred from an empty payload |
 | `state["scout"]["pair"]` | 7 `scout` (B) | the candidate the rejection is about |
 | `state["<blocker>"]["reason_code"]` and its economics | the gate that refused | the `rejections` columns |
 | `state["exchange"]["balances"]` | 1 `exchange` (A) | cash, and therefore whether an equity row can be written at all |
@@ -48,6 +49,29 @@ contract rule 3 forbids importing another engine to find out what a key is calle
 | `state["execution"]["orders"]` | 18 (B), Phase 6 | the entry order it placed, on the **opportunity** chain, same tick |
 | `state["exit"]["closed_trades"]` | 22 (B), Phase 6 | one `trades` row per closed round trip |
 | `state["exit"]["orders"]`, `["positions"]` | 22 (B), Phase 6 | the exit orders it placed and the positions it closed |
+
+## An opportunity-chain engine that errored
+
+Operator ruling 2026-09-16, invariant 12 and contract rule 7; spec 104. When
+`state["block_status"]` is `ERROR` and the primary blocker is **not** a guard, engine 19
+writes one `block_records` row: `blocked_by` the engine's name, `status` `ERROR`,
+`block_reason` the code `engine_errored` (`REASON_ENGINE_ERRORED` in `contracts.py`, mapped in
+`console/format.py`'s `REASON_PROSE`), `is_primary` true. **No `rejections` row**, because
+no candidate was refused, and **no `reason_code` is read or required**: a code is a decision
+and an error is the absence of one. Positions, orders and the equity row are written as on
+any other tick.
+
+Before the ruling this tick was lost: rule 7 empties a raising engine's payload, engine 19
+read that as a refusal with no code and raised, and the tick had no rejection, no block
+record and no equity row. Engine 17's error rate now counts these rows too.
+
+Two neighbouring cases keep their treatment, and the tests name them apart:
+
+- **A guard that errored** is recorded from `state["guard_blockers"]` as before, and gets no
+  second row.
+- **A `BLOCK` with no `reason_code`** is a gate breaking its contract. It still raises, because
+  the console renders a rejection with no code as silence. It looks exactly like an errored
+  engine's empty payload, which is why the status is read rather than inferred.
 
 ## What it writes into `state`
 
@@ -115,7 +139,10 @@ tick's reason, and skipping the assignment instead would render an hour-old hold
 
 `tests/engines/test_memory.py` — the block record on every blocked tick (spec 49).
 `tests/engines/test_memory_rows.py` — the five live-row tables, including the
-absent-is-not-zero case for each (spec 50).
+absent-is-not-zero case for each (spec 50), what engines 18 and 22 publish (spec 98), and
+the errored-engine tick, one test of it through the real orchestrator and a real raising
+engine (spec 104).
 
 Both were proved capable of failing by mutation rather than by review; the mutations
-and the messages they produced are in `docs/build-log/phase-4/c-interface.md`.
+and the messages they produced are in `docs/build-log/phase-4/c-interface.md` and, for
+specs 98 and 104, `docs/build-log/phase-6/c-interface.md`.

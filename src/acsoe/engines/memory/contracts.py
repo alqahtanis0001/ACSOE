@@ -32,6 +32,7 @@ from acsoe.clients.store.contracts import Money
 __all__ = [
     "BALANCES_FIELD",
     "BLOCK_REASON_KEY",
+    "BLOCK_STATUS_KEY",
     "CANDIDATE_PAIR_PATH",
     "CLOSED_TRADES_FIELD",
     "CYCLE_ID_KEY",
@@ -46,6 +47,7 @@ __all__ = [
     "POSITIONS_VALUE_FIELD",
     "POSITION_MANAGER_KEY",
     "REASON_CODE_FIELD",
+    "REASON_ENGINE_ERRORED",
     "SCOUT_KEY",
     "STATE_KEY",
     "TRADING_BLOCKED_BY_KEY",
@@ -72,9 +74,27 @@ CYCLE_ID_KEY: Final = "cycle_id"
 
 #: Set by the orchestrator to the **first** blocker of either chain, and the reason it
 #: gave. A blocker that is not one of ``guard_blockers`` came from the opportunity
-#: chain, which is what makes the tick a *rejection* rather than only a block.
+#: chain, which is what makes the tick a *rejection* rather than only a block — unless
+#: its status is ``ERROR``, in which case nothing was refused (see ``BLOCK_STATUS_KEY``).
 TRADING_BLOCKED_BY_KEY: Final = "trading_blocked_by"
 BLOCK_REASON_KEY: Final = "block_reason"
+
+#: Set by the orchestrator beside the two keys above: ``BLOCK`` or ``ERROR``, absent on an
+#: unblocked tick. It is the **only** thing that tells an opportunity-chain engine that
+#: raised from one that refused. Rule 7 empties a raising engine's payload, and an empty
+#: payload is also exactly what a gate that blocked without its ``reason_code`` looks like
+#: — two facts with different right answers, so engine 19 reads this key and never infers
+#: an error from the emptiness. Invariant 12 and contract rule 7, operator ruling
+#: 2026-09-16.
+BLOCK_STATUS_KEY: Final = "block_status"
+
+#: The ``block_records.block_reason`` of an opportunity-chain engine that returned
+#: ``ERROR``. **Engine 19's code, not the engine's**: a ``reason_code`` is a decision an
+#: engine made and an error is the absence of one, so the errored engine is never asked
+#: for a code and never credited with one. No ``rejections`` row carries it, because no
+#: candidate was refused. `console/format.py`'s ``REASON_PROSE`` maps it, in the change
+#: that introduced it (spec 104).
+REASON_ENGINE_ERRORED: Final = "engine_errored"
 
 #: Engine 7 `scout` (B). Which pair the tick is considering. ``None`` on a tick where
 #: the opportunity chain never produced a candidate, which is most of them.

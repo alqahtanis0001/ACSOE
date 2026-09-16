@@ -5,6 +5,31 @@ Never edit the tracker directly.
 
 ## Current Task
 
+### CLAIM 2026-09-16 — specs 104 then 105 (Agent C, Interface and models, Opus 5 1M)
+
+Written before any code. Assigned by the lead from the operator's rulings on A's spec 87
+findings. **104 first; stop and report to the lead; 105 only on the lead's go-ahead.** The only
+agent in the checkout. No commits, no registration (spec 82 stays held), no `core/`,
+`bootstrap.py`, `context/*` (except this file), `config/`, other engines, or `clients/` (except
+spec 105's transient, hash-restored broker mutation).
+
+| Spec | Files I will touch |
+|---|---|
+| **104** — engine 19 records an errored opportunity-chain engine as `engine_errored` | `src/acsoe/engines/memory/{engine.py,contracts.py,README.md}`, `tests/engines/test_memory_rows.py`, `src/acsoe/console/format.py` (the prose, same change) |
+| **105** — criterion `paper_equity_continuous_across_fill` at fee tier 3 | `scripts/verify.py`, `tests/verify/test_phase6_criteria.py`, `tests/verify/test_runner.py` (phase-6 list); transient byte-copy mutation of `src/acsoe/clients/paper/broker.py`, restored by hash |
+
+Records: this file and `docs/build-log/phase-6/c-interface.md`. Logs under `logs/verify/c104-*`
+and `c105-*`; scratch under the session scratchpad `c104/`.
+
+#### 104 — DONE, not committed; reported to the lead, waiting for the go-ahead on 105
+
+Engine 19 reads `state["block_status"]`. An opportunity-chain `ERROR` gets one `block_records`
+row (`ERROR`, `engine_errored`, primary) and no rejection, and the equity row is still written.
+`engine_errored` is in `REASON_PROSE`. There are seven new tests, one of them through the real
+orchestrator with engine 18 really raising. Six mutations, all six killed by the tests written
+for them; control E1 survived narrow (39) and wide (1259). ruff and mypy are clean over the
+whole gate paths. No contract mismatch found. Full account in the build log.
+
 ### CLAIM 2026-09-16 — Phase 6, the engines-and-models half of lane C (C-5, Opus 5 1M)
 
 Written before any code, per Phase 6 rule 1. This session is **specs 95, 102, 96, 97 and 98

@@ -176,6 +176,9 @@ def a_rejection(pair: str = "AAA/USD") -> dict[str, Any]:
         "scout": {"pair": pair},
         "trading_blocked_by": "cost",
         "block_reason": "Net edge -0.21% after fees",
+        # The orchestrator publishes the status beside the name and the reason, in both
+        # chains. A gate that refused is `BLOCK`; spec 104's tests below vary it.
+        "block_status": "BLOCK",
         "cost": {
             "reason_code": "net_edge_below_hurdle",
             "expected_move_pct": "0.0191",
@@ -1024,3 +1027,291 @@ def test_an_open_position_with_a_value_but_no_unrealised_pnl_also_skips(
         ),
     )
     assert rows_in(migrated_db, "equity_snapshots") == []
+
+
+# --------------------------------------------------------------------------- #
+# Spec 104 — an opportunity-chain engine that errored is recorded, not refused
+# --------------------------------------------------------------------------- #
+#
+# Operator ruling 2026-09-16, invariant 12 and contract rule 7. Rule 7 empties the payload
+# of an engine that raised, so the orchestrator publishes `state["block_status"]` and engine
+# 19 reads it. The tests below are in two groups: one through the real orchestrator and a
+# real raising engine, where nothing about the status is hand-built, and hand-built ticks
+# that name apart the cases the status exists to separate.
+
+
+def an_errored_tick(cycle_id: int, **payload: Any) -> dict[str, Any]:
+    """`state` as the orchestrator leaves it when engine 18 raised on a real candidate."""
+    return tick(
+        cycle_id,
+        **balances("500.00"),
+        scout={"pair": "AAA/USD"},
+        trading_blocked_by="execution",
+        block_reason="unhandled ExecutionError: decision.intent is absent",
+        block_status="ERROR",
+        execution=dict(payload),
+    )
+
+
+def block_rows(db_path: Path) -> list[tuple[Any, ...]]:
+    return [
+        (row["cycle_id"], row["blocked_by"], row["status"], row["block_reason"], row["is_primary"])
+        for row in rows_in(db_path, "block_records")
+    ]
+
+
+class _EngineErrors:
+    """The orchestrator's log, kept so an engine that raised can be named by cause."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    def debug(self, event: str, **fields: Any) -> None:
+        self.events.append((event, fields))
+
+    def for_engine(self, engine: str) -> list[str]:
+        return [
+            str(fields.get("error", ""))
+            for event, fields in self.events
+            if event == "engine_error" and fields.get("engine") == engine
+        ]
+
+
+def test_an_engine_that_raised_is_recorded_through_the_real_orchestrator(
+    tmp_path: Path,
+) -> None:
+    """The finding, end to end: a real engine raises and the tick is recorded in full.
+
+    **Nothing about the error is staged.** The chain is the real one in registry order with
+    engine 16 left out and most of the judgement engines with it: guard 1, 2, 3, 4, 17;
+    opportunity 5, 7, 18; manage 19. Engine 7 ranks alphabetically while no ranking feature
+    is configured, so flat bars are enough for a real candidate, and engine 18 then raises
+    its own `ExecutionError` because no decision was made. The orchestrator turns that into
+    `ERROR` and publishes the status; engine 19 reads it. No model is trained, because the
+    defect needs none.
+
+    Before spec 104 this tick wrote nothing: engine 19 read the empty payload as a refusal
+    with no `reason_code` and raised, after positions and orders and before equity.
+
+    The market is at fee tier 3, the regime every Phase 6 trade runs in, though nothing here
+    reaches the cost gate.
+    """
+    from datetime import UTC, datetime
+
+    from tests.harness.doubles import FakeClients, FixedClock, load_default_config
+    from tests.harness.fake_kraken import TIER_3, FakeRecorder
+    from tests.harness.market_script import Bar, ScriptedMarket
+
+    from acsoe.clients.paper.broker import PaperBroker
+    from acsoe.clients.store.client import StoreClient
+    from acsoe.clients.store.contracts import CommandName, CommandRow, CommandSource
+    from acsoe.clients.store.migrations import apply_migrations
+    from acsoe.core.contracts import Chains
+    from acsoe.core.orchestrator import Orchestrator
+    from acsoe.engines.data_guard.engine import DataGuardEngine
+    from acsoe.engines.exchange.engine import ExchangeEngine
+    from acsoe.engines.execution.engine import ExecutionEngine
+    from acsoe.engines.feature.engine import FeatureEngine
+    from acsoe.engines.market_data_recorder.engine import MarketDataRecorderEngine
+    from acsoe.engines.market_sensor.engine import MarketSensorEngine
+    from acsoe.engines.safety.engine import SafetyEngine
+    from acsoe.engines.scout.engine import ScoutEngine
+
+    bar = 900
+    pairs = ("BTC/USD", "ETH/USD")
+    last = (int(datetime(2026, 9, 1, tzinfo=UTC).timestamp()) // bar) * bar
+    clock = FixedClock(datetime.fromtimestamp(last, tz=UTC))
+    market = ScriptedMarket(clock=clock, interval_s=bar, published_bars=200, pairs=pairs)
+    market.use_fee_tier(TIER_3)
+    flat = [Bar.flat(last - bar * k, "100.000", trades=17 + k % 5) for k in range(300, -3, -1)]
+    for pair in pairs:
+        market.plant(pair, flat)
+        market.set_quote(pair, bid="100.000", ask="100.010")
+        market.set_order_book(pair, bids=[("100.000", "1000")], asks=[("100.010", "1000")])
+
+    db = tmp_path / "acsoe.sqlite"
+    apply_migrations(db)
+    store = StoreClient(db)
+    try:
+        config = load_default_config()
+        store.append_command(
+            CommandRow(
+                command=CommandName.ACTIVATE.value,
+                source=CommandSource.CONSOLE,
+                reason="spec 104",
+                created_at=1,
+                updated_at=1,
+            )
+        )
+        log = _EngineErrors()
+        orchestrator = Orchestrator(
+            config=config,
+            clock=clock,
+            clients=FakeClients(
+                kraken=PaperBroker(market, store=store, config=config, clock=clock),
+                store=store,
+                recorder=FakeRecorder(),
+            ),
+            chains=Chains(
+                guard=[
+                    ExchangeEngine(),
+                    MarketDataRecorderEngine(),
+                    MarketSensorEngine(),
+                    DataGuardEngine(),
+                    SafetyEngine(),
+                ],
+                opportunity=[FeatureEngine(), ScoutEngine(), ExecutionEngine()],
+                manage=[MemoryEngine()],
+            ),
+            logger=log,
+        )
+
+        # A quiet tick first, so the errored tick has an equity row before it and the
+        # scout has an equity figure to size against.
+        clock.set(datetime.fromtimestamp(last + bar - 59, tz=UTC))
+        quiet = orchestrator.tick()
+        assert "trading_blocked_by" not in quiet, quiet.get("block_reason")
+        clock.set(datetime.fromtimestamp(last + bar + 1, tz=UTC))
+        state = orchestrator.tick()
+    finally:
+        store.close()
+
+    # The subject: a real engine raised, on a tick that had a real candidate - which is
+    # what made the old code treat it as a rejection.
+    assert state["trading_blocked_by"] == "execution", state.get("block_reason")
+    assert state["block_status"] == "ERROR"
+    assert state["guard_blockers"] == []
+    assert state["scout"]["pair"], "no candidate, so the rejection path was never reachable"
+    assert state["execution"] == {}
+    assert any("decision.intent is absent" in error for error in log.for_engine("execution"))
+
+    # The property.
+    assert log.for_engine("memory") == [], "engine 19 raised on the errored tick"
+    assert state["memory"], "engine 19 published nothing on the errored tick"
+    cycle = state["cycle_id"]
+    assert block_rows(db) == [(cycle, "execution", "ERROR", "engine_errored", 1)], (
+        "the errored engine is not recorded as one primary ERROR row with engine 19's code"
+    )
+    assert rows_in(db, "rejections") == [], "an engine that raised refused nothing"
+    equity = [row for row in rows_in(db, "equity_snapshots") if row["cycle_id"] == cycle]
+    assert len(equity) == 1, "the errored tick has no equity row, so the tick was lost"
+    assert state["memory"]["written"]["block_records"] == 1
+    assert state["memory"]["written"]["rejections"] == 0
+    assert state["memory"]["written"]["equity_snapshots"] == 1
+
+
+def test_an_errored_engine_writes_a_block_record_no_rejection_and_the_equity_row(
+    context_at: Any, migrated_db: Path
+) -> None:
+    """The same three facts on a hand-built tick, with the columns named one by one."""
+    result = MemoryEngine().process(context_at(0), an_errored_tick(4))
+
+    (row,) = rows_in(migrated_db, "block_records")
+    assert (row["run_id"], row["cycle_id"]) == (RUN, 4)
+    assert row["blocked_by"] == "execution"
+    assert row["status"] == "ERROR", "engine 17's error rate counts status = 'ERROR'"
+    assert row["block_reason"] == "engine_errored"
+    assert row["is_primary"] == 1
+    assert rows_in(migrated_db, "rejections") == []
+    assert [snapshot["equity"] for snapshot in rows_in(migrated_db, "equity_snapshots")] == [
+        "500.00"
+    ]
+    assert result.data["written"]["block_records"] == 1
+    assert result.data["written"]["rejections"] == 0
+
+
+def test_an_engine_that_raised_and_a_gate_that_blocked_without_a_code_are_different_facts(
+    context_at: Any,
+) -> None:
+    """Spec 104 step 4: the two cases an empty payload cannot tell apart.
+
+    Both ticks are identical except for `block_status`, and both payloads are `{}`. A gate
+    that returned `BLOCK` without its `reason_code` has broken its contract, and the
+    console would render its rejection as silence, so engine 19 still refuses the tick. An
+    engine that raised decided nothing and is recorded. An engine 19 that inferred the
+    error from the empty payload would record both, and the first half goes red.
+    """
+    refused = an_errored_tick(5)
+    refused["block_status"] = "BLOCK"
+    with pytest.raises(MissingInputError, match="without publishing a 'reason_code'"):
+        MemoryEngine().process(context_at(0), refused)
+
+    raised = an_errored_tick(6)
+    result = MemoryEngine().process(context_at(1), raised)
+    assert result.data["written"]["block_records"] == 1
+
+
+def test_an_errored_engine_is_never_asked_for_a_reason_code(
+    context_at: Any, migrated_db: Path
+) -> None:
+    """The status decides, whatever the payload carries.
+
+    The orchestrator always empties an errored engine's payload, so this payload is not one
+    it would produce. It is here to pin that engine 19 neither reads a code on this path nor
+    decides the case from the payload's shape: a non-empty payload with a code in it is
+    still an error, still gets engine 19's own code, and is still not a rejection.
+    """
+    MemoryEngine().process(
+        context_at(0), an_errored_tick(7, reason_code="entry_placed", placed=True)
+    )
+
+    assert [row[3] for row in block_rows(migrated_db)] == ["engine_errored"]
+    assert rows_in(migrated_db, "rejections") == []
+
+
+def test_an_errored_engine_with_no_candidate_is_still_recorded(
+    context_at: Any, migrated_db: Path
+) -> None:
+    """A block record is one tick, candidate or not. Engine 5 raising has no candidate."""
+    state = tick(
+        8,
+        **balances("500.00"),
+        trading_blocked_by="feature",
+        block_reason="unhandled KeyError: 'candles'",
+        block_status="ERROR",
+        feature={},
+    )
+    MemoryEngine().process(context_at(0), state)
+
+    assert block_rows(migrated_db) == [(8, "feature", "ERROR", "engine_errored", 1)]
+    assert rows_in(migrated_db, "rejections") == []
+
+
+def test_a_guard_that_errored_keeps_its_one_row_and_its_own_reason(
+    context_at: Any, migrated_db: Path
+) -> None:
+    """Spec 104's scope limit: guard-chain blockers are recorded exactly as before.
+
+    A guard that raised is already in `guard_blockers` with its status, so it has its row.
+    A second one for it would be a second primary on the tick, which the database refuses.
+    """
+    state = tick(
+        9,
+        trading_blocked_by="exchange",
+        block_reason="unhandled KrakenError: nonce",
+        block_status="ERROR",
+        exchange={},
+    )
+    state[GUARD_BLOCKERS_KEY] = [
+        {"engine": "exchange", "reason": "unhandled KrakenError: nonce", "status": "ERROR"}
+    ]
+    MemoryEngine().process(context_at(0), state)
+
+    assert block_rows(migrated_db) == [
+        (9, "exchange", "ERROR", "unhandled KrakenError: nonce", 1)
+    ]
+
+
+def test_an_opportunity_gate_that_blocked_writes_a_rejection_and_no_block_record(
+    context_at: Any, migrated_db: Path
+) -> None:
+    """The other side of the status: a `BLOCK` with its code is a rejection only.
+
+    A rejection is one candidate, a block record is one tick of an evaluation. An engine 19
+    that wrote an error row for every opportunity-chain blocker would put every cost-gate
+    refusal into engine 17's error rate.
+    """
+    MemoryEngine().process(context_at(0), tick(10, **a_rejection()))
+
+    assert rows_in(migrated_db, "block_records") == []
+    assert [row["rejected_by"] for row in rows_in(migrated_db, "rejections")] == ["cost"]

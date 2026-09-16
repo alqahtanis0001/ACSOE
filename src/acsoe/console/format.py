@@ -450,6 +450,21 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # or below its own base rate: the leaderboard is reporting that nothing on it has
     # edge, which is information an operator wants stated rather than softened.
     "no_model_beats_its_base_rate": "No model is currently beating its own base rate",
+    # Engine 19 `memory`, spec 104, landed in the same change as the code, as invariant 12
+    # requires. **Engine 19's code, not the errored engine's**: it is the `block_reason` of
+    # the row recording an opportunity-chain engine that raised, and it is never a
+    # rejection, because an engine that raised decided nothing.
+    #
+    # So the sentence says the check *failed* rather than *refused*, and it says what to
+    # do. A refusal is the system working and needs nothing; this is a fault somebody has
+    # to read about, and the engine's own error is in the log for the tick, not on this
+    # row. It also names the consequence the operator cares about first: nothing was
+    # traded. It does not mention the error-rate breaker, which is a threshold this row
+    # does not carry.
+    "engine_errored": (
+        "A check failed with an error before it could decide, so nothing was traded; "
+        "the log for this tick says why"
+    ),
 }
 
 #: What a row with neither prose nor a mapped code shows. A statement of absence,

@@ -56,6 +56,7 @@ from acsoe.core.contracts import BaseEngine, EngineContext, EngineResult, Engine
 from acsoe.engines.memory.contracts import (
     BALANCES_FIELD,
     BLOCK_REASON_KEY,
+    BLOCK_STATUS_KEY,
     CANDIDATE_PAIR_PATH,
     CLOSED_TRADES_FIELD,
     CYCLE_ID_KEY,
@@ -70,6 +71,7 @@ from acsoe.engines.memory.contracts import (
     POSITIONS_FIELD,
     POSITIONS_VALUE_FIELD,
     REASON_CODE_FIELD,
+    REASON_ENGINE_ERRORED,
     STATE_KEY,
     TRADING_BLOCKED_BY_KEY,
     UNREALISED_PNL_FIELD,
@@ -226,10 +228,13 @@ class MemoryEngine(BaseEngine):
         cycle_id: int,
         ts: int,
     ) -> int:
-        """One row per entry in ``state["guard_blockers"]``, `is_primary` on the first.
+        """One row per entry in ``state["guard_blockers"]``, `is_primary` on the first,
+        plus one for an opportunity-chain engine that returned ``ERROR``.
 
-        **No row at all when the list is empty.** A row on every tick makes every count
-        that reads this table meaningless — the outage run becomes the uptime.
+        **No row at all on a tick where nothing blocked**, and none for an
+        opportunity-chain ``BLOCK``, which is a rejection rather than an evaluation. A row
+        on every tick makes every count that reads this table meaningless — the outage run
+        becomes the uptime.
 
         The unique index `ux_block_records_primary` is `(run_id, cycle_id)`, so a second
         primary row for one tick raises `sqlite3.IntegrityError` at the database. That
@@ -274,7 +279,52 @@ class MemoryEngine(BaseEngine):
                     updated_at=ts,
                 )
             )
-        return len(blockers)
+
+        errored = self._errored_opportunity_engine(state)
+        if errored is None:
+            return len(blockers)
+        # Invariant 12, operator ruling 2026-09-16: the tick this table most needs. The
+        # reason is engine 19's code and never one read from the engine, which decided
+        # nothing — rule 7 has emptied its payload, and asking it for a code is what
+        # used to lose the whole tick. `is_primary` is true because the opportunity chain
+        # runs only when no guard blocked, so no guard row above can also be primary.
+        store.write_block_record(
+            BlockRecordRow(
+                cycle_id=cycle_id,
+                run_id=context.run_id,
+                ts=ts,
+                blocked_by=errored,
+                block_reason=REASON_ENGINE_ERRORED,
+                is_primary=True,
+                status=BlockStatus.ERROR,
+                updated_at=ts,
+            )
+        )
+        return len(blockers) + 1
+
+    def _errored_opportunity_engine(self, state: State) -> str | None:
+        """The opportunity-chain engine that returned ``ERROR`` this tick, or ``None``.
+
+        **Read from ``state["block_status"]``, never inferred from an empty payload.** An
+        engine that raised and a gate that blocked without publishing its `reason_code`
+        both leave ``{}`` behind, and they are different facts: the first is recorded here
+        and is not a rejection, the second is a gate breaking its contract and still
+        raises in `_write_rejection`.
+
+        A guard that errored is not this case. It is already in ``guard_blockers`` with
+        its status and gets its row there; a second row for it would be a second primary.
+        """
+        blocked_by = state.get(TRADING_BLOCKED_BY_KEY)
+        if not blocked_by or state.get(BLOCK_STATUS_KEY) != BlockStatus.ERROR:
+            return None
+        guards = {
+            str(entry.get("engine"))
+            for entry in state.get(GUARD_BLOCKERS_KEY) or ()
+            if isinstance(entry, Mapping)
+        }
+        if str(blocked_by) in guards:
+            return None
+        return str(blocked_by)
 
     # ------------------------------------------------------- positions, orders
 
@@ -406,6 +456,11 @@ class MemoryEngine(BaseEngine):
             if isinstance(entry, Mapping)
         }
         if str(blocked_by) in guards:
+            return 0
+        if self._errored_opportunity_engine(state) is not None:
+            # An engine that raised refused nothing — it failed to decide — so there is no
+            # rejection to write and no `reason_code` to demand. Its block record is
+            # written in `_write_block_records`. Invariant 12, operator ruling 2026-09-16.
             return 0
 
         scout_key, pair_field = CANDIDATE_PAIR_PATH
