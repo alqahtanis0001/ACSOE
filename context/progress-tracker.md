@@ -123,7 +123,33 @@ the mark is the fill price (B); spec 100's `test_pending_on_a_tree_with_nothing_
 from `bare_tree` to `unbuilt_tree` when the criteria bodies are written, because the editable
 install resolves the real package there (C).
 
-**Registration (spec 82) stays held for the operator's word.**
+### The operator's three rulings on the rehearsal round, 2026-09-16 evening
+
+1. **Registration (spec 82): yes** — engines 9, 14, 16 and 18 into the opportunity chain, and the
+   manage chain 21, 22, 19. **First**, C moves spec 100's `test_pending_on_a_tree_with_nothing_built`
+   off `bare_tree`, where the editable install resolves the real package and a written criterion
+   body would quietly PASS once registration lands.
+2. **Fee-tier outage: confirmed.** B's spec 103 choice stands: a due paper fill whose fee tier did
+   not return makes `balance()` a failed fetch (`KrakenUnavailableError`), not an `ERROR`. A fetch
+   that did not return is the exchange being slow, not the code failing, and spending engine 17's
+   error budget on it is the shape the engine 18 reason-code ruling already refused.
+3. **Engine 11's balance fallback: REMOVED** (spec 106, B), and invariant 2's paper row now names
+   the paper broker as the authority, with no fallback. **Not because it was unreachable — because
+   reaching it would break invariant 6.** After one executed fill it fed the affordability check the
+   raw `paper.starting_balances` and would approve a candidate against 5,000 the account no longer
+   holds. Its docstring deferred the fill adjustment to Phase 6; Phase 6 put the ledger in the
+   broker instead, and what remained was a second, wrong answer to the account question.
+
+**FINDING — how it was found, which is the point.** It was found by asking **what the branch would
+do if reached**, not **whether it could be reached**. The lead's first answer, "dead code behind
+engine 7", was the wrong reassurance: it made engine 7's handling of an absent balance
+load-bearing for invariant 6, an invariant engine 7 does not own, so an unrelated change to engine
+7 would have armed the branch with nothing going red. Unreachability is a property of the callers;
+correctness is a property of the branch. **Also folded into spec 106:** engine 21 stores a position
+opened this tick with `last_price` NULL while its `_mark` docstring says the mark is the fill price
+(C's observation from spec 105).
+
+**Registration (spec 82) is approved and follows C's test move and B's spec 106.**
 
 ### FINDING: a defect mutation testing structurally cannot reach
 

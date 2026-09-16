@@ -42,24 +42,26 @@ Discarding on failure would make rule 14 unimplementable at exactly the moment i
 
 **In paper mode**, so that a fresh clone with an empty `.env` can still start, run its loop, record market data and build candles:
 
-| Failed fetch | Paper-mode fallback |
+| Failed fetch | In paper mode |
 |---|---|
 | Fee tier | Block that pair. No fallback — see below |
-| Balance | The **paper ledger** — see below. It is not a fallback that waits for a failed fetch |
+| Balance | Read from the **paper broker**, the authority on its own cash — see below. If the broker cannot answer, **block**. No fallback — not to `paper.starting_balances`, not to anything (operator ruling 2026-09-16) |
 | Pair rules | Block that pair. No fallback — a wrong `ordermin` produces invalid orders |
 | Spread | Block that pair. No fallback — an assumed spread invalidates the cost gate |
 
-**Balance is the only row of the four that does not block, and since 2026-09-16 it is not a fallback either — it is the paper ledger, below.** Three of the four rows block, and that is the table working rather than an oversight: standing in for a value is only legitimate where it cannot change the answer to *"can this trade pay for itself"*, and the balance is the only one of the four that qualifies.
+**Every row blocks. There is no paper-mode fallback left in this table.** Paper mode differs from live in one respect only: the balance comes from the paper broker rather than the exchange. When the broker cannot answer — for example a fill is due and the fee tier needed to charge it did not return — that is a failed fetch like any other, engine 1 publishes no balance, and every consumer refuses on the absence.
+
+**The last fallback was removed by the operator on 2026-09-16.** Engine 11 `risk`, finding no published balance in paper mode, used the raw `paper.starting_balances` config map — unadjusted by any fill — in its invariant 6 affordability check. After one executed fill that check would approve a second candidate against 5,000 the account no longer holds. The branch was unreachable, because engine 7 excludes every pair when the balance is absent and stops the chain first; **that was the wrong reassurance**, since it made engine 7's handling load-bearing for an invariant engine 7 does not own. The branch's own docstring deferred the fill adjustment to Phase 6, and Phase 6 put the ledger in the broker instead, so what remained was a second answer to the account question, and the wrong one. Engine 11 now blocks on an absent balance, as it does on every other missing input.
 
 ### The paper ledger, ruled by the operator 2026-09-16
 
-**In paper mode the balance is always `paper.starting_balances` adjusted by every fill the broker has executed — whether or not the real `Balance` fetch succeeded, and whether or not engine 19 has recorded the fill yet (amended 2026-09-16, below).** It is served by the paper broker in `clients/paper/`, so the mode difference stays in the client layer and no engine branches on mode to get an account.
+**In paper mode the balance is always the paper broker's: its opening `paper.starting_balances` adjusted by every fill the broker has executed — whether or not the real `Balance` fetch succeeded, and whether or not engine 19 has recorded the fill yet (amended 2026-09-16, below).** It is served by the paper broker in `clients/paper/`, so the mode difference stays in the client layer and no engine branches on mode to get an account.
 
 The row above used to promise a fallback "adjusted by simulated fills" that fired only on a *failed* fetch, and **nothing implemented the adjustment**. Two consequences, both found in Phase 6 planning before any position existed. A simulated fill never touches the fetched cash, so engine 11 would size a second position against cash the first had already spent — invariant 6 says never allocate cash the account does not hold. And engine 19's equity is cash plus positions value, so the same cash was counted twice, in the series that moves the drawdown threshold engine 17 freezes on.
 
 With real credentials in paper mode the fetch *succeeds* and returns the real account's cash, which no simulated fill spends either. A fetched balance plus simulated fills describes no account that exists, which is why the ledger is unconditional in paper rather than a failure path. Live mode is unchanged: it reads the exchange, and a failed fetch blocks.
 
-**Amended by the operator 2026-09-16 — *when* a fill enters the ledger.** **The broker's reported balance includes every fill it has executed, including fills engine 19 has not yet recorded.** The broker is the authority on its own cash: a fill it has executed is money it has spent, whether or not the store has caught up. The sentence above that says the ledger is adjusted by every fill *the store has recorded* is superseded on exactly this point.
+**Amended by the operator 2026-09-16 — *when* a fill enters the ledger.** **The broker's reported balance includes every fill it has executed, including fills engine 19 has not yet recorded.** The broker is the authority on its own cash: a fill it has executed is money it has spent, whether or not the store has caught up. The ruling as first written — the ledger adjusted by every fill *the store has recorded* — is superseded on exactly this point, and the paragraph above already states the amended form.
 
 The operator records the amendment as their own, and names the gap: the original ruling said what the balance is adjusted *by* and not *when*. The broker decides a resting entry's fill when engine 21 asks for it, part-way through a tick, and engine 19 records it at the end of that tick; a balance counting only recorded fills therefore lagged the broker's own knowledge by one tick. Engine 21 counts a position opened by this tick's fill in the portfolio value — correctly, since a live exchange's fetched balance already reflects a fill that printed before the tick — so on the fill tick paper equity counted the notional twice: once as unspent cash and once as the position. `peak_equity` took the inflated figure, engine 17 read a 40% drawdown the next tick and froze the account, and every later tick stayed frozen. **Every paper trade would have frozen the account.** Found by A's spec 87 rehearsal; see the tracker.
 
@@ -71,7 +73,9 @@ The operator records the amendment as their own, and names the gap: the original
 
 Two engines reading one key and answering differently is not an inconsistency to tidy away; it is this rule working. Raised by C-models while building engine 9, Phase 6, 2026-09-16, and recorded here rather than in that engine's README so the next reader of a fallback applies the test to their own use of it. The same shape as the config rule in `code-standards.md`: the landing order is universal, the resting state is per-reader.
 
-**A ledger balance is not recorded as a fallback fired.** It is what the account *is* in paper mode, not a substitute for something that failed, and the run's mode already says every figure derived from it is simulated. The rule below — every decision affected by a fallback records which fallback fired — is unchanged for the three rows that block and for live mode.
+**The per-reader test above is now moot for the balance**: no reader substitutes one. Engine 11's use of it was removed on 2026-09-16 (above) — not because the test was misapplied to engine 11's sizing, but because the branch also fed the affordability check, and asking *what the branch would do if reached* rather than *whether it could be reached* is what found that. The principle stands for any future fallback: judge it by its reader, and judge the reader by every answer the substituted value touches.
+
+**A ledger balance is not recorded as a fallback fired.** It is what the account *is* in paper mode, not a substitute for something that failed, and the run's mode already says every figure derived from it is simulated.
 
 **The fee-tier row named a tier and told the system to ~~assume~~ it. That is retired, 2026-09-10.**
 It was never implementable.
@@ -92,11 +96,11 @@ The consequence, stated plainly rather than left to be discovered: with an empty
 
 Every decision affected by a fallback records which fallback fired. A fallback is never optimistic: it may only make the system less willing to trade.
 
-These are the paper-mode fallbacks, and rule 14 is the only other exception in this document. Where any other rule here says a failed fetch blocks, it means live mode, and this section is what governs paper.
+Since 2026-09-16 no paper-mode fallback remains, so the rule above binds only rule 14's liquidation, which is the one place in this document where a stale value is used. A failed fetch blocks in paper mode exactly as in live.
 
 ## 3. Every gate is fail-closed
 
-A gate that errors blocks. A gate that cannot reach its data blocks, subject only to the paper-mode fallbacks in rule 2 and to the emergency liquidation in rule 14. A gate that returns an unparseable result blocks. Absence of a "no" is never a "yes".
+A gate that errors blocks. A gate that cannot reach its data blocks, subject only to the emergency liquidation in rule 14. A gate that returns an unparseable result blocks. Absence of a "no" is never a "yes".
 
 Gate engines: 4 (data guard), 7 (scout), 10 (cost), 11 (risk), 13 (anomaly), 15 (skeptic), 16 (decision), 17 (safety).
 
@@ -250,4 +254,4 @@ Constraints that still hold during a liquidation:
 - Quantities are still rounded **down** using the cached `lot_decimals`. Rounding down leaves dust; rounding up produces an order Kraken rejects, and a rejected order during an emergency is worse than dust.
 - Every order still carries a `userref` and is still checked for idempotency. A liquidation that double-sells is not a liquidation.
 - The override applies only to exiting. It never permits an entry, and it never relaxes a gate for a new position.
-- Every fetch failure tolerated under this rule is recorded on the resulting trade, exactly as a paper-mode fallback is, so the fill is never mistaken for one priced on good data.
+- Every fetch failure tolerated under this rule is recorded on the resulting trade (`fallbacks_used`), so the fill is never mistaken for one priced on good data.
