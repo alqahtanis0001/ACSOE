@@ -66,6 +66,73 @@ for an enumeration it cannot perform, spec 96's field list omitting `pair`, and
 an agent building against the code rather than the spec, and the general rule is now in
 `code-standards.md`: **a description of the code is not the code.**
 
+### FINDING: a defect mutation testing structurally cannot reach
+
+**The first documented instance in this project, and it is evidence rather than theory.**
+Mutation has been the main defence since Phase 3 and this is the shape it cannot see.
+
+Engine 14's truncation tripwire — publish no weights when a leaderboard read "came back exactly
+full", because a truncated window produces weights that still sum to one over the wrong set — was
+ruled by the lead onto **both** read paths, the windowed fallback and B's new unlimited
+enumeration. On the unlimited read that comparison is not a weaker check, it is **a different
+claim sharing the same arithmetic**: it fires on a model that happens to have exactly
+`_WINDOWED_PROBE` rows, a false positive costing that tick **all** of its weights, and over 405
+folds that is not negligible.
+
+**No mutation could have found it, and no fixture would have shown it.** The defect only appears
+when the row count equals the probe constant exactly. A fixture is written with the row count the
+test needs, never with that one, so every arm of every sweep passes and the sweep reports a clean
+kill rate over the branch. The code is wrong for exactly one input that no test author would ever
+choose, and mutation testing asks "would any test object to this change" — not "is there an input
+nobody thought to write".
+
+**Found by B3 reading C-models' code.** Neither agent's tests could have surfaced it; a colleague
+reading a diff did. Recorded here rather than folded into a testing rule, on the operator's
+instruction, because the point is not the fix — it is that **the project's primary defence has a
+blind spot with a name and a worked example**, and code review is what covers it. The fix: the
+length check stays on the windowed fallback, where "came back exactly full" is a fact about a
+*limited* read and is exactly right; it is gone from the enumerating path; and the lead's
+requirement that the detection outlive B's read as "the assertion that the fallback is
+unreachable" is met **by a test rather than by a runtime heuristic**.
+
+### UNATTRIBUTED, and it stays that way
+
+`test_all_leaderboard_rows_is_scoped_to_one_model` failed once in a batch of 180 and passed on an
+identical re-run minutes later, while B was landing that exact method. C-models **did not hash the
+file on either side**, so it cannot prove the failure was a concurrent save rather than the known
+native fault, and it recorded the gap in its own evidence rather than choosing between them.
+
+**Do not resolve this later by reasoning.** Both explanations remain available and neither was
+measured; a plausible account written months from now would be a new claim wearing the authority
+of a contemporaneous record. It is correct as it stands, and it is the standard working — the
+project's rule is that *unexplained* is an acceptable thing to write, and its companion, from this
+phase, is that `unexplained` written where a documented mechanism already fits dilutes the real
+entry. This one fits neither test, so it stays as it is: one observation, two candidates, no
+evidence to separate them.
+
+### Four smaller rulings of 2026-09-16, recorded here because they lived only in build logs
+
+1. **Engine 11's per-pair refusal is asked BEFORE the portfolio cap** (lead, overturning B's
+   original order). The cap is inert at this balance, so asking it first made invariant 6's
+   specific clause invisible on exactly the ticks where both fire. Four places carried the old
+   argument and all four moved together, including the README's numbered gate-condition list,
+   whose order *is* the behaviour.
+2. **Engine 18 publishes a reason code rather than raising** when an exchange order for one of its
+   own entries comes back with no `limit_price`. A raise becomes `ERROR`, engine 19 writes
+   `block_records.status = 'ERROR'`, and engine 17 counts those against
+   `safety.max_errors_in_window` and freezes the account. **An exchange contradicting itself about
+   one order is not the system malfunctioning and must not spend the breaker's budget.**
+3. **Engine 14's aggregation, which spec 97 never named.** The leaderboard holds one row per
+   version *per fold*, so there is a step between rows and weight: the **equal-weighted mean over
+   a version's folds**, because every fold is one out-of-sample measurement and equal weighting
+   adds no unstated judgement about recency or longevity. Amended twice by C-models on evidence:
+   **duplicate `(version, fold)` rows are collapsed to the latest rather than averaged**, since
+   the store returns every duplicate on purpose and averaging would let a data artefact move a
+   weight; and **only the engine's own `model_id` is weighted**, since normalising across families
+   would hand one family part of another's weight.
+4. **The leaderboard read takes both halves**: B's non-truncating enumeration *and* C's truncation
+   tripwire — the latter now on the windowed fallback only, per the finding above.
+
 ### FINDING: the Phase 0 seed's refusal vocabulary is invented, and no engine can emit any of it
 
 Found 2026-09-16 by spec 99's walking test, from the one direction it cannot see directly — a

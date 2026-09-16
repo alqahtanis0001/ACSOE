@@ -1,5 +1,85 @@
 # Phase 6 — shared task list
 
+## HANDOFF 3, 2026-09-16 07:40Z — all six engines are committed; the order from here is forced
+
+**Read this first. HANDOFF 2 and HANDOFF 1 below are history.** Every ruling and finding of the
+session that produced this is on disk — in `context/progress-tracker.md` (rulings and findings),
+`context/code-standards.md` (nine new standing rules), `context/trading-invariants.md`,
+`context/engine-contracts.md` and the four `docs/build-log/phase-6/*.md`. Nothing of substance
+lives only in a transcript.
+
+### What is committed and pushed
+
+**All six Phase 6 engines plus the fill simulator exist.** Fifteen commits, `4d9e106` to
+`fe018e3`:
+
+| Engine / piece | Spec | Owner |
+|---|---|---|
+| 9 `order_book` + committed book fixture | 96 | C |
+| 14 `adaptive_router` + leaderboard fixture | 97 | C |
+| 16 `decision` — **a gate**, the tick-coherence check | 90 | B |
+| 18 `execution` | 91 | B |
+| 21 `position_manager` | 92 | B |
+| 22 `exit` — invariant 14's liquidation | 93 | B |
+| Paper broker and ledger (`clients/paper/`) | 88 | B |
+| 19 `memory` rewritten to record 18 and 22 | 98 | C |
+| Order surface on `clients/kraken/` + `order_book` config | 84, 80 | A |
+| Migrations 0003 `positions.hold_reason`, 0004 `leaderboard.base_rate_brier`, `all_leaderboard_rows` | — | B |
+| Spec 99's walking test + all engine codes mapped; spec 100's nine criteria registered; scripted market harness; tier-3 profile | 99, 100 | C |
+
+**Gate at that commit**, frozen tree, zero writes during the run:
+`1 PASS, 1 FAIL, 9 PENDING` — `8 failed, 3159 passed, 2 skipped in 1256.96s`.
+Log: `logs/verify/phase6-20260916-boundary2-lead.log`.
+
+### The only red, and it is owned
+
+All eight failures are one parametrised test,
+`tests/verify/test_phase6_criteria.py::test_pending_on_the_real_tree_names_the_subject_and_the_spec`.
+They fail **because the engines their PENDING messages named as missing have landed** — the
+frontier moving, not a regression. C predicted it before the run. It is part of spec 100's
+remaining work.
+
+### Nothing is in flight — every teammate is stopped
+
+`A2-platform`, `B3-store`, `C-models` and `C4-verify` were all stopped cleanly at boundaries;
+their progress files and build logs are current. Earlier sessions of each lane are stopped too.
+**A revived session is not a rogue one** — it is a session hours out of date, and the first thing
+it should do is read this file.
+
+### The forced order from here
+
+1. **The two rehearsals**, each run by an agent that did not build the engines.
+   - **A's spec 87** — engines 18, 21 and 22 through real `Orchestrator` ticks.
+   - **B's spec 94** — engines 9 and 14. **Read spec 94 step 2 before writing the assertion**:
+     engine 9's estimate on the fake client's *default* book is **exactly zero**, so recomputing
+     friction with it is indistinguishable from recomputing with no slippage term at all. Script
+     a thin book; the basis must not fit in level one.
+2. **Registration, spec 82** — the lead adds 9, 14, 16, 18 to the opportunity chain and makes the
+   manage chain 21, 22, 19. **Held until both rehearsals are green**, the same deferral Phases 2
+   to 5 each took, and `is_gate_matches_registry` will only pass with engine 16 counted as a gate.
+3. **Spec 100's criteria bodies** — they drive the real `bootstrap` chains, so they can only reach
+   PASS after registration. Seven of the nine need a trade; all seven run at **fee tier 3** and say
+   so in their own message.
+4. **Then** spec 101 (console), and the seed-vocabulary reconciliation recorded as a finding in the
+   tracker: B repoints every seeded rejection to an `(engine, code)` pair the live system can emit,
+   C then retires prose with no producer. Every code stays mapped until B's half lands.
+
+### Five things that will otherwise be relearned
+
+- **Hard-stop every session before a gate.** A hold reaches an agent at its next tool boundary, by
+  which point the nearest coherent stopping point is several steps away. Two gate runs were spent
+  measuring a moving tree before this was accepted.
+- **A description of the code is not the code.** Five spec lines of the lead's named mechanisms
+  that could not do the job; each was caught by an agent building against the code.
+- **Read the working tree, not `HEAD`.** Teammates do not commit, so another lane's landed work is
+  invisible to `git show`. Two agents concluded a dependency was missing when it was on disk.
+- **Count CRLF in Python before any sweep** (`b.count(b"
+")`). `grep -c $'
+$'` lies in this
+  shell. A text-mode round trip disarms every literal-anchor patcher in the repository at once.
+- **`PYTHONDONTWRITEBYTECODE=1` on every sweep**, and a verdict with no pytest summary line is not
+  a result.
+
 ## HANDOFF 2, 2026-09-16 06:20Z — every remaining piece of Phase 6 runs through B
 
 **Read this before HANDOFF 1, which is now history rather than state.**
