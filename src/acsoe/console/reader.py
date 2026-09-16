@@ -444,6 +444,8 @@ class ConsoleReader:
             direction=direction(row.unrealised_pnl),
             opened_at=row.opened_at,
             timeout_at=row.timeout_at,
+            age_us=max(now - row.opened_at, 0),
+            age_text=format_age(max(now - row.opened_at, 0) // _MICROS_PER_MILLI),
             staleness=self.staleness(row.updated_at, now=now),
         )
 

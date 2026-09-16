@@ -41,8 +41,11 @@ from typing import Any, Protocol, runtime_checkable
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "kraken"
 
 __all__ = [
+    "TIER_1",
+    "TIER_3",
     "BalancesSnapshot",
     "FakeKrakenClient",
+    "FeeTierProfile",
     "FeeTierSnapshot",
     "KrakenAPIError",
     "KrakenClientProtocol",
@@ -51,6 +54,8 @@ __all__ = [
     "OrderBookSnapshot",
     "PairRule",
     "PairRulesSnapshot",
+    "fee_tier_profile",
+    "tier_sentence",
 ]
 
 
@@ -209,6 +214,102 @@ def unwrap(envelope: Mapping[str, Any], call: str) -> Any:
 
 
 # --------------------------------------------------------------------------- #
+# Named fee tiers
+# --------------------------------------------------------------------------- #
+#
+# Spec 100 step 1. The Phase 6 criteria all have to say which fee tier they ran at,
+# because the answer changes whether a trade is possible at all: at tier 1 the cost
+# gate is unreachable by construction and a criterion that produced no trade there
+# would be reporting the thresholds interacting rather than anything about the
+# engines. Naming the tiers rather than spelling two decimal strings at each call
+# site is what stops "tier 3" meaning two different things in two criteria - which
+# it already nearly did, with `0.0011`/`0.0019` copied by hand into four test files.
+#
+# The numbers live in `tests/fixtures/kraken/fee_tiers.json` and nowhere else. They
+# are invented data for a fake exchange; invariant 2 says the real ones come from
+# `TradeVolume` at runtime or the trade is blocked.
+
+TIER_1 = 1
+TIER_3 = 3
+
+#: What tier-1 and tier-3 friction mean for the hurdle, as one sentence a criterion
+#: can put in its own message. Not computed here: `friction` is fees plus the
+#: measured spread plus estimated slippage, and engine 10 is the only thing entitled
+#: to compute it. These are the reference round-trip figures the phase documents
+#: carry, quoted so a reader of a PASS line knows what regime produced it.
+_TIER_SENTENCES = {
+    TIER_1: (
+        "at fee tier 1, where the cost gate is unreachable by construction: the bar "
+        "is 2.5x friction, tier-1 reference friction is about 1.25% round trip, and "
+        "3.125% is above the 3.0% target barrier"
+    ),
+    TIER_3: (
+        "at fee tier 3, reference friction about 0.65% round trip and a hurdle of "
+        "1.625%; tier 1 is a no-trade regime at the current barriers"
+    ),
+}
+
+
+@dataclass(frozen=True)
+class FeeTierProfile:
+    """One named fee tier, read from the committed fixture.
+
+    Strings rather than `Decimal` on the fee fields, because that is what
+    :meth:`FakeKrakenClient.set_fee_tier` takes and what the envelope carries; the
+    conversion to `Decimal` happens once, in `trade_volume()`, the way it does in
+    the real client.
+    """
+
+    tier: int
+    currency: str
+    volume_30d: str
+    maker_fee_pct: str
+    taker_fee_pct: str
+
+    @property
+    def fees_round_trip_pct(self) -> Decimal:
+        """Maker in, taker out. **Not the friction** engine 10 hurdles against.
+
+        Friction is this plus the measured spread plus estimated slippage, and this
+        property exists to be compared against a fixture, never to stand in for the
+        gate's arithmetic. A criterion that hurdled against this number would be
+        checking its own sum rather than the engine's.
+        """
+        return Decimal(self.maker_fee_pct) + Decimal(self.taker_fee_pct)
+
+
+def fee_tier_profile(tier: int) -> FeeTierProfile:
+    """The named profile for `tier`, from `tests/fixtures/kraken/fee_tiers.json`."""
+    data = json.loads((FIXTURE_DIR / "fee_tiers.json").read_text(encoding="utf-8"))
+    tiers = data["tiers"]
+    key = str(tier)
+    if key not in tiers:
+        raise ValueError(f"no named fee-tier profile for tier {tier}; have {sorted(tiers)}")
+    entry = tiers[key]
+    return FeeTierProfile(
+        tier=int(entry["tier"]),
+        currency=str(entry["currency"]),
+        volume_30d=str(entry["volume_30d"]),
+        maker_fee_pct=str(entry["maker_fee_pct"]),
+        taker_fee_pct=str(entry["taker_fee_pct"]),
+    )
+
+
+def tier_sentence(tier: int) -> str:
+    """The clause a criterion puts in its own PASS and FAIL message.
+
+    Required by ruling 8 of the Phase 6 task list: *"Every criterion that drives a
+    trade says tier 3 in its own message."* A verdict that does not name its fee
+    regime claims more than it proves, because the same engines produce no trade at
+    all one tier away.
+    """
+    try:
+        return _TIER_SENTENCES[tier]
+    except KeyError:
+        raise ValueError(f"no sentence for tier {tier}; have {sorted(_TIER_SENTENCES)}") from None
+
+
+# --------------------------------------------------------------------------- #
 # The client
 # --------------------------------------------------------------------------- #
 
@@ -259,6 +360,23 @@ class FakeKrakenClient:
                 "volume_30d": volume_30d,
             }
         )
+
+    def use_fee_tier(self, tier: int) -> FeeTierProfile:
+        """Apply a **named** tier from the fixture, and say which one was applied.
+
+        The returned profile is what a criterion quotes in its message, so the tier
+        it reports and the tier it ran at are the same object rather than two
+        statements that happen to agree today.
+        """
+        profile = fee_tier_profile(tier)
+        self.set_fee_tier(
+            tier=profile.tier,
+            maker_fee_pct=profile.maker_fee_pct,
+            taker_fee_pct=profile.taker_fee_pct,
+            volume_30d=profile.volume_30d,
+        )
+        self._envelopes["trade_volume"]["result"]["currency"] = profile.currency
+        return profile
 
     def set_balances(self, balances: Mapping[str, str]) -> None:
         self._envelopes["balance"]["result"] = dict(balances)

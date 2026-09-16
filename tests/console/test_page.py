@@ -425,3 +425,57 @@ def _declarations(block: str) -> list[tuple[str, str]]:
 def _touches_the_frame(selector: str) -> bool:
     lowered = selector.lower()
     return any(token in lowered for token in ("html", "body", ":root", ".frame", ".viewport"))
+
+
+# --------------------------------------------------------------------------- #
+# The positions table: header and row builder, counted against each other
+# --------------------------------------------------------------------------- #
+
+
+def _positions_headers() -> list[str]:
+    """The column headings of the open-positions table, in order."""
+    html = TEMPLATE_PATH.read_text(encoding="utf-8")
+    start = html.index('data-region="positions"')
+    end = html.index('<tbody data-rows="positions">', start)
+    return re.findall(r"<th[^>]*>(.*?)</th>", html[start:end], flags=re.S)
+
+
+def _positions_row_cells() -> list[str]:
+    """The cells `console.js` builds for one position row, in order."""
+    script = (STATIC_DIR / "console.js").read_text(encoding="utf-8")
+    start = script.index('fill("positions"')
+    end = script.index("]);", start)
+    return re.findall(r"\[\s*(p\.[A-Za-z_]+)", script[start:end])
+
+
+def test_the_positions_table_builds_one_cell_per_column() -> None:
+    """A header and a row builder that disagree misalign every number in the table.
+
+    Nothing raises and nothing looks broken: the cells simply shift one column left
+    and an entry price is read as a quantity. `ui-context.md` opens its number rules
+    with "these are not stylistic — misread numbers cost money", and a table whose
+    figures are under the wrong headings is the purest form of that.
+
+    The two are counted against each other rather than either being pinned to a
+    number, because the number is not the point: adding a column is fine, adding a
+    column to one of the two is not. Spec 101 added Age and this is the test that would
+    have caught it going into the template alone.
+    """
+    headers = _positions_headers()
+    cells = _positions_row_cells()
+    assert headers, "no headers were found, so this test would pass vacuously"
+    assert len(headers) == len(cells), (
+        f"{len(headers)} columns and {len(cells)} cells: {headers} against {cells}"
+    )
+
+
+def test_the_positions_table_shows_the_age_spec_101_asks_for() -> None:
+    """Named rather than left to the count above, because a count cannot say *which*.
+
+    The count test is satisfied by any two matching lists, so a template that renamed
+    Age to something else and a row builder that followed would still pass it. Spec 101
+    asks for the age specifically — an operator decides whether to leave a position
+    alone by reading its age against its timeout.
+    """
+    assert "Age" in _positions_headers()
+    assert "p.age_text" in _positions_row_cells()

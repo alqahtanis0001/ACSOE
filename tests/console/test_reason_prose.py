@@ -18,10 +18,16 @@ read here rather than restated, so neither can be wrong about the other.
 
 from __future__ import annotations
 
+import importlib
+import pkgutil
+import warnings
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Final
 
 import pytest
 
+import acsoe.engines
 from acsoe.console.format import NO_REASON_RECORDED, REASON_PROSE, operator_reason
 from acsoe.engines.scout import contracts as scout_contracts
 
@@ -411,3 +417,247 @@ def test_every_sentence_is_written_for_the_operator(code: str) -> None:
     assert sentence != code, f"{code!r} maps to itself, which renders a code on screen"
     assert " " in sentence, f"{code!r} maps to a single token, not a sentence: {sentence!r}"
     assert sentence[0].isupper(), f"{code!r} does not start with a capital: {sentence!r}"
+
+
+# --------------------------------------------------------------------------- #
+# The walk over every engine — spec 99
+# --------------------------------------------------------------------------- #
+#
+# The tests above name one engine each, which is exactly the shape of the failure this
+# seam is known for: engine 21 publishes two codes, nobody wrote a test for engine 21,
+# and the operator meets "No reason was recorded." on a held position. Six of the tests
+# above were written one at a time as six engines landed, and the seventh engine is
+# always the one nobody remembers.
+#
+# So: walk every `acsoe.engines.*.contracts` module there is, take every module-level
+# string constant named `REASON_*` or `HOLD_*`, and require prose for each. Nothing is
+# listed by hand except the two things that *must* be listed by hand — the set of
+# constants that name a place in `state` rather than a value, and the engines the walk
+# is expected to reach — because both are guards against the walk passing vacuously.
+
+
+#: The prefixes a published code is spelled with. `engine-contracts.md` fixes
+#: `reason_code` on the payload and `hold_reason` on engine 21's, and every engine so
+#: far names its constants after the field they end up in.
+#:
+#: Checked against the tree before this test was written, per spec 99 step 5: no engine
+#: publishes a code under a third convention today. `BLOCK_REASON_KEY` in
+#: `engines/memory/contracts.py` is the near miss — it contains "REASON" but does not
+#: start with either prefix, and it names `state["block_reason"]`, a *location*, so it
+#: is correctly out of scope rather than exempted.
+CODE_PREFIXES: Final = ("REASON_", "HOLD_")
+
+#: Three constants that carry these prefixes and are **not** codes: they name a key in
+#: `state` or a column in a row. The codebase-wide convention is that `*_FIELD`, `*_KEY`
+#: and `*_PATH` name a location and everything else names a value, and these three obey
+#: it — but the suffix is not what exempts them. **The exact inventory is pinned**, so a
+#: fourth one cannot join by being spelled `_FIELD`, and a code that happens to be named
+#: `REASON_SOMETHING_FIELD` goes red rather than disappearing.
+#:
+#: Raised with the lead as a convention question rather than settled here: the two
+#: modules are `C-models`'s and B's, and spec 99's scope limit forbids editing another
+#: agent's `contracts.py` to fit this test's naming.
+STATE_FIELD_CONSTANTS: Final[dict[tuple[str, str], str]] = {
+    ("memory", "REASON_CODE_FIELD"): "reason_code",
+    ("memory", "HOLD_REASON_FIELD"): "hold_reason",
+    ("position_manager", "HOLD_REASON_FIELD"): "hold_reason",
+}
+
+#: Engines whose contracts module the walk must reach, whatever else it finds. A walk
+#: that discovers nothing asserts nothing, and `pkgutil` returning an empty list is the
+#: specific way that happens. These five are the oldest and are not going to be deleted;
+#: the walk is *not* limited to them.
+ENGINES_THE_WALK_MUST_REACH: Final = frozenset(
+    {"scout", "cost", "risk", "prediction", "data_guard"}
+)
+
+
+def engine_contracts_modules() -> dict[str, ModuleType]:
+    """Every `acsoe.engines.<name>.contracts` module, imported, keyed by engine name.
+
+    An import failure is allowed to propagate. A walk that swallowed one would report
+    green for an engine it never read, which is worse than the red it is hiding.
+    """
+    modules: dict[str, ModuleType] = {}
+    for found in pkgutil.iter_modules(acsoe.engines.__path__):
+        if not found.ispkg:
+            continue
+        modules[found.name] = importlib.import_module(f"acsoe.engines.{found.name}.contracts")
+    return modules
+
+
+def engine_directories_with_contracts() -> set[str]:
+    """The same set, read off the filesystem rather than out of the import system.
+
+    Two independent answers to "which engines are there", compared in
+    `test_the_walk_reaches_every_engine_on_disk`. `engine-contracts.md` requires every
+    engine directory to hold a `contracts.py`, so a directory without one is itself a
+    finding.
+    """
+    root = Path(acsoe.engines.__file__).parent
+    return {
+        child.name
+        for child in root.iterdir()
+        if child.is_dir()
+        and not child.name.startswith("_")
+        and (child / "contracts.py").exists()
+    }
+
+
+def published_constants() -> dict[tuple[str, str], str]:
+    """Every `REASON_*` / `HOLD_*` string constant, keyed by (engine, attribute name).
+
+    Deliberately broader than spec 99's "`Final` string constant". `Final` is erased at
+    runtime and, under `from __future__ import annotations`, survives only as the string
+    `"Final"` in `__annotations__` — so filtering on it would mean trusting an annotation
+    to decide whether a code needs prose. A code declared without `Final` still reaches
+    the console.
+    """
+    return {
+        (engine, name): value
+        for engine, module in engine_contracts_modules().items()
+        for name, value in vars(module).items()
+        if name.startswith(CODE_PREFIXES) and isinstance(value, str)
+    }
+
+
+def published_codes() -> dict[tuple[str, str], str]:
+    """The constants that are codes: everything above minus the pinned state fields."""
+    return {
+        key: value
+        for key, value in published_constants().items()
+        if key not in STATE_FIELD_CONSTANTS
+    }
+
+
+def unmapped_across_every_engine() -> dict[tuple[str, str], str]:
+    """The codes `REASON_PROSE` does not carry. Empty is the passing state."""
+    return {key: code for key, code in published_codes().items() if code not in REASON_PROSE}
+
+
+def test_the_walk_reaches_every_engine_on_disk() -> None:
+    """The guard against the whole thing passing because it read nothing.
+
+    `unmapped_across_every_engine() == {}` is satisfied by an empty walk just as well as
+    by a complete one, and an empty walk is a plausible accident: a namespace package, a
+    rename, an engine directory that lost its `contracts.py`. So the import-system answer
+    and the filesystem answer are compared against each other, and both are checked to
+    contain engines that certainly exist.
+    """
+    walked = set(engine_contracts_modules())
+    on_disk = engine_directories_with_contracts()
+    assert walked == on_disk, (
+        "the walk and the filesystem disagree about which engines exist; "
+        f"only imported: {sorted(walked - on_disk)}; only on disk: {sorted(on_disk - walked)}"
+    )
+    assert walked >= ENGINES_THE_WALK_MUST_REACH, sorted(ENGINES_THE_WALK_MUST_REACH - walked)
+
+
+def test_the_walk_collects_codes_and_not_merely_modules() -> None:
+    """The second half of the same guard, one level down.
+
+    Reaching seventeen modules and collecting zero constants out of them would also pass
+    the main test silently — a typo in `CODE_PREFIXES` is enough. Four codes from four
+    engines, spelled as the values an operator would meet, none of them derived from the
+    walk itself.
+    """
+    collected = set(published_codes().values())
+    for certain in ("di_refused", "skeptic_veto", "net_edge_below_hurdle", "empty_universe"):
+        assert certain in collected, certain
+
+
+def test_every_code_every_engine_publishes_has_operator_prose() -> None:
+    """Spec 99's deliverable.
+
+    A code absent from `REASON_PROSE` renders `NO_REASON_RECORDED` with no exception, no
+    log line and nothing degraded on screen. This is the only thing in the system that
+    notices, and it notices for engines nobody has written a test for yet.
+    """
+    missing = unmapped_across_every_engine()
+    assert missing == {}, (
+        "these engines publish a code with no operator prose, so it renders "
+        f"{NO_REASON_RECORDED!r} on the console, silently: "
+        + ", ".join(
+            f"engines/{engine}/contracts.py::{name} = {code!r}"
+            for (engine, name), code in sorted(missing.items())
+        )
+        + ". Add a sentence to REASON_PROSE in src/acsoe/console/format.py."
+    )
+
+
+def test_the_state_field_constants_are_pinned_rather_than_exempted_by_shape() -> None:
+    """The exemption list cannot widen without somebody deciding it should.
+
+    Three constants named `REASON_*` / `HOLD_*` are not codes — they name `reason_code`
+    and `hold_reason`, which are *places* a code is written to. Skipping them by matching
+    a `_FIELD` suffix would be a rule the next engine could satisfy by accident, and the
+    accident would be a real code exempted from the map. So the inventory is exact: a
+    fourth such constant turns this red, gets looked at, and is added on purpose.
+    """
+    codes = published_codes()
+    found = {key: value for key, value in published_constants().items() if key not in codes}
+    assert found == STATE_FIELD_CONSTANTS, (
+        "the set of REASON_*/HOLD_* constants that name a state field rather than a code "
+        f"has changed: {sorted(set(found) ^ set(STATE_FIELD_CONSTANTS))}. If the new one "
+        "really is a field name, pin it here; if it is a code, it needs prose."
+    )
+    for (engine, name), value in STATE_FIELD_CONSTANTS.items():
+        assert name.endswith("_FIELD"), (engine, name)
+        assert value in {"reason_code", "hold_reason"}, (engine, name, value)
+
+
+def test_the_walk_catches_a_code_nobody_mapped() -> None:
+    """The mechanism shown to fail, on a fabricated module rather than a real one.
+
+    `test_the_enumeration_catches_a_code_nobody_mapped` does this for the single-module
+    helper; this is the same proof for the filter the walk runs. The real proof — an
+    unmapped constant added to a scratch copy of a live contracts module, the red
+    observed naming it, the file restored from a byte copy with its sha256 compared in
+    the same statement — is in `docs/build-log/phase-6/c-interface.md`, because it is not
+    something a committed test can do to a teammate's file.
+    """
+    fabricated = {
+        ("exit", "REASON_A_CODE_NOBODY_TOLD_THE_CONSOLE_ABOUT"): "exit_rejected_by_exchange",
+        ("exit", "HOLD_ANOTHER_ONE"): "awaiting_pair_rules",
+        ("scout", "REASON_EMPTY_UNIVERSE"): "empty_universe",
+    }
+    assert {key: code for key, code in fabricated.items() if code not in REASON_PROSE} == {
+        ("exit", "REASON_A_CODE_NOBODY_TOLD_THE_CONSOLE_ABOUT"): "exit_rejected_by_exchange",
+        ("exit", "HOLD_ANOTHER_ONE"): "awaiting_pair_rules",
+    }
+
+
+def prose_keys_no_engine_publishes() -> set[str]:
+    """Map entries nothing in `engines/` emits. A warning, deliberately not a failure.
+
+    Most of these are legitimate: `clients/store/seed.py` writes its own older spellings
+    onto seeded rows — `meta_label_veto`, `outlier_market_state` — and those rows still
+    have to render. The list is worth *seeing* so a code retired from an engine is
+    noticed rather than left as a sentence nothing can reach, and it is worth not failing
+    on, because the day a real orphan appears is not the day to turn somebody else's
+    suite red over a cosmetic finding.
+    """
+    return set(REASON_PROSE) - set(published_codes().values())
+
+
+def test_the_inverse_is_reported_as_a_warning_and_never_as_a_failure() -> None:
+    """Spec 99 step 4.
+
+    Runs the real inverse and warns. The assertion is on the comparison being against
+    the right set rather than on the list being empty, because the list is legitimately
+    non-empty today and a test that pinned it would fail every time a seeded spelling
+    changed.
+    """
+    orphans = prose_keys_no_engine_publishes()
+    if orphans:
+        warnings.warn(
+            "REASON_PROSE carries sentences no engine publishes. Expected for the seed "
+            "generator's older spellings; a retired engine code would look the same: "
+            + ", ".join(sorted(orphans)),
+            UserWarning,
+            stacklevel=1,
+        )
+    assert "empty_universe" not in orphans, (
+        "a code an engine demonstrably publishes was reported as an orphan, so the "
+        "inverse is comparing against the wrong set"
+    )

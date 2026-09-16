@@ -260,6 +260,92 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # socket and a stream that never connected have different causes and different
     # fixes. A's finding, and the prose is what settled it.
     "no_market_data": "No market data has arrived",
+    # Engine 12 `regime`, found by spec 99's walk over every engine's contracts module
+    # on 2026-09-16 — not requested by anybody, because nobody had noticed. Both codes
+    # have been on disk since Phase 5 and rendered as silence the whole time: engine 12
+    # writes the bare code into `reason` and publishes no `reason_code`, so
+    # `operator_reason` recognises the stored text as a code, refuses to print it, and
+    # finds nothing to look up. Six enumeration tests written one per engine could not
+    # see a seventh engine, which is the entire argument for the walk.
+    #
+    # Deliberately not variants of each other. "This pair produced no feature row on
+    # this bar" is engine 5 having nothing for the candidate at all; "the two inputs the
+    # rules read are unfilled" is a feature row that exists with holes in the lookbacks
+    # that matter here, which is the ordinary state of a young series and needs nothing
+    # done about it. Neither is a default label — engine 12 publishes `null` rather than
+    # calling an unclassifiable market `choppy`, and the sentence has to say the market
+    # was **not classified** rather than imply it was classified as quiet.
+    "no_feature_row": "No feature row for this pair on this bar, so the market was not classified",
+    "regime_inputs_incomplete": (
+        "The inputs that classify the market have not filled yet for this pair"
+    ),
+    # Engine 21 `position_manager`, B's spec 92. B's contracts module flags both to spec
+    # 99 by name. **My wording, not B's** — B is not running and the alternative was
+    # leaving the walk red; the same arrangement as `no_fx_rate` and
+    # `barriers_below_tick_size` above, and B is asked to replace either if it is wrong.
+    #
+    # A fill engine 21 could not turn into a position row, because the pair rules it
+    # needs for `base` and `quote` were not published this tick. Nothing is lost: the
+    # order stays resting in the store and the fill is picked up again next tick, and the
+    # sentence says so, because "could not record your position" with no further word is
+    # the most alarming thing this console could say about money.
+    "position_unrecordable": (
+        "An entry filled before the exchange published this pair's rules, so the position "
+        "is recorded on the next tick"
+    ),
+    # Engine 16 `decision`, B's spec 90, landed 2026-09-16 and caught by the walk within
+    # minutes of landing — the second time in one day, and the argument for the walk in
+    # two lines. **My wording, not B's**, for the same reason as engine 21's above.
+    #
+    # Engine 16 is a gate and it *composes* the order intent; it never decides. The
+    # sentences say "check" and "refused" and never "decided", because a README that
+    # says composes and a console that says decided would put the ruling back at issue
+    # in the one place nobody looks.
+    #
+    # Five codes, five different things to look at, so five sentences. The engine writes
+    # the specific pair names and timestamps into its own `reason` and `operator_reason`
+    # prefers that, which is why none of these carries a number.
+    "pair_disagreement": "Two engines judged different pairs on this bar, so no entry was made",
+    "stale_bar": "One of the approvals came from an earlier decision bar",
+    "input_missing": "An engine this check needs published nothing for this bar",
+    "no_approved_quantity": "The risk gate approved an entry without a size, so none was placed",
+    "decision_inputs_unavailable": "The final coherence check could not read what it needs",
+    # Engine 18 `execution`, B's spec 91, landed 2026-09-16 and caught by the walk the
+    # same way engines 16 and 21 were — three engines in one afternoon. My wording, B
+    # asked to replace any that is wrong.
+    #
+    # **The first of these is not a refusal**, and it is the reason engine 18 has codes
+    # at all: the engine is not a gate, `entry_placed` says what it *did*, and a
+    # placement with no sentence would be the one outcome the console cannot narrate.
+    # So it is written in the past tense with no apology, the way `empty_universe` is.
+    "entry_placed": "A post-only buy is resting on the book",
+    # Not a variant of the line above and not an error either. Invariant 8: one entry
+    # per tick, identified by `userref`, so meeting the order again is the mechanism
+    # working on a re-run rather than anything going wrong.
+    "entry_already_placed": "This entry was already placed, so nothing was sent again",
+    # Invariant 7 in one sentence. The order is abandoned for the tick and deliberately
+    # **not** re-placed lower, because re-placing at a worse price is chasing, and the
+    # sentence says the price moved rather than that something failed.
+    "post_only_would_cross": "The price moved before the order rested, so it was not placed",
+    # The crash-recovery case, and the sentence has to be the one an operator can act
+    # on: the order is real, it is at the exchange, and the system cannot describe it
+    # because `OrderState` carries no quantity or limit price. Naming the `userref` is
+    # engine 18's job — it publishes it — and this sentence says where to look.
+    "entry_unrecorded_at_exchange": (
+        "An order is resting at the exchange that this system has no record of; find it "
+        "by its reference"
+    ),
+    # The first **hold** reason to get a sentence, and deliberately not written as a
+    # refusal. Nothing was rejected and nothing is wrong with the position: the guard
+    # refused this tick's market data, and a stop or target computed from exactly that
+    # data would be a fabricated trigger, so engines 21 and 22 place no exit. The
+    # position is still watched and an entry past its unfilled window is still cancelled.
+    # An operator told "blocked" would go looking for a fault in the position; what is
+    # paused is the exit, and what is not paused is the watching.
+    "data_guard_blocked": (
+        "Exits are paused while this tick's market data is rejected; the position is still "
+        "watched"
+    ),
 }
 
 #: What a row with neither prose nor a mapped code shows. A statement of absence,

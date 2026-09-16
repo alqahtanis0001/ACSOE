@@ -126,6 +126,11 @@
               <th scope="col" class="num">Stop</th>
               <th scope="col" class="num">Unrealised</th>
               <th scope="col" class="num">Change</th>
+              <!-- Spec 101. How long the position has been open, against the
+                   twelve-hour timeout beside it: an operator deciding whether to
+                   leave a position alone needs both numbers or neither means
+                   anything. The reader computes it from the injected clock. -->
+              <th scope="col" class="num">Age</th>
             </tr>
           </thead>
           <tbody data-rows="positions"></tbody>

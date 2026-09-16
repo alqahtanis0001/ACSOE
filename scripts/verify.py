@@ -8850,8 +8850,21 @@ def _constructed_candles(polars: ModuleType, *, pair: str, interval_s: int) -> A
     return polars.DataFrame(rows)
 
 
+#: The candle builder `_constructed_dataset` uses unless a caller names another. A
+#: parameter rather than a hardcoded call because Phase 6 needs a *different* series
+#: from the same pipeline: the Phase 5 criteria want a mixed, unremarkable market, and
+#: spec 100 wants one with a pattern in it that precedes a target touch. Same labeller,
+#: same features, same trainer - only the prices differ, which is the line "fabricate
+#: the subject, never the contract" draws.
+CandleBuilder = Callable[..., Any]
+
+
 def _constructed_dataset(
-    ctx: VerifyContext, polars: ModuleType, training: ModuleType, engine_config: Any
+    ctx: VerifyContext,
+    polars: ModuleType,
+    training: ModuleType,
+    engine_config: Any,
+    candles_builder: CandleBuilder | None = None,
 ) -> tuple[Any, Outcome | None]:
     """The pooled, labelled, featured, weighted frame the trainer takes.
 
@@ -8876,7 +8889,8 @@ def _constructed_dataset(
     candles: dict[str, Any] = {}
     labelled: dict[str, Any] = {}
     for pair in CONSTRUCTED_PAIRS:
-        frame = _constructed_candles(polars, pair=pair, interval_s=interval_s)
+        build = candles_builder or _constructed_candles
+        frame = build(polars, pair=pair, interval_s=interval_s)
         decimal_frame = frame.with_columns(
             [
                 polars.col(column).cast(polars.Decimal(38, 12))
@@ -8901,6 +8915,7 @@ def _trained(
     max_folds: int = CONSTRUCTED_MAX_FOLDS,
     now: datetime | None = None,
     overrides: Mapping[str, Any] | None = None,
+    candles_builder: CandleBuilder | None = None,
 ) -> tuple[tuple[Any, Any, Any] | None, Outcome | None]:
     """`(report, dataset, config)` from one training run into a temporary models root.
 
@@ -8928,7 +8943,9 @@ def _trained(
     if trainer is None:
         return None, _with_contract(problem, "train_walkforward is absent", TRAINING_CONTRACT)
 
-    dataset, problem = _constructed_dataset(ctx, polars, training, engine_config)
+    dataset, problem = _constructed_dataset(
+        ctx, polars, training, engine_config, candles_builder
+    )
     if dataset is None:
         return None, problem
     if overrides:
@@ -10522,6 +10539,702 @@ def _leaderboard_rows(db_path: Path) -> list[dict[str, Any]]:
         conn.close()
 
 
+
+# --------------------------------------------------------------------------- #
+# Phase 6 - decision and execution. Spec 100.
+# --------------------------------------------------------------------------- #
+#
+# Nine criteria, and on the tree they were written against **every one of them is
+# PENDING**. Engines 16, 18 and 22 are unbuilt, engines 9 and 14 are unbuilt, and
+# both committed fixtures are uncut. That is the point of writing them first: a
+# criterion exists so it can report PENDING, and PENDING is what stops a phase with
+# nothing in it looking finished. Spec 00 was first in Phase 0, spec 16 in Phase 1,
+# spec 45 in Phase 3, spec 48 in Phase 4 and spec 60 in Phase 5 for the same reason.
+#
+# **Phase 6 fails expensively.** Every phase before this one could fail on paper.
+# Here the manage chain holds real positions and the failure modes cost money rather
+# than a metric: an entry that fills and is never recorded, a stop that is computed
+# from data the guard already rejected, a liquidation that stalls because a balance
+# fetch failed during the outage that triggered it. Each criterion below is therefore
+# written against a **named wrong implementation** - the hold removed from engine 21,
+# the liquidation reading fresh balances only, engine 9 walking the ask - rather than
+# against the shape of the evidence.
+#
+# Three rules govern all nine, and the first is this phase's own.
+#
+# * **Everything that drives a trade runs at fee tier 3, and says so in its own
+#   message.** Ruling 8 of the Phase 6 task list. At tier 1 the cost gate is
+#   unreachable by construction: `hurdle_multiple` 1.5 makes the bar 2.5x friction,
+#   tier-1 reference friction is about 1.25% round trip, and the resulting 3.125% is
+#   above the 3.0% target barrier - so *no* candidate clears and a criterion that
+#   reported PASS there would be reporting the thresholds interacting rather than
+#   anything about the engines. A verdict that does not name its fee regime claims
+#   more than it proves. `hurdle_multiple` is not changed and the cost gate is not
+#   weakened; the tier is what moves, and it moves through the **named** profile in
+#   `tests/fixtures/kraken/fee_tiers.json` so two criteria cannot mean two different
+#   things by "tier 3".
+# * **No criterion reads `data/`, `models/` or `logs/`.** All three are gitignored,
+#   so a criterion depending on one passes only on the machine that produced it.
+#   Everything here reads a committed fixture under `tests/fixtures/` or fabricates
+#   its subject into a temporary directory.
+# * **Fabricate the subject, never the contract.** The prices, the book and the
+#   scripted ticks are this file's. Every engine, every `contracts.py` and the config
+#   model are the real ones. If a real BUY cannot be produced honestly at tier 3,
+#   that is a finding for the lead and not something to route around with a
+#   hand-built `state` - spec 100 says so in as many words, and Phase 4 found twice in
+#   one day that a hand-built payload agrees with whoever built it.
+
+#: Engine number and owning spec for every subject these criteria drive, so a PENDING
+#: line names who owes it rather than making the reader come and find this file.
+PHASE6_ENGINES: Final[dict[str, tuple[int, str]]] = {
+    "order_book": (9, "C, spec 96"),
+    "adaptive_router": (14, "C, spec 97"),
+    "decision": (16, "B, spec 90"),
+    "execution": (18, "B, spec 91"),
+    "memory": (19, "C, spec 98"),
+    "position_manager": (21, "B, spec 92"),
+    "exit": (22, "B, spec 93"),
+}
+
+#: The two committed fixtures Phase 6 adds, and who cuts each. `data/db/` is
+#: gitignored and `data/historical/` is not in the repository, so a criterion that
+#: wanted a real book or a real leaderboard row has to read a committed sample or it
+#: cannot run on a fresh clone at all.
+PHASE6_FIXTURES: Final[dict[str, str]] = {
+    "book_sample.jsonl": (
+        "cut from the live archive by A's scripts/cut_book_fixture.py (spec 86) and "
+        "deposited by C (spec 96); must carry a thin book and a deep one"
+    ),
+    "leaderboard_sample.json": (
+        "written by C (spec 97); at least two models, because a router cannot be shown "
+        "to move weight between one"
+    ),
+}
+
+#: What the trade-driving criteria expect of the chain once B has built it. A
+#: proposal to the owning agent, not a decree, and messaged to B when these were
+#: registered - the same arrangement as `CONSOLE_CONTRACT` in Phase 1 and the Phase 2
+#: data-spine contracts.
+TRADE_CHAIN_CONTRACT: Final = (
+    "expected, and fixed by context/engine-contracts.md rather than by this file: "
+    "engine 16 `decision` a gate publishing one typed order intent, absent on every "
+    "block; engine 18 `execution` placing one post-only entry per intent and never a "
+    "market order; engine 21 `position_manager` publishing entry_orders_cancelled and "
+    "hold_reason; engine 22 `exit` publishing positions_closed; engine 19 `memory` "
+    "recording what 18 and 22 publish. Driven through the real Orchestrator at fee "
+    "tier 3 against B's paper broker"
+)
+
+#: The paper broker is a client, not an engine, so it is looked up separately.
+PAPER_BROKER_CONTRACT: Final = (
+    "expected acsoe.clients.paper exposing the broker that implements A's "
+    "OrderClientProtocol and wraps clients.kraken in paper mode (B, spec 88)"
+)
+
+
+def _tier_sentence(tier: int) -> tuple[str | None, Outcome | None]:
+    """The fee-regime clause every trade-driving criterion puts in its own message.
+
+    Read out of the harness rather than spelled here, so the sentence a criterion
+    reports and the profile it applied come from one file. A criterion that named a
+    tier it had not applied would be the exact wrong claim ruling 8 exists to stop.
+
+    Called **inside** `root_import_path`, like every other import in this section.
+    """
+    module, problem = try_import("tests.harness.fake_kraken")
+    if module is None:
+        return None, problem or pending("tests.harness.fake_kraken is unavailable")
+    sentence, missing = module_attr(module, "tier_sentence")
+    if sentence is None:
+        return None, pending("the harness has no named fee tiers yet: " + missing)
+    return str(sentence(tier)), None
+
+
+def _phase6_engine_class(engine: str) -> tuple[Any, Outcome | None]:
+    """The engine class, or the PENDING naming its number and the spec that owes it.
+
+    **A module that imports and declares no engine gets its own sentence.** "Does not
+    exist yet" would send somebody to write a file that is already there, and a
+    half-built engine is what an interrupted session leaves behind - Phase 6 opened on
+    exactly that in another lane, with `modelling/di.py` naming `score_many` in
+    `__all__` and not defining it.
+    """
+    number, spec = PHASE6_ENGINES[engine]
+    module, problem = try_import(f"acsoe.engines.{engine}.engine")
+    if module is None:
+        if problem is not None and problem.result is Result.FAIL:
+            return None, problem
+        return None, pending(f"engine {number} `{engine}` does not exist yet ({spec})")
+    for attr in dir(module):
+        candidate = getattr(module, attr)
+        if (
+            isinstance(candidate, type)
+            and getattr(candidate, "name", None) == engine
+            and getattr(candidate, "number", None) == number
+        ):
+            return candidate, None
+    return None, pending(
+        f"acsoe.engines.{engine}.engine exists but declares no class with "
+        f"`name = {engine!r}` and `number = {number}` ({spec})"
+    )
+
+
+def _phase6_engines(*engines: str) -> Outcome | None:
+    """`None` when every named engine exists, else the first PENDING.
+
+    Reported one at a time and in the order given, because "engines 16, 18 and 22 are
+    missing" is a less useful line than the name of the one to build next.
+    """
+    for engine in engines:
+        cls, problem = _phase6_engine_class(engine)
+        if cls is None:
+            return problem
+    return None
+
+
+def _phase6_fixture(ctx: VerifyContext, name: str) -> Outcome | None:
+    """`None` when the committed fixture is there and carries something.
+
+    **Absent is PENDING and empty is FAIL**, and the difference matters. Absent means
+    nobody has cut it yet, which is a schedule fact. Empty means somebody deposited a
+    file that carries nothing, and a walk over no levels or a leaderboard with no
+    models is the vacuous pass this project has been burned by three times.
+    """
+    path = ctx.root / "tests" / "fixtures" / name
+    if not path.is_file():
+        return pending(
+            f"tests/fixtures/{name} has not been deposited yet - " + PHASE6_FIXTURES[name]
+        )
+    if path.stat().st_size == 0:
+        return failed(f"tests/fixtures/{name} is empty, so it proves nothing")
+    return None
+
+
+def _paper_broker_module() -> Outcome | None:
+    """`None` when B's paper broker exists, else the PENDING naming spec 88.
+
+    Looked up as a **client** and not as an engine, which is the operator's corrected
+    ruling of 2026-09-16: a resting post-only entry fills on a later tick that only
+    engine 21 sees and exits fill in engine 22, so under `engines/execution/` two
+    engines forbidden by contract rule 3 from importing it would each need their own
+    copy of one fill rule.
+    """
+    module, problem = try_import("acsoe.clients.paper")
+    if module is None:
+        return _with_contract(
+            problem, "acsoe.clients.paper does not exist yet (B, spec 88)", PAPER_BROKER_CONTRACT
+        )
+    return None
+
+
+def _trade_chain_subject() -> Outcome | None:
+    """`None` when a round trip could be driven, else the PENDING naming what is missing.
+
+    Spec 100 step 2. The subject is a fabricated market in a temporary directory -
+    candles with a planted pattern that precedes target touches, trained through the
+    real `research/training.py` into a real `models/<run_id>/` - driven through the
+    real orchestrator, the real chains, a real `StoreClient`, the fake Kraken client at
+    tier 3 and B's paper broker.
+
+    **Everything in that sentence except the prices is the real thing.** The one
+    licence spec 100 grants is over the *subject*: what the market did. It grants none
+    over the *contract*: every engine, every `contracts.py` and the config model are
+    the committed ones, and a candidate that will not clear the gates honestly is a
+    finding for the lead rather than something to arrange around.
+
+    It reports PENDING, never FAIL, while any part of the chain is unbuilt, and it
+    names the next thing to build rather than the whole list.
+    """
+    problem = _phase6_engines("decision", "execution", "position_manager", "exit", "memory")
+    if problem is not None:
+        return problem
+    problem = _paper_broker_module()
+    if problem is not None:
+        return problem
+    return pending(
+        "every engine and the paper broker exist; the trade-producing subject of spec "
+        "100 step 2 is not written yet (C, spec 100) - " + TRADE_CHAIN_CONTRACT
+    )
+
+
+def _awaiting(problem: Outcome | None, tier: str, leg: str = "") -> Outcome:
+    """One PENDING that names both the missing subject and the regime it will run in.
+
+    A FAIL is passed through unchanged: a broken environment is a broken environment
+    and the fee regime is beside the point. That is the same rule `_with_contract`
+    follows, for the same reason.
+    """
+    assert problem is not None, "the caller must have something to report"
+    if problem.result is Result.FAIL:
+        return problem
+    where = f"the {leg} leg will then run " if leg else "will run "
+    return pending(problem.message + "; " + where + tier)
+
+
+# --- the trade-producing subject, spec 100 step 2 -------------------------- #
+#
+# The hardest requirement in the spec, and the one that could have ended in a finding
+# rather than in code: **a candidate has to be a real BUY with an expected move above
+# the tier-3 bar of 1.625%, produced by the real predictor, not refused by the DI and
+# not vetoed.** Spec 100 is explicit that if that cannot be done honestly it is raised
+# to the lead rather than routed around with a hand-built `state`.
+#
+# It can be done, and the measurement is in `docs/build-log/phase-6/c-interface.md`.
+# What follows is the price series that does it, and only the price series is
+# fabricated: the labeller, the feature module, the trainer, the calibrator, the DI and
+# the anomaly detector are all the committed ones, reached through `_trained`.
+#
+# **The pattern is what a feature vector can actually see.** Planting "the price goes up
+# later" is not plantable - the model reads one row of `FEATURE_NAMES`, not the future -
+# so the signature is four bars of a straight, positive, volume-breaking climb, which
+# lands in `log_return_4`, `efficiency_ratio_4` and `volume_z_4`, and the rise that
+# follows is what the labeller turns into a `target`.
+#
+# **One signature in five is not honoured, deliberately.** The first version always was,
+# and produced `p_target` of 0.97 and above with `p_stop` at nine decimal places of zero
+# - a model that has memorised a deterministic rule. Nothing about that is *wrong*, and
+# it is a poor subject: a chain driven by a certainty never exercises the paths that
+# exist because the model is uncertain, and a calibrator fitted on perfect separation is
+# not a calibrator anybody has tested. At four in five the measured `p_target` is 0.82 to
+# 0.91 and the expected move is 2.2% to 2.7%, comfortably above the bar and visibly short
+# of certain.
+
+#: Bars between one planted signature and the next. Comfortably more than
+#: `barriers.timeout_bars` (48), so one signature's label window never overlaps the next
+#: signature's - overlapping windows would leak the second pattern into the first's
+#: label and the criterion would be measuring the leak.
+PLANTED_PERIOD: Final = 89
+
+#: Bars the planted rise is spread over, and how far it rises. Well inside the timeout,
+#: and above the 3.0% target with enough headroom that the 1.5% stop is never touched
+#: first - which is what makes the label `target` rather than a coin toss.
+PLANTED_RISE_BARS: Final = 8
+PLANTED_RISE_TOTAL: Final = 0.045
+
+#: One signature in this many is followed by a drift down instead of the rise.
+PLANTED_HONOURED_IN: Final = 5
+
+#: The tier-3 hurdle, `hurdle_multiple` x reference friction, as the number the subject
+#: is measured against. **Not used to decide anything** - engine 10 computes the real
+#: hurdle from the live fee tier, the measured spread and engine 9's slippage, and this
+#: is only what the subject's own test compares an expected move to. A criterion that
+#: hurdled against this constant would be checking its own arithmetic.
+TIER_3_REFERENCE_HURDLE_PCT: Final = 0.01625
+
+
+def _planted_candles(polars: ModuleType, *, pair: str, interval_s: int) -> Any:
+    """A deterministic series carrying a signature that precedes a target touch.
+
+    Seeded arithmetic and no random generator, so two runs of the gate a week apart
+    produce the same bars and a criterion is measuring the engines rather than the
+    weather. Each pair gets a different phase, because two identical series would let a
+    pooled model read the pair column and the feature columns as the same information.
+    """
+    bars = CONSTRUCTED_DAYS * 86_400 // interval_s
+    origin = (int(datetime(2024, 1, 1, tzinfo=UTC).timestamp()) // interval_s) * interval_s
+    offset = sum(ord(char) for char in pair)
+    price = 100.0 + (offset % 17)
+    rows: list[dict[str, Any]] = []
+    for index in range(bars):
+        phase = (index + offset) % PLANTED_PERIOD
+        cycle = (index + offset) // PLANTED_PERIOD
+        honoured = (cycle * 2_654_435_761) % PLANTED_HONOURED_IN != 0
+        volume = 900.0 + 60.0 * ((index + offset) % 13)
+        trades = 15 + ((index + offset) % 9)
+        if phase < 4:
+            step = 0.0035
+            volume *= 1.8
+            trades = int(trades * 1.8)
+        elif phase < 4 + PLANTED_RISE_BARS:
+            step = (
+                (1.0 + PLANTED_RISE_TOTAL) ** (1.0 / PLANTED_RISE_BARS) - 1.0
+                if honoured
+                else -0.0032
+            )
+        elif phase == 4 + PLANTED_RISE_BARS + 6:
+            # The stop-out, so `stop` is an outcome the model has seen. A dataset of
+            # nothing but `target` and `timeout` teaches a predictor that the stop never
+            # happens, and every expected move it produces is then too high by the term
+            # that is supposed to subtract.
+            step = -0.022
+        else:
+            step = 0.0016 * math.sin((index + offset) / 5.0) - 0.00045
+        price = max(price * (1.0 + step), 0.01)
+        span = abs(step) + 0.0006
+        rows.append(
+            {
+                "ts": origin + index * interval_s,
+                "open": price * (1.0 - span / 3),
+                "high": price * (1.0 + span),
+                "low": price * (1.0 - span),
+                "close": price,
+                "volume": volume,
+                "trades": trades,
+            }
+        )
+    return polars.DataFrame(rows)
+
+
+@dataclass(frozen=True)
+class TradeSubjectModel:
+    """One trained run over the planted market, and what it cost to produce.
+
+    `config` is the committed config with `models.dir` and the three run ids answered,
+    so engines 8, 13 and 15 load **these** artefacts. `oos` is the out-of-sample frame
+    the training run wrote, which is what the subject's own test reads to show that a
+    real BUY above the tier-3 bar exists.
+    """
+
+    models_dir: Path
+    run_id: str
+    config: Any
+    oos: Any
+    seconds: float
+
+
+#: One trained subject per repository root, for the lifetime of the process.
+#:
+#: Spec 100 step 6: *"share one trained subject across criteria within a run where that
+#: does not let one criterion's state leak into another's verdict, and say which."* This
+#: is which. **The model is shared and nothing else is.** A fitted artefact is read-only
+#: once written and every criterion reads the same numbers out of it, so sharing it
+#: cannot carry one criterion's state into another's verdict - and training costs about
+#: a minute, which six criteria paying separately would put on every gate run.
+#:
+#: The database, the paper broker's ledger and the store are **not** shared and must not
+#: be: those are exactly the mutable state the rule is about, and each criterion builds
+#: its own in its own temporary directory.
+#:
+#: Keyed by root, because a criterion pointed at a fabricated tree must not be handed
+#: the real tree's model. The temporary directory is held on the entry so it outlives
+#: the call that made it.
+_TRADE_SUBJECTS: dict[str, TradeSubjectModel] = {}
+_TRADE_SUBJECT_DIRS: list[Any] = []
+
+
+def _trade_subject_model(ctx: VerifyContext) -> tuple[TradeSubjectModel | None, Outcome | None]:
+    """The trained subject for `ctx.root`, training it once if nothing has yet.
+
+    Reports PENDING rather than FAIL when the trainer or the modelling package is not
+    reachable, for the reason `_phase5_module` does: a module of ours that has not been
+    written is not a broken environment.
+    """
+    key = str(ctx.root)
+    cached = _TRADE_SUBJECTS.get(key)
+    if cached is not None:
+        return cached, None
+
+    polars, problem = _polars()
+    if polars is None:
+        return None, problem
+    started = time.monotonic()
+    holder = tempfile.TemporaryDirectory(prefix="acsoe-trade-subject-")
+    _TRADE_SUBJECT_DIRS.append(holder)
+    tmp = Path(holder.name)
+    result, problem = _trained(
+        ctx, tmp, name="subject", candles_builder=_planted_candles
+    )
+    if result is None:
+        return None, problem
+    report, _dataset, engine_config = result
+    fold_runs = list(getattr(report, "fold_runs", ()) or ())
+    if not fold_runs:
+        return None, failed(
+            "the training run over the planted market produced no fold artefacts, so "
+            "engines 8, 13 and 15 have nothing to load. An assertion over an empty fold "
+            "list is an assertion over nothing."
+        )
+    # The **last** fold, because it is the one trained on the most recent window and is
+    # what a live daemon would have loaded. Taking the first would train the subject on
+    # the oldest data available and is the kind of choice that looks arbitrary because
+    # it is.
+    run_id = str(fold_runs[-1])
+    models_dir = tmp / "subject" / "models"
+    subject = TradeSubjectModel(
+        models_dir=models_dir,
+        run_id=run_id,
+        config=_ConfigWith(
+            engine_config,
+            {
+                "models.dir": str(models_dir),
+                "models.prediction_run_id": run_id,
+                "models.anomaly_run_id": run_id,
+                "models.skeptic_run_id": run_id,
+            },
+        ),
+        oos=polars.read_parquet(report.oos_path),
+        seconds=time.monotonic() - started,
+    )
+    _TRADE_SUBJECTS[key] = subject
+    return subject, None
+
+
+def _subject_buy_rows(subject: TradeSubjectModel, polars: ModuleType) -> Any:
+    """The out-of-sample rows that are a BUY above the tier-3 bar and not DI-refused.
+
+    The population a Phase 6 round trip is drawn from. Empty is the finding spec 100
+    names: a subject that produces no honest BUY is raised to the lead, not arranged
+    around.
+    """
+    return subject.oos.filter(
+        polars.col("is_buy")
+        & (~polars.col("di_refused"))
+        & (polars.col("expected_move_pct") > TIER_3_REFERENCE_HURDLE_PCT)
+    )
+
+
+# --- paper_trade_round_trip_target / _stop / _timeout ----------------------- #
+
+
+def _round_trip(ctx: VerifyContext, leg: str) -> Outcome:
+    """One paper round trip that ends at the named barrier, reconciled to the cent.
+
+    The three criteria differ only in which barrier the scripted market reaches, and
+    they are one function because the reconciliation is the assertion in all three:
+    every row engine 19 wrote is read back and compared against the trade the paper
+    broker actually filled - entry, exit, fees and realised PnL, exactly, with no
+    tolerance. A tolerance on money is a defect waiting for a rounding bug to hide in.
+
+    Why all three rather than one. `target` and `stop` differ by which barrier the
+    scripted trades touch first, and the operator's ruling of 2026-09-16 says both in
+    one tick resolves to `stop`; `timeout` never touches either and is the path where
+    nothing triggers the exit except elapsed bars, which is the only one of the three
+    that can be broken by a clock and stay green on the other two.
+    """
+    with root_import_path(ctx.root):
+        tier, problem = _tier_sentence(3)
+        if tier is None:
+            return _awaiting(problem, "at fee tier 3", leg)
+        return _awaiting(_trade_chain_subject(), tier, leg)
+
+
+def check_paper_trade_round_trip_target(ctx: VerifyContext) -> Outcome:
+    """A candidate becomes a filled position that exits at the target, recorded exactly.
+
+    The whole phase in one line: post-only entry, simulated fill, minute-by-minute
+    watch, the exit, and every row engine 19 wrote reconciled against the trade.
+    """
+    return _round_trip(ctx, "target")
+
+
+def check_paper_trade_round_trip_stop(ctx: VerifyContext) -> Outcome:
+    """The same round trip ending at the stop.
+
+    Separately registered because the stop is the leg that protects the account, and a
+    chain that can only be shown to take profit has been shown the easy half.
+    """
+    return _round_trip(ctx, "stop")
+
+
+def check_paper_trade_round_trip_timeout(ctx: VerifyContext) -> Outcome:
+    """The same round trip ending at the timeout, with neither barrier touched.
+
+    The path no price movement triggers, so it is the one a broken bar count leaves
+    open forever while the other two stay green.
+    """
+    return _round_trip(ctx, "timeout")
+
+
+# --- unfilled_entry_cancels_without_chasing --------------------------------- #
+
+
+def check_unfilled_entry_cancels_without_chasing(ctx: VerifyContext) -> Outcome:
+    """A post-only entry that never fills is cancelled, and nothing chases the price.
+
+    Three claims, and the second is the one invariant 7 turns on. The order is
+    cancelled at `trading.entry_unfilled_window_s`; **no market order is ever
+    constructed** - not sent, constructed, because a market order that exists in memory
+    is one branch away from being sent; and no second entry is placed on the pair,
+    which is the difference between giving up on a fill and chasing one.
+
+    The named wrong implementation is an engine 18 that re-places at the new best bid
+    when the window expires. It looks like diligence and it is exactly the taker
+    behaviour invariant 7 forbids.
+    """
+    with root_import_path(ctx.root):
+        tier, problem = _tier_sentence(3)
+        if tier is None:
+            return _awaiting(problem, "at fee tier 3")
+        problem = _phase6_engines("decision", "execution", "position_manager")
+        if problem is None:
+            problem = _paper_broker_module()
+        if problem is None:
+            problem = pending(
+                "every subject exists; the unfilled-entry driver of spec 100 is not "
+                "written yet (C, spec 100) - " + TRADE_CHAIN_CONTRACT
+            )
+        return _awaiting(problem, tier)
+
+
+# --- triggered_stop_holds_on_data_guard_block ------------------------------- #
+
+
+def check_triggered_stop_holds_on_data_guard_block(ctx: VerifyContext) -> Outcome:
+    """A stop that triggers on a tick the guard rejected places no exit, and says why.
+
+    `engine-contracts.md`: when `state["trading_blocked_by"] == "data_guard"` the manage
+    chain still runs and engines 21 and 22 place **no** exit, because a barrier computed
+    from exactly the data the guard refused is a fabricated trigger. Engine 21 publishes
+    `hold_reason` and engine 19 records it.
+
+    And the other half in the same criterion, because the hold is only correct if it is
+    also bounded: the **same** position with `close_intent` set does exit. A hold that
+    survives a liquidation is invariant 14 broken, and a criterion that only checked the
+    hold would call that a pass.
+
+    The named wrong implementation is the hold removed from engine 21 - the mutation
+    this criterion is proved against - and the subtler one is reading "the manage chain
+    holds" as "engine 21 does nothing", which leaves a live post-only buy on the book
+    through the outage.
+    """
+    with root_import_path(ctx.root):
+        tier, problem = _tier_sentence(3)
+        if tier is None:
+            return _awaiting(problem, "at fee tier 3")
+        problem = _phase6_engines("position_manager", "exit", "memory")
+        if problem is None:
+            problem = pending(
+                "every subject exists; the held-stop driver of spec 100 is not written "
+                "yet (C, spec 100) - " + TRADE_CHAIN_CONTRACT
+            )
+        return _awaiting(problem, tier)
+
+
+# --- escalation_completes_during_outage ------------------------------------- #
+
+
+def check_escalation_completes_during_outage(ctx: VerifyContext) -> Outcome:
+    """The kill switch finishes while the outage that fired it is still happening.
+
+    Engine 17 escalates after `safety.max_consecutive_data_blocks`; engine 21 cancels
+    every resting entry and engine 22 closes every position **while `data_guard` is
+    still blocking and the balance fetch is still failing**; the orchestrator clears
+    `close_intent` and marks the command consumed; and every tolerated fallback is
+    recorded on the trade.
+
+    This is invariant 14, and it is the one place in the system where a fetch failure
+    does **not** block. The named wrong implementation is a liquidation that reads
+    fresh balances only: that is the correct behaviour everywhere else in the system,
+    which is why it is the mistake that gets made, and it stalls the kill switch at
+    precisely the moment the exchange is unreachable.
+
+    `safety_escalates_on_sustained_outage` in Phase 3 already proves engine 17 *emits*
+    the row from the seed. This proves the manage chain *completes* on it, which is a
+    different claim: Phase 3 had no engine 21 and no engine 22 to complete anything.
+    """
+    with root_import_path(ctx.root):
+        tier, problem = _tier_sentence(3)
+        if tier is None:
+            return _awaiting(problem, "at fee tier 3")
+        problem = _phase6_engines("position_manager", "exit", "memory")
+        if problem is None:
+            problem = _paper_broker_module()
+        if problem is None:
+            problem = pending(
+                "every subject exists; the liquidation-during-outage driver of spec 100 "
+                "is not written yet (C, spec 100) - " + TRADE_CHAIN_CONTRACT
+            )
+        return _awaiting(problem, tier)
+
+
+# --- console_shows_position_live -------------------------------------------- #
+
+
+def check_console_shows_position_live(ctx: VerifyContext) -> Outcome:
+    """The console renders a position a real daemon opened, and the mark moves.
+
+    Spec 101's subject. Phase 1 proved the region renders against **seeded** rows,
+    which is a different claim: a seeded row is written by the seed generator to the
+    shape the console expects, and a position written by engine 19 out of engine 21's
+    payload is written to the shape engine 21 publishes. The two agreeing is the thing
+    being checked.
+
+    The mutation it is proved against is the reader serving the previous tick's mark -
+    a stale figure that looks exactly like a correct one, on a screen whose entire job
+    is to say what is true now.
+    """
+    with root_import_path(ctx.root):
+        tier, problem = _tier_sentence(3)
+        if tier is None:
+            return _awaiting(problem, "at fee tier 3")
+        problem = _phase6_engines("position_manager", "memory")
+        if problem is None:
+            problem = _trade_chain_subject()
+        return _awaiting(problem, tier)
+
+
+# --- order_book_slippage_on_recorded_book ----------------------------------- #
+
+
+def check_order_book_slippage_on_recorded_book(ctx: VerifyContext) -> Outcome:
+    """Engine 9's slippage estimate matches a walk this criterion recomputes.
+
+    **Recomputed from the fixture, never a number this file stores.** A stored expected
+    value is a second implementation of the walk, written by the same person, at the
+    same time, from the same misunderstanding - and it agrees with the engine for
+    exactly as long as both are wrong in the same way. The Phase 5 closing finding is
+    the same shape: what killed a calibrator fitted on the test window was recomputing
+    the expected rows from the public splitter.
+
+    Thin book and deep book, because a walk that consumes one level and a walk that
+    consumes several are different code paths and the thin one is where the money is.
+
+    Two properties beyond the number. Engine 9 **never blocks** - it is not a gate, it
+    publishes an estimate and engine 10 decides - and it estimates at the whole quote
+    balance as an upper bound, which is the lead's decision of 2026-09-16. The named
+    wrong implementation is walking the **ask** side for a sell or the bid for a buy: it
+    produces a plausible number with the wrong sign of error, and nothing downstream can
+    tell.
+
+    This criterion drives no trade, so it names no fee tier: the walk is arithmetic over
+    a recorded book and the fee schedule does not enter it. Claiming a regime it never
+    applied would be the same untrue statement as omitting one it had.
+    """
+    with root_import_path(ctx.root):
+        _, problem = _phase6_engine_class("order_book")
+        if problem is not None:
+            return problem
+        problem = _phase6_fixture(ctx, "book_sample.jsonl")
+        if problem is not None:
+            return problem
+        return pending(
+            "engine 9 and its fixture both exist; the recomputed walk of spec 100 is "
+            "not written yet (C, spec 100)"
+        )
+
+
+# --- adaptive_router_weights_on_fixture ------------------------------------- #
+
+
+def check_adaptive_router_weights_on_fixture(ctx: VerifyContext) -> Outcome:
+    """Engine 14's weights are recomputed from the leaderboard rows, not read back.
+
+    The same rule as the criterion above and for the same reason: the weights are
+    derived from `leaderboard_sample.json` by this criterion and compared against the
+    engine's, so an engine that reported its own input back would be caught.
+
+    The fixture carries **at least two models**, because a router cannot be shown to
+    move weight between one, and every weights-move assertion names the fixture as its
+    subject - "the router prefers the model with the better out-of-sample Brier *on this
+    fixture*" is a true sentence, and "the router prefers better models" is a claim
+    about a population nobody sampled.
+
+    Engine 14 is not a gate and cannot refuse a trade, so this criterion drives none and
+    names no fee tier.
+    """
+    with root_import_path(ctx.root):
+        _, problem = _phase6_engine_class("adaptive_router")
+        if problem is not None:
+            return problem
+        problem = _phase6_fixture(ctx, "leaderboard_sample.json")
+        if problem is not None:
+            return problem
+        return pending(
+            "engine 14 and its fixture both exist; the recomputed weights of spec 100 "
+            "are not written yet (C, spec 100)"
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Registration
 # --------------------------------------------------------------------------- #
@@ -10753,6 +11466,53 @@ register(
     Criterion(
         "walkforward_trains_on_the_past_only",
         check_walkforward_trains_on_the_past_only,
+    ),
+)
+
+# Phase 6 - decision and execution. Spec 100, registered first in the phase and ahead of
+# every subject it judges, for the reason spec 00 was first in Phase 0, spec 16 in Phase
+# 1, spec 45 in Phase 3, spec 48 in Phase 4 and spec 60 in Phase 5. Until these existed
+# `--phase 6` registered `docs_vocabulary` and `toolchain_green` alone and printed "Phase
+# 6 is green: every criterion PASS, zero PENDING" over a phase in which engines 16, 18
+# and 22 were unbuilt and nothing had ever placed an order. A phase with nothing in it
+# must not be able to report as finished, and PENDING is how it says so.
+#
+# Registered while every one of them is PENDING, and deliberately: B builds engines 16,
+# 18 and 22 against these rather than after them, which is the whole reason spec 100 sits
+# in wave 2 of a phase whose engines land in wave 3.
+register(6, Criterion("paper_trade_round_trip_target", check_paper_trade_round_trip_target))
+register(6, Criterion("paper_trade_round_trip_stop", check_paper_trade_round_trip_stop))
+register(6, Criterion("paper_trade_round_trip_timeout", check_paper_trade_round_trip_timeout))
+register(
+    6,
+    Criterion(
+        "unfilled_entry_cancels_without_chasing",
+        check_unfilled_entry_cancels_without_chasing,
+    ),
+)
+register(
+    6,
+    Criterion(
+        "triggered_stop_holds_on_data_guard_block",
+        check_triggered_stop_holds_on_data_guard_block,
+    ),
+)
+register(
+    6,
+    Criterion("escalation_completes_during_outage", check_escalation_completes_during_outage),
+)
+register(6, Criterion("console_shows_position_live", check_console_shows_position_live))
+register(
+    6,
+    Criterion(
+        "order_book_slippage_on_recorded_book",
+        check_order_book_slippage_on_recorded_book,
+    ),
+)
+register(
+    6,
+    Criterion(
+        "adaptive_router_weights_on_fixture", check_adaptive_router_weights_on_fixture
     ),
 )
 

@@ -215,3 +215,30 @@ def test_an_age_in_milliseconds_is_a_display_value_derived_after_the_verdict() -
     assert stale.is_stale is True
     assert fresh.is_stale is False
     assert stale.age_ms == fresh.age_ms == STALE_AFTER_MS
+
+
+def test_every_position_payload_carries_the_age_the_page_renders(
+    seeded_db: Path, seed_clock: Any
+) -> None:
+    """Spec 101. The page reads `age_text` and nothing derives it in the browser.
+
+    `ui-context.md` scope limit for spec 101: the console computes no PnL and no age of
+    its own beyond formatting what it was handed. A page that worked out an age from
+    `opened_at` in JavaScript would be reading the *browser's* clock, which belongs to
+    neither the daemon nor the console and is the one clock in the picture nobody
+    controls.
+    """
+    from acsoe.console.payloads import _position_payload
+    from acsoe.console.reader import ConsoleReader
+
+    reader = ConsoleReader(seeded_db, clock=seed_clock, stale_after_ms=30_000)
+    try:
+        view = reader.positions()[0]
+    finally:
+        reader.close()
+    payload = _position_payload(view)
+    assert payload["age_text"] == view.age_text
+    assert "age_us" not in payload, (
+        "the raw microsecond age is a reader-side value; sending it invites the page to "
+        "recompute the text from it"
+    )

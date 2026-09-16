@@ -1072,7 +1072,19 @@ def test_is_gate_parses_the_registry_out_of_the_document(
     verify_module: ModuleType, repo_root: Path
 ) -> None:
     """`engine-contracts.md` is the authority and the table is parsed, not
-    hardcoded, so a registry change moves the check with it."""
+    hardcoded, so a registry change moves the check with it.
+
+    The expected set below is written out by hand **on purpose**, and must never be
+    derived from the same table it is checking. `is_gate_matches_registry` holds every
+    registered engine to the document, which makes the document the authority for
+    everything downstream of it and leaves nothing watching the document itself. This
+    is that watch: widening the gate list is a deliberate act with a red test in front
+    of it, whoever does the widening.
+
+    `decision` joined the set on 2026-09-16 — the operator ruled engine 16 a gate, the
+    lead added its **Y** to the Gate column, and this test went red naming `decision`
+    before anybody claimed the change was harmless.
+    """
     rows = verify_module.parse_engine_registry(repo_root)
     assert len(rows) == 23
     assert rows["data_guard"].number == 4 and rows["data_guard"].is_gate
@@ -1085,6 +1097,7 @@ def test_is_gate_parses_the_registry_out_of_the_document(
         "cost",
         "risk",
         "skeptic",
+        "decision",
     }
 
 

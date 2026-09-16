@@ -10,6 +10,7 @@ of invariant 2 are the easiest place to be accidentally kind.
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -236,3 +237,124 @@ def test_an_unknown_call_name_is_refused(fake_kraken: FakeKrakenClient) -> None:
     """A typo in a test's failure injection must not silently inject nothing."""
     with pytest.raises(ValueError, match="unknown call"):
         fake_kraken.fail("tradevolume")
+
+
+# --------------------------------------------------------------------------- #
+# Named fee tiers — spec 100 step 1
+# --------------------------------------------------------------------------- #
+
+
+def test_the_tier_1_profile_is_the_default_envelope_and_not_a_second_copy_of_it() -> None:
+    """Two files now state tier 1's fees. This is what stops them disagreeing.
+
+    `trade_volume.json` is what `FakeKrakenClient` loads with no injection, and
+    `fee_tiers.json` names the same tier so a criterion can ask for it explicitly.
+    A fake whose default tier and whose named tier 1 differ would make "no trade at
+    tier 1" mean two different things depending on which route the test took, and
+    the difference would be invisible: both are plausible numbers.
+    """
+    from tests.harness.fake_kraken import TIER_1, fee_tier_profile, load_envelope
+
+    default = load_envelope("trade_volume")["result"]
+    named = fee_tier_profile(TIER_1)
+    assert named.tier == int(default["tier"])
+    assert named.currency == str(default["currency"])
+    assert named.maker_fee_pct == str(default["maker_fee_pct"])
+    assert named.taker_fee_pct == str(default["taker_fee_pct"])
+
+
+@pytest.mark.asyncio
+async def test_use_fee_tier_reaches_the_client_through_trade_volume(
+    fake_kraken: FakeKrakenClient,
+) -> None:
+    """The profile the criterion quotes is the profile the engine reads.
+
+    Applied through the fixture and read back through the Protocol method engine 1
+    actually calls, rather than off the envelope dict — the point of the helper is
+    that the reported tier and the running tier are one object, and reading the
+    dict back would only prove the helper wrote to the dict.
+    """
+    from tests.harness.fake_kraken import TIER_3
+
+    profile = fake_kraken.use_fee_tier(TIER_3)
+    fees = await fake_kraken.trade_volume()
+    assert fees.tier == 3
+    assert fees.maker_fee_pct == Decimal(profile.maker_fee_pct)
+    assert fees.taker_fee_pct == Decimal(profile.taker_fee_pct)
+    assert fees.volume_30d == Decimal(profile.volume_30d)
+    assert fees.currency == profile.currency
+
+
+def test_an_unnamed_tier_raises_rather_than_falling_back_to_tier_1() -> None:
+    """A fake kinder than reality hides fail-closed bugs — the harness's own rule.
+
+    Silently answering tier 1 for `use_fee_tier(2)` would give a criterion a
+    no-trade regime while its message said tier 2, which is the exact class of
+    wrong claim the tier sentences exist to prevent.
+    """
+    from tests.harness.fake_kraken import fee_tier_profile, tier_sentence
+
+    with pytest.raises(ValueError, match="no named fee-tier profile for tier 2"):
+        fee_tier_profile(2)
+    with pytest.raises(ValueError, match="no sentence for tier 2"):
+        tier_sentence(2)
+
+
+def test_the_two_tier_sentences_say_which_regime_and_are_not_interchangeable() -> None:
+    """Ruling 8: every criterion that drives a trade says tier 3 in its own message.
+
+    A sentence that did not name the tier, or that read the same for both, would
+    let a PASS at tier 1 — where no trade is possible — be mistaken for a PASS that
+    proved something about the engines.
+    """
+    from tests.harness.fake_kraken import TIER_1, TIER_3, tier_sentence
+
+    one, three = tier_sentence(TIER_1), tier_sentence(TIER_3)
+    assert one != three
+    assert "tier 1" in one and "tier 3" in three
+    assert "no-trade regime" in three, three
+    assert "unreachable by construction" in one, one
+
+
+def test_the_tier_3_fees_are_lower_than_tier_1s_on_both_sides() -> None:
+    """The one property of the numbers worth asserting, and the one a typo breaks.
+
+    Not the friction and not the hurdle: those are engine 10's arithmetic and a
+    criterion that recomputed them here would be checking its own sum. What the
+    fixture has to get right is the direction — a tier-3 profile with tier-1 fees
+    would leave every Phase 6 criterion in the no-trade regime while reporting that
+    it was not, and every one of them would simply find no candidate.
+    """
+    from tests.harness.fake_kraken import TIER_1, TIER_3, fee_tier_profile
+
+    one, three = fee_tier_profile(TIER_1), fee_tier_profile(TIER_3)
+    assert Decimal(three.maker_fee_pct) < Decimal(one.maker_fee_pct)
+    assert Decimal(three.taker_fee_pct) < Decimal(one.taker_fee_pct)
+    assert three.fees_round_trip_pct < one.fees_round_trip_pct
+
+
+def test_no_fee_number_in_the_fixture_reaches_src() -> None:
+    """`AGENTS.md`: a fee percentage in `src/` is stale by definition.
+
+    The fixture's own docstring says no code outside `tests/` may read it, and this
+    is that sentence made checkable. Searching for the literal strings rather than
+    for the filename catches the copy-paste, which is how a fixture number gets into
+    `src/` in practice — nobody imports the fixture, somebody types the number.
+    """
+    from tests.harness.fake_kraken import TIER_1, TIER_3, fee_tier_profile
+
+    src = Path(__file__).resolve().parents[2] / "src"
+    sources = list(src.rglob("*.py"))
+    assert sources, "no sources found; the search would pass vacuously"
+    for tier in (TIER_1, TIER_3):
+        profile = fee_tier_profile(tier)
+        for number in (profile.maker_fee_pct, profile.taker_fee_pct):
+            offenders = [
+                path.relative_to(src)
+                for path in sources
+                if number in path.read_text(encoding="utf-8")
+            ]
+            assert not offenders, (
+                f"tier {tier}'s {number!r} appears in src/: {offenders}. Fees come from "
+                "TradeVolume at runtime or the trade is blocked — invariant 2."
+            )

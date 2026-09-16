@@ -198,7 +198,24 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
         "tournament_writes_leaderboard_from_oos",
         "walkforward_trains_on_the_past_only",
     }
-    for phase in range(6, verify_module.MAX_PHASE + 1):
+    # Spec 100, registered first in Phase 6 and ahead of every subject it judges. Until
+    # these existed `--phase 6` carried `every_phase` alone and printed "Phase 6 is
+    # green" over a phase in which engines 16, 18 and 22 were unbuilt and nothing had
+    # ever placed an order. Every one of them is PENDING on the tree they were written
+    # against, which is the point: B builds 16, 18 and 22 against them rather than after
+    # them.
+    assert {c.name for c in verify_module._REGISTRY[6]} == every_phase | {
+        "paper_trade_round_trip_target",
+        "paper_trade_round_trip_stop",
+        "paper_trade_round_trip_timeout",
+        "unfilled_entry_cancels_without_chasing",
+        "triggered_stop_holds_on_data_guard_block",
+        "escalation_completes_during_outage",
+        "console_shows_position_live",
+        "order_book_slippage_on_recorded_book",
+        "adaptive_router_weights_on_fixture",
+    }
+    for phase in range(7, verify_module.MAX_PHASE + 1):
         assert {c.name for c in verify_module._REGISTRY[phase]} == every_phase
 
 

@@ -197,6 +197,16 @@ class PositionView(_View):
     direction: str
     opened_at: Micros
     timeout_at: Micros
+    age_us: int
+    """How long the position has been open, in microseconds.
+
+    Set by the reader from the injected clock, for the reason :class:`Staleness` gives:
+    a view model that worked out its own age would be reading a clock, and the console
+    has exactly one, held by the reader. Spec 101 — an operator deciding whether to
+    leave a position alone reads its age against its timeout, and neither number means
+    anything without the other."""
+
+    age_text: str
     staleness: Staleness
 
 

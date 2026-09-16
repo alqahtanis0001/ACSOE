@@ -27,7 +27,7 @@ from pydantic import ValidationError
 
 from acsoe.clients.store.client import StoreClient
 from acsoe.clients.store.contracts import RunMode, RunRow, SystemMode
-from acsoe.console.format import MINUS_SIGN
+from acsoe.console.format import MINUS_SIGN, format_age
 from acsoe.console.reader import ConsoleReader, ReadOnlyStore, open_readonly_connection
 from acsoe.console.views import (
     FROZEN,
@@ -661,6 +661,71 @@ def test_history_carries_trades_and_rejections_newest_first(
     assert rejected_at == sorted(rejected_at, reverse=True)
     assert closed_at != sorted(closed_at)
     assert rejected_at != sorted(rejected_at)
+
+
+def test_a_position_says_how_long_it_has_been_open(
+    seeded_reader: ConsoleReader,
+) -> None:
+    """Spec 101: the age is shown, and it is computed here rather than in the view.
+
+    Two facts an operator uses together — how long a position has been open, and when
+    it times out — and neither means anything without the other. Before spec 101 the
+    table rendered eight columns and none of them was age; Phase 1 rendered seeded rows
+    and how old a fixture is was not a question anybody had.
+
+    The age comes from the reader's injected clock and not from the view model, which is
+    the rule `views.py` already states for `Staleness`: a view model working out its own
+    age is a view model reading a clock, and the console has exactly one.
+    """
+    position = seeded_reader.positions()[0]
+    assert position.age_us == max(seeded_reader.now_micros() - position.opened_at, 0)
+    assert position.age_text
+    assert position.age_text == format_age(position.age_us // 1000)
+
+
+def test_the_age_is_not_the_staleness_and_the_two_can_disagree(
+    seeded_reader: ConsoleReader,
+) -> None:
+    """Two ages on one row, answering two different questions.
+
+    `staleness` is how old the **figures** are — it is what fades the row past
+    `console.stale_after_ms`, and it is measured from `updated_at`, the last time the
+    daemon touched the row. `age_us` is how long the **position** has been open, from
+    `opened_at`. A position opened four hours ago and marked a second ago is old and
+    fresh at once, and conflating them would either fade every long-held position or
+    tell an operator a stale row was new.
+    """
+    position = seeded_reader.positions()[0]
+    assert position.opened_at != position.staleness.age_us
+    assert position.age_us >= position.staleness.age_us, (
+        "a position cannot have been updated before it was opened"
+    )
+
+
+def test_a_console_clock_behind_the_row_reports_no_age_rather_than_a_negative_one(
+    seeded_db: Path, seed_clock: Any
+) -> None:
+    """Two processes, two clock reads, and the console cannot fix the skew.
+
+    The daemon writes `opened_at` and the console reads its own clock, so a console
+    marginally behind the daemon produces a negative age. `format_age` already renders
+    a negative as `0s` for exactly this reason; this pins the same answer one level up,
+    so the number on the view model is never negative either — a negative age would
+    read as a position that has not started yet.
+
+    Driven by moving the **reader's** clock behind the seeded row rather than by
+    arithmetic on the view, because the clamp lives in the reader and an assertion that
+    recomputed it here would be checking its own sum.
+    """
+    behind = type(seed_clock)(seed_clock.now() - timedelta(days=365))
+    reader = reader_for(seeded_db, behind)
+    try:
+        position = reader.positions()[0]
+        assert reader.now_micros() < position.opened_at, "the clock is not actually behind"
+        assert position.age_us == 0
+        assert position.age_text == format_age(0)
+    finally:
+        reader.close()
 
 
 def test_a_position_view_renders_every_figure_as_a_string_too(

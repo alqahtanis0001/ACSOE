@@ -174,7 +174,12 @@
         [p.target_price_text, "num"],
         [p.stop_price_text, "num"],
         [p.unrealised_pnl_text, "num " + p.direction],
-        [p.unrealised_pnl_pct_text, "num " + p.direction]
+        [p.unrealised_pnl_pct_text, "num " + p.direction],
+        /* Spec 101. Rendered, never computed: the age arrives as text from the
+           reader, which holds the console's one clock. Deriving it here from
+           opened_at would read the *browser's* clock, which belongs to neither
+           the daemon nor the console and is the one nobody controls. */
+        [p.age_text, "num"]
       ]);
     });
   }

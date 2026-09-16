@@ -99,6 +99,7 @@ def _position_payload(view: PositionView) -> dict[str, Any]:
         "direction": view.direction,
         "opened_at": view.opened_at,
         "timeout_at": view.timeout_at,
+        "age_text": view.age_text,
         "staleness": staleness_payload(view.staleness),
     }
 
