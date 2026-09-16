@@ -721,9 +721,48 @@ class OrderAck(_Snapshot):
 class OrderState(_Snapshot):
     """Where one order stands now, from a query or a cancel.
 
-    Four couplings are enforced, because each of them is a fact a consumer would
+    ``qty`` and ``limit_price`` describe **what the order is**; everything after
+    them describes what has happened to it. The first two were added by the spec 84
+    amendment of 2026-09-16 and the reason is worth keeping next to the fields.
+    Without them, an order resting at the exchange that the store has never recorded
+    — placed, then the process died before engine 19 ran — could be *detected* by
+    engine 18 and not *described*, so no row could be written and nothing would ever
+    cancel it. In the operator's words: an order that cannot be cancelled because
+    nothing recorded enough to identify it is an unmanaged exposure, and that is the
+    failure invariant 8 exists to prevent. Kraken returns both in ``descr`` on
+    ``OpenOrders`` and ``QueryOrders``, so this is faithful to what a live client
+    will actually hold rather than a field the paper side alone can fill.
+
+    ``qty`` is **required**. Every order has one, at the exchange and in the store,
+    and an optional field here would recreate exactly the ambiguity the amendment
+    removes — a consumer could not tell "no quantity was recorded" from "no
+    quantity exists".
+
+    ``limit_price`` follows :class:`OrderRequest`'s coupling: present for a limit
+    order, absent for a market one. There is no ``order_type`` beside it because
+    presence **is** the statement and the two would be a second copy that can
+    disagree; a consumer that needs the type reads ``limit_price is not None``.
+    The lead's ruling of 2026-09-16 closes the one weakening that leaves **at the
+    consumer that knows the answer**: engine 18 asked for a post-only buy limit, so
+    an ``OrderState`` coming back with no ``limit_price`` is the exchange
+    contradicting the placement rather than a market order, and engine 18 refuses
+    to record it. The model cannot make that call; the placer can.
+
+    ``opened_at`` completes the same amendment. It is optional, and **absent means
+    the exchange did not say** — not "now" and not zero. Kraken's ``OpenOrders``
+    returns ``opentm``, so a live client will normally have it; a consumer that
+    needs a placement time and has none keeps whatever fail-closed behaviour it
+    already had, which for engine 18 is to publish no row and name the ``userref``.
+    That narrows the unrecorded-order gap to the single case the exchange itself
+    cannot answer.
+
+    Seven couplings are enforced, because each of them is a fact a consumer would
     otherwise have to re-derive and could re-derive differently:
 
+    * ``qty`` is above zero. An order for nothing is not an order.
+    * ``filled_qty`` never exceeds ``qty``. An order cannot fill more than it asked
+      for, and a state that said so would put a position the exchange never opened
+      into the ledger. Only checkable now that ``qty`` is here.
     * ``avg_fill_price`` is present **exactly when** ``filled_qty`` is above zero.
       An unfilled order has no average price, and ``0`` is not one — it would put a
       zero cost basis into the ledger.
@@ -736,9 +775,12 @@ class OrderState(_Snapshot):
     userref: UserRef
     order_id: str
     status: OrderStatus
+    qty: Money
+    limit_price: Money | None = None
     filled_qty: Money
     avg_fill_price: Money | None = None
     fee: Money
+    opened_at: int | None = None
     closed_at: int | None = None
 
     @field_validator("filled_qty", "fee")
@@ -748,12 +790,35 @@ class OrderState(_Snapshot):
             raise ValueError("a filled quantity and a fee are never negative")
         return value
 
+    @field_validator("qty")
+    @classmethod
+    def _qty_is_positive(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("an order quantity must be greater than zero")
+        return value
+
+    @field_validator("limit_price")
+    @classmethod
+    def _limit_price_is_positive(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value <= 0:
+            raise ValueError("a limit price must be greater than zero")
+        return value
+
     @field_validator("avg_fill_price")
     @classmethod
     def _price_is_positive(cls, value: Decimal | None) -> Decimal | None:
         if value is not None and value <= 0:
             raise ValueError("an average fill price must be greater than zero")
         return value
+
+    @model_validator(mode="after")
+    def _fill_never_exceeds_the_order(self) -> OrderState:
+        if self.filled_qty > self.qty:
+            raise ValueError(
+                f"filled_qty {money_text(self.filled_qty)} exceeds qty "
+                f"{money_text(self.qty)}; an order cannot fill more than it asked for"
+            )
+        return self
 
     @model_validator(mode="after")
     def _fill_fields_agree(self) -> OrderState:
@@ -783,16 +848,37 @@ class OrderState(_Snapshot):
             raise ValueError(f"status is {self.status}, which is not over, so nothing closed")
         return self
 
+    @model_validator(mode="after")
+    def _it_did_not_close_before_it_opened(self) -> OrderState:
+        """Only checkable when the exchange supplied both, which is the common case.
+
+        Equality is allowed: a marketable order placed and finished inside one
+        microsecond carries one stamp twice, and in paper the same injected clock
+        reading produces exactly that. The refusal is for the strictly impossible
+        ordering, which is a clock or a mapping defect and would put a negative
+        lifetime into anything that measures how long an entry rested.
+        """
+        opened, closed = self.opened_at, self.closed_at
+        if opened is not None and closed is not None and closed < opened:
+            raise ValueError(
+                f"closed_at {closed} is before opened_at {opened}; "
+                "an order cannot close before it opened"
+            )
+        return self
+
     def state_dict(self) -> dict[str, Any]:
         return {
             "userref": self.userref,
             "order_id": self.order_id,
             "status": str(self.status),
+            "qty": money_text(self.qty),
+            "limit_price": None if self.limit_price is None else money_text(self.limit_price),
             "filled_qty": money_text(self.filled_qty),
             "avg_fill_price": (
                 None if self.avg_fill_price is None else money_text(self.avg_fill_price)
             ),
             "fee": money_text(self.fee),
+            "opened_at": self.opened_at,
             "closed_at": self.closed_at,
         }
 

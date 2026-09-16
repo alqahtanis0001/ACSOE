@@ -33,7 +33,9 @@ from typing import Any
 import pytest
 import yaml
 
+from acsoe.engines.market_data_recorder.contracts import BOOK_DEPTH
 from acsoe.platform.config import (
+    MAX_BOOK_DEPTH,
     Config,
     ConfigError,
     ConfigKeyError,
@@ -911,6 +913,10 @@ LANDED_SECTIONS: tuple[str, ...] = (
     "regime",
     "scout",
     "training",
+    # Phase 6. Landed 2026-09-16, the same hour the lead pasted it — the window in
+    # which the committed config would otherwise have failed to parse is the whole
+    # of the time this name was absent from here.
+    "order_book",
 )
 
 #: The three keys the operator supplies after the walk-forward reports, and the
@@ -974,10 +980,38 @@ def test_removing_a_phase_5_section_is_refused_at_startup(
     operator reading one refusal and an agent reading a `ConfigKeyError` traceback
     out of a blocked gate.
     """
-    raw = with_phase_5()
+    # `with_phase_6` rather than `with_phase_5`, and the assertion is on the whole
+    # list of missing sections rather than on a `match=` pattern. **Both are
+    # defensive and neither is load-bearing today** — measured, not assumed:
+    # swapping `with_phase_6()` back to `with_phase_5()` and weakening the assertion
+    # to a bare count both leave all 176 tests green.
+    #
+    # The reason is worth knowing, because the obvious story is wrong. It is not that
+    # the Phase 5 overlay carries `order_book`; it does not. It is that
+    # `complete_config_dict()` starts from the **shipped** `config/default.yaml`, so
+    # every section the lead has pasted is already in the base and the overlays only
+    # pin values on top of it. Which means these cases would still be correct with
+    # `with_phase_5()`, for a reason that has nothing to do with Phase 5.
+    #
+    # They are kept because the failure they guard is real and silent when it does
+    # occur: if the base ever stops carrying a required section, every case here
+    # would refuse for *that* section as well, and a `match=` on a substring cannot
+    # tell. Note that `match=rf"{section}: Field required"` does **not** help —
+    # pydantic reports every missing field, so the deleted section's line is in the
+    # message whether or not another one sits beside it, and `re.search` finds it.
+    # Comparing the whole list is the only form that can say what else went wrong.
+    raw = with_phase_6()
     del raw[section]
-    with pytest.raises(ConfigError, match="Field required"):
+    with pytest.raises(ConfigError) as refusal:
         Config.load(write_config(tmp_path, raw))
+
+    missing = re.findall(r"- (\w+): Field required", str(refusal.value))
+    assert missing == [section], (
+        f"deleting {section} should refuse naming {section} and nothing else; the "
+        f"refusal named {missing}. More than one name means the base config this "
+        f"test builds on is itself incomplete, so the case is not testing what it "
+        f"says it tests."
+    )
 
 
 def test_the_training_hyperparameters_parse_and_bound_their_values(
@@ -1232,6 +1266,9 @@ BAD_VALUES: tuple[tuple[str, str, Any, str], ...] = (
     ("training", "num_leaves", 0, "Input should be greater than 1"),
     ("training", "min_data_in_leaf", 0, "Input should be greater than 0"),
 )
+#: Phase 6's sections keep their own table at the bottom of the file
+#: (`BAD_ORDER_BOOK_VALUES`), because a row here is loaded through `load_phase_5` and
+#: a section Phase 5 does not carry has nothing to write the bad value into.
 
 
 @pytest.mark.parametrize(("section", "leaf", "value", "constraint"), BAD_VALUES)
@@ -1326,3 +1363,182 @@ def test_a_macro_asset_missing_its_archive_spelling_is_refused(tmp_path: Path) -
 
     with pytest.raises(ConfigError, match="Field required"):
         load_phase_5(tmp_path, mutate)
+
+
+# --- Phase 6: the `order_book` section ----------------------------------------
+#
+# Spec 80 owed this section and never landed it; spec 96 step 2 reads
+# `order_book.depth`. Same two-halves landing as the nine sections above, and it ran
+# in about an hour on 2026-09-16: the model field landed optional, the lead pasted
+# the YAML, and the field was tightened to required in the change that also added
+# `order_book` to `LANDED_SECTIONS`. Both halves are in. Every test here still builds
+# its own config, so a change to the shipped file cannot quietly alter what they
+# assert; only `test_the_order_book_landing_is_closed_and_the_section_is_required`
+# reads it.
+#
+# `depth: 10` is the lead's approved value, 2026-09-16, and the reason is the ceiling
+# rather than a preference — see `test_the_book_depth_ceiling_agrees_with_the_feed`.
+
+#: The Phase 6 sections, matching what the lead pasted.
+PHASE_6_SECTIONS: dict[str, Any] = {
+    "order_book": {"depth": 10},
+}
+
+
+def with_phase_6(raw: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A complete config carrying the Phase 5 sections and the Phase 6 ones."""
+    base = with_phase_5(raw)
+    for section, values in PHASE_6_SECTIONS.items():
+        base[section] = copy.deepcopy(values)
+    return base
+
+
+def load_phase_6(tmp_path: Path, mutate: Any = None) -> Config:
+    raw = with_phase_6()
+    if mutate is not None:
+        mutate(raw)
+    return Config.load(write_config(tmp_path, raw))
+
+
+#: Every `order_book` value that is a mistake rather than a choice, **one row per
+#: bound**, and the table is written before the interesting tests below it.
+#:
+#: That order is the lesson `training` taught one phase ago and it is worth repeating
+#: at the top of every new section: `training` shipped with a parse test and one good
+#: story test and no bounds rows at all, so loosening `learning_rate` from `(0, 1)` to
+#: `[0, 1]` broke nothing and the mutation survived. A field with no row here is a
+#: field whose constraint is a claim.
+#:
+#: Matched on the CONSTRAINT message and never on the key name, for the reason the
+#: Phase 5 table states: under `extra="forbid"` a refusal always names the key, so
+#: `match="depth"` would pass just as happily against a model with no such field.
+BAD_ORDER_BOOK_VALUES: tuple[tuple[str, Any, str], ...] = (
+    ("depth", 0, "Input should be greater than 0"),
+    ("depth", -1, "Input should be greater than 0"),
+    ("depth", MAX_BOOK_DEPTH + 1, "Input should be less than or equal to 10"),
+    ("depth", 500, "Input should be less than or equal to 10"),
+    ("depth", "ten", "Input should be a valid integer"),
+)
+
+
+@pytest.mark.parametrize(("leaf", "value", "constraint"), BAD_ORDER_BOOK_VALUES)
+def test_a_bad_order_book_value_is_refused_by_its_constraint(
+    tmp_path: Path, leaf: str, value: Any, constraint: str
+) -> None:
+    def mutate(raw: dict[str, Any]) -> None:
+        raw["order_book"][leaf] = value
+
+    with pytest.raises(ConfigError, match=constraint):
+        load_phase_6(tmp_path, mutate)
+
+
+def test_the_order_book_section_parses_and_engine_9_can_read_its_depth(
+    tmp_path: Path,
+) -> None:
+    """The good story, and it asserts through `get` as well as through the field.
+
+    Engine 9 reads `config.get("order_book.depth")`, not `config.order_book.depth`,
+    so an attribute that parses and a key that does not resolve would be a section
+    that looks landed from here and raises from inside the engine.
+    """
+    config = load_phase_6(tmp_path)
+    assert config.order_book is not None
+    assert config.order_book.depth == 10
+    assert config.get("order_book.depth") == 10
+
+
+# The landing window had its own test here — an absent `order_book` is a **section**
+# and not a leaf, so `Config.get("order_book.depth")` raised rather than answering
+# `None`, and a reader therefore failed closed rather than reading a depth of zero.
+# It is **deleted rather than kept**, because the window closed on 2026-09-16 and the
+# state it asserted can no longer be constructed: the field is required, so a config
+# without the section does not load at all. What replaced it is stronger and is
+# `test_removing_a_phase_5_section_is_refused_at_startup[order_book]` — the process
+# does not start, and the refusal names the section. A test whose premise cannot occur
+# is a claim nobody is checking, which is the same reason the Phase 5 landing test
+# lost its branch.
+
+
+def test_the_book_depth_ceiling_agrees_with_the_feed(tmp_path: Path) -> None:
+    """`MAX_BOOK_DEPTH` is a copy of `BOOK_DEPTH`, and this is what pays for the copy.
+
+    `platform/` sits under `engines/` in the layering, so `config.py` writes the
+    integer out rather than importing upwards. A test may import both, and this one
+    fails the moment they disagree — which is the only way the duplicate stays
+    honest. If the recorder ever subscribes deeper, the ceiling moves with it here
+    and not by somebody noticing.
+    """
+    assert MAX_BOOK_DEPTH == BOOK_DEPTH, (
+        "order_book.depth is bounded by how many levels a side the stream is "
+        "subscribed at. The two numbers have diverged, so the config now permits a "
+        "depth the feed never delivers (or forbids one it does)."
+    )
+    # And the bound is live at that value, not merely equal to it.
+    assert load_phase_6(tmp_path, _set_depth(BOOK_DEPTH)).get("order_book.depth") == BOOK_DEPTH
+    with pytest.raises(ConfigError, match="less than or equal to"):
+        load_phase_6(tmp_path, _set_depth(BOOK_DEPTH + 1))
+
+
+def _set_depth(value: Any) -> Any:
+    def mutate(raw: dict[str, Any]) -> None:
+        raw["order_book"]["depth"] = value
+
+    return mutate
+
+
+def test_an_order_book_section_without_a_depth_is_refused(tmp_path: Path) -> None:
+    """`depth` has no default, and this is what says so.
+
+    A default would be a depth nobody chose, arrived at by deleting a line — and
+    unlike a missing *section*, which raises at the reader, a missing *key* under a
+    section that parses is invisible everywhere. The section exists, engine 9 starts,
+    and it walks however deep the default happens to be.
+    """
+
+    def mutate(raw: dict[str, Any]) -> None:
+        del raw["order_book"]["depth"]
+
+    with pytest.raises(ConfigError, match="Field required"):
+        load_phase_6(tmp_path, mutate)
+
+
+def test_the_order_book_section_refuses_an_unknown_key(tmp_path: Path) -> None:
+    """`extra="forbid"`, like every other section. A typo'd `dept: 25` that was
+    silently dropped would leave engine 9 walking a depth nobody chose."""
+
+    def mutate(raw: dict[str, Any]) -> None:
+        raw["order_book"]["dept"] = 25
+
+    with pytest.raises(ConfigError, match="Extra inputs are not permitted"):
+        load_phase_6(tmp_path, mutate)
+
+
+def test_the_order_book_landing_is_closed_and_the_section_is_required() -> None:
+    """Both halves are in, so this asserts the closed state and not two worlds.
+
+    It branched on whether `order_book:` was in the shipped file for the hour the
+    landing was in flight — the field first, the lead's YAML after. The paste
+    happened on 2026-09-16 and the field was tightened the same hour, so the branch
+    is gone: **a dead branch in a test is a claim nobody is checking**, the same
+    lesson `test_the_phase_5_landing_is_closed_and_every_section_is_required`
+    records for the nine sections before it.
+
+    The branch did its job on the way past. The paste landed while A was in another
+    file and this test is what went red to say so — which is the whole point of
+    writing the tripwire before the paste rather than remembering to check after it.
+    """
+    shipped = yaml.safe_load(DEFAULT_YAML.read_text(encoding="utf-8"))
+    assert "order_book" in shipped, (
+        "order_book has been removed from config/default.yaml while the model field "
+        "is required, so the shipped config no longer parses."
+    )
+    assert Config.model_fields["order_book"].is_required(), (
+        "order_book is optional again. Optional is only for the window between the "
+        "two halves; at rest the section must be required, so that deleting it "
+        "refuses at startup instead of raising from inside engine 9 three chains "
+        "into a tick."
+    )
+    assert "order_book" in LANDED_SECTIONS, (
+        "order_book has landed but is not in LANDED_SECTIONS, so nothing asserts "
+        "that deleting the section is refused at startup."
+    )

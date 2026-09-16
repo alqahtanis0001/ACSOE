@@ -767,6 +767,44 @@ class TrainingConfig(_Section):
     """Minimum rows behind a leaf. The main guard against fitting noise in a thin pair."""
 
 
+#: The deepest book engine 9 may be configured to walk, and it is **not** a Kraken
+#: limit — it is what this system's own feed delivers.
+#:
+#: ``engines/market_data_recorder/contracts.py`` subscribes the stream at
+#: ``BOOK_DEPTH`` levels a side, and that number is itself pinned to
+#: ``scripts/record.py``'s ``DEFAULT_DEPTH`` so the daemon's archive and the
+#: standalone recorder's cannot diverge. Every recorded book frame therefore carries
+#: at most that many levels, including the committed ``tests/fixtures/book_sample.jsonl``
+#: that engine 9 is validated on. A larger ``order_book.depth`` would configure the
+#: engine to walk deeper than any evidence can reach — making a thin-book refusal one
+#: the fixture could never exercise, so the gate would look configured and be untested.
+#:
+#: **Written out rather than imported.** ``platform/`` is under ``engines/`` in the
+#: layering and importing upwards would invert it, so the cost is a duplicated integer
+#: and it is paid back by ``test_the_book_depth_ceiling_agrees_with_what_the_stream_
+#: subscribes``, which imports both and fails if they ever disagree.
+MAX_BOOK_DEPTH: Final = 10
+
+
+class OrderBookConfig(_Section):
+    """Engine 9's view of the book. Spec 80's debt, needed by spec 96.
+
+    One key. ``depth`` is how many levels a side engine 9 walks, and both bounds are
+    the difference between a value and a mistake rather than opinions:
+
+    * ``> 0`` because a book walked zero levels deep has no best price at all, and
+      the engine would report a spread of nothing rather than refusing. Absent is
+      never zero, and neither is zero a depth.
+    * ``<= MAX_BOOK_DEPTH`` because the stream is subscribed at that many levels, so
+      a deeper configuration asks the engine for levels that never arrive. The
+      failure is silent in the direction that matters: the walk simply ends early,
+      the book reads as thin, and nothing says the configuration was the cause.
+    """
+
+    depth: int = Field(gt=0, le=MAX_BOOK_DEPTH)
+    """Levels a side engine 9 walks. Approved by the lead at 10, 2026-09-16."""
+
+
 class SeedsConfig(_Section):
     # `global` is a Python keyword, so the field is aliased. `populate_by_name`
     # lets code refer to it as `global_` while the YAML keeps the readable name.
@@ -828,6 +866,13 @@ class Config(BaseModel):
     # minutes, which is the whole of the window in which the committed config would
     # otherwise have failed to parse.
     training: TrainingConfig
+
+    # ---- Phase 6, spec 80's debt, needed by spec 96. -----------------------
+    # Optional for about an hour on 2026-09-16 while the lead's YAML was in flight,
+    # and **required since it landed**, for the same reason as every section above:
+    # a section deleted from the file now refuses at startup, by name, instead of
+    # surfacing as a `ConfigKeyError` from inside engine 9 three chains into a tick.
+    order_book: OrderBookConfig
 
     @model_validator(mode="after")
     def _lookback_fits_in_what_engine_3_publishes(self) -> Self:

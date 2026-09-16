@@ -237,10 +237,36 @@ a paper run exercise the live code path rather than a parallel one.
 
 **The models are strict about coupling, not about values.** A limit order with no
 price, a market order carrying one, `post_only` on a market order, a fill with no
-average price, a fee on an order that filled nothing, a resting order with a close
-time: each is refused at construction. Nothing here knows a fee, a minimum, a tick
-size or a precision — sizes and prices arrive already rounded by the caller using
-the pair's own `lot_decimals` and `pair_decimals`.
+average price, a fill larger than the order, a fee on an order that filled nothing,
+a resting order with a close time: each is refused at construction. Nothing here
+knows a fee, a minimum, a tick size or a precision — sizes and prices arrive
+already rounded by the caller using the pair's own `lot_decimals` and
+`pair_decimals`.
+
+**`OrderState` carries `qty` and `limit_price`** — the amendment to spec 84 of
+2026-09-16. Without them an order resting at the exchange that the store had never
+recorded, because the process died between the placement and engine 19, could be
+*detected* by engine 18 and not *described*: no row could be written, so nothing
+would ever cancel it, and an order that cannot be cancelled is an unmanaged
+exposure — the failure invariant 8 exists to prevent. `qty` is required, because an
+optional one could not tell "no quantity was recorded" from "no quantity exists".
+`limit_price` follows `OrderRequest`'s coupling — present for a limit order, absent
+for a market one — and there is deliberately **no `order_type` beside it**: its
+presence *is* the statement, and a second copy of a fact is one more thing that can
+disagree. Kraken returns both in `descr` on `OpenOrders` and `QueryOrders`. The one
+weakening that leaves — nothing refuses a limit order whose price went missing — is
+closed by the lead's ruling of 2026-09-16 **at the consumer that knows the answer**:
+engine 18 asked for a post-only buy limit, so a state with no `limit_price` is the
+exchange contradicting the placement, and engine 18 refuses to record it.
+
+**`opened_at` completes it.** Optional microseconds since the epoch, from Kraken's
+`opentm`, and **absent means the exchange did not say** — not now, and not zero. It
+is coupled to nothing (a resting order has an open time and no close time), except
+that an order may not close before it opened when both are known; equality is allowed
+because in paper one injected clock reading stamps both. With `qty`, `limit_price` and
+`opened_at` in, every value engine 18 could not fill from what it structurally knows
+is now available, and the unrecorded-order gap narrows to the single case the exchange
+itself cannot answer.
 
 `userref` is the key everywhere, not `order_id`. Invariant 8 makes it the system's
 idempotency token: the system chooses it *before* the order exists, so it is the

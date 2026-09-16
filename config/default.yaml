@@ -130,6 +130,28 @@ paper:
   starting_balances: {USD: "5000.00"}   # Operator-chosen 2026-09-08. Currency-to-amount
                                  # map; amounts are quoted strings, parsed as Decimal.
 
+order_book:                      # Engine 9 `order_book`. Requested by C, spec 96.
+  depth: 10                      # Levels a side engine 9 walks when it estimates the
+                                 # slippage a taker exit would pay. Chosen by the lead
+                                 # 2026-09-16 at C's request, and it is NOT an arbitrary
+                                 # ten: `scripts/record.py` subscribes the book at that
+                                 # depth, so every frame in `data/raw/` carries at most
+                                 # ten levels a side, and the committed fixture engine 9
+                                 # is validated against inherits that limit.
+                                 #
+                                 # A deeper value would configure the engine to walk past
+                                 # anything the evidence can hold, and the failure is
+                                 # silent in the direction that matters: the walk ends
+                                 # early, the book reads as thin, `book_too_thin` fires,
+                                 # and nothing says the configuration was the cause. It
+                                 # would also make that refusal one the fixture can never
+                                 # exercise honestly.
+                                 #
+                                 # PROVISIONAL, and tied to the recorder: whoever changes
+                                 # `record.py`'s subscription depth changes this, and
+                                 # `platform/config.py` bounds it at MAX_BOOK_DEPTH so the
+                                 # two cannot silently diverge.
+
 kraken:                          # Client tuning. Requested by A, spec 25.
                                  # NOTHING here is a value the exchange can tell us: no fee,
                                  # no order minimum, no tick size, no precision. What is here

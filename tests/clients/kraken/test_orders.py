@@ -333,6 +333,8 @@ def test_the_userref_bound_is_inclusive_at_both_edges(value: int) -> None:
             {
                 "order_id": "O-1",
                 "status": OrderStatus.RESTING,
+                "qty": Decimal("0.01"),
+                "limit_price": Decimal("50000.00"),
                 "filled_qty": Decimal("0"),
                 "fee": Decimal("0"),
             },
@@ -484,7 +486,7 @@ def test_the_ack_statuses_compare_equal_to_the_order_statuses_they_share() -> No
 
 
 # --------------------------------------------------------------------------- #
-# OrderState — the four couplings
+# OrderState — the six couplings
 # --------------------------------------------------------------------------- #
 
 
@@ -493,6 +495,8 @@ def a_state(**overrides: Any) -> OrderState:
         "userref": 4242,
         "order_id": "OQCLML-BW3P3-BUCMWZ",
         "status": OrderStatus.RESTING,
+        "qty": Decimal("0.01"),
+        "limit_price": Decimal("50000.00"),
         "filled_qty": Decimal("0"),
         "fee": Decimal("0"),
     }
@@ -609,8 +613,176 @@ def test_the_state_crosses_state_with_money_as_strings() -> None:
         "userref": 4242,
         "order_id": "OQCLML-BW3P3-BUCMWZ",
         "status": "filled",
+        "qty": "0.01",
+        "limit_price": "50000.00",
         "filled_qty": "0.01",
         "avg_fill_price": "49999.90",
         "fee": "1.10",
+        "opened_at": None,
         "closed_at": 1_772_000_000_000_000,
     }
+
+
+# --------------------------------------------------------------------------- #
+# OrderState — qty and limit_price, the spec 84 amendment of 2026-09-16
+# --------------------------------------------------------------------------- #
+#
+# The amendment exists because engine 18 could detect an order resting at the
+# exchange that the store had never recorded and could not describe it, so no row
+# was written and nothing would ever cancel it. The tests below are about the two
+# fields being *there and load-bearing*, not about what a fill does.
+
+
+def test_a_state_without_a_qty_is_refused() -> None:
+    """`qty` is required, and this is the assertion the whole amendment turns on.
+
+    An optional `qty` would recreate the ambiguity the amendment removes: a
+    consumer could not tell "no quantity was recorded" from "no quantity exists".
+    Matched on pydantic's own missing-field text rather than on the field name,
+    because in a model with `extra="forbid"` the field name appears in the refusal
+    whether the field is missing or the field was deleted from the model.
+    """
+    fields = {
+        "userref": 4242,
+        "order_id": "OQCLML-BW3P3-BUCMWZ",
+        "status": OrderStatus.RESTING,
+        "limit_price": Decimal("50000.00"),
+        "filled_qty": Decimal("0"),
+        "fee": Decimal("0"),
+    }
+    with pytest.raises(ValidationError, match="Field required"):
+        OrderState(**fields)  # type: ignore[arg-type]
+
+
+def test_an_order_carries_the_quantity_and_price_it_was_placed_at() -> None:
+    """The positive half: the two fields survive construction and read back exact.
+
+    This is what engine 18 needs to build a row for an order it found at the
+    exchange and the store has never heard of — without it the order is detectable
+    and not describable, which is an exposure nothing can cancel.
+    """
+    state = a_state(qty=Decimal("0.01000"), limit_price=Decimal("49999.90"))
+    assert state.limit_price == Decimal("49999.90")
+    # On the rendered form, not on the `Decimal`: `Decimal("0.01000") ==
+    # Decimal("0.01")` is True, so an equality check cannot see a quantum being
+    # normalised away, and the quantum is what says how finely the pair trades.
+    assert state.state_dict()["qty"] == "0.01000"
+
+
+@pytest.mark.parametrize("qty", [Decimal("0"), Decimal("-0.01")], ids=["zero", "negative"])
+def test_a_non_positive_order_quantity_is_refused(qty: Decimal) -> None:
+    with pytest.raises(ValidationError, match="order quantity must be greater than zero"):
+        a_state(qty=qty)
+
+
+@pytest.mark.parametrize("price", [Decimal("0"), Decimal("-1")], ids=["zero", "negative"])
+def test_a_non_positive_limit_price_on_a_state_is_refused(price: Decimal) -> None:
+    with pytest.raises(ValidationError, match="limit price must be greater than zero"):
+        a_state(limit_price=price)
+
+
+def test_a_float_qty_is_refused_rather_than_coerced() -> None:
+    with pytest.raises(ValidationError, match="has already lost precision"):
+        a_state(qty=0.01)
+
+
+def test_a_market_order_state_has_no_limit_price() -> None:
+    """The shape invariant 14's taker liquidation comes back as.
+
+    `limit_price` is absent for a market order, exactly as on `OrderRequest`. There
+    is no `order_type` beside it: presence *is* the statement, and a second copy of
+    it is one more thing that can disagree.
+    """
+    state = a_state(limit_price=None)
+    assert state.limit_price is None
+    assert state.qty == Decimal("0.01")
+
+
+def test_a_fill_larger_than_the_order_is_refused() -> None:
+    """Only checkable now that `qty` is here, and worth checking: a state saying
+    more filled than was asked for would put a position the exchange never opened
+    into the ledger."""
+    with pytest.raises(ValidationError, match="exceeds qty"):
+        a_state(
+            status=OrderStatus.FILLED,
+            qty=Decimal("0.01"),
+            filled_qty=Decimal("0.02"),
+            avg_fill_price=Decimal("50000.00"),
+            fee=Decimal("1.10"),
+            closed_at=1_772_000_000_000_000,
+        )
+
+
+def test_a_fill_exactly_equal_to_the_order_is_allowed() -> None:
+    """The other half, and the boundary. A completely filled order is the ordinary
+    case, so a bound written `>=` instead of `>` would forbid every full fill."""
+    state = a_state(
+        status=OrderStatus.FILLED,
+        qty=Decimal("0.01"),
+        filled_qty=Decimal("0.01"),
+        avg_fill_price=Decimal("49999.90"),
+        fee=Decimal("1.10"),
+        closed_at=1_772_000_000_000_000,
+    )
+    assert state.filled_qty == state.qty
+
+
+def test_a_market_order_state_crosses_state_with_a_null_limit_price() -> None:
+    assert a_state(limit_price=None).state_dict()["limit_price"] is None
+
+
+# --------------------------------------------------------------------------- #
+# OrderState — opened_at, the lead's ruling of 2026-09-16
+# --------------------------------------------------------------------------- #
+#
+# The last field the unrecorded-order row needed. With `qty` and `limit_price` in,
+# `placed_at` was the only value engine 18 could not fill from what it structurally
+# knows. Kraken's `OpenOrders` returns `opentm`, so a live client has it.
+
+
+def test_an_order_carries_when_it_opened() -> None:
+    state = a_state(opened_at=1_771_999_000_000_000)
+    assert state.opened_at == 1_771_999_000_000_000
+    assert state.state_dict()["opened_at"] == 1_771_999_000_000_000
+
+
+def test_an_order_whose_open_time_the_exchange_did_not_report_is_still_valid() -> None:
+    """Absent means the exchange did not say — not now, and not zero.
+
+    Unlike `qty`, this one **is** optional, and the two are not inconsistent: every
+    order has a quantity that something knows, while a placement time is a thing
+    only the exchange can report and it does not always. A required field here
+    would force a consumer to invent one, which is the fabrication the whole
+    amendment exists to stop. Engine 18 keeps its existing fail-closed answer for
+    this case: no row, and the `userref` published so an operator can look.
+    """
+    state = a_state()
+    assert state.opened_at is None
+    assert state.state_dict()["opened_at"] is None
+
+
+def test_an_order_that_closed_before_it_opened_is_refused() -> None:
+    with pytest.raises(ValidationError, match="cannot close before it opened"):
+        a_state(
+            status=OrderStatus.CANCELLED,
+            opened_at=1_772_000_000_000_000,
+            closed_at=1_771_999_999_999_999,
+        )
+
+
+def test_an_order_that_opened_and_closed_in_the_same_microsecond_is_allowed() -> None:
+    """The boundary, and it is a real shape rather than a pedantic one: in paper the
+    same injected clock reading stamps both, so a bound written `<=` instead of `<`
+    would refuse every simulated marketable order."""
+    stamp = 1_772_000_000_000_000
+    state = a_state(status=OrderStatus.CANCELLED, opened_at=stamp, closed_at=stamp)
+    assert state.opened_at == state.closed_at
+
+
+def test_a_resting_order_may_know_when_it_opened() -> None:
+    """`opened_at` is coupled to nothing. It is not the mirror of `closed_at`: a
+    resting order has an open time and no close time, which is the ordinary state
+    of the entry engine 21 is watching."""
+    state = a_state(opened_at=1_771_999_000_000_000)
+    assert state.status is OrderStatus.RESTING
+    assert state.closed_at is None
