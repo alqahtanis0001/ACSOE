@@ -1,5 +1,22 @@
 # Phase 6 — shared task list
 
+## HANDOFF 4, 2026-09-16 — spec 87 is done and found two defects; three specs added
+
+**Read this first; HANDOFF 3 below still holds except where this says otherwise.** A's spec 87
+rehearsal is committed. It found two defects between engines, both ruled by the operator — see
+"DEFECTS FOUND BY REHEARSAL" in `context/progress-tracker.md`. Three new specs:
+
+| Spec | Owner | What | Order |
+|---|---|---|---|
+| 103 | B | The paper broker's balance counts every fill it has executed, recorded or not | after B's spec 94 |
+| 104 | C | Engine 19 records an errored opportunity-chain engine as `engine_errored`; prose in the same change | after 103, not concurrently with B's sweeps |
+| 105 | C | Criterion `paper_equity_continuous_across_fill`, proven red by breaking the broker | after 103 has landed |
+
+Plus A's one-line follow-up: remove the strict `xfail` in `test_trade_chain_rehearsal.py` once
+103 lands. The lead has already landed `state["block_status"]` in `core/` (spec 104 step 1).
+**Registration (82) is still held.** The sequence is: B's 94 → B's 103 → A's xfail →
+C's 104 → C's 105 → the lead reports to the operator → 82.
+
 ## HANDOFF 3, 2026-09-16 07:40Z — all six engines are committed; the order from here is forced
 
 **Read this first. HANDOFF 2 and HANDOFF 1 below are history.** Every ruling and finding of the

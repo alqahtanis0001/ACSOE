@@ -322,3 +322,38 @@ test is that nobody widens the gate list silently, including me.
 
 **So the baseline's verdict, stated honestly: one broken module, one document change awaiting its
 test, one deliberate tripwire. No defect in any of the work the four sessions completed.**
+
+### The two rehearsal findings ruled, and `state["block_status"]` landed in `core/`
+
+**Agent:** Lead · **Task:** spec 87 review, specs 103–105 · **Date:** 2026-09-16
+
+**What happened.** A's spec 87 rehearsal found two defects between engines (A's build log has
+the diagnoses). I confirmed finding 1 against the code before reporting it:
+`PaperBroker.balance()` adjusts by recorded fills only, and engine 21's `_mark` counts this
+tick's fills in the portfolio value by design. The operator ruled on both — the paper-ledger
+amendment (invariant 2) and the errored-engine record (invariant 12, contract rule 7).
+
+**Why `core/` had to change for finding 2.** The opportunity chain put only the blocker's name
+and reason into `state`, never its status. Engine 19 could therefore tell an engine that raised
+from one that refused only by the empty payload — and an empty payload is also what a refusal
+missing its `reason_code` looks like, the conflation `code-standards.md` warns about. A fix in
+engine 19 alone would have had to guess.
+
+**Fix.** `state["block_status"]` beside `block_reason` in both chains, absent when unblocked. Two
+tests added. Three mutations, each killed by exactly one test (`tests/core`, 60 tests):
+L1 opportunity status dropped → `test_an_opportunity_engine_that_raised_is_distinguishable_from_one_that_blocked`;
+L2 guard status dropped → `test_a_raising_engine_becomes_error_and_blocks_without_killing_the_tick`;
+L3 opportunity status hardcoded `BLOCK` → the first again. Restored file sha256
+`52abd51c32e02b21734e1d925a652cd0ee5c22c643b0bd8b6500b0be37936731`.
+
+**My own wrong turn, recorded.** The first sweep script wrote mutant L1 to disk and then raised
+before running anything — `subprocess` could not find `.venv/Scripts/python.exe` by relative path —
+and its restore sat after the call rather than in a `finally`. The mutant stayed on disk. I found
+it by grepping for the line, restored it by a single-anchor patch, and re-ran with
+`sys.executable` and a per-arm `try/finally` restore checked by hash. Nobody else was in the tree.
+It is the "restore before the next mutation" rule from the other side: **a restore that is not in
+a `finally` is a restore that only runs when nothing went wrong.**
+
+**Also.** `core/orchestrator.py`, `tests/core/test_orchestrator.py` and
+`context/architecture-context.md` were CRLF on every line in the working tree against LF blobs;
+all three were written back as LF.

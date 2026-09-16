@@ -62,6 +62,8 @@ project's floor.
 5. An engine never calls `datetime.now()` or `time.time()`. Use `context.now`.
 6. To block, return `EngineResult(status=BLOCK, blocks_trading=True, reason="...")`. A reason is mandatory and must be specific enough to analyse later.
 7. Any uncaught exception is converted by the orchestrator into `ERROR` with `blocks_trading=True`. Engines should not swallow their own exceptions to avoid this.
+
+   **An engine returning `ERROR` is not required to supply a `reason_code`, and engine 19 must record the tick regardless.** Operator ruling 2026-09-16. A `reason_code` is a decision an engine made; an `ERROR` is the absence of one — the orchestrator's conversion leaves `data == {}` — so no reader may demand a code from it. Engine 19 records an errored engine as a `block_records` row (`status = 'ERROR'`, `block_reason = 'engine_errored'`) and never as a rejection. Invariant 12 holds the rule and its reasoning. As first written this file was satisfiable by code that broke invariant 12 — engine 19 raising on the missing code lost the whole tick — which made the contract wrong rather than the code.
 8. `data` must be JSON-serialisable. No numpy arrays, no dataframes, no model objects.
 
    **Money crosses `state` as an exact decimal string, never as a `float`.** The validator in `core/contracts.py` refuses a `Decimal` — loudly, which is fine — and **accepts a `float`**, which is the dangerous half. An engine that hits the refusal and reflexively casts to `float` publishes `0.0022` where it meant `Decimal("0.0022")`, loses precision on the way through, and arrives in a hurdle comparison wrong in the fourth decimal. That is the magnitude engine 10 `cost` operates at: reference friction is ~1.25% round trip at tier 1 and ~0.65% at tier 3, and a net edge is the small difference between two larger numbers.
@@ -110,6 +112,7 @@ for engine in GUARD_CHAIN:                     # exactly: 1, 2, 3, 4, 17
         if "trading_blocked_by" not in state:        # the first one is primary
             state["trading_blocked_by"] = engine.name
             state["block_reason"] = result.reason
+            state["block_status"] = result.status
         # the chain still finishes; only the opportunity chain is skipped
 
 # 2. OPPORTUNITY — only if running and nothing blocked. May stop early.
@@ -120,6 +123,7 @@ if state["system"]["mode"] == "running" and "trading_blocked_by" not in state:
         if result.blocks_trading:
             state["trading_blocked_by"] = engine.name
             state["block_reason"] = result.reason
+            state["block_status"] = result.status    # BLOCK or ERROR; see rule 7
             break
         if result.status is PASS:
             break                              # no candidate this cycle
@@ -251,7 +255,7 @@ Each engine's `data` payload is typed in its own `contracts.py`. Orchestrator-le
 
 - `state["system"]` — the only persistent region. `mode` and `close_intent`. **Written only by the orchestrator**, in exactly two places: the command reader sets `mode` and `close_intent` at step 0, and step 4 clears `close_intent` once the manage chain reports the close finished. No engine writes it; any engine may read it.
 - `state["cycle_id"]` — an integer, fresh per tick, minted by the orchestrator, restarting at 1 each run. It joins logs, decisions and SHAP rows **together with `context.run_id`**: on its own it is ambiguous across runs.
-- `state["trading_blocked_by"]`, `state["block_reason"]` — the **primary** blocker: the first engine to block this tick, and what gates the opportunity chain. Fresh per tick.
+- `state["trading_blocked_by"]`, `state["block_reason"]`, `state["block_status"]` — the **primary** blocker: the first engine to block this tick, and what gates the opportunity chain. Fresh per tick, and all three absent on an unblocked tick. `block_status` is `BLOCK` or `ERROR`, added 2026-09-16 so engine 19 can tell an opportunity-chain engine that raised from one that refused without inferring it from an empty payload — which is also what a refusal missing its code looks like (rule 7, invariant 12).
 - `state["guard_blockers"]` — every guard engine that blocked this tick, in chain order, each with its reason and status. The guard chain never breaks early, so there can be more than one. Engine 19 writes one `block_records` row per entry, `is_primary` on the first. An empty list on an unblocked tick, never absent.
 
 `run_id` is `context.run_id`, nowhere else.

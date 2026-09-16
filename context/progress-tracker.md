@@ -66,6 +66,43 @@ for an enumeration it cannot perform, spec 96's field list omitting `pair`, and
 an agent building against the code rather than the spec, and the general rule is now in
 `code-standards.md`: **a description of the code is not the code.**
 
+### DEFECTS FOUND BY REHEARSAL, 2026-09-16 — neither is reachable without running the chain end to end
+
+A's spec 87 rehearsal drove engines 18, 21 and 22 through real orchestrator ticks with **every**
+upstream engine real (models trained in the test), at fee tier 3, against B's paper broker, with
+engine 19 recording. Six scenarios green, four mutations killed by the tests written for them, one
+equivalent control surviving the rehearsal and 855 tests in `tests/engines/` and
+`tests/clients/paper/`. **And two defects that no unit test in any lane could have reached**,
+because each lives between two engines that are individually correct. The operator ruled on both.
+
+**Defect 1 — every paper trade would have frozen the account.** On the tick an entry fills,
+`PaperBroker.balance()` counted only fills the store had recorded, so cash was still unspent,
+while engine 21 — correctly for a live exchange — counted the new position in the portfolio value.
+Engine 19 wrote equity `8332.41` against a true `4996.99`; `peak_equity` kept the inflated figure,
+engine 17 read a 40.03% drawdown the next tick and froze, and every later tick stayed frozen.
+**The cause is the operator's own paper-ledger ruling**, which said what the balance is adjusted
+*by* and not *when*. **Ruled:** the broker's balance includes every fill it has executed, recorded
+or not — the broker is the authority on its own cash. Invariant 2 amended and recorded as the
+operator's. Fix is spec 103 (B). **And a criterion, not just a fix**: equity on the fill tick
+equals equity on the tick before, within the fill's own cost, proven red by breaking the broker —
+spec 105 (C). A's rehearsal pins the defect with a strict `xfail` that turns red when the fix lands.
+
+**Defect 2 — a tick on which an opportunity-chain engine errored was not recorded at all.** Rule 7
+empties the erroring engine's payload; engine 19 refused to write a rejection with no
+`reason_code` and raised — so no rejection, no block record and no equity row. Invariant 12 says
+every tick is recorded, and an erroring engine is the tick you most want. **Ruled:** engine 19
+writes a `block_records` row for the errored engine with `status = 'ERROR'` and the code
+`engine_errored` — never a `reason_code` the engine did not produce, because a reason code is a
+decision and an error is its absence — and `REASON_PROSE` maps the code in the same change.
+**The contract was wrong, not only the code**: it was satisfiable by code that broke invariant 12,
+so rule 7 now says an `ERROR` owes no `reason_code` and engine 19 records the tick regardless.
+The lead landed `state["block_status"]` in `core/` so engine 19 reads the status rather than
+inferring it from an empty payload; the engine change is spec 104 (C). Consequence stated: engine
+17's error rate now counts opportunity-chain errors too.
+
+**Registration (spec 82) stays held**, as it was: the operator asked to see the rehearsal findings
+first, and spec 94 has not run yet.
+
 ### FINDING: a defect mutation testing structurally cannot reach
 
 **The first documented instance in this project, and it is evidence rather than theory.**

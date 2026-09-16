@@ -432,6 +432,36 @@ def test_a_raising_engine_becomes_error_and_blocks_without_killing_the_tick() ->
     assert state["trading_blocked_by"] == "exchange"
     assert state["guard_blockers"][0]["status"] == "ERROR"
     assert "RuntimeError" in state["block_reason"]
+    assert state["block_status"] == "ERROR"
+
+
+def test_an_opportunity_engine_that_raised_is_distinguishable_from_one_that_blocked() -> None:
+    """Invariant 12, operator ruling 2026-09-16.
+
+    Both leave `trading_blocked_by` set and stop the chain, and a raise leaves `data == {}`.
+    Engine 19 must record an ERROR as an ERROR rather than as a rejection with no reason
+    code, so the status has to reach `state` beside the name - for the opportunity chain
+    as well as the guard chain, which already carried it in `guard_blockers`.
+    """
+    for spy, expected in (
+        (_Spy("execution", 18, raises=True), "ERROR"),
+        (_Spy("cost", 10, status=EngineStatus.BLOCK, blocks=True, reason="below_hurdle"), "BLOCK"),
+    ):
+        orchestrator = _orch(Chains(opportunity=(spy,)))
+        orchestrator.system["mode"] = "running"
+        state = orchestrator.tick()
+        assert state["trading_blocked_by"] == spy.name
+        assert state["block_status"] == expected, spy.name
+        assert state["guard_blockers"] == []
+
+
+def test_block_status_is_absent_on_an_unblocked_tick() -> None:
+    """Absent, like `trading_blocked_by`, never a placeholder a reader could mistake."""
+    orchestrator = _orch(Chains(opportunity=(_Spy("feature", 5),)))
+    orchestrator.system["mode"] = "running"
+    state = orchestrator.tick()
+    assert "trading_blocked_by" not in state
+    assert "block_status" not in state
 
 
 # -------------------------------------------------------------------- close_all

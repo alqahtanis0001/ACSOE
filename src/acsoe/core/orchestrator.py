@@ -451,6 +451,7 @@ class Orchestrator:
                 if "trading_blocked_by" not in state:
                     state["trading_blocked_by"] = engine.name
                     state["block_reason"] = result.reason
+                    state["block_status"] = str(result.status)
 
     # ---------------------------------------------------------- step 2: opportunity
 
@@ -467,8 +468,14 @@ class Orchestrator:
             result = self._run(engine, context, state)
             state[engine.name] = result.data
             if result.blocks_trading:
+                # The status travels with the name and the reason. An opportunity-chain
+                # engine that raised has an empty payload (rule 7), and without this key
+                # engine 19 could tell that apart from a BLOCK only by the emptiness -
+                # which is also what a BLOCK with a missing reason_code looks like.
+                # Invariant 12, operator ruling 2026-09-16.
                 state["trading_blocked_by"] = engine.name
                 state["block_reason"] = result.reason
+                state["block_status"] = str(result.status)
                 break
             if result.status is EngineStatus.PASS:
                 break

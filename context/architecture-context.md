@@ -143,7 +143,7 @@ Engine 9 (order book) and the spread component of Engine 10 cannot be backtested
 | Open and closed positions | SQLite, table `positions` | What the console renders and what `safety` counts |
 | Orders, including resting entries | SQLite, table `orders` | Keyed by `userref`; a resting post-only buy lives here |
 | Equity series | SQLite, table `equity_snapshots` | One row per tick. Feeds `safety`'s drawdown and the Phase 7 alpha curve, which needs cash periods too |
-| Block records | SQLite, table `block_records` | One row per guard blocker per **tick**. Not a column on `rejections` — see below |
+| Block records | SQLite, table `block_records` | One row per guard blocker per **tick**, plus one for an opportunity-chain engine that errored (invariant 12). Not a column on `rejections` — see below |
 | Trained models | Files in `models/` | Versioned by training run id, never overwritten |
 | SHAP explanations | Parquet, joined by decision id | One row per decision |
 
@@ -183,6 +183,8 @@ The archive is an observation: it would contain exactly the same bytes if this s
 A rejection is one *candidate* refused, with its reason and its SHAP row. A block record is one *tick* on which trading was blocked, and most blocked ticks never had a candidate at all — `data_guard` blocks before the opportunity chain has run. Folding blocks into `rejections` would mean writing candidate-less rejection rows, inflating the counterfactual dataset that is the point of the whole exercise: anyone counting refused trades would be counting feed outages too.
 
 They join on `cycle_id`. A blocked tick that *did* have a candidate produces one row in each.
+
+**An opportunity-chain engine that errored produces a `block_records` row and no `rejections` row** (operator ruling 2026-09-16, invariant 12): `blocked_by` its name, `status` `ERROR`, `block_reason` `engine_errored`, `is_primary` true since the opportunity chain runs only when no guard blocked. An error refused no candidate — it failed to decide — so it belongs with the evaluations, not in the counterfactual dataset.
 
 Engine 17 `safety` derives its outage count from this table, so the columns are fixed:
 
