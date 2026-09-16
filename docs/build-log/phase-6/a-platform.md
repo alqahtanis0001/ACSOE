@@ -1095,3 +1095,241 @@ property is "*and nothing else*", `match=` cannot express it.
 `pytest tests/platform tests/clients/kraken -q` — 485 passed, 1 skipped (the
 pre-existing Windows byte-range skip). `ruff` clean. `mypy --strict` clean on 147
 source files, B's `broker.py` having landed its `qty` sites in the meantime.
+
+## Spec 87 — the rehearsal of engines 18, 21 and 22
+
+### Decision: the whole opportunity chain is real, and no upstream payload is hand-built
+
+**Agent:** A · **Task:** spec 87 · **Date:** 2026-09-16
+
+**Options.** B's `test_decision.py` and `test_execution.py` run engines 1, 3, 7, 9, 10,
+11, 14 and 16 for real and supply 8 and 15 through their contract models, because they
+need a trained artefact. The alternative is to train one and run every engine.
+
+**Chose.** Every engine, in registry order: guard 1, 2, 3, 4, 17; opportunity 5, 6, 7,
+12, 13, 8, 9, 10, 11, 14, 15, 16, 18; manage 21, 22, 19. The artefacts are trained in the
+test, four folds of C's constructed series (`tests/research/test_training.py`), exactly
+the way `test_feature_chain_rehearsal.py` trains its skeptic fixture. The market is C's
+`ScriptedMarket` (spec 100's harness) wrapped by B's `PaperBroker`, at **fee tier 3**,
+with the committed thresholds — skeptic 0.50, DI and anomaly 0.99.
+
+**Because.** It is possible, which settles it. A probe measured it before any test was
+written: on the window ending 200 bars before the end of the series, engine 8 calls a
+BUY with an expected move of 2.99999999%, engine 10 prices friction at 0.308% against a
+0.462% hurdle, engine 15's `p_wrong` is 9e-6 against 0.50, engine 16 is coherent and
+engine 18 places a post-only limit buy. Training costs about 17 seconds, once per module.
+So there is no compromise on "real upstream" to record.
+
+**Cost.** One module-scoped fit, and a scripted market that has to be kept consistent
+by hand: the stream quote (engine 3, engine 18's limit) and the REST book (engine 9, the
+broker's post-only check and its market-sell walk) are two different reads in this
+design, and the test pins both to one price at every step.
+
+### FINDING, not fixed (B's lane): every paper fill inflates `peak_equity` by the position's notional, and `safety` freezes the account two ticks later
+
+**Agent:** A · **Task:** spec 87 · **Date:** 2026-09-16
+
+**What happened.** Driving a real entry to a real fill through the real chain, engine 19
+wrote an `equity_snapshots` row on the fill tick of **`8332.414226591`** against a
+`paper.starting_balances` of `5000.00`. That number is exactly
+`5000.00 + 3332.414226591`: the whole pre-fill cash **plus** the new position valued at
+its entry price. The next tick wrote the true equity, `4996.9908483354999` (cash
+`1663.92` after the spend and the maker fee, plus the position marked at the bid).
+Engine 17 then read that row against the inflated peak, computed a drawdown of
+**40.03%** against `safety.max_drawdown_pct` 0.10, blocked, and wrote a `freeze`. Every
+tick after that is blocked by `safety`, because `peak_equity` is carried forward from
+the store and never comes back down. Reproduced on the first probe, deterministic.
+
+**Why.** Two readings of one fill disagree about *when* it happened.
+
+- `state["exchange"]["balances"]` comes from engine 1 at the **top** of the tick, and in
+  paper mode that is `PaperBroker.balance()`: the starting balance adjusted by every fill
+  **the store has recorded** (`src/acsoe/clients/paper/broker.py`, `balance` and
+  `_filled_orders`). This tick's fill is not recorded yet — engine 21 has not even
+  observed it — so cash is still `5000.00`.
+- Engine 21 then observes the fill through `query_orders` and **includes the new
+  position in `positions_value`** (`src/acsoe/engines/position_manager/engine.py`,
+  `_mark`, the loop over `fills`), deliberately:
+  `test_a_position_opened_by_this_ticks_fill_is_counted_in_the_portfolio_value` argues
+  that leaving it out would make the row "short by the whole notional". That argument
+  holds only if cash already reflects the spend.
+- Engine 19 writes `equity = cash + positions_value`
+  (`src/acsoe/engines/memory/engine.py`, `_write_equity`). The notional is counted twice.
+
+In **live** mode B's argument is right: the exchange applied the fill when the trade
+printed, before the tick began, so the fetched balance already reflects it. In paper
+mode the broker decides the fill lazily, at the moment engine 21 asks, so its ledger lags
+by exactly one tick. The broker's ledger is therefore *not* the same balance a real
+exchange would report on the fill tick, and engine 21's valuation assumes it is. The
+exit side is consistent in both modes (cash before the sale, the position still valued
+beside it), which is why only entries show it.
+
+**Consequence.** With 18, 21, 22 and 19 registered as spec 82 plans, every paper trade
+freezes the account the tick after the tick after its fill. It is the drawdown-breaker
+shape `code-standards.md` names — a plausible, in-range number that nothing downstream
+questions — and it would have surfaced on the first paper trade after registration.
+
+**Minimal reproduction.** `tests/engines/test_trade_chain_rehearsal.py`,
+`test_a_filled_position_is_watched_across_quiet_ticks` (see the Fix note below for its
+state). By hand: a resting entry of qty `q` at limit `L`, a trade strictly below `L`
+between two ticks, `paper.starting_balances` `C`; on the next tick
+`state["memory"]["equity"] == C + q*L` where it should be `C - q*L - fee + q*L`.
+
+**Not fixed, by the rules of this spec.** Engines 21 and 19 and the paper broker are
+B's and C's. Reported to the lead. Where the fix belongs is their call, and there are at
+least three places it could go: the broker's `balance()` could resolve not-yet-recorded
+fills the way `query_orders` does; engine 21 could leave this tick's fills out of the
+total in paper mode (but no engine may branch on mode); or engine 19 could net this
+tick's entry fills out of cash.
+
+**What the rest of the rehearsal does about it.** Every other scenario is arranged so
+that the tick it is *about* is the tick directly after the fill: `safety` reads the
+fill tick's own inflated row there, where equity equals peak and the drawdown is zero,
+so that tick is clean. The one scenario that cannot be arranged that way is the one the
+defect breaks — watching a position across several quiet ticks.
+
+### M4 was killed by the right test for the wrong reason, and the reason is a second finding
+
+**Agent:** A · **Task:** spec 87 · **Date:** 2026-09-16
+
+**What happened.** The first sweep killed M4 (engine 18 skips the `userref` check) in
+`test_a_restarted_process_does_not_place_the_same_entry_twice`, which is the test written
+for it. But the failure was a `KeyError: 'cycle_id'` inside my own record-check helper,
+before the test reached its assertion that nothing was placed twice. The helper read
+`state["memory"]["cycle_id"]` and `state["memory"]` was `{}`: **engine 19 had raised.**
+That is an incidental kill wearing the right test's name, and it stays that way until
+the property assertion is what fires.
+
+**Why engine 19 raised.** Under M4, engine 18 re-places the order, the broker refuses a
+second placement under one `userref` (`PaperBrokerError`), engine 18 raises, and
+contract rule 7 turns that into `ERROR` with `blocks_trading=True` and `data={}`. The
+orchestrator then sets `trading_blocked_by = "execution"`. Engine 19's
+`_write_rejection` sees a blocker that is not a guard and a candidate pair, so it treats
+the tick as a rejection, finds no `reason_code` in `state["execution"]` (empty, by rule 7),
+and raises `MissingInputError` on purpose (`src/acsoe/engines/memory/engine.py`, the
+`if not reason_code:` branch).
+
+### FINDING, not fixed (C's lane, and a contract question for the lead): an ERROR anywhere in the opportunity chain leaves the tick unrecorded
+
+**Agent:** A · **Task:** spec 87 · **Date:** 2026-09-16
+
+**What happened.** Reproduced on **unmutated** engines: the full chain with engine 16
+left out, so a real engine 18 raises its own `ExecutionError` ("decision.intent is
+absent"). Result on that tick: `state["memory"] == {}`; the orchestrator logged two
+`engine_error`s, engine 18's and engine 19's `MissingInputError`; **no `rejections` row,
+no `block_records` row and no `equity_snapshots` row** were written. Probe:
+`scratchpad/a87/test_probe_error.py`, output `probe-error.log`.
+
+**Why.** Rule 7 empties the payload of any engine that raises, and engine 19 refuses to
+record a rejection without a `reason_code` read from that payload. The two rules are each
+reasonable and together they make every opportunity-chain `ERROR` unrecordable. It is not
+specific to engine 18: any opportunity-chain engine that raises (10, 11, 16, and so on)
+leaves `{}` and trips the same branch. It is only newly visible because engine 18 is the
+first engine in that chain whose raise can come from the **exchange**, an outage during
+`open_orders()` or `add_order()`, rather than from a chain contradiction.
+
+**Consequence.** Invariant 12 says a rejection that does not reach storage is a defect
+equal to a lost trade. Engine 17 counts `status = 'ERROR'` rows in `block_records`
+against `safety.max_errors_in_window`, but `block_records` is written only for **guard**
+blockers, so an opportunity-chain `ERROR` never reaches that count either. Engine 19 also
+raises **after** it has written that tick's positions and orders, so the tick is partly
+recorded and its equity row is missing.
+
+**Not fixed.** Engine 19 is C's; the `ERROR`-to-row question is the contract's. For the
+rehearsal: the restart test now asserts the idempotency property **before** it reads
+the store back, so M4 is killed by the assertion that states it.
+
+### Spec 87 mutation sweep — 4 applied, 4 killed, 1 equivalent control survived everywhere
+
+**Agent:** A · **Task:** spec 87 · **Date:** 2026-09-16
+
+**Discipline.** Before the sweep all three engine files were counted in Python:
+`position_manager/engine.py` 0 CRLF / 632 LF, `exit/engine.py` 0 / 690,
+`execution/engine.py` 0 / 487, and the test file 0 / 1105. So every anchor is bare LF, and
+the harness refuses any anchor that does not occur exactly once. `PYTHONDONTWRITEBYTECODE=1`
+throughout. For each arm the harness takes a byte copy into the scratchpad, applies the
+mutant, runs it, and **restores from the byte copy before the next arm**, comparing the
+sha256 in the same statement. A verdict needs a pytest summary line from every process it
+ran. Harness: `scratchpad/a87/sweep.py`. The final run is against the final test file,
+sha256 `1c018836bfceedf65fa9cab81dc307bc72d1a09ffbb69e0372551472efc64c20`, after a green
+baseline of `6 passed, 1 xfailed`. After the sweep, `sha256sum -c` on all four files was
+OK, and `git status` shows no engine touched.
+
+File hashes before and after every arm (restored), then each mutant's hash:
+`position_manager/engine.py` `bdb1878b…c6db76`, `exit/engine.py` `878c574f…1942b3`,
+`execution/engine.py` `b1651203…e28912`.
+
+| Arm | Mutation (anchor) | Mutant sha256 | Killed by | Red message | Summary |
+|---|---|---|---|---|---|
+| M1 | 21 `_held`: `return state.get(TRADING_BLOCKED_BY_KEY) == DATA_GUARD_NAME` → `is not None` (holds on any block) | `3524c202…df2fdb` | `test_a_block_by_any_other_engine_does_not_hold_a_touched_stop` | `engine 21 held on a block that was not data_guard` | `1 failed, 5 passed, 1 xfailed` |
+| M2 | 22 `_held`: the `if self._close_intent(state): return False` lines deleted | `719934e1…c0f08` | `test_a_data_guard_block_holds_a_touched_stop_and_close_intent_then_exits_it` | `assert 'data_guard_blocked' == 'exits_placed'` (tier-3 sentence in the message) | `1 failed, 5 passed, 1 xfailed` |
+| M3 | 21 after `cancels.append(self._cancelled_row(entry, cancelled, now))`: a new post-only buy under `userref + 1` | `ea9dd7eb…e92e5` | `test_an_unfilled_entry_is_cancelled_at_its_window_and_not_replaced` | `the cancelled entry was replaced at the exchange` | `1 failed, 5 passed, 1 xfailed` |
+| M4 | 18: `found = self._already_placed(context, pair, userref)` → `found = None` | `c6a36954…11f9a892` | `test_a_restarted_process_does_not_place_the_same_entry_twice` | `unhandled PaperBrokerError: userref … has already been placed` on `trading_blocked_by` | `1 failed, 5 passed, 1 xfailed` |
+| E1 | **equivalent control**: 21 `_held` rewritten as `== DATA_GUARD_NAME and not self._close_intent(state)` | `d1d3eaf8…50988` | nothing, as designed | — | own file `6 passed, 1 xfailed`; wider suite below |
+
+**Each kill is the one test written for that property, and nothing else went red.** No
+arm was killed incidentally, and the xfailed test stayed xfailed under every arm (no
+XPASS). The first sweep's M4 kill came from a `KeyError` in my helper; that is recorded
+above, and the kill is now on the property assertion.
+
+**One limit on M4's kill.** It is observed through the **paper broker** refusing a second
+placement under one `userref`. A live exchange might accept the duplicate instead, and
+then this test would see a different symptom (two resting orders). It would still go red,
+through `open_orders()`, but that branch has only been reasoned about, not run.
+
+**E1 against the wider suite.** The wider-suite baseline, one process over
+`tests/engines/ tests/clients/paper/`, was `854 passed, 1 xfailed in 158.92s`
+(`logs/verify/a87-wide-baseline.log`). E1 then took **four attempts**, because the process
+died with `0xC0000005` (exit 3221225477) and no summary on three of them. Each is recorded
+as "not a result", not as a verdict:
+
+1. One process: access violation inside `research/walkforward.py:_required`, under
+   `test_feature_chain_rehearsal.py`'s `trained_skeptic` fixture (`wide-E1-crashed.log`).
+2. One process: access violation inside pydantic `model_dump`, from
+   `test_macro_context.py` (`wide-E1.log`).
+3. Four processes: two died, one inside `shap`'s tree explainer and one inside plain
+   Python in `test_feature_chain_rehearsal.py:trades_for` (`wide3-E1.log`).
+4. Six processes (`wide4-E1.log`): five green (`244 passed`, `229 passed`, `280 passed`,
+   `6 passed, 1 xfailed`, `66 passed`), and the feature-chain rehearsal died again. That
+   group alone was then re-run under E1 (`wide5-E1.log`): `29 passed`.
+
+So **E1 survived every test in `tests/engines/` and `tests/clients/paper/`**: 855 tests in
+total, the same as the baseline. The feature-chain rehearsal does not import engine 21 at
+all (0 occurrences of `position_manager`). As an unmutated control it then passed
+2 of 2 runs.
+
+**The crashes are the registered native fault, and I checked the other mechanisms first.**
+The fault sites are four unrelated places: a C extension (`shap`), pydantic-core, and
+pure Python twice. That is the process-level memory-corruption signature on the Known
+Risks register. None of the crashes carried a database error, so it is not the tmp-dir
+sweeper. None was a failing assertion, so it is not the load-sensitive wall-clock one.
+None landed in a file the mutant touches. Three of the four landed in or after the
+feature-chain rehearsal's LightGBM training in the same process; this rehearsal trains
+too, and it did not crash in any of the roughly twenty runs it had this session. That is an observation, not a cause.
+
+**A change made during the sweep, and the reason the sweep was re-run.** The rehearsal
+opened `StoreClient`s and never closed them. An open SQLite handle under `tmp_path` is a
+directory Windows will not delete, which is the same family as the tmp-dir sweeper on the
+register, so a module-level autouse fixture now closes them. It changes no assertion, but
+the file changed, so the narrow sweep was run again from scratch against the final bytes,
+with the results above.
+
+### Spec 87's own gate
+
+**Agent:** A · **Task:** spec 87 · **Date:** 2026-09-16
+
+The four commands, run in sequence under the lead's explicit stop, each redirected to a
+file and read in full:
+
+- `mypy --strict src/ scripts/`: `Success: no issues found in 153 source files`
+  (`logs/verify/a87-mypy.log`)
+- `ruff check src/ tests/ scripts/`: `All checks passed!` (`logs/verify/a87-ruff.log`)
+- `pytest tests/ -q`: `8 failed, 3165 passed, 2 skipped, 1 xfailed, 3 warnings in 633.64s`
+  (`logs/verify/a87-pytest.log`). All 8 are
+  `tests/verify/test_phase6_criteria.py::test_pending_on_the_real_tree_names_the_subject_and_the_spec`,
+  the known red owned by C (spec 100). The 1 xfailed is finding 1's strict xfail.
+- `verify.py --phase 6`: `11 criteria: 1 PASS, 1 FAIL, 9 PENDING`
+  (`logs/verify/a87-verify-phase6.log`). The FAIL is `toolchain_green`, which carries the
+  same 8. `docs_vocabulary` PASSes over these entries.
+
+No failure outside the known one.

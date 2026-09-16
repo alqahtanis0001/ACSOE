@@ -13,11 +13,72 @@ in that order. Nobody else may start them.
 | 84 | The order surface — `OrderRequest`, `OrderAck`, `OrderState`, `OrderClientProtocol`; the live client refuses every order call until Phase 8 | `src/acsoe/clients/kraken/contracts.py`, `rest.py`, `client.py`, `__init__.py`, `README.md`, `tests/clients/kraken/test_orders.py` | **LANDED 2026-09-16** |
 | 85 | Engine 3 publishes each pair's trade low, high and count since the previous tick | `src/acsoe/engines/market_sensor/{contracts,engine,README}.py`, `tests/engines/test_market_sensor.py` | **LANDED 2026-09-16** |
 | 86 | Paper broker wired into `build_clients` in paper mode only; `scripts/cut_book_fixture.py` | `src/acsoe/cli/engine.py`, `scripts/cut_book_fixture.py`, `tests/cli/test_paper_broker_wiring.py`, `tests/scripts/test_cut_book_fixture.py` | **LANDED 2026-09-16** |
-| 87 | Rehearse B's engines 18, 21, 22 through real orchestrator ticks | `tests/engines/test_trade_chain_rehearsal.py` | claimed, blocked on specs 91/92/93 |
+| 87 | Rehearse B's engines 18, 21, 22 through real orchestrator ticks | `tests/engines/test_trade_chain_rehearsal.py` | **BUILT 2026-09-16, two findings reported, not fixed** (see SPEC 87 below). 6 scenarios green, 1 strict xfail naming finding 1; 4 mutations killed + 1 equivalent control |
 
 Spec 84 is first because nothing else in the phase can start without it: B's paper broker (88)
 implements it and engines 18, 21 and 22 call it. The concrete signatures are under
 **SPEC 84 — THE ORDER SURFACE, FOR B** immediately below.
+
+## SPEC 87 — THE REHEARSAL OF 18, 21 AND 22 — BUILT 2026-09-16
+
+File: `tests/engines/test_trade_chain_rehearsal.py`. Only that file, this file and
+`docs/build-log/phase-6/a-platform.md` were written. No engine, simulator, `bootstrap.py`
+or `core/` file was edited; the mutations were temporary and restored byte for byte, with
+the hash checked each time.
+
+**Fully real upstream, no compromise.** Guard 1, 2, 3, 4, 17; opportunity 5, 6, 7, 12,
+13, 8, 9, 10, 11, 14, 15, 16, 18; manage 21, 22, 19. The models are trained in the test
+(4 folds, about 17s, once per module). The thresholds are the committed ones, the market
+is C's `ScriptedMarket` under B's `PaperBroker`, and everything runs at **fee tier 3**.
+
+| Scenario (test) | Result |
+|---|---|
+| entry placed → filled on a later tick → stop touched and exited | green |
+| timeout reached and exited | green |
+| unfilled entry cancelled at `entry_unfilled_window_s` (300s) and not replaced | green |
+| `data_guard` block holds a touched stop, `hold_reason` recorded; `close_all` then liquidates the same position under the same block | green |
+| a non-`data_guard` block (engine 17 drawdown) does not hold a touched stop | green |
+| the same bar evaluated by a restarted process places one entry (engine 18's `open_orders` probe) | green |
+| position watched across quiet ticks | **strict xfail, finding 1** |
+
+After every tick, `orders`, `positions`, `trades` and `equity_snapshots` are read back and
+compared row for row with what 18, 21 and 22 published.
+
+**Mutations:** M1, M2, M3 and M4 were each killed by the one test written for that
+property. The equivalent control E1 survived `tests/engines/` and `tests/clients/paper/`
+(855 tests), after three runs voided by the known native access-violation fault. The table
+is in the build log.
+
+### FOR THE LEAD — two findings, neither fixed, both block a clean spec 82
+
+1. **Every paper fill inflates `peak_equity` by the position's notional; engine 17
+   freezes the account two ticks later.** On the fill tick, engine 1's cash is the ledger
+   *before* the fill (the broker counts only recorded fills), while engine 21 already
+   includes the new position in `positions_value`. Engine 19 adds the two. Measured:
+   `8332.414226591` = `5000.00 + 3332.414226591`, then a 40.03% drawdown on the next row.
+   Owners: B (engine 21 and `clients/paper/`) and C (engine 19). Repro:
+   `test_a_filled_position_is_watched_across_quiet_ticks` with `--runxfail`.
+2. **An ERROR anywhere in the opportunity chain leaves the tick unrecorded.** Rule 7
+   empties the raising engine's payload, and engine 19 then raises `MissingInputError`
+   ("refused ... without publishing a 'reason_code'"). No rejection row, no block record
+   and no equity row are written, and engine 17's error count never sees it. Reproduced on
+   unmutated engines with engine 16 left out of the chain, so that engine 18 raises.
+   Owner: C (engine 19), with a contract question for the lead.
+
+Build-log entries: "FINDING, not fixed (B's lane): every paper fill inflates
+`peak_equity`..." and "FINDING, not fixed (C's lane, and a contract question...)".
+
+**Gate, 2026-09-16:** mypy clean (153 files); ruff clean; `pytest tests/ -q`
+`8 failed, 3165 passed, 2 skipped, 1 xfailed`, where the 8 are C's known spec 100 red;
+`verify.py --phase 6` `1 PASS, 1 FAIL, 9 PENDING`, where the FAIL is `toolchain_green`
+from the same 8. Logs: `logs/verify/a87-{mypy,ruff,pytest,verify-phase6}.log`.
+
+**Lead ruling received:** both findings are ruled (specs 103, 104 and 105). The strict
+xfail stays until spec 103 lands, and the test file is not to be touched further.
+
+**Choice the lead may overrule:** the broken scenario is a strict `xfail` (the first in
+this repository) rather than a red test or a skip. It goes red the day finding 1 is
+fixed.
 
 ## FOR B AND C — PROSE THAT NOW SAYS THE OPPOSITE OF THE CONTRACT
 
