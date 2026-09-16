@@ -31,7 +31,12 @@ from tests.engines.test_decision import (
 # in `code-standards.md`. `OrderRequest.side` is the *client's* `OrderSide`, and the
 # published row's fields are the *store's*; they compare equal and are never
 # identical, and this file asserted `is` against the wrong one on its first run.
-from acsoe.clients.kraken.contracts import USERREF_MAX, USERREF_MIN, OrderRequest
+from acsoe.clients.kraken.contracts import (
+    USERREF_MAX,
+    USERREF_MIN,
+    OrderRequest,
+    OrderState,
+)
 from acsoe.clients.kraken.contracts import OrderSide as ClientOrderSide
 from acsoe.clients.kraken.contracts import OrderType as ClientOrderType
 from acsoe.clients.paper.broker import PaperBroker
@@ -50,10 +55,13 @@ from acsoe.engines.execution.contracts import (
     ORDERS_FIELD,
     PLACED_FIELD,
     REASON_ENTRY_ALREADY_PLACED,
+    REASON_ENTRY_NOT_A_LIMIT,
     REASON_ENTRY_PLACED,
+    REASON_ENTRY_RECOVERED,
     REASON_ENTRY_UNRECORDED,
     REASON_POST_ONLY_WOULD_CROSS,
     STATE_KEY,
+    USERREF_FIELD,
     ExecutionState,
     to_userref,
     userref_for,
@@ -297,7 +305,48 @@ def test_the_same_tick_run_twice_places_exactly_one_order(
     assert len(run_blocking(broker.open_orders())) == 1, "one order on the book, not two"
 
 
-def test_an_order_at_the_exchange_that_the_store_never_recorded_places_nothing(
+class _Answering:
+    """The real broker with exactly one field of `open_orders()` replaced.
+
+    A wrapper rather than a fake order client, for the reason engine 21's file gives:
+    everything the engine reads still comes from the real chain, and the replacement is
+    a freshly constructed `OrderState` so A's validators still apply — a hand-built
+    double would drift into agreeing with the engine.
+
+    All three states it produces are ones a real exchange reaches and the simulator,
+    correctly, never does: an order with no limit price, an order the exchange will not
+    date, and an order that opened on an earlier tick than the one asking about it.
+    """
+
+    def __init__(self, real: PaperBroker, **replace: Any) -> None:
+        self._real = real
+        self._replace = replace
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+    async def open_orders(self) -> tuple[OrderState, ...]:
+        return tuple(
+            OrderState(
+                **{
+                    "userref": state.userref,
+                    "order_id": state.order_id,
+                    "status": state.status,
+                    "qty": state.qty,
+                    "limit_price": state.limit_price,
+                    "filled_qty": state.filled_qty,
+                    "avg_fill_price": state.avg_fill_price,
+                    "fee": state.fee,
+                    "opened_at": state.opened_at,
+                    "closed_at": state.closed_at,
+                    **self._replace,
+                }
+            )
+            for state in await self._real.open_orders()
+        )
+
+
+def test_an_order_at_the_exchange_that_the_store_never_recorded_is_recovered(
     execution: ExecutionEngine, trading_context: Any, broker: PaperBroker
 ) -> None:
     """The case the store cannot cover: placed, then the process died before engine 19.
@@ -307,23 +356,181 @@ def test_an_order_at_the_exchange_that_the_store_never_recorded_places_nothing(
     opportunity chain and the end of the manage chain leaves behind. Engine 18 must not
     place a second one.
 
-    **And it publishes no order row.** `OrderState` carries no `qty` and no
-    `limit_price`, so the order cannot be described well enough to build engine 19's row,
-    and guessing the two would write a price nothing ever rested at into `orders`. The
-    `userref` is published so an operator can find it by hand. Reported to the lead and
-    to A as a seam gap rather than papered over here.
+    **And it publishes the order's row**, which it could not do until A's spec 84
+    amendment put `qty`, `limit_price` and `opened_at` on `OrderState`. The row is what
+    closes the gap that mattered: an order nothing recorded is an order nothing will
+    ever cancel, because engine 21 assembles entries from the store plus
+    `state["execution"]`.
+
+    **The witness is the point of the second state.** If this tick's intent and book
+    were the ones that placed the order, `qty` and `limit_price` read from the exchange
+    and `qty` and `limit_price` guessed from this tick would be the same two numbers,
+    and the assertion could not tell which the engine used. So the second tick carries a
+    different approved quantity and a different best bid, and the row must still show
+    the first order's — the exact failure the operator's ruling against fabrication was
+    about, now asserted rather than argued.
+    """
+    from acsoe.platform.aio import run_blocking
+
+    first = execution.process(trading_context, decided(trading_context)).data
+    assert len(run_blocking(broker.open_orders())) == 1
+    placed = first[ORDERS_FIELD][0]
+
+    moved = decided(trading_context)
+    moved["decision"]["intent"] = dict(moved["decision"]["intent"], qty="7.00000000")
+    moved["market_sensor"]["quotes"][PAIR] = dict(
+        moved["market_sensor"]["quotes"][PAIR], bid="1.50"
+    )
+
+    second = execution.process(trading_context, moved).data
+
+    assert second[PLACED_FIELD] is False
+    assert second["reason_code"] == REASON_ENTRY_RECOVERED
+    assert len(run_blocking(broker.open_orders())) == 1, "still one order, not two"
+
+    (described,) = second[ORDERS_FIELD]
+    assert described["userref"] == first["userref"]
+    assert described["qty"] == placed["qty"] != "7.00000000"
+    assert described["limit_price"] == placed["limit_price"] != "1.50"
+    assert described["status"] == OrderStatus.RESTING.value
+    assert described["pair"] == PAIR
+    assert described["intent"] == OrderIntent.ENTRY.value
+    assert described["order_type"] == OrderType.LIMIT.value
+
+
+def test_the_recovered_row_is_dated_by_the_exchange_and_not_by_this_tick(
+    execution: ExecutionEngine, trading_context: Any, broker: PaperBroker
+) -> None:
+    """`placed_at` comes from `OrderState.opened_at` — Kraken's `opentm`.
+
+    It matters because engine 21 cancels a stale entry on **elapsed time**: a row dated
+    this tick restarts the unfilled window, so an order already past it waits another
+    full window before anything cancels it. Dated by the exchange, it is cancelled on
+    time.
+
+    **The witness needs the two times to differ**, and in this fixture they do not: the
+    order was placed on this same tick, so `opened_at` and `context.now` are one number
+    and an engine reading either would pass. So the wrapper reports the order as having
+    opened ten minutes ago — a state a real exchange reaches on every restart and the
+    simulator never does — and the assertion pins the older value **and** rejects the
+    newer one by name.
+    """
+    execution.process(trading_context, decided(trading_context))
+    earlier = to_micros(trading_context.now) - 600 * 1_000_000
+    trading_context.clients.kraken = _Answering(broker, opened_at=earlier)
+
+    (described,) = execution.process(trading_context, decided(trading_context)).data[
+        ORDERS_FIELD
+    ]
+
+    assert described["placed_at"] == earlier
+    assert described["placed_at"] != to_micros(trading_context.now)
+    assert "closed_at" not in described, "a resting order has not closed"
+
+
+def test_an_exchange_order_with_no_limit_price_publishes_no_row_and_does_not_raise(
+    execution: ExecutionEngine, trading_context: Any, broker: PaperBroker
+) -> None:
+    """Invariant 8 makes every entry a post-only buy **limit**, so an answer with no
+    limit price is the exchange contradicting the placement.
+
+    `OrderState` deliberately carries no `order_type` — presence of a limit price is a
+    total discriminator — so the model cannot refuse this and the consumer that knows
+    what it asked for must. Recording it would put a limit order with a null price into
+    `orders`, which engine 21 cannot reason about.
+
+    **And it must not be an `ERROR`.** Lead ruling, 2026-09-16: contract rule 7 would
+    turn a raise into `ERROR`, engine 19 writes `block_records.status = 'ERROR'`, and
+    engine 17 `safety` counts those against `safety.max_errors_in_window` and freezes
+    the account. An exchange contradicting itself about one order is not the system
+    malfunctioning and must not spend the breaker's budget. That is what the status and
+    `blocks_trading` assertions below are for, and they are the half of this test that
+    would otherwise be missing.
     """
     from acsoe.platform.aio import run_blocking
 
     execution.process(trading_context, decided(trading_context))
+    trading_context.clients.kraken = _Answering(broker, limit_price=None)
+
+    result = execution.process(trading_context, decided(trading_context))
+
+    assert result.status is EngineStatus.OK, "an ERROR here would spend engine 17's budget"
+    assert result.blocks_trading is False
+    assert result.data["reason_code"] == REASON_ENTRY_NOT_A_LIMIT
+    assert result.data[ORDERS_FIELD] == [], "no limit order with a null price"
+    assert result.data[PLACED_FIELD] is False
+    assert result.data[USERREF_FIELD], "the userref is published so an operator can find it"
+    assert len(run_blocking(broker.open_orders())) == 1, "and no duplicate was placed"
+
+
+def test_an_exchange_order_the_exchange_will_not_date_publishes_no_row(
+    execution: ExecutionEngine, trading_context: Any, broker: PaperBroker
+) -> None:
+    """The one case A's amendment does not close, and the only one left under
+    `entry_unrecorded_at_exchange`.
+
+    A clock reading substituted for a missing `opentm` is a time that never happened,
+    written into the column research and the console read as a placement time — and
+    there is nowhere to record the substitution either: `fallbacks_used` is a `trades`
+    column and `orders` has none. So no row, and the same non-`ERROR` treatment as the
+    test above, for the same circuit-breaker reason.
+
+    One input differs from `..._is_recovered`: whether the exchange dated the order.
+    """
+    from acsoe.platform.aio import run_blocking
+
+    execution.process(trading_context, decided(trading_context))
+    trading_context.clients.kraken = _Answering(broker, opened_at=None)
+
+    result = execution.process(trading_context, decided(trading_context))
+
+    assert result.status is EngineStatus.OK
+    assert result.blocks_trading is False
+    assert result.data["reason_code"] == REASON_ENTRY_UNRECORDED
+    assert result.data[ORDERS_FIELD] == []
     assert len(run_blocking(broker.open_orders())) == 1
 
-    second = execution.process(trading_context, decided(trading_context)).data
 
-    assert second[PLACED_FIELD] is False
-    assert second["reason_code"] == REASON_ENTRY_UNRECORDED
-    assert second[ORDERS_FIELD] == [], "nothing is described that cannot be described"
-    assert len(run_blocking(broker.open_orders())) == 1, "still one order, not two"
+def test_the_six_outcomes_this_engine_reports_have_six_spellings() -> None:
+    """`entry_unrecorded_at_exchange` was narrowed on 2026-09-16 from "any order found
+    at the exchange" to "an order the exchange will not date", and the case it lost
+    split in two — one that now publishes a row (`entry_recovered_from_exchange`) and
+    one that refuses for a different reason (`entry_at_exchange_is_not_a_limit`).
+    Three outcomes sharing one code is how a console ends up unable to tell an operator
+    which of them happened."""
+    codes = {
+        REASON_ENTRY_PLACED,
+        REASON_ENTRY_ALREADY_PLACED,
+        REASON_POST_ONLY_WOULD_CROSS,
+        REASON_ENTRY_UNRECORDED,
+        REASON_ENTRY_RECOVERED,
+        REASON_ENTRY_NOT_A_LIMIT,
+    }
+    assert len(codes) == 6
+
+
+def test_every_reason_code_this_engine_emits_is_renderable_by_the_console() -> None:
+    """A code absent from `REASON_PROSE` renders "No reason was recorded." on the
+    console, silently.
+
+    This was a tripwire asserting the absence of the two codes the 2026-09-16 ruling
+    added, because mapping them is C's under spec 99. C landed both within the hour and
+    it went red, which is what a tripwire is for; this is the assertion its own failure
+    message said to replace it with. **All six are listed**, not only the two, because
+    a list that only ever grows by the codes someone happened to be adding is how the
+    other four stop being checked.
+    """
+    from acsoe.console.format import REASON_PROSE
+
+    for code in (
+        REASON_ENTRY_PLACED,
+        REASON_ENTRY_ALREADY_PLACED,
+        REASON_POST_ONLY_WOULD_CROSS,
+        REASON_ENTRY_UNRECORDED,
+        REASON_ENTRY_RECOVERED,
+        REASON_ENTRY_NOT_A_LIMIT,
+    ):
+        assert code in REASON_PROSE, f"{code} renders as no reason at all"
 
 
 def test_a_userref_recorded_against_another_pair_raises(

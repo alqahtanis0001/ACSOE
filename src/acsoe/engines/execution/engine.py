@@ -96,7 +96,9 @@ from acsoe.engines.execution.contracts import (
     QUOTE_BID_FIELD,
     QUOTES_FIELD,
     REASON_ENTRY_ALREADY_PLACED,
+    REASON_ENTRY_NOT_A_LIMIT,
     REASON_ENTRY_PLACED,
+    REASON_ENTRY_RECOVERED,
     REASON_ENTRY_UNRECORDED,
     REASON_POST_ONLY_WOULD_CROSS,
     ExecutionState,
@@ -106,11 +108,12 @@ from acsoe.platform.aio import run_blocking
 
 
 class _AlreadyPlaced(NamedTuple):
-    """What the invariant 8 probe found: a row if it could describe one, and why.
+    """What the invariant 8 probe found: the order's row, and why it was not placed.
 
-    `row` is `None` in exactly one case — the order is at the exchange and the store
-    has never heard of it — because `OrderState` cannot describe it. See
-    `_already_placed`.
+    `row` is `None` in exactly two cases, both of them an exchange answer this engine
+    will not turn into a record: an entry with no `limit_price`, which contradicts the
+    only order it places, and an order with no `opened_at`, which cannot be dated
+    without inventing a time. See :meth:`ExecutionEngine._unrecorded`.
     """
 
     row: dict[str, Any] | None
@@ -389,25 +392,79 @@ class ExecutionEngine(BaseEngine):
         # with one exception, and those two require opposite actions.
         for order in run_blocking(context.clients.kraken.open_orders()):
             if int(order.userref) == userref:
-                # **No row, on purpose, and this is a seam gap rather than a shortcut.**
-                # `OrderState` carries `userref`, `order_id`, `status`, `filled_qty`,
-                # `avg_fill_price`, `fee` and `closed_at` — and no `qty` and no
-                # `limit_price`. So an order the exchange holds and the store does not
-                # cannot be described well enough to build the row engine 19 records.
-                #
-                # The two numbers could be *guessed*: this tick's approved quantity and
-                # this tick's best bid. Both would be wrong the moment equity or the
-                # book moved between the placement and now, and a fabricated
-                # `limit_price` is a price nothing ever rested at, written into `orders`
-                # as though it had. Invariant 2's posture applied to a record rather
-                # than to a trade: an absent value is never substituted.
-                #
-                # So: the duplicate is not placed, which is the part that protects
-                # money, and the payload names the `userref` so an operator can find the
-                # order by hand. Reported to the lead and to A — describing an order
-                # found at the exchange needs a field `OrderState` does not have.
-                return _AlreadyPlaced(row=None, reason_code=REASON_ENTRY_UNRECORDED)
+                return self._unrecorded(order, pair, userref)
         return None
+
+    @staticmethod
+    def _unrecorded(order: Any, pair: str, userref: int) -> _AlreadyPlaced:
+        """Describe an order the exchange holds and the store has never heard of.
+
+        **This published nothing until 2026-09-16**, because `OrderState` carried no
+        `qty`, no `limit_price` and no placement time, and all three could only have
+        been guessed — from this tick's approved quantity, this tick's best bid and
+        this tick's clock, every one of them wrong the moment equity, the book or the
+        hour moved. A's spec 84 amendment added `qty`, `limit_price` and `opened_at`
+        for exactly this case, so the numbers are read rather than invented.
+
+        Publishing the row is what closes the gap that mattered: an order nothing
+        recorded is an order **nothing will ever cancel**, because engine 21 assembles
+        entries from the store plus `state["execution"]`. That is unmanaged exposure
+        and it is the failure invariant 8 exists to prevent. With `opened_at` carrying
+        the real placement time, engine 21 then cancels it in the **ordinary** unfilled
+        window rather than one window late.
+
+        `pair`, `side`, `intent`, `order_type` and `oflags` are filled from what this
+        engine structurally knows rather than from anything observed, and that is the
+        distinction the operator's ruling draws: invariant 8 makes every entry a
+        post-only buy limit, the `userref` is `userref_for(pair, bar)` so an order
+        resting under it is this candidate's pair by construction, and a `userref`
+        recorded against a different pair already raises as a collision two branches
+        above. Substituting a *market observation* would be the fabrication; restating
+        the system's own contract is not.
+
+        **Two refusals, and neither raises.** Both publish no row under their own
+        reason code, leave the `userref` in the payload so an operator can find the
+        order by hand, and abandon the candidate for the tick:
+
+        * **no `limit_price`.** `OrderState` deliberately carries no `order_type` —
+          the presence of a limit price is a total discriminator and a second field
+          holding the same bit is one more thing that can disagree — so the model
+          cannot refuse this and the consumer that knows what it asked for must. An
+          entry with no limit price is the exchange contradicting the placement.
+        * **no `opened_at`.** The exchange did not say when the order opened, and a
+          clock reading substituted here is a time that never happened written into
+          the column research and the console read as a placement time. `OrderRow`
+          carries no `fallbacks_used`, so there is nowhere to record the substitution
+          either — the `trades` table has that column and `orders` does not.
+
+        **Neither is an `ERROR`, by the lead's ruling of 2026-09-16, and the reason is
+        the circuit breaker.** Contract rule 7 would turn a raise into `ERROR`, engine
+        19 writes `block_records.status = 'ERROR'`, and engine 17 `safety` counts those
+        against `safety.max_errors_in_window` and freezes the account. An exchange
+        contradicting itself about one order is not the system malfunctioning and must
+        not spend the breaker's budget.
+        """
+        if order.limit_price is None:
+            return _AlreadyPlaced(row=None, reason_code=REASON_ENTRY_NOT_A_LIMIT)
+        if order.opened_at is None:
+            return _AlreadyPlaced(row=None, reason_code=REASON_ENTRY_UNRECORDED)
+        return _AlreadyPlaced(
+            row={
+                "userref": userref,
+                "order_id": str(order.order_id),
+                "pair": pair,
+                "side": OrderSide.BUY.value,
+                "intent": OrderIntent.ENTRY.value,
+                "order_type": OrderType.LIMIT.value,
+                "oflags": "post",
+                "status": OrderStatus(str(order.status)).value,
+                "qty": money_text(order.qty),
+                "limit_price": money_text(order.limit_price),
+                "filled_qty": money_text(order.filled_qty),
+                "placed_at": int(order.opened_at),
+            },
+            reason_code=REASON_ENTRY_RECOVERED,
+        )
 
 
 def order_types_named_in_this_module() -> set[str]:

@@ -92,25 +92,60 @@ lists.
 The spec's conclusion is right and its mechanism is the one that cannot work. Flagged to
 the lead rather than treated as settled.
 
-## The one case that publishes no row, and why it is not a shortcut
+## The order the exchange holds and the store has never heard of
 
-When the order is at the exchange and the store has never heard of it, engine 18 does not
-place a duplicate — and publishes **no order row**.
+Placed, then the process died before engine 19 recorded it. Engine 18 finds it on its
+second invariant 8 probe, places no duplicate, and **publishes its row** under
+`entry_recovered_from_exchange`.
 
-`OrderState` carries `userref`, `order_id`, `status`, `filled_qty`, `avg_fill_price`,
-`fee` and `closed_at`. It carries **no `qty` and no `limit_price`**, so an order found
-this way cannot be described well enough to build the row engine 19 records.
+**It published nothing until 2026-09-16**, and the reason is worth keeping because it is
+the argument that got `OrderState` changed. The model carried `userref`, `order_id`,
+`status`, `filled_qty`, `avg_fill_price`, `fee` and `closed_at` — no `qty`, no
+`limit_price`, no placement time — so an order found this way could be *detected* and
+not *described*. All three could have been guessed, from this tick's approved quantity,
+this tick's best bid and this tick's clock, and every one of them would be wrong the
+moment equity, the book or the hour moved.
 
-Both numbers could be guessed — this tick's approved quantity and this tick's best bid —
-and both would be wrong the moment equity or the book moved between the placement and
-now. A fabricated `limit_price` is a price nothing ever rested at, written into `orders`
-as though it had. That is invariant 2's posture applied to a record rather than to a
-trade: an absent value is never substituted.
+The consequence of publishing nothing was worse than a missing record. An order engine 21
+cannot see is an order **nothing will ever cancel**, because engine 21 assembles entries
+from the store plus `state["execution"]`. That is unmanaged exposure and it is the
+failure invariant 8 exists to prevent. A's spec 84 amendment added `qty`, `limit_price`
+and `opened_at`, and this branch now builds the row from the exchange's own answer —
+including the placement time, so engine 21 cancels the order in the **ordinary** unfilled
+window rather than one window late.
 
-So the duplicate is not placed, which is the part that protects money, and the payload
-names the `userref` so an operator can find the order by hand. **Reported to the lead and
-to A**: describing an order found at the exchange needs a field `OrderState` does not
-have.
+### What is filled from the contract rather than from an observation
+
+`pair`, `side`, `intent`, `order_type` and `oflags`. Invariant 8 makes every entry a
+post-only buy limit; the `userref` is `userref_for(pair, bar)`, so an order resting under
+it is this candidate's pair by construction, and a `userref` recorded against a different
+pair already raises as a collision two branches above.
+
+That is the distinction the operator's ruling draws, and the two look identical in a
+diff: substituting a **market observation** is fabrication, restating the system's own
+contract is not.
+
+### Two refusals, and neither of them raises
+
+Both publish no row, leave the `userref` in the payload so an operator can find the order
+by hand, and abandon the candidate for the tick.
+
+| Code | When | Why no row |
+|---|---|---|
+| `entry_at_exchange_is_not_a_limit` | the answer carries no `limit_price` | invariant 8 makes every entry a limit order, so this is the exchange contradicting the placement. A limit order with a null price in `orders` is a row engine 21 cannot reason about |
+| `entry_unrecorded_at_exchange` | the answer carries no `opened_at` | a clock reading substituted for a missing `opentm` is a time that never happened, written into the column research and the console read as a placement time — and `fallbacks_used` is a `trades` column, so there is nowhere to record the substitution either |
+
+`OrderState` deliberately carries no `order_type`: the presence of a limit price is a
+total discriminator, and a second field holding the same bit is one more thing that can
+disagree. So the model cannot refuse the first case and the consumer that knows what it
+asked for must.
+
+**Neither is an `ERROR`, and the reason is the circuit breaker.** Lead ruling,
+2026-09-16. Contract rule 7 would turn a raise into `ERROR`, engine 19 writes
+`block_records.status = 'ERROR'`, and engine 17 `safety` counts those rows in the
+trailing hour against `safety.max_errors_in_window` and freezes the account. An exchange
+contradicting itself about one order is not the system malfunctioning and must not spend
+the breaker's budget.
 
 ## The price: the best bid, and it is a recorded absence
 

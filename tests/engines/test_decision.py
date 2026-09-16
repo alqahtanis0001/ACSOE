@@ -40,6 +40,7 @@ from acsoe.clients.store.contracts import (
     to_micros,
 )
 from acsoe.core.contracts import EngineStatus
+from acsoe.engines.adaptive_router.engine import AdaptiveRouterEngine
 from acsoe.engines.cost.engine import CostEngine
 from acsoe.engines.decision.contracts import (
     CHECKED_SOURCES,
@@ -56,6 +57,7 @@ from acsoe.engines.decision.contracts import (
 from acsoe.engines.decision.engine import DecisionEngine
 from acsoe.engines.exchange.engine import ExchangeEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
+from acsoe.engines.order_book.engine import OrderBookEngine
 from acsoe.engines.prediction.contracts import PredictionState
 from acsoe.engines.risk.contracts import RiskSizing
 from acsoe.engines.risk.engine import RiskEngine
@@ -83,11 +85,16 @@ TAKER = "0.0038"
 BID = "99.98"
 ASK = "100.00"
 
-#: Engine 9's estimate. Small, so friction stays below what the move can clear.
-SLIPPAGE = "0.0005"
-
 #: Engine 8's expected move. Comfortably past `2.5 x friction` at tier 3 — friction here
-#: is 0.22% + 0.38% + 0.02% + 0.05% = 0.67%, so the hurdle needs a move above ~1.68%.
+#: is 0.22% + 0.38% + 0.02% + 0.00% = 0.62%, so the hurdle needs a move above ~1.55%.
+#:
+#: The last term is engine 9's, and it is **exactly zero** on this book: the fake's top
+#: bid level holds more than the 5,000 quote basis, so the walk consumes one level and
+#: fills at the best bid. That is engine 9 working, and it is a weak witness — an engine
+#: 10 that ignored the slippage term entirely would produce this same friction. Recorded
+#: here rather than fixed here, because the fixture that fixes it is spec 94's: the
+#: rehearsal's acceptance is "engine 10 reads engine 9's slippage, proven by
+#: recomputation", and a zero cannot prove it.
 EXPECTED_MOVE = "0.025"
 
 #: The committed config's own worked example, quoted on `max_concurrent_positions`:
@@ -236,30 +243,6 @@ def skeptic_payload(*, pair: str) -> dict[str, Any]:
     ).to_state()
 
 
-def order_book_payload() -> dict[str, Any]:
-    """Engine 9's payload. **The only hand-built dict in this file**, because engine 9
-    does not exist — see `test_engines_nine_and_fourteen_still_do_not_exist`."""
-    return {
-        "pair": PAIR,
-        "estimated_slippage_pct": SLIPPAGE,
-        "basis_notional": "5000.00",
-        "levels_consumed": 1,
-        "reason_code": None,
-    }
-
-
-def router_payload() -> dict[str, Any]:
-    """Engine 14's payload. The second and last hand-built dict, same reason."""
-    return {
-        "weights": {"v1": 1.0},
-        "active_model_run_id": "run-2026-09-01",
-        "basis": "single model",
-        "regime": "trending",
-        "di_margin": 0.5,
-        "reason_code": None,
-    }
-
-
 def approving_state(
     context: Any, *, candidate: str | None = PAIR, bar_ts: int | None = None
 ) -> dict[str, Any]:
@@ -289,10 +272,10 @@ def approving_state(
 
     bar = state["market_sensor"]["closed_bar_ts"] if bar_ts is None else bar_ts
     state["prediction"] = prediction_payload(pair=chosen, bar_ts=bar)
-    state["order_book"] = order_book_payload()
+    state["order_book"] = OrderBookEngine().process(context, state).data
     state["cost"] = CostEngine().process(context, state).data
     state["risk"] = RiskEngine().process(context, state).data
-    state["adaptive_router"] = router_payload()
+    state["adaptive_router"] = AdaptiveRouterEngine().process(context, state).data
     state["skeptic"] = skeptic_payload(pair=chosen)
     return state
 
@@ -833,47 +816,65 @@ def test_the_published_payload_is_json_serialisable(
 
 
 # --------------------------------------------------------------------------- #
-# The two seams that are not real yet
+# The two seams that used to be stand-ins, and are not any more
 # --------------------------------------------------------------------------- #
 
 
-def test_engines_nine_and_fourteen_still_do_not_exist() -> None:
-    """A tripwire, and it is written to go red when C lands specs 96 and 97.
+def test_no_publisher_payload_in_this_file_is_hand_built_any_more() -> None:
+    """The tripwire that stood here has fired twice and is retired, not weakened.
 
-    `order_book_payload()` and `router_payload()` are the only hand-built publisher
-    payloads in this file, and they are allowed only because the publishers do not exist.
-    The moment either engine is real, its own payload must be used instead — and, more
-    importantly, engine 16's walk will start checking any `pair` or `bar_ts` it publishes,
-    which is a seam that needs looking at rather than discovering.
+    It asserted that engines 9 `order_book` and 14 `adaptive_router` did not exist,
+    because `order_book_payload()` and `router_payload()` were the only hand-built
+    publisher dicts in this file and were allowed only while their publishers did not
+    exist. C landed spec 96 and then spec 97 within the day; both times the test went
+    red, both times the stand-in was replaced with the real engine run in chain order,
+    and both times the payload function was **deleted** rather than kept "for the unit
+    tests" — a stand-in that outlives its publisher is a second description of an
+    engine that nothing keeps true.
 
-    Asserting the absence means this fails when C is right, which is the only direction a
-    placeholder should be able to fail in. A "use the real one if it exists" fixture would
-    be green in both states and would therefore never prompt anyone.
+    What replaces the tripwire is the property it was protecting: no hand-built
+    publisher payload is left. `prediction_payload` and `skeptic_payload` are the two
+    exceptions and they are engines 8 and 15, which exist and are simply not runnable
+    here — they need a fitted model artefact.
     """
     import importlib.util
 
-    def absent(name: str) -> bool:
-        # `find_spec` returns None for a missing *module* and raises for a missing
-        # *parent package*, and these two are missing as whole packages — so the first
-        # version of this test failed on `ModuleNotFoundError` rather than on its own
-        # assertion, which would have read as "C has landed them" and is the opposite
-        # of the truth. Both shapes mean absent.
-        try:
-            return importlib.util.find_spec(name) is None
-        except ModuleNotFoundError:
-            return True
+    for name in ("acsoe.engines.order_book.engine", "acsoe.engines.adaptive_router.engine"):
+        assert importlib.util.find_spec(name) is not None, (
+            f"{name} has gone away; the stand-in it replaced was deleted, so "
+            "`approving_state` will fail rather than quietly using an old dict"
+        )
+    assert "order_book_payload" not in globals()
+    assert "router_payload" not in globals()
 
-    still_absent = [
-        name
-        for name in ("acsoe.engines.order_book.engine", "acsoe.engines.adaptive_router.engine")
-        if absent(name)
-    ]
 
-    assert len(still_absent) == 2, (
-        "C has landed engine 9 or engine 14: replace order_book_payload() or "
-        "router_payload() with the real engine's output, check what it publishes for a "
-        "`pair` and a `bar_ts`, and delete this test"
-    )
+def test_engine_nines_own_payload_is_walked_by_the_coherence_check(
+    decision: DecisionEngine, context: Any
+) -> None:
+    """The seam the tripwire warned about, now that engine 9 is real.
+
+    Engine 9 publishes a `pair`, so engine 16's walk has something to check — and the
+    walk is a walk over the payloads rather than a hand-written list of comparisons
+    precisely so that landing engine 9 needed no edit to engine 16. This asserts that
+    it really did not: engine 9 appears in `checked`, and a genuine engine 9 payload for
+    the *other* candidate blocks.
+
+    The spliced payload is a **real** engine 9 run over the other candidate, not the
+    SOL/USD one with its `pair` edited — the same standard the engine 10 disagreement
+    test holds itself to, and for the same reason: an edited field tests string
+    comparison, a real payload tests what the failure looks like.
+    """
+    state = approving_state(context)
+    assert state["order_book"]["pair"] == PAIR, "engine 9 names the candidate at all"
+    assert "order_book" in decision.process(context, state).data["checked"]
+
+    state["order_book"] = approving_state(context, candidate=OTHER_PAIR)["order_book"]
+
+    result = decision.process(context, state)
+
+    assert result.blocks_trading is True
+    assert result.data["reason_code"] == REASON_PAIR_DISAGREEMENT
+    assert "order_book" in (result.reason or ""), "the sentence names engine 9"
 
 
 def test_every_reason_code_this_engine_emits_is_renderable_by_the_console() -> None:

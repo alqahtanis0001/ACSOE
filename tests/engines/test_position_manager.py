@@ -189,6 +189,13 @@ class _BrokerAnswering:
                 userref=state.userref,
                 order_id=state.order_id,
                 status=state.status,
+                # What the order *is* is passed through; only what the exchange reports
+                # about it is replaced. `limit_price` in particular must stay the real
+                # 99.00 while `avg_fill_price` becomes 98.50 — the whole point of this
+                # wrapper is that the two are different numbers, so an engine reading
+                # the wrong one is visible.
+                qty=state.qty,
+                limit_price=state.limit_price,
                 filled_qty=state.filled_qty,
                 avg_fill_price=self._fill_price,
                 fee=state.fee,
@@ -204,6 +211,8 @@ class _BrokerAnswering:
                 userref=state.userref,
                 order_id=state.order_id,
                 status=ClientOrderStatus.FILLED,
+                qty=state.qty,
+                limit_price=state.limit_price,
                 filled_qty=Decimal("10"),
                 avg_fill_price=LIMIT,
                 fee=Decimal("10") * LIMIT * Decimal(MAKER),
@@ -218,6 +227,8 @@ class _BrokerAnswering:
                 userref=state.userref,
                 order_id=state.order_id,
                 status=ClientOrderStatus.RESTING,
+                qty=state.qty,
+                limit_price=state.limit_price,
                 filled_qty=Decimal("0"),
                 fee=Decimal("0"),
             )

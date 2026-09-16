@@ -19,7 +19,9 @@ __all__ = [
     "ORDERS_FIELD",
     "PLACED_FIELD",
     "REASON_ENTRY_ALREADY_PLACED",
+    "REASON_ENTRY_NOT_A_LIMIT",
     "REASON_ENTRY_PLACED",
+    "REASON_ENTRY_RECOVERED",
     "REASON_ENTRY_UNRECORDED",
     "REASON_POST_ONLY_WOULD_CROSS",
     "STATE_KEY",
@@ -133,9 +135,10 @@ class ExecutionState(BaseModel):
     recorded publishes `placed: False` and still publishes its row, because engine 21
     needs to see it whether or not this tick is what put it there.
 
-    `orders` is empty in exactly one case: the order is at the exchange and the store has
-    never heard of it, so there is nothing to describe it with. See
-    `REASON_ENTRY_UNRECORDED` below and `ExecutionEngine._already_placed`.
+    `orders` is empty in exactly two cases, both of them an exchange answer this engine
+    will not turn into a record: an entry the exchange reports with no `limit_price`,
+    and an order it reports with no `opened_at`. See `REASON_ENTRY_NOT_A_LIMIT` and
+    `REASON_ENTRY_UNRECORDED` below. Neither raises.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -159,9 +162,49 @@ class ExecutionState(BaseModel):
 #: The order is resting at the exchange under this `userref` and the store has never
 #: heard of it: engine 18 placed it and the process died before engine 19 recorded it.
 #:
-#: Distinct from `entry_already_placed` because the consequence is different. There, the
-#: system knows everything about the order. Here it knows only that it exists — A's
-#: `OrderState` carries no `qty` and no `limit_price`, so no row can be built for engine
-#: 19 without fabricating two numbers. The duplicate is not placed, which is the part
-#: that protects money, and the `userref` is published so an operator can find it.
+#: Distinct from `entry_already_placed` because the *provenance* is different, not the
+#: consequence: there the store is the source of everything, here the exchange is. Both
+#: publish a row and neither places a duplicate.
+#:
+#: **Narrowed on 2026-09-16.** It used to cover every order found this way, because
+#: `OrderState` carried no `qty`, no `limit_price` and no placement time and none of
+#: the three could be had without fabricating it. A's spec 84 amendment added all
+#: three, so the ordinary case now publishes a row under `REASON_ENTRY_RECOVERED` and
+#: this code is left with the one thing the amendment does not fix: **the exchange
+#: reported no `opentm`**, so the order cannot be dated.
+#:
+#: A clock reading substituted here is a time that never happened, written into the
+#: column research and the console read as a placement time — and there is nowhere to
+#: record the substitution either, because `fallbacks_used` is a `trades` column and
+#: `orders` has none. So: no row, the `userref` published, the candidate abandoned for
+#: the tick, and **no raise** (see `REASON_ENTRY_NOT_A_LIMIT` for why not).
 REASON_ENTRY_UNRECORDED: Final = "entry_unrecorded_at_exchange"
+
+#: The order is at the exchange, the store has never heard of it, and it **is** fully
+#: describable: `qty`, `limit_price` and `opened_at` all came back. Engine 18 places no
+#: duplicate and publishes the row, so engine 21 can see the order and cancel it in the
+#: ordinary unfilled window.
+#:
+#: Distinct from `entry_already_placed` by *provenance* rather than by consequence —
+#: there the store is the source, here the exchange is — and worth its own code because
+#: the two say different things to an operator: one is a re-run of a tick, the other is
+#: a process that died between placing and recording.
+REASON_ENTRY_RECOVERED: Final = "entry_recovered_from_exchange"
+
+#: The order at the exchange under this entry's `userref` carries **no limit price**,
+#: and invariant 8 makes every entry a post-only buy limit. That is the exchange
+#: contradicting the placement, so no row is written: a limit order with a null price
+#: in `orders` is a row engine 21 cannot reason about.
+#:
+#: `OrderState` deliberately carries no `order_type` — the presence of a limit price is
+#: a total discriminator and a second field holding the same bit is one more thing that
+#: can disagree — so the model cannot refuse this and the consumer that knows what it
+#: asked for must. Lead ruling, 2026-09-16.
+#:
+#: **It is a reason code and not a raise, and the reason is the circuit breaker.**
+#: Contract rule 7 would turn a raise into `ERROR`, engine 19 writes
+#: `block_records.status = 'ERROR'`, and engine 17 `safety` counts those in the trailing
+#: hour against `safety.max_errors_in_window` and freezes the account. An exchange
+#: contradicting itself about one order is not the system malfunctioning and must not
+#: spend the breaker's budget. Lead ruling, 2026-09-16.
+REASON_ENTRY_NOT_A_LIMIT: Final = "entry_at_exchange_is_not_a_limit"
