@@ -2342,3 +2342,9 @@ scripts/` clean. `test_adaptive_router.py` 26 passed; `test_adaptive_router` +
 **Spec 97 is complete.** All four specs — 95, 96, 97, 98 — are done. What remains in lane
 C is C-verify's: operator prose for twelve reason codes (engine 9's four, engine 14's
 four, engine 22's four) and the Phase 4 replay fix.
+
+### CLAIM — spec 100: the nothing-built PENDING test moves to `unbuilt_tree`, 2026-09-16
+
+From the lead, before spec 82 registration. Writing only `tests/verify/test_phase6_criteria.py`,
+this file and my Phase 6 build log. The mutation proof runs on a byte copy of
+`scripts/verify.py`, restored in a `finally`. No commit, no registration, nothing in `src/`.

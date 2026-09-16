@@ -2384,3 +2384,92 @@ each redirected to its own file, and each file was read in full.
 
 The suite grew by 5 tests over spec 104's boundary (A's gate had 3165 passed). No native fault
 crashed any of the four runs.
+
+### Spec 100 — the nothing-built PENDING test never had an absent subject, measured before moving it
+
+**Agent:** C (interface and models) · **Task:** spec 100, the lead's fix before spec 82 · **Date:** 2026-09-16
+
+**What happened.** `test_pending_on_a_tree_with_nothing_built` runs the nine criteria against
+`bare_tree`, which has no `src/`. I ran all nine against `bare_tree` and against `unbuilt_tree`
+from a scratch probe (`scratchpad/c100b/probe_trees.py`), and the two trees give different
+results. On `bare_tree`, **seven of the nine got past every engine guard** and stopped at the
+hard-coded placeholder ("every engine and the paper broker exist; ... is not written yet").
+The other two, engines 9 and 14, also found the **real** engine class and stopped only
+because the fixture lookup is rooted at `ctx.root`, which has no `tests/fixtures/`. On
+`unbuilt_tree` all nine report PENDING on an engine that "does not exist yet": engine 16, 21,
+9 or 14.
+
+**Why.** The editable install is a plain `.pth`, so `acsoe` resolves to the repository from
+any directory, and `root_import_path` only shadows what the tree carries. On `bare_tree` the
+subject is not absent, it is the developer's own. The test was green only because the nine
+bodies end in a hard-coded PENDING. So it had never observed the thing its name claims.
+**It could not see a criterion that mishandles an absent subject**, for example one that
+reports FAIL or PASS when the engine import fails, because on its tree the import never fails.
+And a correctly guarded body, once written, would run the real chain there and turn it red for
+no fault. Phases 0 to 5 already route their import-based PENDING tests through `unbuilt_tree`.
+Their remaining `bare_tree` entries (`db_migrates_from_empty`, `seed_fixtures_present`,
+`record_sample_valid`, the four static console criteria, `recording_span_continuous`) gave
+**identical** results on both trees in the same probe, because each one stops on a file under
+`ctx.root` before any import. None of them is exposed.
+
+**Fix.** `test_pending_on_a_tree_with_nothing_built` now takes `unbuilt_tree` and makes a second
+assertion: the message must begin with `engine N `name` does not exist yet `. A PENDING for
+any other reason, such as the placeholder, means the criterion got past a guard it had
+nothing to pass. Nothing else moved. `test_the_tier_sentence_is_pending_rather_than_wrong_when_the_harness_is_absent`
+also takes `bare_tree`, but it drives no criterion and deletes the fixture on its first line.
+Its name promises a PENDING it never observes. I reported it to the lead and did not change it.
+
+### Spec 100 — the moved test proved able to fail, and the old one proved blind, under the same mutants
+
+**Agent:** C (interface and models) · **Task:** spec 100, the lead's fix before spec 82 · **Date:** 2026-09-16
+
+**The lead's arm could not do what it was asked to show, and that is the first result.** The
+lead asked for a mutant that makes a criterion "return PASS when its subject can be imported"
+and expected the moved test to go red and the old one to stay green. It does the reverse. On
+`unbuilt_tree` the subject cannot be imported, so a correctly guarded written body is PENDING
+and the moved test is right to stay green. On `bare_tree` the subject *can* be imported, so the
+old test goes red on a body that is correct. So I ran that arm and added the arms that separate
+the two forms.
+
+**Harness.** `scratchpad/c100b/sweep.py`. It copies `scripts/`, `tests/`, `config/`,
+`context/`, `AGENTS.md`, `README.md` and `pyproject.toml` into `scratchpad/c100b/tree`, and
+mutates the **copy's** `verify.py`. The real file is never written, and its sha256 is
+`f2299ae8fb19a000b633e4e29833e629a6348858fbdb539826c42ed03b5e0844` before and after. In the
+copy, each arm is written from a byte copy and restored in a `finally`, with the sha256
+compared in the same statement. The file has 0 CRLF. The anchor is the whole held-stop guard
+block in `check_triggered_stop_holds_on_data_guard_block` and occurs exactly once, because its
+first line alone occurs twice. No test file carries the anchor text. Each run used
+`PYTHONDONTWRITEBYTECODE=1`, `sys.executable -X faulthandler`, `-p no:cacheprovider`, and
+required a pytest summary line. The pytest traceback shows the module was loaded from the
+copy's `scripts/verify.py`. Three test forms ran, each over the nine criteria:
+
+- **MOVED**: the committed test, which checks the result and the absent-engine message.
+- **MOVED-r**: the same test on `unbuilt_tree` with the message assertion removed.
+- **OLD**: the `76035be` body on `bare_tree`, verbatim, from a scratch test file in the copy.
+
+| Arm | Mutation of the held-stop criterion | Mutant sha256 | Summary | Red |
+|---|---|---|---|---|
+| BASE | none | `f2299ae8fb19a000b633e4e29833e629a6348858fbdb539826c42ed03b5e0844` | 27 passed | — |
+| W (the lead's) | written body: guard kept, PASS when the engines import | `987a930c203dbd4395b70c453b81c5ae87073f18c8ef58f712c1ab138e9401f5` | 1 failed, 26 passed | **OLD only**. MOVED is green, correctly |
+| A | absent subject reported PASS: `if problem is not None: return passed(...)` | `c972de74a6ec148cbe69469406d86c9b85bd5d97fbdfb668814664e12aa4d888` | 2 failed, 25 passed | **MOVED** and MOVED-r. **OLD green** |
+| G | guard dropped (`problem = None`), placeholder PENDING kept | `0420cff89e347de8ed34d8989d12ccc60ee1082edfe454c14a9b615dafd85bfc` | 1 failed, 26 passed | **MOVED only**. MOVED-r and OLD green |
+| WG | guard dropped, written body returns PASS | `473558b19abedacca7f3cb6266718e143435a066195180b67572df5d95bd7e26` | 3 failed, 24 passed | all three |
+| E0 | control: placeholder reworded | `9645364450be502470aa26e3e19c524a40e6cdc019e54e132929afbdc03d80cd` | 27 passed | — |
+
+Every red is the `[triggered_stop_holds_on_data_guard_block]` parametrisation, and the other
+eight stayed green in every arm. Logs: `logs/verify/c100b-sweep-<arm>.log`.
+
+**The two verdicts the lead asked for.**
+
+- **Moved test red, old test green, same mutant:** arms A and G. The killing test is
+  `test_pending_on_a_tree_with_nothing_built[triggered_stop_holds_on_data_guard_block]`.
+  Arm A: `AssertionError: Outcome(result=<Result.PASS: 'PASS'>, message='MUTANT A: held-stop reported PASS on an absent subject')`.
+  Arm G: `AssertionError: triggered_stop_holds_on_data_guard_block: every subject exists; the held-stop driver of spec 100 is not written yet (C, spec 100) - ...`.
+  On `bare_tree` the engines import in both arms, so the broken branch never runs and the old
+  test passes.
+- **The lead's arm W** turns only the old test red, on a correct body. That is the false
+  alarm spec 82 plus the first written body would have raised.
+
+**G is killed only by the new message assertion.** MOVED-r survives it because the result
+is still PENDING. A criterion whose guard has been dropped keeps reporting PENDING until its
+body is written, so a check on the result alone cannot tell "absent" from "not reached".

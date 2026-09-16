@@ -178,18 +178,34 @@ def test_every_phase_6_criterion_is_offline_and_never_live_only(
 # --------------------------------------------------------------------------- #
 
 
+#: The PENDING an absent engine produces, as the first clause of the message.
+_ABSENT_ENGINE = re.compile(r"engine \d+ `[a-z_]+` does not exist yet ")
+
+
 @pytest.mark.parametrize("name", PHASE6_CRITERIA)
 def test_pending_on_a_tree_with_nothing_built(
-    verify_module: ModuleType, bare_tree: Path, name: str
+    verify_module: ModuleType, unbuilt_tree: Path, name: str
 ) -> None:
-    """Every criterion reports PENDING against the documents and nothing else.
+    """Every criterion reports PENDING, on a missing engine, where nothing is built.
 
-    `bare_tree` carries `context/`, `AGENTS.md` and `README.md` and no `src/`, no
-    `tests/` and no `config/` — the honest picture of a phase that has not started.
     None of the nine may raise there and none may report PASS or FAIL: a FAIL on an
     unbuilt tree is an accusation against work nobody has done, and a PASS is worse.
+
+    **`unbuilt_tree`, not `bare_tree`.** This test used `bare_tree` until spec 82, and
+    on that tree the editable install resolves `acsoe` to the real repository. Seven of
+    the nine got past every engine guard there and stopped at their "not written yet"
+    placeholder, and engines 9 and 14 were imported for real. The test was green only
+    because of the placeholders, so it never saw a missing subject. It could not catch
+    a criterion that mishandles one, and a correctly guarded body would have run the
+    real chain and turned it red. The empty package in `unbuilt_tree` shadows the real
+    one. The build log has the measurement.
+
+    Hence the second assertion: the PENDING has to be *about* the absent engine. Any
+    other PENDING here means the criterion got past a guard it had nothing to pass.
     """
-    assert_pending(run(verify_module, name, bare_tree), verify_module)
+    outcome = run(verify_module, name, unbuilt_tree)
+    assert_pending(outcome, verify_module)
+    assert _ABSENT_ENGINE.match(outcome.message), f"{name}: {outcome.message}"
 
 
 @pytest.mark.parametrize("name", PHASE6_CRITERIA)
