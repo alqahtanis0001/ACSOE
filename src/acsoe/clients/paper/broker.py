@@ -54,6 +54,19 @@ for two readers to race over. Seeing one trade repeatedly cannot double-fill —
 fills once and is terminal after that — and every candidate is still filtered to
 `ts > placed_at`. Build log, 2026-09-16.
 
+**The window is pinned for the tick at `balance()`, and a fill is remembered once made.**
+Spec 103, operator ruling 2026-09-16: the balance includes every fill the broker has
+executed, recorded or not. Engine 1 reads the balance at the top of every tick, before
+engine 21 asks about any order, so `balance()` is where fills are decided: it takes the
+tick's view of the trade window, resolves every open order against it, and counts what
+filled. Every later read in the tick resolves against **that same view** — in the daemon the
+window is filled by the websocket on another thread, and a trade landing between engine 1
+and engine 21 would otherwise make one read say "filled" and the other not, which is the
+double count the ruling exists to remove. A fill, once decided by any read, is kept in
+`_executed` until engine 19's `filled` row exists, so every reader sees one fill with one
+price and one fee, and the window rolling past its trade cannot undo it. Before the first
+`balance()` of a process there is no pinned view and a read uses the live window.
+
 **The window is bounded by count, not by time.** `max_buffered_trades`, again `ws.py`'s
 own wording. A resting entry older than that window cannot see the trade that would have
 filled it, so on a very busy pair an entry may go unfilled that a real exchange would
@@ -75,7 +88,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 from acsoe.clients.kraken.contracts import (
     TERMINAL_ORDER_STATUSES,
@@ -91,6 +104,7 @@ from acsoe.clients.kraken.contracts import (
     coerce_fee_tier,
     to_micros,
 )
+from acsoe.clients.kraken.errors import KrakenError, KrakenUnavailableError
 from acsoe.clients.paper.fills import (
     apply_fill_to_ledger,
     fee_on,
@@ -179,6 +193,18 @@ class _Pending:
         self.fee = fee
 
 
+class _Executed(NamedTuple):
+    """A fill this broker executed, with what the ledger needs to count it.
+
+    `OrderState` carries no pair and no side, so both travel with it. Kept until engine 19
+    has recorded the fill; from then on the store's row is the only thing counted.
+    """
+
+    pair: str
+    is_entry: bool
+    state: OrderState
+
+
 class PaperBroker:
     """Reads and the stream forwarded; the four order calls simulated.
 
@@ -202,6 +228,12 @@ class PaperBroker:
         # asks the store or the stream for, every time, so a restart loses nothing it
         # was relying on.
         self._pending: dict[int, _Pending] = {}
+        # Spec 103. Fills executed and not yet seen recorded — lost by a restart, and that
+        # is correct: the store is what a restarted process rebuilds the ledger from, and
+        # the stream that filled them is gone with the process. And the tick's view of the
+        # trade window, taken by `balance()`; `None` until the first one.
+        self._executed: dict[int, _Executed] = {}
+        self._window: tuple[TradeTick, ...] | None = None
 
     # ------------------------------------------------------------------ time
 
@@ -299,8 +331,23 @@ class PaperBroker:
         trades: tuple[TradeTick, ...] = self._real.recent_trades()
         return trades
 
+    def _observe_trades(self) -> tuple[TradeTick, ...]:
+        """The wrapped stream's window as it stands now, copied."""
+        recent = getattr(self._real, "recent_trades", None)
+        if not callable(recent):
+            raise PaperBrokerError(
+                "the wrapped client has no `recent_trades`, so the simulator cannot see "
+                "which trades happened and cannot decide whether anything filled"
+            )
+        trades: tuple[TradeTick, ...] = tuple(recent())
+        return trades
+
     def _trade_prices_after(self, pair: str, placed_at: int) -> tuple[Decimal, ...]:
         """Prices printed on `pair` strictly after `placed_at`, oldest first.
+
+        From the window `balance()` pinned for this tick when there is one, so every read
+        in a tick decides against the same trades (spec 103); from the live window before
+        the process's first balance.
 
         Strictly after, because engine 18 places in the opportunity chain and engine 3
         has already read the window in the guard chain of the same tick. A trade the
@@ -308,22 +355,27 @@ class PaperBroker:
         the past — invariant 10's look-ahead, arriving through the simulator rather than
         through a feature.
         """
-        recent = getattr(self._real, "recent_trades", None)
-        if not callable(recent):
-            raise PaperBrokerError(
-                "the wrapped client has no `recent_trades`, so the simulator cannot see "
-                "which trades happened and cannot decide whether anything filled"
-            )
+        window = self._window if self._window is not None else self._observe_trades()
         return tuple(
             Decimal(trade.price)
-            for trade in recent()
+            for trade in window
             if str(trade.pair) == pair and to_micros(trade.ts) > placed_at
         )
 
     # ------------------------------------------------------------- the ledger
 
     async def balance(self) -> BalancesSnapshot:
-        """`paper.starting_balances` adjusted by every recorded fill.
+        """`paper.starting_balances` adjusted by every fill this broker has executed.
+
+        **Spec 103, operator ruling 2026-09-16: recorded by engine 19 or not.** Until then
+        this counted only the store's `filled` rows, and engine 1 reads it at the top of the
+        tick — before engine 21 has asked about any order, and long before engine 19 can
+        record one. On the fill tick the cash was therefore unspent while engine 21 counted
+        the new position, engine 19 wrote the notional twice into equity, and engine 17
+        froze the account. So this is where the tick's fills are decided: the window is
+        pinned, every open order is resolved against it through `open_orders`, and every
+        executed fill is counted — from the store once engine 19 has written it, from
+        `_executed` until then, never from both.
 
         **Operator ruling 3, 2026-09-16: in paper mode this is always the balance**,
         whether or not the real `Balance` call works, because no simulated fill spends
@@ -340,9 +392,25 @@ class PaperBroker:
         **Never `SUM()` in SQL**: money columns are TEXT, so SQLite would sum them
         lexicographically or coerce them to floats, and `code-standards.md` forbids it.
         """
+        self._window = self._observe_trades()
+        try:
+            await self.open_orders()
+        except PaperBrokerError as refused:
+            if not isinstance(refused.__cause__, KrakenError):
+                raise
+            # A fill is due and the exchange call that prices it did not answer, so the
+            # balance is **unknown**, not unchanged. Reported as the exchange-shaped
+            # failure it is, so engine 1 records `balance` as a failed fetch beside the
+            # calls that did answer, instead of losing its whole payload to an ERROR.
+            # Build log, 2026-09-16, spec 103.
+            raise KrakenUnavailableError(
+                f"the paper ledger cannot be computed this tick: {refused}", refused
+            ) from refused
         quotes = await self._quote_currencies()
         balances = self._starting_balances()
+        recorded: set[int] = set()
         for row in self._filled_orders():
+            recorded.add(int(row.userref))
             price = row.avg_fill_price
             if price is None:
                 # `OrderState` refuses this shape at its own boundary, so a row like it in
@@ -365,6 +433,29 @@ class PaperBroker:
                 filled_qty=row.filled_qty,
                 fill_price=price,
                 fee=row.fee if row.fee is not None else Decimal(0),
+            )
+        for userref, executed in list(self._executed.items()):
+            if userref in recorded:
+                # Engine 19 has written it: the store's row was counted above and is the
+                # record from here on. Counting this copy as well is the double count.
+                del self._executed[userref]
+                continue
+            quote = quotes.get(executed.pair)
+            if quote is None:
+                raise PaperBrokerError(
+                    f"no pair rules for {executed.pair}, so the ledger cannot tell which "
+                    "currency its fills spent; AssetPairs has no fallback (invariant 2)"
+                )
+            fill_price = executed.state.avg_fill_price
+            if fill_price is None:  # pragma: no cover - OrderState refuses this shape
+                raise PaperBrokerError(f"order {userref} executed with no avg_fill_price")
+            balances = apply_fill_to_ledger(
+                balances,
+                quote=quote,
+                is_entry=executed.is_entry,
+                filled_qty=executed.state.filled_qty,
+                fill_price=fill_price,
+                fee=executed.state.fee,
             )
         return BalancesSnapshot(balances=balances, fetched_at=self._now())
 
@@ -488,13 +579,17 @@ class PaperBroker:
         fee = fee_on(
             notional=walk.avg_price * walk.filled_qty, rate=await self._taker_rate()
         )
-        self._pending[request.userref] = _Pending(
+        pending = _Pending(
             request=request,
             status=OrderStatus.FILLED,
             placed_at=self._now(),
             filled_qty=walk.filled_qty,
             fill_price=walk.avg_price,
             fee=fee,
+        )
+        self._pending[request.userref] = pending
+        self._executed[request.userref] = _Executed(
+            pair=request.pair, is_entry=False, state=await self._state_of_pending(pending)
         )
         return OrderAck(
             userref=request.userref,
@@ -694,6 +789,12 @@ class PaperBroker:
         tick happened before the order existed and filling on it would be look-ahead —
         invariant 10, arriving through the simulator rather than through a feature.
         """
+        executed = self._executed.get(userref)
+        if executed is not None:
+            # Decided already, by whichever read came first. A fill is a fact once made:
+            # deciding it again would give it a second `closed_at`, and a window that has
+            # rolled past its trade would un-fill it.
+            return executed.state
         if limit_price is None:
             raise PaperBrokerError(
                 f"resting order {userref} has no limit price, so there is nothing for a "
@@ -712,7 +813,7 @@ class PaperBroker:
                 fee=Decimal(0),
                 opened_at=placed_at,
             )
-        return OrderState(
+        filled = OrderState(
             userref=userref,
             order_id=self._order_id(userref),
             status=OrderStatus.FILLED,
@@ -724,6 +825,9 @@ class PaperBroker:
             opened_at=placed_at,
             closed_at=self._now(),
         )
+        # Every resting order is a post-only buy (`_rest_post_only`), so this is an entry.
+        self._executed[userref] = _Executed(pair=pair, is_entry=True, state=filled)
+        return filled
 
     # ----------------------------------------------------------------- fees
 

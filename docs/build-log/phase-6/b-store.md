@@ -1912,3 +1912,245 @@ called from `seed.py` under `tests/conftest.py`'s `seed_fixtures` — an access 
 not recur on the retry or in my own full run minutes earlier. Checked against the other
 known mechanism, a stale `.pyc`: no sweep was running and nothing was mutated during the
 gate. Not filed as unexplained.
+
+### Correction: `engines/cost/` is B's, not C's
+
+**Agent:** B (session 4) · **Date:** 2026-09-16
+
+The spec 94 entries above call `src/acsoe/engines/cost/engine.py` "C's file". It is mine —
+`ownership.md` gives engine 10 to B — and the lead corrected it. The facts stand (328 CRLF /
+0 LF in the working tree, not normalised during the sweeps); the attribution was wrong. It
+is mine to convert to LF at a quiet moment after spec 103, **after** checking that no
+`tests/verify/` patcher anchor on that file spans a line break, since a conversion changes
+what such an anchor matches.
+
+### Spec 103, diagnosis — the ledger learns of a fill one tick after the broker executes it
+
+**Agent:** B (session 4) · **Task:** spec 103 · **Date:** 2026-09-16
+
+The diagnosis is A's (`a-platform.md`, "every paper fill inflates `peak_equity`"); this is
+where in my broker the two readings disagree about *when*, written before any change.
+
+**What happened.** On the tick a resting entry fills, `PaperBroker.balance()` reports the
+pre-fill cash while engine 21 counts the new position, so engine 19 writes equity with the
+notional counted twice (`8332.41` against a true `4996.99` in A's rehearsal), `peak_equity`
+keeps it, and engine 17 freezes the account on the next tick and every tick after.
+
+**Why, in `src/acsoe/clients/paper/broker.py`.** The broker has one place that *decides* a
+fill and a different place that *counts* one, and they are reached at different moments of
+the tick:
+
+- **The decision** is `_resolve_resting`, reached only through `_state_of`, which only
+  `query_orders`, `open_orders` and `cancel_order` call — that is, only when engine 21 (or
+  22) asks, in the manage chain, near the end of the tick. The decision is not kept: it is
+  recomputed from the live trade window on every call and lives nowhere once returned.
+- **The count** is `balance()`, which reads `self._store.filled_orders()` and nothing else —
+  fills **engine 19 has recorded**. Engine 1 calls it at the top of the tick, in the guard
+  chain, before any engine has asked about the order. On the fill tick the store still says
+  `resting`, so the fill is absent; it appears one tick later, after engine 19 has written
+  the `filled` row.
+
+So the balance lags the broker's own knowledge by exactly one tick, and the lag is
+structural: the only reader that triggers the decision runs after the only reader that
+counts. The same holds for a market sell from engine 22, which is held in `_pending` as
+`FILLED` and never counted by `balance()` until recorded — harmless today only because
+nothing reads the balance again in that tick.
+
+**Two further properties the fix has to have, both from the spec.**
+
+1. *Whichever read comes first, both see one fill.* The decision is currently a function of
+   the live trade window at the moment of the call. In the daemon the window is the
+   websocket's, filled on another thread (`ws.py` takes a lock), so a trade can arrive
+   between engine 1's read and engine 21's. A balance that decided "not filled" and a query
+   that then decided "filled" would reproduce the defect in a narrower window. So the
+   decision has to be taken once and remembered, and the not-filled answer has to be pinned
+   for the tick as well as the filled one.
+2. *Never twice once recorded.* Once engine 19 writes the `filled` row, the store is the
+   record and the broker's own memory of the fill must stop counting.
+
+**Restart.** The broker holds no fill memory across a process, and the stream is
+per-process, so a fill executed and never recorded is absent from the rebuilt ledger; the
+store still holds the order as `resting` and no position row, so the rebuilt positions agree.
+That is the claim the spec requires a test for rather than an assumption.
+
+### Spec 103, fix — `balance()` decides the tick's fills, and counts every one it executed
+
+**Agent:** B (session 4) · **Task:** spec 103 · **Date:** 2026-09-16
+
+**Fix**, in `src/acsoe/clients/paper/broker.py` only (no engine touched):
+
+1. **`balance()` is where fills are decided.** It pins the tick's view of the trade window
+   (`_window`, a copy of `recent_trades()`), then calls `open_orders()`, which resolves every
+   store-resting and not-yet-recorded order through the one existing resolution path, then
+   counts. Engine 1 is the first engine of every tick, so in the daemon every fill due this
+   tick is decided before anything reads the account.
+2. **A fill, once decided, is kept** in `_executed` (`pair`, `is_entry`, `OrderState`) — by
+   `_resolve_resting` for a resting entry and by `_fill_market` for engine 22's sweep — and
+   `_resolve_resting` returns the kept state on every later read. One fill, one price, one
+   fee, one `closed_at`, whichever read decided it; and a window that rolls past the trade
+   cannot un-fill it.
+3. **Every later read resolves against the pinned window**, so a trade the websocket thread
+   delivers between engine 1 and engine 21 is decided on the next tick rather than by
+   engine 21 alone. Before a process's first balance there is no pin and reads use the live
+   window, which keeps every test and caller that never reads a balance on the old path.
+4. **Counted once.** The store's `filled` rows are counted as before; each `_executed` entry
+   is counted unless its `userref` is among them, in which case it is dropped — engine 19's
+   row is the record from then on.
+5. **Restart:** `_executed` and `_window` are per-process, like the stream. Proven by
+   `test_a_fill_the_process_died_before_recording_is_absent_from_the_rebuilt_ledger_and_positions`,
+   which runs the real engine 1 and engine 21 on the restarted broker over the same store
+   and a fresh stream: `USD 5000.00`, `positions == []`, no fill recorded, the entry still
+   resting, `entry_orders_cancelled` false.
+
+**Decision: a due fill that cannot be priced makes the balance a failed fetch.** Step 1
+gives `balance()` a dependency it never had — the maker rate, fetched when a fill is
+priced. My first run of the neighbouring suites found it:
+`test_position_manager.py::test_the_flag_is_false_while_an_entry_the_client_will_not_report_on_still_rests`
+fails `TradeVolume` while a trade has printed through a resting entry, and engine 1 now
+**raised**: the broker's `PaperBrokerError` is not a `KrakenError`, and engine 1 re-raises
+anything that is not (contract rule 7), which would empty its whole payload — `pair_rules`
+and all — for the length of the outage. Two options:
+
+- *Let it raise.* Fail-closed, but engine 1 goes `ERROR` every tick of a fee outage while a
+  fill is due, and every consumer of `pair_rules` loses it for a reason unrelated to pairs.
+- *Report it as what it is* — the exchange call that prices the fill did not answer, so the
+  balance is unknown. Chosen: `balance()` re-raises that one case, and **only** a
+  `PaperBrokerError` whose `__cause__` is a `KrakenError`, as `KrakenUnavailableError`.
+  Engine 1 then records `balance` and `trade_volume` as failed calls and keeps `pair_rules`.
+  Anything else the broker refuses while deciding is re-raised unchanged, because laundering
+  a defect into "the exchange was unavailable" sends the operator to wait rather than fix.
+
+Consequences, checked rather than assumed: engine 19 writes no equity row on a tick with no
+balances (it says why), and engine 9 publishes no estimate while engine 10 blocks on the
+missing fee tier, so **engine 11's paper-mode balance fallback is not reachable through this
+path** — the only way to reach it is the fee outage, which blocks the tick at engine 10 first.
+Engine 11's fallback itself (`paper.starting_balances` when engine 1 publishes none) now sits
+awkwardly beside the ruling that the paper balance *is* the ledger; it is my engine and out of
+this spec's scope, so it is reported to the lead rather than changed. The existing engine 21
+test passes unchanged under the chosen option.
+
+**A wrong turn, mine.** My first "defect is raised as itself" test planted a row recorded as
+`pending` and got `DID NOT RAISE`: `open_orders` reads only `resting` rows, so `balance()`
+never reaches a `pending` one. The broker was right and the test was aimed at a path
+`balance()` does not take. It now plants a resting row with no limit price, which
+`_resolve_resting` refuses with no exchange failure behind it.
+
+**A's strict xfail.** `test_a_filled_position_is_watched_across_quiet_ticks` now reports
+`XPASS(strict)` and fails, as spec 103 said it would (`logs/verify/b103-A-xfail-default.log`,
+`1 failed`); run with `--runxfail` it passes (`logs/verify/b103-A-runxfail.log`,
+`1 passed in 22.81s`). A's file is not touched; removing the marker is A's.
+
+### Spec 103 — twelve mutations of the broker: ten killed by the tests written for them, a control, and one checked negative
+
+**Agent:** B (session 4) · **Task:** spec 103 step 4 · **Date:** 2026-09-16
+
+Harness: `scratchpad/b94/sweep103.py` on spec 94's machinery (byte copy, every anchor
+exactly once, `PYTHONDONTWRITEBYTECODE=1`, `-p no:cacheprovider`, `sys.executable`, restore
+in a `finally` before the next arm with the sha256 compared in the same statement, no verdict
+without a summary line). `broker.py` is pure LF (0 CRLF, counted in Python before the sweep)
+and no `tests/verify/` or `scripts/verify.py` patcher anchors on its text — checked with a
+grep first, the spec 94 control lesson. Hash before and after every arm:
+`98c0df710256e4fb65c0e9dc6bf58acca6547eb2e38c7a088be01e28c70e6201`. Narrow target:
+`tests/clients/paper/` (baseline `77 passed`). Logs `logs/verify/b103-sweep-*`.
+
+| Arm | Mutation | Verdict | Killing test — written for it | Notes |
+|---|---|---|---|---|
+| N0 | `list(self._executed.items())` → `tuple(...)` — **control** | survived, `77 passed` | — | wide re-run below |
+| N1 | `balance()` counts no executed fill (the defect restored) | killed, `8 failed` | `test_the_balance_on_the_fill_tick_counts_the_spend_before_the_store_records_it` | the other seven depend on the spend being counted |
+| N2 | a recorded fill's kept copy counted too (`if userref in recorded:` → `if False:`) | killed, `2 failed` | `test_a_fill_recorded_by_engine_19_is_not_counted_twice` | also the market-sell test, which records and re-reads |
+| N3 | `balance()` decides nothing (`await self.open_orders()` → `pass`) | killed, `7 failed` | `…counts_the_spend_before_the_store_records_it`; `…whichever_is_asked_first[balance]` — `[query]` stays green, which is the point of parametrising the order | the outage and defect-passthrough tests also die: nothing is decided, so nothing refuses |
+| N4 | a kept fill ignored on the next read | killed, `1 failed` | `test_an_executed_fill_is_not_undone_when_its_trade_leaves_the_window` | none |
+| N5 | reads use the live window, never the pinned one | killed, `1 failed` | `test_a_trade_that_arrives_after_the_balance_waits_for_the_next_tick` | none |
+| N6 | engine 22's market fill not kept | killed, `1 failed` | `test_a_market_sell_is_counted_before_it_is_recorded` | none |
+| N7 | a resting fill not kept | killed, `7 failed` | `…counts_the_spend_before_the_store_records_it` and both `…whichever_is_asked_first` | the rest depend on it |
+| N8 | kept fills survive a restart (a module-level dict) | killed, `25 failed` | `test_a_fill_the_process_died_before_recording_is_absent_from_the_rebuilt_ledger_and_positions` | **mostly incidental**: one dict shared across every broker in the process contaminates unrelated tests. The deliberate kill is the restart test's `USD == 5000.00` |
+| N9 | the fee-outage refusal not mapped to a failed fetch | killed, `1 failed` | `test_a_due_fill_with_no_fee_tier_makes_the_balance_a_failed_fetch_not_an_error` | none |
+| N10 | every refusal mapped, defects included | killed, `1 failed` | `test_a_broker_defect_met_while_deciding_fills_is_raised_as_itself` | none |
+| N11 | a recorded fill's kept copy not dropped (`del` removed, `continue` kept) | survived, `77 passed` | — | **checked negative**: see below |
+
+**N11 is equivalent, and says what the `del` is for.** The count is protected by the
+`continue`, not by the `del`: a kept copy of a recorded fill is reached only through
+`balance()`'s loop, which skips it, or through `_resolve_resting`, which is reached only for
+a `resting` row — and a recorded fill's row is `filled`. So the `del` is memory hygiene for
+a long-running daemon and nothing observable depends on it. Recorded as a checked negative
+beside N2, which is the non-equivalent form of the same claim.
+
+**The defect itself, restored by breaking the broker, through A's rehearsal.** Arms N0, N1,
+N3 and N7 run against `tests/engines/test_trade_chain_rehearsal.py::
+test_a_filled_position_is_watched_across_quiet_ticks` with `--runxfail`, so the strict marker
+does not turn the answer into its opposite (logs `b103-sweep-N*-2t-rsal.py_test_a_filled_…`):
+
+| Arm | Result |
+|---|---|
+| N0 control | `1 passed` |
+| N1, N3, N7 | `1 failed` each, every one at A's own assertion: `the fill tick's equity counts the entry's notional twice` — `Decimal('8332.414226591') == Decimal('1663.9201177597499') + Decimal('26.26015939') * Decimal('126.9')` |
+
+`8332.414226591` is the exact figure A's finding recorded. That is spec 103's "proven capable
+of failing by breaking the broker so the fill is excluded", measured through the chain rather
+than through my own tests; the criterion that makes it permanent is C's, spec 105.
+
+**The two survivors, against the whole of `tests/`.** The expected failing set at this
+point is the known eight `test_pending_on_the_real_tree…` parametrisations **plus A's
+`test_a_filled_position_is_watched_across_quiet_ticks` as `XPASS(strict)`**, which spec 103
+predicts. Against that:
+
+- **N11 — behaviourally survived**, `9 failed, 3182 passed, 2 skipped` in 693.08s, exactly
+  the expected nine (`logs/verify/b103-sweep-wide-stdout3.log`). A checked negative.
+- **N0 — behaviourally survived**, `9 failed, 3181 passed, 2 skipped, 1 error` in 733.68s: the
+  expected nine, and one setup **error** in `tests/engines/test_exit.py::
+  test_the_request_that_reaches_the_client_is_a_market_sell_and_not_only_the_row` —
+  `TypeError: 'dict_keyiterator' object does not support the context manager protocol`
+  raised inside `yaml/scanner.py:153`. No correct interpreter raises that from that line; it
+  is the corrupted-interpreter shape of the registered native fault (the same family as the
+  `SystemError` in `yaml/scanner.py` I recorded earlier this phase), in a test that neither
+  N0 nor the broker reaches at setup.
+
+**Getting those two answers took five wide runs, and three of them crashed.** Recorded
+because they are evidence about the machine today, not about the broker, and because
+the harness's "NO RESULT" rule is the only reason none of them was read as a verdict:
+
+| Run | Outcome | Where |
+|---|---|---|
+| N11, attempt 1 | `Windows fatal exception: access violation` during collection, in `scipy/_lib/_array_api.py` under a scipy import | `logs/verify/b103-crashed/N11-attempt1.log` |
+| N0, attempt 1 | access violation at 47%, in pure-Python `yaml/scanner.py` `stale_possible_simple_keys` | `logs/verify/b103-crashed/N0-attempt1.log` |
+| N11, attempt 2 | died silently at 36% after ~50 s, no fault-handler output | `logs/verify/b103-crashed/N11-attempt2.log` |
+| N0, attempt 2 | completed, with the one yaml `TypeError` above | `b103-sweep-N0-control-1t-tests_.log` |
+| N11, attempt 3 | completed, clean | `b103-sweep-N11-recorded-copy-not-dropped-1t-tests_.log` |
+
+Checked against the known mechanisms: nothing else was running (process list taken while N0's
+second attempt ran, a minute after N11's silent death: only the recorder and supervisor
+processes and my own sweep), 68 of 100 GB free,
+`PYTHONDONTWRITEBYTECODE=1` on every run so no stale `.pyc`, and every crash site is in a
+third-party module (scipy, PyYAML) rather than in the broker the arms change by one token. Attributed to the
+registered native fault, not filed as unexplained. The harness did not record the exit
+code, which is why attempt 2's silent death has no number beside it; it records it now.
+
+### Spec 103 — the gate at the spec 103 boundary
+
+**Agent:** B (session 4) · **Date:** 2026-09-16
+
+Tree: `49e369a` plus `src/acsoe/clients/paper/{broker.py,README.md}`,
+`tests/clients/paper/test_ledger_counts_executed_fills.py` (new), this log and my progress
+file. No sweep running. Expected red: the eight `test_pending_on_the_real_tree…` (C, spec
+100) and A's `test_a_filled_position_is_watched_across_quiet_ticks` as `XPASS(strict)`,
+which spec 103 predicts.
+
+| Command | Result | Log |
+|---|---|---|
+| `mypy --strict src/ scripts/` | `Success: no issues found in 153 source files` | `logs/verify/b103-gate-mypy.log` |
+| `ruff check src/ tests/ scripts/` | `All checks passed!` | `logs/verify/b103-gate-ruff.log` |
+| `pytest tests/ -q` | `10 failed, 3181 passed, 2 skipped in 842.98s` — the expected nine **plus one**, below | `logs/verify/b103-gate-pytest.log` |
+| `verify.py --phase 6` | `11 criteria: 1 PASS, 1 FAIL, 9 PENDING`; `toolchain_green`'s own pytest run: `9 failed, 3182 passed, 2 skipped in 835.20s` — **exactly the expected nine** | `logs/verify/b103-gate-verify.log`, `logs/verify/toolchain_green/20260916T174507_035378-pytest-attempt1.log` |
+
+**The one extra failure, attributed to the registered native fault.**
+`tests/verify/test_phase1_criteria.py::test_pass_against_a_fabricated_console[console_live_frame_amber]`:
+`criterion raised - TypeError: object of type 'MappingEndEvent' has no len()`, from inside
+PyYAML. Pure-Python PyYAML does not ask for the length of an event object on a correct
+interpreter; this is the third PyYAML-shaped corruption on this machine today (the
+`SystemError` earlier this phase, the `dict_keyiterator` `TypeError` in the N0 wide run).
+It names neither the broker nor any file of mine, the console criterion never constructs a
+broker, and **the same test passed in `toolchain_green`'s pytest run over the same tree in
+the same fifteen minutes.** One thing I did that I would not repeat: I ran my gate pytest and
+`verify.py` (which runs its own pytest) **concurrently**, so two full suites shared the
+machine. Nothing is written to the tree by either, so it cannot have changed an answer, but
+it doubles the load on a machine that is faulting natively today.

@@ -68,6 +68,14 @@ same reason it does not retain the spread. Spec 88's scope limit and spec 93's s
 same thing from either side, and the case they are both about is a liquidation during an
 outage.
 
+**`balance()` inherits that refusal, and reports it as a failed fetch** (spec 103). Deciding
+the tick's fills makes the balance depend on the maker rate whenever a fill is due. If
+`TradeVolume` is down at that moment the cash is unknown, so `balance()` raises
+`KrakenUnavailableError` — only for a refusal whose cause is an exchange call that did not
+answer — and engine 1 records `balance` as a failed call while keeping the calls that
+answered. Any other refusal is raised as the `PaperBrokerError` it is, and engine 1 turns it
+into `ERROR`. With nothing due, the ledger answers straight through a fee outage.
+
 `AGENTS.md`'s first paragraph forbids a fee percentage written into the code.
 `test_the_broker_holds_no_fee_rate_of_its_own` walks both modules' ASTs and refuses one
 as a literal — narrower than a text search, because the docstrings here legitimately
@@ -76,15 +84,34 @@ catches a rate written as a bare float too.
 
 ## The balance is the ledger, always
 
-**Operator ruling 3, 2026-09-16.** In paper mode `balance()` is `paper.starting_balances`
-adjusted by every recorded fill, **whether or not the real fetch works**, because no
-simulated fill spends the real account. The real endpoint is never called — calling it
+**Operator ruling 3, 2026-09-16, amended the same day.** In paper mode `balance()` is
+`paper.starting_balances` adjusted by **every fill the broker has executed, whether or not
+engine 19 has recorded it** — and whether or not the real fetch works, because no simulated
+fill spends the real account. The real endpoint is never called — calling it
 and discarding the answer would leave an unused private call in the paper path, and the
 first person to "fix" the unused value would reintroduce the defect the ruling removes.
 
 That defect was found in planning and is worth keeping written down: invariant 2 promised
 an adjustment nothing implemented, so engine 11 sized against cash an earlier paper fill
 had already spent, and engine 19's equity counted that cash twice.
+
+**The amendment, spec 103, and why "recorded" was not enough.** The broker decided a
+resting entry's fill only when engine 21 asked, near the end of the tick; engine 1 reads the
+balance at the top. So on the fill tick the ledger still held the cash while engine 21
+counted the new position, engine 19 wrote the notional twice into equity, `peak_equity`
+kept it, and engine 17 froze the account on the next tick — every paper trade would have.
+Found by A's spec 87 rehearsal. Now:
+
+| Step | What `balance()` does |
+|---|---|
+| Pin | Copies `recent_trades()` as the tick's view. Every read until the next `balance()` resolves against that copy, so engine 1 and engine 21 cannot see different trades |
+| Decide | Calls `open_orders()`, which resolves every open order through the one resolution path. A fill decided by any read is kept in `_executed` — one price, one fee, one `closed_at` — and returned to every later read |
+| Count | The store's `filled` rows, then every `_executed` fill whose `userref` has no such row. A fill engine 19 has recorded is dropped from `_executed` and counted from the store only |
+
+Before a process's first `balance()` nothing is pinned and a read uses the live window.
+`tests/clients/paper/test_ledger_counts_executed_fills.py` holds the timing tests: the
+balance before the store knows, either read first, the store catching up, the window rolling
+past the trade, a trade arriving after the balance, a market sell, and the restart below.
 
 **Quote side only.** An entry debits `qty x price + fee`; an exit credits `qty x price`
 less `fee`. A buy is **not** credited with base currency. Engine 19 computes
@@ -115,11 +142,19 @@ and `_pending`'s copy is dropped at that moment.
 > than the spec; for the abnormal one it is safer, because an order engine 19 failed to
 > record lingers rather than vanishing from a system that has accepted it.
 
-**Observed trades are not held at all.** The broker reads `recent_trades()` when it needs
-them. A restart therefore loses nothing of its own, but it does lose the stream's buffer
-along with the process, so a resting entry that "should" have filled during the gap waits
-for the next trade below its limit or for engine 21's unfilled window. Pessimistic, which
-is the only direction a simulator may err in.
+**Observed trades are held for one tick only**, as the copy `balance()` pins. It is not a
+buffer: it is replaced wholesale by the next `balance()`. A restart loses it along with the
+stream's own window, so a resting entry that "should" have filled during the gap waits for
+the next trade below its limit or for engine 21's unfilled window. Pessimistic, which is the
+only direction a simulator may err in.
+
+**Executed fills are held until recorded, and a restart loses them — correctly.** A fill the
+broker executed and engine 19 never wrote (the process died between the two) is absent from
+the rebuilt ledger, because the ledger is rebuilt from the store; and it is absent from the
+rebuilt positions, because the store holds the entry as `resting` and the new process's
+stream never saw the trade. The two agree. Proven, not assumed:
+`test_a_fill_the_process_died_before_recording_is_absent_from_the_rebuilt_ledger_and_positions`
+runs the real engines 1 and 21 on a restarted broker over the same store.
 
 ## The trade seam — spec 88 says `drain_trades()`, and nothing calls it
 
@@ -132,9 +167,11 @@ across cycles. `drain_trades()` exists on the client, on `ws.py` and in A's
 
 The spec's conclusion holds — the broker is in the path, so it and engine 3 cannot
 disagree about which trades happened — and its mechanism does not. So the broker keeps no
-observation buffer and no tick boundary: reading is non-destructive, there is nothing for
-two readers to race over, and seeing one trade repeatedly cannot double-fill because the
-order is terminal after the first. Every candidate trade is still filtered to
+observation buffer: reading is non-destructive, and seeing one trade repeatedly cannot
+double-fill because the order is terminal after the first. **It does keep a tick boundary
+since spec 103, and the boundary is `balance()`** — the first read of every tick — for the
+race that non-destructive reading does not remove: the websocket thread adding a trade
+between two readers in the same tick. Every candidate trade is still filtered to
 `ts > placed_at`, which is invariant 10: engine 3 reads the window in the guard chain and
 engine 18 places in the opportunity chain, so a trade that printed before the order
 existed would fill it on the past.

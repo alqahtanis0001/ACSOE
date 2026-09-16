@@ -46,8 +46,35 @@ edited; every transient mutation restored by hash.
   `test_phase3_criteria.py`'s patcher — recorded). M5 (engine 14 family filter) survives this
   file by construction and is killed wide by C's
   `test_a_second_model_family_is_not_weighted`.
-- **No finding against engines 9, 14, 10 or 15.** One observation for C:
-  `src/acsoe/engines/cost/engine.py` is entirely CRLF in the working tree.
+- **No finding against engines 9, 14, 10 or 15.** Committed by the lead as `49e369a`.
+- **Open, mine:** `src/acsoe/engines/cost/engine.py` is entirely CRLF in the working tree.
+  Engine 10 is **B's** (`ownership.md`; I first wrote C's — corrected by the lead). Convert to
+  LF at a quiet moment **after** spec 103, and first check that no `tests/verify/` patcher
+  anchor on that file spans a line break.
+
+### Spec 103 — DONE in lane 2026-09-16 (lead's go-ahead after `49e369a`); gate below
+
+Diagnosis entry written to the build log before any change. Files changed:
+`src/acsoe/clients/paper/broker.py`, `src/acsoe/clients/paper/README.md`, new
+`tests/clients/paper/test_ledger_counts_executed_fills.py` (11 tests). No engine touched; A's
+file untouched.
+
+- `balance()` pins the tick's trade window, decides every open order through `open_orders()`,
+  and counts every executed fill: the store's `filled` rows, plus kept fills (`_executed`)
+  not yet recorded, never both. A fill decided by any read is kept and returned to later reads.
+- **Decision:** a due fill that cannot be priced (fee tier down) makes `balance()` raise
+  `KrakenUnavailableError`, so engine 1 records a failed `balance` call and keeps `pair_rules`;
+  any other broker refusal is raised as itself. Build log has the reasoning.
+- Restart proven through the real engines 1 and 21 on a restarted broker: ledger 5000.00, no
+  position, entry still resting.
+- **Mutations:** 12 arms, 10 killed by the tests written for them; N0 control and N11 (`del`
+  of a recorded copy) survive the whole suite behaviourally. Breaking the broker (N1, N3, N7)
+  reproduces A's `8332.414226591` in A's rehearsal under `--runxfail`.
+- **A's strict xfail now XPASSes** (`logs/verify/b103-A-xfail-default.log`); with `--runxfail`
+  it passes (`logs/verify/b103-A-runxfail.log`). A removes the marker.
+- **For the lead:** engine 11's paper fallback (`paper.starting_balances` when engine 1
+  publishes no balances) sits oddly beside "the paper balance is the ledger". Unreachable via
+  this change's outage path (engine 10 blocks first); mine, out of 103's scope, not changed.
 
 ## Phase 6, session 3 — CLAIMED 2026-09-16
 
