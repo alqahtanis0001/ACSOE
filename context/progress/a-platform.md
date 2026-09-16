@@ -19,6 +19,147 @@ Spec 84 is first because nothing else in the phase can start without it: B's pap
 implements it and engines 18, 21 and 22 call it. The concrete signatures are under
 **SPEC 84 — THE ORDER SURFACE, FOR B** immediately below.
 
+## FOR B AND C — PROSE THAT NOW SAYS THE OPPOSITE OF THE CONTRACT
+
+Routed by the lead 2026-09-16. A is stopping; you are not. **None of this is a code change and
+none of it is in A's lane.** Every line below states that `OrderState` carries no quantity or
+limit price, which stopped being true when the spec 84 amendment landed.
+
+This is the drift `docs_vocabulary` cannot catch: there is no retired token to grep for. The
+sentence is still grammatical, still about a real field, and simply wrong.
+
+**B — `engines/execution/`:**
+
+| File | Lines |
+|---|---|
+| `src/acsoe/engines/execution/engine.py` | 112, and the `row=None` comment block at 393–408 |
+| `src/acsoe/engines/execution/contracts.py` | 164, the `REASON_ENTRY_UNRECORDED` docstring |
+| `src/acsoe/engines/execution/README.md` | 100, 112 |
+| `tests/engines/test_execution.py` | 310, "it publishes no order row" |
+
+**C — one line:** `src/acsoe/console/format.py:332`, the comment above
+`entry_unrecorded_at_exchange`, which says the system "cannot describe it because `OrderState`
+carries no quantity or limit price". **The lead's ruling: the reason code keeps its name and
+the branch stays**, narrowed — if the exchange answers without `opened_at`, engine 18 still has
+no honest `placed_at` and still publishes no row. What needs rewriting is the operator-facing
+**prose**, which currently describes an inability that has mostly been fixed. C owns that
+sentence and takes it when it returns for the Phase 6 codes.
+
+`src/acsoe/clients/store/client.py:954` mentions `OrderState` and its claim is **still true** —
+no change needed there. The lead is fixing `feature-specs/84-the-order-surface-contract.md:22`.
+
+**And the correction the lead made to my own framing, which B needs more than I do.** I wrote
+that the amendment "cannot land half-applied and stay quiet" because `mypy --strict` names all
+five source sites. That is true of the *source* and false of the three **test** sites —
+`tests/engines/test_position_manager.py` 188, 210, 226 — because `mypy --strict` is deliberately
+not run over `tests/`. The quiet half is real, and it is found by running the tests, not the
+type checker.
+
+## THE `order_book` CONFIG SECTION — spec 80's debt, for spec 96 — HALF ONE LANDED 2026-09-16
+
+Claimed **before any code was written**. Lead-approved `depth: 10`.
+
+| Half | What | Files | State |
+|---|---|---|---|
+| 1 | `OrderBookConfig` on the model as `OrderBookConfig \| None = None`, `extra="forbid"`, `depth` bounded both ends with a row per bound | `src/acsoe/platform/config.py`, `tests/platform/test_config.py` | **LANDED 2026-09-16** |
+| 2 | the lead pastes the YAML | `config/default.yaml` | **LANDED 2026-09-16** (lead) |
+| 3 | tighten to required, add `order_book` to `LANDED_SECTIONS`, collapse the landing tripwire's branch | same two files | **LANDED 2026-09-16** |
+
+**The whole landing ran in about an hour and half three was triggered by the tripwire, not by
+a message.** I was in another file when the lead pasted; the next routine gate run came back
+red on `test_the_order_book_landing_is_in_flight_or_closed`, whose failure message said which
+half was missing. That is what the branch was for, and it is gone now the landing is closed.
+
+**One correction I made to my own reasoning**, because it is easy to repeat: I moved
+`test_removing_a_phase_5_section_is_refused_at_startup` to `with_phase_6()` believing the
+Phase 5 overlay could no longer load with `order_book` required. **False.**
+`complete_config_dict()` starts from the *shipped* `config/default.yaml`, so every pasted
+section is already in the base and the phase overlays only pin values on top. The move is
+defensive, the mutation proving it survives is recorded as equivalent, and the comment in the
+file says so.
+
+**The bound, in one line, because it will look arbitrary otherwise.** `depth` is
+`0 < depth <= MAX_BOOK_DEPTH` and `MAX_BOOK_DEPTH = 10` is a **copy of `BOOK_DEPTH`** in
+`engines/market_data_recorder/contracts.py`, not a Kraken limit. The stream is subscribed at
+ten levels a side, so a deeper configuration makes engine 9 walk levels that never arrive —
+the book reads thin and nothing says the config caused it.
+`test_the_book_depth_ceiling_agrees_with_the_feed` imports both constants and fails if they
+diverge; that test is what pays for the duplicate, which exists because `platform/` may not
+import upwards into `engines/`.
+
+**FOR C-MODELS (spec 96):** read it as `config.get("order_book.depth")`. While the YAML is
+absent that call **raises** — `order_book` is a section, not a leaf, so the walk descends into
+the `None` and you fail closed rather than reading a depth of zero. Do not add a fallback.
+
+## SPEC 84 AMENDMENT — `OrderState` gains `qty` and `limit_price` — CLAIMED 2026-09-16
+
+Operator-approved amendment, handed to A by the lead. Claimed **before any code was written**.
+Nobody else may touch `src/acsoe/clients/kraken/contracts.py` while this is open.
+
+| What | Files I will touch | State |
+|---|---|---|
+| `OrderState.qty` required, `OrderState.limit_price` optional; `state_dict()`; README; the `a_state`/`a_filled_state` helpers and the new coupling tests | `src/acsoe/clients/kraken/contracts.py`, `src/acsoe/clients/kraken/README.md`, `tests/clients/kraken/test_orders.py` | **LANDED 2026-09-16** |
+
+**Why**, in the operator's words: *an order that cannot be cancelled because nothing recorded
+enough to identify it is an unmanaged exposure, and that is the failure invariant 8 exists to
+prevent.* B found it building engine 18 — `_already_placed` finds the order at the exchange,
+cannot describe it, and publishes no row, so nothing will ever cancel it.
+
+**Out of my lane and not touched by me:** B's `clients/paper/broker.py` (5 construction sites)
+and `tests/engines/test_position_manager.py` (3). Listed in full in the report to the lead.
+
+### WHAT LANDED — FOR B, the new `OrderState`
+
+```python
+class OrderState:
+    userref: UserRef
+    order_id: str
+    status: OrderStatus        # "resting" | "filled" | "cancelled" | "rejected" | "expired"
+    qty: Money                 # NEW, REQUIRED, > 0
+    limit_price: Money | None = None   # NEW, > 0 when present; absent for a market order
+    filled_qty: Money          # >= 0, and NEVER greater than qty
+    avg_fill_price: Money | None = None
+    fee: Money                 # >= 0
+    opened_at: int | None = None       # NEW. Kraken's `opentm`, microseconds.
+                                       # Absent = the exchange did not say.
+    closed_at: int | None = None
+```
+
+Four things that will refuse your code if you do not know them.
+
+1. **`qty` is required.** `mypy --strict` names every site that omits it —
+   `clients/paper/broker.py` lines 516, 609, 650, 684, 691 — and
+   `tests/engines/test_position_manager.py` (188, 203, 217) is the same change, unchecked by
+   mypy. The missing-field refusal is pydantic's `Field required`.
+2. **A sixth coupling: `filled_qty` may not exceed `qty`.** New, only checkable now that `qty`
+   is here, and it is the one most likely to surprise the ledger. `filled_qty == qty` is the
+   ordinary full fill and is explicitly allowed, with its own test.
+3. **There is no `order_type` on `OrderState` and there deliberately is not going to be one.**
+   `limit_price is not None` **is** the order type: a market order has no limit price, a limit
+   order always has one, so the discriminator is total and a second copy of it is one more
+   thing that can disagree. Derive the type from presence when you build the row.
+
+4. **`opened_at` is optional and coupled to nothing** — a resting order may carry one, a
+   terminal order may lack one. The single rule: when both are known, `closed_at` may not be
+   before `opened_at`. **Equality is allowed**, because in paper one injected clock reading
+   stamps both and a stricter bound would refuse every simulated marketable order.
+
+`state_dict()` now carries `"qty"`, `"limit_price"` and `"opened_at"` — if you assert on a
+whole dict anywhere, those are the three keys to add.
+
+**The gap is now closed as far as it honestly can be.** The engine-19 row needs twelve fields.
+`OrderState` supplies six; `pair`, `side`, `order_type`, `oflags` and `intent` are structurally
+known to engine 18 (invariant 8 makes every entry a post-only buy limit on the candidate's
+pair, and a `userref` on a different pair already raises as a collision), so filling those from
+what the engine knows is not fabrication. What is left is one case: **the exchange reported no
+`opentm`.** Keep the existing fail-closed answer there — no row, `entry_unrecorded_at_exchange`,
+`userref` published. Do not substitute a clock reading.
+
+**And the lead's ruling you have to implement, because the model cannot:** engine 18 asked for
+a post-only buy **limit**, so an `OrderState` that comes back with **no `limit_price`** is the
+exchange contradicting the placement, not a market order. Refuse to record that row. The model
+has no `order_type` and therefore cannot see it; you have the `OrderRequest` and can.
+
 ## SPEC 86 — THE WIRING AND THE BOOK CUTTER — LANDED 2026-09-16
 
 ### Step 1: the paper broker is wired in, paper mode only
@@ -176,8 +317,8 @@ class OrderAck:
     status: OrderAckStatus     # "resting" | "filled" | "rejected"
     reason: str | None = None  # present and non-empty iff rejected
 
-class OrderState:
-    userref: UserRef
+class OrderState:                      # SUPERSEDED — see the amendment above; it now
+    userref: UserRef                   # also carries `qty` (required) and `limit_price`
     order_id: str
     status: OrderStatus        # "resting" | "filled" | "cancelled" | "rejected" | "expired"
     filled_qty: Money          # >= 0

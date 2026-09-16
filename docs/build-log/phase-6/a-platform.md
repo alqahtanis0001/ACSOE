@@ -613,3 +613,485 @@ writing out each method drops whatever the author did not think of, and the drop
 at construction: `isinstance` against a `runtime_checkable` Protocol would have caught this in
 one line, and nothing was calling it. A wrapper needs a test that walks the wrapped interface,
 not a test per method.
+
+---
+
+## SPEC 84 AMENDMENT — `OrderState` gains `qty` and `limit_price`, 2026-09-16
+
+### What happened
+
+B, building engine 18, hit a case the spec 84 contract could not express. `_already_placed`
+runs the invariant 8 probe: ask the store, then ask the exchange. When the store has never
+recorded the `userref` and `open_orders()` *does* hold it — placed, then the process died
+before engine 19 ran — the engine can tell the order exists and cannot describe it. The row
+engine 19 records needs `qty` and `limit_price`, and `OrderState` carried neither, so engine 18
+published `row=None` under `REASON_ENTRY_UNRECORDED` and nothing will ever cancel that order.
+
+B refused to guess the two numbers, and was right to: this tick's approved quantity and this
+tick's best bid are both wrong the moment equity or the book moves, and a fabricated
+`limit_price` is a price nothing ever rested at, written into `orders` as though it had.
+
+The operator approved the amendment on 2026-09-16: *an order that cannot be cancelled because
+nothing recorded enough to identify it is an unmanaged exposure, and that is the failure
+invariant 8 exists to prevent.*
+
+### Why the contract was wrong in the first place, and it is a shape worth carrying
+
+`OrderState` was designed as *what has happened to an order* — status, fill, price, fee, close
+time — and not as *what the order is*. That reads correctly as long as the reader already knows
+what it asked for, which is true for every consumer that placed the order itself and holds its
+own `OrderRequest`. It is false for exactly one consumer: the one that is reconciling, which by
+definition has no `OrderRequest` because that is what it lost. **A contract shaped around the
+happy path's information is missing precisely the fields the recovery path needs**, and nothing
+in my own lane could have shown it — every test of spec 84 constructed the state, so every test
+already knew the answer.
+
+### The design decision, and the one I did not take
+
+`limit_price` is coupled to the order type the same way `OrderRequest`'s is: present for a
+limit order, absent for a market one. `OrderRequest` enforces that against its `order_type`
+field. `OrderState` has no `order_type`, and I deliberately did **not** add one.
+
+Two readings were viable.
+
+1. **Add `order_type` and enforce the coupling as a validator**, which is literally "the same
+   shape `OrderRequest` already enforces".
+2. **Let presence be the statement.** A market order has no limit price and a limit order
+   always has one, so `limit_price is not None` is a total, lossless discriminator. A second
+   field carrying the same fact is one more thing that can disagree — the same argument spec 85
+   used to keep `pair` out of a `TradeRange` whose map key already carries it.
+
+I took the second. The redundancy argument decided it: with `order_type` present, a state whose
+`order_type` is `limit` and whose `limit_price` is `None` is a self-contradiction the model
+would have to refuse, and a state with both fields agreeing is two copies of one bit.
+
+**The cost, stated rather than hidden:** the coupling is now documented and not enforced. A
+producer that forgets `limit_price` on a limit order is not refused. That is a real weakening
+against `OrderRequest`, and if the lead wants it closed, `order_type: OrderType` plus a
+`_price_matches_the_type` validator copied from `OrderRequest` is the one-line-each change —
+but it changes B's five construction sites again, so it is a ruling and not mine to take.
+
+### The gap this does *not* close, and B needs to know before building the row
+
+The row engine 18 builds for engine 19 carries `userref`, `order_id`, `pair`, `side`, `intent`,
+`order_type`, `oflags`, `status`, `qty`, `limit_price`, `filled_qty` and `placed_at`.
+`OrderState` now supplies five of those twelve. The rest are **not** a second amendment, because
+they are not unknowable the way the two numbers were:
+
+- `pair` — engine 18 matched this order by a `userref` it derived from the candidate's pair, and
+  a `userref` on a *different* pair already raises as a collision two branches above. The pair
+  is the candidate's.
+- `side`, `order_type`, `oflags` — structurally fixed for engine 18: invariant 8 makes every
+  entry a post-only buy limit, and `order_types_named_in_this_module()` asserts by AST that this
+  engine has no path that could place anything else.
+- `intent` — the engine's own, this tick.
+- `placed_at` — the only remaining unknown. Kraken's `OpenOrders` returns `opentm`, so it is
+  fetchable, but it is not on `OrderState` and inventing it is the thing this amendment exists
+  to stop. **If B needs it, ask; adding `opened_at` is the same one-line change.**
+
+Filling the first four from what the engine structurally knows is not the fabrication the
+operator ruled against. Substituting a *market observation* is. The distinction is worth naming
+because the two look identical in a diff.
+
+### Fix
+
+`src/acsoe/clients/kraken/contracts.py`, `OrderState`:
+
+- `qty: Money`, **required**, positive. Required rather than optional because every order has
+  one — at the exchange and in the store — and an optional field would recreate exactly the
+  ambiguity the amendment removes: a consumer could not tell "no quantity was recorded" from
+  "no quantity exists".
+- `limit_price: Money | None = None`, positive when present.
+- A sixth coupling, only checkable now that `qty` is here: **`filled_qty` may not exceed `qty`**.
+  A state saying otherwise would put a position the exchange never opened into the ledger.
+- `state_dict()` renders both, money as strings.
+
+`README.md` updated in the same change (`AGENTS.md`: keep docs true). Kraken returns both values
+in `descr` on `OpenOrders` and `QueryOrders`, so the live client will actually have them.
+
+### Mutations — ten run, ten killed, no survivors
+
+`src/acsoe/clients/kraken/contracts.py` was copied byte-for-byte to the scratchpad before the
+sweep; every mutation was written from that copy and **every restore wrote the original bytes
+back and compared the sha256 in the same statement** (`assert
+hashlib.sha256(TARGET.read_bytes()).hexdigest() == ORIG_SHA`). `git checkout --` was never used.
+Pre- and post-sweep hash of the file on disk:
+`fbd4c7468c325dcfff8c8e06fbe6ddf292fcd656f0ec548fe84eb5f30f4d2eba`.
+
+Scoped to `tests/clients/kraken` — A's lane, 160 tests — so an incidental kill from another
+lane could not be mistaken for coverage.
+
+| # | Mutation | Verdict | Killed by |
+|---|---|---|---|
+| A1 | `qty: Money` to `qty: Money = Decimal("1")` (required becomes optional) | killed | `test_a_state_without_a_qty_is_refused` |
+| A2 | `_qty_is_positive` body reduced to `return value` | killed | `test_a_non_positive_order_quantity_is_refused[zero]`, `[negative]` |
+| A3 | `_limit_price_is_positive` body reduced to `return value` | killed | `test_a_non_positive_limit_price_on_a_state_is_refused[zero]`, `[negative]` |
+| A4 | over-fill bound `>` to `>=` | killed, 5 tests | `test_a_fill_exactly_equal_to_the_order_is_allowed` and 4 existing fill tests |
+| A5 | `_fill_never_exceeds_the_order` reduced to `return self` | killed | `test_a_fill_larger_than_the_order_is_refused` |
+| A6 | `state_dict` drops the `qty` key | killed | `test_the_state_crosses_state_with_money_as_strings`, `test_an_order_carries_the_quantity_and_price_it_was_placed_at` |
+| A7 | `state_dict` renders `limit_price` as `None` unconditionally | killed | `test_the_state_crosses_state_with_money_as_strings` |
+| A8 | `limit_price` becomes required on the state | killed | `test_a_market_order_state_has_no_limit_price`, `test_a_market_order_state_crosses_state_with_a_null_limit_price` |
+| A9 | `qty: Money` to `qty: Decimal`, so a float is coerced instead of refused | killed | `test_a_float_qty_is_refused_rather_than_coerced` |
+| A10 | `_qty_is_positive` returns `value.normalize()` | killed | `test_an_order_carries_the_quantity_and_price_it_was_placed_at` |
+
+Two red messages, quoted:
+
+```
+A4  FAILED tests/clients/kraken/test_orders.py::test_a_fill_exactly_equal_to_the_order_is_allowed
+    FAILED tests/clients/kraken/test_orders.py::test_a_filled_order_carries_its_price_fee_and_close_time
+    FAILED tests/clients/kraken/test_orders.py::test_a_fill_without_an_average_price_is_refused
+    FAILED tests/clients/kraken/test_orders.py::test_a_terminal_status_without_a_close_time_is_refused[filled]
+    FAILED tests/clients/kraken/test_orders.py::test_the_state_crosses_state_with_money_as_strings
+    5 failed, 155 passed
+
+A10 FAILED tests/clients/kraken/test_orders.py::test_an_order_carries_the_quantity_and_price_it_was_placed_at
+    1 failed, 159 passed
+```
+
+**A5 and A10 are the two that nearly were not written, and both say something.**
+
+A5 is the *interesting* half of the over-fill pair, but A4 is the one that matters: `>=`
+instead of `>` forbids every completely filled order, and it is killed by **five** tests
+including four that existed before this amendment — because `a_filled_state()` fills the whole
+order, as real orders usually do. Had I written only the refusal test and not
+`test_a_fill_exactly_equal_to_the_order_is_allowed`, A4 would still have died, but by accident
+of a fixture rather than by an assertion that says the boundary is deliberate.
+
+A10 is the one that found a defect in my own test. The first version of
+`test_an_order_carries_the_quantity_and_price_it_was_placed_at` asserted
+`state.qty == Decimal("0.01000")`, and **`Decimal("0.01000") == Decimal("0.01")` is `True`** —
+so a validator quietly normalising the quantum away would have passed. The assertion is now on
+`state_dict()["qty"] == "0.01000"`, the rendered form, where the trailing zeros survive. This
+module's own docstring says *the trailing zeros are the quantum*; an equality check on a
+`Decimal` cannot see one.
+
+### Construction sites outside A's lane — reported, not touched
+
+`mypy --strict src/ scripts/` names all five source sites statically, which is worth knowing:
+this amendment cannot land half-applied and stay quiet.
+
+```
+src\acsoe\clients\paper\broker.py:516: error: Missing named argument "qty" for "OrderState"
+src\acsoe\clients\paper\broker.py:609: error: Missing named argument "qty" for "OrderState"
+src\acsoe\clients\paper\broker.py:650: error: Missing named argument "qty" for "OrderState"
+src\acsoe\clients\paper\broker.py:684: error: Missing named argument "qty" for "OrderState"
+src\acsoe\clients\paper\broker.py:691: error: Missing named argument "qty" for "OrderState"
+Found 5 errors in 1 file (checked 144 source files)
+```
+
+Plus three in `tests/engines/test_position_manager.py` (188, 203, 217), which mypy does not
+check. Both files are B's. Full list, with the prose sites that now say something untrue, in the
+report to the lead.
+
+---
+
+## THE `order_book` CONFIG SECTION — half one of two, 2026-09-16
+
+Spec 80 owed this section and never landed it. Spec 96 step 2 reads
+`order_book.depth`, and `config/default.yaml` has no `order_book:` key at all.
+Lead-approved value: `depth: 10`.
+
+### What landed, and what has deliberately not
+
+**Half one only.** `OrderBookConfig` is on the model as `OrderBookConfig | None = None`
+— optional. Nothing in this change writes `config/default.yaml`. The lead pastes the
+YAML next; the tightening to required is one change after that.
+
+The dance is the one in `code-standards.md` and it has now been run five times in this
+project (`kraken.cache_ttl_s`, `backtest.embargo_bars`, the eight Phase 5 sections,
+`training`, and this): `extra="forbid"` means a YAML key with no model field is refused
+at load, and a **required** model field with no YAML key makes the committed config fail
+to parse — taking `scripts/verify.py` and every test in every lane with it.
+
+**Which way absence fails while the window is open, because it differs per shape and
+this one is the safe shape.** `order_book` is a **section**, not a leaf, so
+`Config.get("order_book.depth")` *raises* — the walk has to descend into the `None`.
+A reader therefore fails closed. That is the `kraken.cache_ttl_s` shape and not the
+`backtest.embargo_bars` one, where an absent *leaf* comes back as `None` and a careless
+reader turns it into zero. It has its own test rather than a comment, because it is the
+property that makes the window safe rather than merely short.
+
+### The ceiling, and why it is not a Kraken number
+
+`depth` is bounded `> 0` and `<= MAX_BOOK_DEPTH`, where `MAX_BOOK_DEPTH = 10`.
+
+The obvious upper bound would have been one of Kraken's own — 500 for the REST `count`,
+1000 for the v2 book subscription. **Both would have been exactly the thing `AGENTS.md`
+forbids**: a remembered endpoint limit written into code, stale by assumption. And
+neither is the constraint that actually matters.
+
+The real one is in this repo. `engines/market_data_recorder/contracts.py` subscribes the
+stream at `BOOK_DEPTH = 10` levels a side, and that constant is itself pinned to
+`scripts/record.py`'s `DEFAULT_DEPTH` so the daemon's archive and the standalone
+recorder's cannot diverge mid-history. Every recorded book frame therefore carries at
+most ten levels a side — including `tests/fixtures/book_sample.jsonl`, which my own spec
+86 cutter cut from those frames and which engine 9 is validated on. A larger
+`order_book.depth` configures engine 9 to walk deeper than anything the feed delivers,
+and the failure is silent in the worst direction: **the walk just ends early, the book
+reads as thin, and nothing anywhere says the configuration was the cause.** A
+`book_too_thin` refusal would then be one the committed fixture could never exercise —
+a gate that looks configured and is untested. That is the lead's own reasoning for
+choosing 10, turned into a bound rather than left as a note.
+
+**Written out rather than imported, and the copy is paid for.** `platform/` sits under
+`engines/` in the layering (`architecture-context.md` rule 0's direction), so importing
+`BOOK_DEPTH` upwards into `config.py` would invert it. `config.py` imports nothing from
+`acsoe` today except `platform.logging`, and I was not going to be the one to change
+that for an integer. So the value is duplicated and
+`test_the_book_depth_ceiling_agrees_with_the_feed` imports both and fails if they ever
+disagree — the same trade `engines/market_data_recorder/contracts.py` already makes for
+the state key it duplicates under contract rule 3. The test also asserts the bound is
+*live* at that value, not merely equal to it: `BOOK_DEPTH` is accepted and
+`BOOK_DEPTH + 1` is refused, so dropping the `le=` while leaving the constant in place
+still goes red.
+
+### The order the tests were written in, which is the point of the entry
+
+**The `BAD_ORDER_BOOK_VALUES` table was written first and the interesting tests second.**
+That is A's own Phase 5 lesson applied deliberately rather than remembered afterwards:
+the `training` section shipped with a parse test and one good `num_leaves` story test and
+**no rows in the bounds table**, and loosening `learning_rate` from `(0, 1)` to `[0, 1]`
+broke nothing. Three of four fields had constraints nothing asked about. A field with no
+row in the table is a field whose constraint is a claim.
+
+Phase 6's rows live in their own table rather than in `BAD_VALUES`, because a row there
+is loaded through `load_phase_5` and a section Phase 5 does not carry has nothing to
+write the bad value into. `PHASE_6_SECTIONS`, `with_phase_6` and `load_phase_6` mirror
+the Phase 5 machinery exactly, so the next section to land copies four lines.
+
+Every row matches on the **constraint** message, never the key name: under
+`extra="forbid"` a refusal always contains the key, so `match="depth"` would pass just
+as happily against a model with no such field.
+
+### Mutations — seven run, seven killed, no survivors
+
+`src/acsoe/platform/config.py` was copied byte-for-byte to the scratchpad before the
+sweep; every mutation was written from that copy and **every restore wrote the original
+bytes back and compared the sha256 in the same statement**. `git checkout --` was never
+used. Pre- and post-sweep hash of the file on disk:
+`f993ae0b26f96bbada0fe605c375ad30da81e428e78d9f630bea5a1b8fa70f9a`.
+
+Scoped to `tests/platform/test_config.py` — 176 tests.
+
+| # | Mutation | Verdict | Killed by |
+|---|---|---|---|
+| B1 | `depth` floor `gt=0` becomes `ge=0` | killed | `test_a_bad_order_book_value_is_refused_by_its_constraint[depth-0-…]`, `[depth--1-…]` |
+| B2 | the `le=MAX_BOOK_DEPTH` ceiling is dropped | killed, 3 | the two over-ceiling rows and `test_the_book_depth_ceiling_agrees_with_the_feed` |
+| B3 | `MAX_BOOK_DEPTH` drifts to 25 while `BOOK_DEPTH` stays 10 | killed, 3 | `test_the_book_depth_ceiling_agrees_with_the_feed` + `[depth-26-…]`, `[depth-500-…]` |
+| B4 | the section lands **required** before the YAML | killed, 53 | `test_the_order_book_landing_is_in_flight_or_closed` and `test_default_yaml_loads_cleanly` |
+| B5 | `OrderBookConfig` gets `extra="allow"` | killed | `test_the_order_book_section_refuses_an_unknown_key` |
+| B6 | the absent section defaults to `OrderBookConfig(depth=10)` | killed | `test_a_missing_order_book_section_fails_closed_rather_than_reading_as_zero` |
+| B7 | `depth` acquires `default=1`, so a deleted key is silently 1 | killed | `test_an_order_book_section_without_a_depth_is_refused` |
+
+**B4 is the one worth reading, and not because it is the biggest.** Landing this section
+required instead of optional takes **53 of 176 tests** in this file red, starting with
+`test_default_yaml_loads_cleanly`:
+
+```
+acsoe.platform.config.ConfigError: configuration in config\default.yaml is invalid:
+  - order_book: Field required
+```
+
+That is the whole justification for the two-halves dance, measured rather than asserted.
+It is also a warning about scope: those 53 are one file. The same mutation takes every
+test in every lane that reads the shipped config, which is why this must not be landed
+required until the YAML is in.
+
+**B7 is the one that nearly was not written.** I had a section test, a bounds table and a
+missing-*section* test, and no test at all for a missing *key under a present section*.
+Those fail in opposite directions: an absent section raises at the reader, while an
+absent key under a section that parses is invisible everywhere — engine 9 starts, walks
+whatever the default happens to be, and nothing is wrong anywhere a human would look.
+The test was added because the mutation was written before the fix was called finished,
+not because reading the code suggested it.
+
+### For the lead — the exact paste, and what to do after it
+
+```yaml
+order_book:
+  depth: 10                      # Levels a side engine 9 walks. Bounded by
+                                 # market_data_recorder's BOOK_DEPTH: the stream is
+                                 # subscribed at ten, so a deeper walk reads air.
+```
+
+Then step 3, one change, all in A's lane:
+
+1. `order_book: OrderBookConfig | None = None` becomes `order_book: OrderBookConfig` in
+   `src/acsoe/platform/config.py`, and the block comment above it goes.
+2. `"order_book"` is appended to `LANDED_SECTIONS` in `tests/platform/test_config.py`,
+   and `test_removing_a_phase_5_section_is_refused_at_startup` moves from
+   `with_phase_5()` to `with_phase_6()` — it deletes each landed section in turn, and
+   with `order_book` required the Phase 5 overlay no longer loads at all.
+3. `test_the_order_book_landing_is_in_flight_or_closed` loses its `else` branch and
+   becomes the closed assertion. It stays **green across the paste** and goes red only
+   if the paste lands without the tightening — which is what it is for.
+
+### One flake seen once, reported rather than buried
+
+`test_a_bad_value_is_refused_by_its_constraint[models-anomaly_run_id-runs/2026-…]` failed
+once, in one run of `pytest tests/platform tests/clients/kraken -q`, and has not reproduced
+in six subsequent runs of the same command nor in the parametrisation run alone.
+
+It is a **Phase 5 row this change does not touch**, and the most consistent explanation is
+the shared working tree: that row loads through `complete_config_dict()`, which reads the
+committed `config/default.yaml`, and three other agents are editing in this checkout
+concurrently. A config that was transiently invalid for an unrelated reason raises
+`ConfigError` with a *different* message, which is exactly a `pytest.raises(..., match=...)`
+failure rather than a crash. Recorded because a flake nobody wrote down is a flake somebody
+rediscovers, and because the lead's authoritative gate runs the whole suite at once.
+
+---
+
+## `OrderState.opened_at` — the amendment's last field, 2026-09-16
+
+The lead's ruling on the two questions the amendment left open.
+
+**Ruling 1: keep presence as the discriminator.** No `order_type` on `OrderState`.
+The weakening it leaves — nothing refuses a limit order whose `limit_price` went
+missing — is closed **at the consumer that knows the answer** rather than in the
+model: engine 18 asked for a post-only buy limit, so a state with no `limit_price`
+is the exchange contradicting the placement rather than a market order, and engine
+18 refuses to record it. That is the better place for it and it is worth naming why:
+the model sees one order at a time and has no idea what was asked for, while the
+placer has the `OrderRequest` in hand. **A coupling belongs wherever both halves of
+it are visible**, which for this one is not the boundary.
+
+**Ruling 2: add `opened_at: int | None`.** My own analysis was the argument for it.
+With `qty` and `limit_price` in, `placed_at` was the *only* value engine 18 could not
+fill from what it structurally knows, and without it the unrecorded-order row still
+could not be built — which was the entire point of the amendment.
+
+### What landed
+
+`opened_at: int | None = None`, microseconds since the epoch like `closed_at` and
+`fetched_at`, from Kraken's `opentm` on `OpenOrders`. Rendered in `state_dict()`.
+
+**Optional, and `qty` being required is not inconsistent with it.** Every order has a
+quantity that something knows; a placement time is a thing only the exchange can
+report, and it does not always. A required field here would force a consumer to
+invent one — the fabrication the whole amendment exists to stop. Absent means *the
+exchange did not say*: not now, not zero. Engine 18 keeps its existing fail-closed
+answer in that case (no row, `entry_unrecorded_at_exchange`, `userref` published), so
+the gap is now exactly the case the exchange itself cannot answer, which is as far as
+this can honestly be taken.
+
+**Coupled to nothing, deliberately — it is not the mirror of `closed_at`.** A resting
+order has an open time and no close time, and that is the ordinary state of the entry
+engine 21 watches. The one rule is a seventh coupling: **an order may not close before
+it opened**, when both are known. Equality is allowed, and that is not pedantry — in
+paper the same injected clock reading stamps both, so a bound written `<=` would
+refuse every simulated marketable order. Mutation C3 is exactly that bound and exactly
+one test objects.
+
+### Mutations — six run, six killed, no survivors
+
+Byte copy taken again after the previous sweep (the file had moved), every mutation
+written from it, and **every restore wrote the original bytes back and compared the
+sha256 in the same statement**. No `git checkout --`. Pre- and post-sweep hash:
+`7a050f53e7591ee241a222c6001c8a4d5e4ffaae602bcb6b83ed1096a31d7656`. Scoped to
+`tests/clients/kraken`, 165 tests.
+
+| # | Mutation | Verdict | Killed by |
+|---|---|---|---|
+| C1 | the `opened_at` field is removed | killed, 17 | `test_an_order_carries_when_it_opened` and every `a_state` caller, via `extra="forbid"` |
+| C2 | `state_dict` drops `opened_at` | killed, 3 | `test_an_order_carries_when_it_opened`, `test_an_order_whose_open_time_the_exchange_did_not_report_is_still_valid`, `test_the_state_crosses_state_with_money_as_strings` |
+| C3 | the ordering bound refuses equality too (`<` becomes `<=`) | killed, 1 | `test_an_order_that_opened_and_closed_in_the_same_microsecond_is_allowed` |
+| C4 | the ordering check is removed | killed, 1 | `test_an_order_that_closed_before_it_opened_is_refused` |
+| C5 | `opened_at` becomes required | killed, 23 | `test_an_order_whose_open_time_the_exchange_did_not_report_is_still_valid` and every state built without one |
+| C6 | `opened_at` is coupled to a terminal status, mirroring `closed_at` | killed, 2 | `test_a_resting_order_may_know_when_it_opened`, `test_an_order_carries_when_it_opened` |
+
+**C6 is the one that earns its place.** C1 and C5 are killed by seventeen and
+twenty-three tests, almost all of them incidental — they die because `a_state()`
+stops constructing, not because anything asserts the property. The *deliberate*
+assertion in each case is a single test, and the honest reading of a 23-test kill is
+that twenty-two of them prove the fixture works. C6 is the opposite shape: it is a
+plausible design somebody could add later in good faith (make `opened_at` the mirror
+of `closed_at`, since they look like a pair), it breaks only two tests, and one of
+those exists purely to say the coupling is deliberately absent. A field that is
+coupled to nothing needs a test saying so, or the next reader will add the coupling
+and nothing will stop them.
+
+### One ruff finding worth a line
+
+The first version of the ordering check was a nested `if` and `ruff` refused it
+(`SIM102`). Flattening it with `and` breaks mypy's narrowing — `self.closed_at <
+self.opened_at` on two `int | None` — and the obvious escape is a `type: ignore`. It
+is not needed: binding `opened, closed = self.opened_at, self.closed_at` first gives
+mypy locals it can narrow, and the single `and` chain then satisfies both tools with
+no suppression. **A `type: ignore` added to satisfy a linter is a suppression bought
+with a real loss of checking**, and in this file the thing being unchecked would have
+been a comparison on a value that can be `None`.
+
+---
+
+## `order_book` half three — the tightening, 2026-09-16
+
+### The tripwire fired on its own, which is the point of writing it first
+
+I was in `clients/kraken/contracts.py` adding `opened_at` when the lead pasted the
+YAML. Nobody told me. The next routine gate run came back with two reds, and one of
+them was `test_the_order_book_landing_is_in_flight_or_closed` saying in its own
+message that half two had landed and half three had not. **A tripwire written before
+the event it is waiting for costs one branch and replaces a thing somebody has to
+remember to check.** The Phase 5 landing needed a message from the lead to close;
+this one announced itself.
+
+### What landed
+
+1. `order_book: OrderBookConfig | None = None` becomes `order_book: OrderBookConfig`.
+2. `"order_book"` appended to `LANDED_SECTIONS`.
+3. `test_the_order_book_landing_is_in_flight_or_closed` loses its branch and becomes
+   `test_the_order_book_landing_is_closed_and_the_section_is_required`.
+4. `test_a_missing_order_book_section_fails_closed_rather_than_reading_as_zero`
+   **deleted**, with the reason left in place of the body. It asserted that an absent
+   *section* makes `Config.get("order_book.depth")` raise rather than answer `None` —
+   true, and unreachable now that the field is required, because such a config no
+   longer loads at all. What replaced it is stronger:
+   `test_removing_a_phase_5_section_is_refused_at_startup[order_book]`, where the
+   process does not start and the refusal names the section. A test whose premise
+   cannot occur is a claim nobody is checking.
+
+### Two mutations survived, and the reason corrected a comment I had already written
+
+| # | Mutation | Verdict |
+|---|---|---|
+| D1 | `order_book` goes optional again | killed, 3 — the landing test, the Phase 5 landing test, and `test_removing_a_phase_5_section_is_refused_at_startup[order_book]` |
+| D2 | `"order_book"` dropped from `LANDED_SECTIONS` | killed, 1 — the landing test's third assertion |
+| D3 | the deletion test reverts from `with_phase_6()` to `with_phase_5()` | **survived — equivalent** |
+| D4 | the deletion test counts missing sections instead of naming them | **survived — equivalent** |
+
+Byte copies of both files taken before the sweep; every restore wrote the original
+bytes back and compared the sha256 in the same statement. No `git checkout --`.
+Hashes: `config.py` `1422df60…`, `test_config.py` `23eb5003…`.
+
+**Why D3 and D4 survive, and it is not the reason I wrote in the comment.** When I
+moved `test_removing_a_phase_5_section_is_refused_at_startup` from `with_phase_5()`
+to `with_phase_6()`, I wrote that the Phase 5 overlay could no longer load with
+`order_book` required, so every case would refuse for `order_book` rather than for
+the section deleted. **That is false.** `complete_config_dict()` starts from the
+*shipped* `config/default.yaml`, so every section the lead has ever pasted is already
+in the base and the phase overlays only pin values on top of it. The Phase 5 overlay
+carries `order_book` for a reason that has nothing to do with Phase 5.
+
+So the move is defensive rather than necessary, and the list assertion with it. Both
+are kept — the failure they guard is real and silent if the base ever stops carrying
+a required section — but they are recorded as **equivalent mutants under the current
+fixtures**, not as coverage, and the comment in the file now says so with the
+measurement beside it.
+
+**The part of that story that was real, and it cost a mutation to find.** I first
+strengthened the deletion test to `match=rf"{section}: Field required"`, reasoning
+that naming the section is the strong assertion here rather than the weak one. It
+survived D3. Pydantic reports **every** missing field, so the deleted section's line
+is in the message whether or not another section's line is sitting next to it, and
+`re.search` finds it either way. **A `match=` pattern is a substring test on a
+multi-error message and can never say what else went wrong.** Comparing the whole
+extracted list is the only form that can. That generalises past this file: every
+`pytest.raises(..., match=...)` in this project is a substring test, and wherever the
+property is "*and nothing else*", `match=` cannot express it.
+
+### Half three's own gate
+
+`pytest tests/platform tests/clients/kraken -q` — 485 passed, 1 skipped (the
+pre-existing Windows byte-range skip). `ruff` clean. `mypy --strict` clean on 147
+source files, B's `broker.py` having landed its `qty` sites in the meantime.

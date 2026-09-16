@@ -34,6 +34,31 @@
   corruption, and the criterion that reads it fails with a parse error naming nothing useful.
 - `csv.writer` needs the same empty `newline` on the file object, or it doubles the carriage
   return before every line feed.
+- **A text-mode round trip breaks every literal-anchor patcher in the repository, and leaves no
+  diff to show for it.** C-models lost four mutation arms in a row to `anchor appears 0 times,
+  expected exactly once`, against anchors copied character for character out of the file:
+  `engines/memory/engine.py` was **566 CRLF and 0 bare LF** in the working tree against a
+  committed blob of 521 bare LF, and `tests/engines/test_memory_rows.py` was mixed. An anchor
+  written with `
+` matches nothing in a file whose every line now ends `
+`. Because
+  `.gitattributes` normalises on the way into the index, **`git status` says nothing and
+  `git diff --numstat` shows only the real changes** — the conversion is invisible from every
+  direction except a byte count.
+  This is the same mechanism as the rule above, seen from its consequence rather than its cause,
+  and it matters because this project's *can-it-fail* proofs are literal-anchor patchers: every
+  `patch(root, relative, old, new)` in `tests/verify/`, and every mutation sweep any agent runs.
+  A whole-file conversion disarms all of them at once, silently, and the failure surfaces a long
+  way from the cause. Under `tests/fixtures/`, marked `-text` so nothing converts near an evidence
+  fixture, it changes committed bytes instead.
+  **The cheap habit: count CRLF on every file the session has touched before running a sweep,
+  not after four refusals.** And count it in Python: `b.count(b"
+")` against `b.count(b"
+")`.
+  **`grep -c $'
+$'` lies in this shell** — C checked several files with it and got uniform CRLF
+  reported for files that were pure LF, which is worse than no check because it produces a
+  confident wrong answer about the very thing you are trying to measure. Phase 6, C-models, 2026-09-16.
 
 ### Suppressing a lint
 
@@ -84,6 +109,16 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   or a timestamp column, and the only `max`/`min` over prices is a polars `Decimal` dtype.
   The rule is here to keep it that way, because the next one will look just as reasonable.
 
+- **`Decimal` equality ignores the quantum, so a test about the quantum must assert the
+  rendered string.** `Decimal("0.01000") == Decimal("0.01")` is `True`. A found this in its own
+  new test during the Phase 6 `OrderState` amendment: it asserted `state.qty == Decimal("0.01000")`
+  to show the exact quantity survived validation, and **a validator that normalised the trailing
+  zeros away would have passed it**. The assertion was re-pointed at `state_dict()["qty"] ==
+  "0.01000"`, the rendered form, where the zeros survive. The distinction matters here and almost
+  nowhere else, because this project's whole money argument is exactness: `Decimal` comparison is
+  what you want for *value* (a price, a hurdle, a balance), and the rendered string is what you
+  want for *form* (precision preserved across a boundary, a quantity rounded to `lot_decimals`, a
+  figure crossing `state`). Ask which of the two the test is about before choosing.
 - **`Decimal` for prices, quantities, fees, and balances.** Never `float`. Floating-point drift in an order size is a real defect that will get an order rejected by Kraken.
 - `float` and `numpy` are fine for features, indicators, model inputs, and statistics.
 - Round order sizes and prices using the pair's own `lot_decimals` and `pair_decimals` from `AssetPairs`, and always round *down* for quantity.
@@ -139,6 +174,28 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
 - Anything involving money uses exact `Decimal` assertions, never `pytest.approx`.
 - Use `hypothesis` for sizing and rounding logic — that is where off-by-one errors hide.
 - A test that asserts a gate can be bypassed is a defect in the test.
+- **A double that was faithful when written can stop tracking what it doubles, and nothing
+  compares the two.** The rule below is about a double too *simple* to exhibit the property.
+  This is the other failure: C-models' store double matched `StoreClient` exactly on the day it
+  was written, the real method later gained a keyword argument, and **the engine and the double
+  moved as a pair while the store moved separately** — 15 of 26 tests were green against a
+  signature that no longer existed, and went red the moment the double was re-pointed at the real
+  shape. A double is a claim about another module's interface, and it is the only claim in this
+  codebase that nothing re-checks: `mypy` does not compare them, the owning lane does not run the
+  consumer's tests, and the consumer's tests pass precisely because both halves agree.
+
+  Re-pointing it then exposed a second thing, which is the reason this is worth the entry:
+  the real read **filters by model family itself**, so engine 14's own filter was redundant on
+  that path and load-bearing only on the windowed fallback. The family test, left where it was,
+  **would have been green against an engine with no filter at all**, and its mutation would have
+  become an equivalent mutant with nothing saying so. Its replacement asserts the store was
+  *asked* for the family rather than asserting the rows that came back — a filtered result is
+  equally consistent with the engine filtering afterwards.
+
+  So: for any seam driven by a double, keep **one test with no double in it** (already the rule
+  for agreed-by-message seams), and when a double is re-pointed, expect the re-point to change
+  which tests are load-bearing rather than only which ones compile. Phase 6, C-models,
+  2026-09-16.
 - **A double must be capable of exhibiting the property under test.** Before writing the
   assertion, ask what single property this test exists to demonstrate, and whether the fake,
   fixture or stub can actually exhibit it. A double that is simpler than the real thing *in
@@ -160,6 +217,25 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   on contact with tests in another file. A false survivor is worse than a missed one, because it
   sends someone to write a test for a case already covered and makes the real survivors look less
   urgent. Without this caveat the practice produces confident noise.
+- **Run every mutation sweep with `PYTHONDONTWRITEBYTECODE=1`, because a stale `.pyc` can report
+  a false KILL and nothing in the sweep will say so.** B found this in Phase 6 after three runs
+  returned a verdict with **no pytest summary at all**, and one mutation reported KILLED that a
+  re-check showed SURVIVED. The mechanism: a mutant lives for one run and is then overwritten
+  with bytes **of the same length**, and CPython validates a cached `.pyc` on
+  `(source mtime, source size)` — Windows mtime granularity is coarse enough that an
+  apply / run / restore cycle can leave both unchanged, so the next run imports **the previous
+  mutant, or a half-written module**, and pytest can die before printing anything.
+
+  This is worse than the compounded-mutants defect below and for a different reason: that one
+  drifts every verdict toward KILLED, which is at least a *direction*; this one can make a single
+  arbitrary arm report the opposite of the truth, with no summary line to notice. **It is the one
+  failure an equivalent-mutant control does not catch** — the control is itself an arm, and a
+  stale cache can serve it the same wrong answer. Two cheap guards, both mandatory from here:
+  set `PYTHONDONTWRITEBYTECODE=1` for the whole sweep, and **require a pytest summary line in
+  every verdict** — a verdict with no summary is not a result, it is a run that did not happen.
+
+  **If you ran a sweep today whose mutation preserved the file's byte length, re-run it.**
+  Phase 6, B, 2026-09-16.
 - **A mutation harness must restore every file BEFORE the next mutation, not in a `finally` at
   the end of the run.** B's rehearsal harness restored only at the end, so one mutation was
   still on disk while the next was applied and the second verdict was really *first plus
@@ -170,6 +246,15 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   bug, on the strength of a check that was measuring a different mutation. Caught only because
   a hand run disagreed with the harness about *which* tests failed — so compare the failing set,
   not the verdict.
+- **A fixture clause that looks like arbitrary variety is often the only thing standing between
+  a correct-by-accident branch and a measurement.** Spec 97 required a leaderboard fixture with
+  "at least two distinct `model_id`s", which reads like a request for realism. It is not: engine
+  14 must weight only its own model family, and **with one family in the fixture the mutation
+  that removes that filter is an equivalent mutant** — nothing observable changes, the sweep
+  reports a clean kill rate, and the hole is invisible from inside the results. C-models only
+  understood what the clause was for once it had to build the fixture. So when a spec asks for
+  variety in a fixture, find out which branch that variety is the witness for before trimming it;
+  and when you write a spec, say which branch it is. Phase 6, 2026-09-16.
 - **An equivalent mutant is a checked negative, not a survivor.** Report it as one. B's N3 —
   dropping a `dict.fromkeys(...)` initialiser whose keys are all assigned unconditionally
   further down — changes nothing observable and no test can kill it. Filed as a survivor it
@@ -184,6 +269,33 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   two of C-2's own saves and still produced a clean, plausible, directionally sensible answer.
   Re-run with C-2's files hashed before and after both arms: 20 passed in both. Two lines of
   shell; without them an A/B in this checkout measures whichever save was on disk.
+- **A description of the code is not the code, and this project generates descriptions
+  faster than it generates code.** C-models named this as the single pattern behind all three
+  of its own Phase 6 mistakes, and once named it accounts for most of the phase's findings
+  across every lane. The descriptions are all things this project deliberately maintains —
+  which is exactly why they are trusted:
+
+  * **A spec's field list.** Spec 96 omitted `pair` from engine 9's payload; the engine always
+    published it. An agent read the list, told another lane engine 9 has no `pair`, and engine
+    16's coherence walk would have silently exempted the one engine whose output is defined by
+    a pair. The spec was wrong, not the engine.
+  * **A spec naming a method.** Four spec lines this phase named a mechanism that could not do
+    the job — `drain_trades` for the broker, `query_orders` for an idempotency probe,
+    `leaderboard_entries` for an enumeration, and the drain that engine 3 does not do. Each was
+    the right conclusion reached for by the nearest plausible method, with the signature never
+    checked against the job.
+  * **`HEAD` instead of the working tree.** Teammates do not commit, so another lane's landed
+    work is invisible to `git show`. Two agents concluded a dependency had not landed when it
+    was on disk.
+  * **A model's own default.** A fixture built from the real `PositionRow` supplied the `None`
+    the test was asserting engine 19 had written.
+
+  The operational form: **when the question is what the code does, read the code.** A spec, a
+  docstring, a field list, a manifest and a commit message are all statements *about* the code
+  by someone who is not running it. They are worth keeping and they are not evidence. This is
+  the sibling of the Phase 5 rule below — a record of intent is not a record of what happened —
+  and between them they cover both directions: do not trust what the producer said it did, and
+  do not trust what the document says it is. Phase 6, C-models, 2026-09-16.
 - **A record written beside a call is not a check on that call.** C-2's spec 67 mutation
   sweep survived a calibrator fitted on the test window twice: once because isotonic
   regression is monotone and moves the Brier by less than any honest tolerance, and again
@@ -356,6 +468,17 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   code, and say so; and treat "it is probably the other agent's harness" as a hypothesis to
   check rather than an explanation to accept, because it is exactly the assumption that makes
   a real finding invisible.
+- **`unexplained` written where a documented mechanism already fits is not caution — it is a
+  second unexplained entry diluting a real one.** C-models filed a Windows access violation
+  during `import sklearn` as unexplained, then re-attributed it: an access violation is the
+  **known native fault's** signature, recorded on this register since Phase 0 across
+  pydantic-core, `sqlite3`, pure-Python PyYAML and CPython's own `ast.walk`, and the evidence fit
+  it exactly. `unexplained` is the right word for a mechanism nobody has identified, and it earns
+  its weight only while it stays rare — the Phase 5 scipy `TypeError` during collection is still
+  genuinely one. Write it when the known entries do not fit, and say which ones you checked; the
+  standing rule is to suspect the known fault **before** treating a one-off in an untouched path
+  as a defect, and its mirror is not to file a new mystery beside one that already explains it.
+  Phase 6, 2026-09-16.
 - **A diagnostic procedure that cannot fail is the same defect as a test that cannot fail.**
   "Re-run the named test in isolation, and if it passes it was the machine's intermittent fault"
   ran for two phases and confirmed itself every time — because in isolation nothing else was
@@ -372,6 +495,51 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
   watched the Phase 3 criterion stay PASS, and reported a can-it-fail proof **that had itself
   stopped being able to fail**. The count assertion is the part that keeps the proof honest,
   not decoration on it.
+- **The same substring trap runs in the other direction, and there the symptom is a test that
+  keeps PASSING.** `test_a_peak_equity_recomputed_from_this_tick_is_a_fail` asserted
+  `"drawdown_pct" in outcome.message` and had been green for the wrong reason ever since engine
+  19 changed: the **crash** message — `criterion raised - ValueError: live.drawdown_pct is not a
+  decimal: None` — contains that substring, and `verify.py` renders a raise as a FAIL, so both
+  halves of the assertion held while **the criterion never reached the comparison it exists to
+  make.** The only live proof that spec 50's named mutation is caught had quietly stopped being
+  one. Its two siblings named other readings and went red, which is the only reason anybody
+  looked. Two guards, both cheap: extract the disagreeing set and compare the whole of it rather
+  than searching the rendered message, and **refuse any message containing `criterion raised`** —
+  a criterion that raised has not judged anything, and a test that accepts its output as a verdict
+  is asserting against a stack trace. A failing test gets investigated; a test that passes for the
+  wrong reason is invisible until something unrelated moves. Phase 6, C, 2026-09-16.
+- **A `match=` pattern is a substring test on the whole message, so it can never express "and
+  nothing else."** A strengthened `test_removing_a_phase_5_section_is_refused_at_startup` to
+  `match=rf"{section}: Field required"`, reasoning that naming the section was the strong
+  assertion — and the mutation survived, because **pydantic reports every missing field at
+  once**, so the deleted section's line is in the message whether or not three more sit beside
+  it, and `re.search` finds it either way. The test said "this section is refused" and asserted
+  "this section is mentioned somewhere in a list of unknown length". Where the property is
+  *which* things failed, extract the list and compare the whole of it; `match=` can only ever
+  say *at least this*. This is the sibling of the rule below rather than a replacement for it:
+  naming the cause beats naming the type, and comparing the set beats naming one member of it.
+  Phase 6, A, 2026-09-16.
+- **A default in a real row model is a second source, and it will satisfy your assertion for
+  you.** C-models' `test_the_hold_reason_is_written_and_then_cleared` passed under its own
+  mutation on the first run: the fixture dumps a real `PositionRow`, whose `hold_reason` defaults
+  to `None`, so **the row already said null** and the column read as cleared whether or not
+  engine 19 assigned anything. Using the real contract rather than a hand-built dict is normally
+  the right instinct — it is what stops a test agreeing with a shape nothing publishes — and here
+  it quietly supplied the value under test. Fixed by giving the earlier tick a **stale** reason,
+  so the clearing has something to clear. Fifth instance in one day of one witness satisfying two
+  hypotheses, and the only one where the second source was a model default rather than a fixture
+  value. Phase 6, C-models, 2026-09-16.
+- **A field coupled to nothing needs a test saying the absence is deliberate.** A's `opened_at`
+  on `OrderState` is bound by no other field on purpose — a resting order may carry one and a
+  terminal order may lack one. Its mutation C6 is "make `opened_at` the mirror of `closed_at`,
+  since they look like a pair", which is a plausible future design offered in good faith, and it
+  broke only two tests, **one of which exists purely to state that the coupling is absent by
+  choice**. Without that test the next reader adds the coupling, the suite agrees with them, and
+  a constraint nobody decided on is now enforced. Note the shape of the other arms: removing the
+  field, or making it required, kills 17 and 23 tests almost entirely **incidentally** — they die
+  because the shared constructor stops working, not because anything asserts the property, and in
+  each case the deliberate assertion is a single test. A high kill count on a mutation is not
+  evidence that the property is tested. Phase 6, A, 2026-09-16.
 - **`pytest.raises(SomeError)` alone is a weak assertion wherever one error type has several
   causes.** Every fail-closed path in `clients/kraken/` raises `KrakenUnavailableError` on
   purpose, so the bare form cannot tell the failure you induced from one that happened first.

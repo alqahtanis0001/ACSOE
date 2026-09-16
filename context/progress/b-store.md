@@ -1,5 +1,283 @@
 # Agent B — Store and trading
 
+## Phase 6, session 3 — CLAIMED 2026-09-16
+
+The second B session was stopped; everything it built is committed (`bdcb1ff`, `b2fb9de`,
+`41ebf19`). Nothing below this section is revised by it.
+
+**Claimed, before any code, per rule 1. Three jobs, in the lead's order.**
+
+1. **Migration 0003 — `hold_reason TEXT` on `positions`.** Lead ruling 2026-09-16 on C's
+   escalation. My half is the column and the row model, not the write (engine 19 is the
+   only writer, spec 98, C's). Files: `db/migrations/0003_position_hold_reason.sql`,
+   `src/acsoe/clients/store/contracts.py` (`PositionRow.hold_reason`),
+   `src/acsoe/clients/store/client.py` if a read needs it,
+   `src/acsoe/clients/store/seed.py` if the seed must name the field, and
+   `tests/clients/store/`, `tests/db/test_migrations.py`.
+   Three conditions from the ruling, carried into the migration's own comment so the next
+   reader does not have to find this file: engine 19 is the only writer; **it is cleared to
+   `NULL` on every tick that did not hold**; **`NULL` means "did not hold", never "unknown"**.
+2. **`OrderState` gains `qty` and `limit_price` — my half.** A lands the contract; my
+   `clients/paper/broker.py` constructs `OrderState` and must populate both, and engine 18's
+   `entry_unrecorded_at_exchange` path can then publish a real row. Files:
+   `src/acsoe/clients/paper/broker.py`, `src/acsoe/engines/execution/` and their tests.
+   Expect the tree red between A's half and mine.
+3. **Spec 93 — engine 22 `exit`.** Files: `src/acsoe/engines/exit/{__init__,engine,contracts}.py`
+   + `README.md`, and `tests/engines/test_exit.py`. Invariant 14 read in full first.
+
+### Job 1 — migration 0003 DONE 2026-09-16; green in my lane, the four gates are not run
+
+Files touched, and nothing else:
+
+- `db/migrations/0003_position_hold_reason.sql` — new. One nullable `TEXT` column on
+  `positions`, no table added, no index added, `EXPECTED_TABLES` and `EXPECTED_INDEXES`
+  unchanged, every existing CHECK unchanged.
+- `src/acsoe/clients/store/contracts.py` — `PositionRow.hold_reason: str | None = None`,
+  placed with `last_price` and `unrealised_pnl` because all three are facts about *now*,
+  plus a validator refusing a blank.
+- `tests/clients/store/test_store.py` — `make_position(hold_reason=...)` and six tests.
+- `tests/db/test_migrations.py` — four tests, and the `>= 2` floor raised to `>= 3`.
+
+**No change to `client.py`.** `write_position` upserts every column and `open_positions`
+is `SELECT *`, so the column round-trips and — this is condition 2 of the ruling — is
+**cleared by the writer writing the row it would have written anyway**. Nobody has to
+remember to blank a field. Mutation H6 is that defect and one test kills it.
+
+**Eight mutations, eight killed, equivalent control survived.** Table and reasoning in
+the build log. Three things for the lead's eye:
+
+1. **SQLite's one-argument `trim()` strips spaces and nothing else** — not tabs, not
+   newlines — so the obvious CHECK let a tab through and the two layers' refusals
+   disagreed. Found by the parametrisation carrying a tab rather than three kinds of
+   space. Build-log entry written at diagnosis.
+2. **A real hole in `open_positions()`, from Phase 0 and not mine**: the
+   `position_id ASC` tie-break was asserted by nothing, and every position the seed and
+   the builders make shares one `opened_at`. `DESC` survived all 244 tests in the lane.
+   One test added; no change to the client.
+3. **No CHECK enumerating the hold reasons**, unlike `runs.system_mode` — Decision entry
+   in the build log with the reasoning and its cost.
+
+```
+pytest tests/db/test_migrations.py tests/clients/store/ -q     245 passed
+ruff  check src/acsoe/clients/store/ tests/clients/store/ tests/db/   All checks passed
+mypy  --strict src/acsoe/clients/store/                        7 source files, clean
+```
+
+### Job 2 — `OrderState.qty` and `.limit_price` DONE 2026-09-16; green in my lane
+
+A's half was already on disk. Files I touched, and nothing else:
+
+- `src/acsoe/clients/paper/broker.py` — all **five** `OrderState` construction sites.
+- `src/acsoe/engines/execution/engine.py` — `_row_for_unrecorded`, and
+  `_AlreadyPlaced.row` is no longer optional. Engine 18 now **publishes the row** for
+  an order at the exchange the store never recorded, which closes the unmanaged
+  exposure: nothing was ever going to cancel an order engine 21 could not see.
+- `tests/clients/paper/test_broker.py` (5 tests, one per shape),
+  `tests/engines/test_execution.py` (2 new, 1 rewritten),
+  `tests/engines/test_position_manager.py` (`_BrokerAnswering` passes both through).
+
+**Ten mutations, ten killed, equivalent control survived.** Table in the build log.
+
+**One gap A's amendment does not close, flagged rather than taken quietly:
+`placed_at`.** `OrderState` carries `closed_at` and no placement time, so the row says
+*this* tick. Engine 21's entry window therefore restarts from here and an already-stale
+order is cancelled up to one window (300s) late. I judged that acceptable because the
+cost is bounded and the failure it replaces is not, and because `close_all` cancels
+every resting entry **regardless of the window** (invariant 8) — the kill switch is
+complete the moment the row exists. Back-dating to force an immediate cancel writes a
+time that never happened into a column research and the console read as a placement
+time. One line to reverse if the lead disagrees.
+
+**Engine 18 raises rather than recording an exchange order with no limit price.** The
+only order it places under an entry `userref` is a post-only limit buy; a limit order
+with a null price in `orders` is a row engine 21 cannot reason about.
+
+### The engine 9 tripwire fired and was acted on, not weakened
+
+`test_engines_nine_and_fourteen_still_do_not_exist` went red because C landed spec 96.
+Done as its own message says: `approving_state` runs the real `OrderBookEngine`,
+`order_book_payload()` is deleted, the tripwire is narrowed to engine 14, and the seam
+it warned about is pinned by
+`test_engine_nines_own_payload_is_walked_by_the_coherence_check`. **All 29 other tests
+in the file passed unchanged**, which is the first real test of engine 16's design claim
+that its pair and bar clauses are a walk over the payloads rather than four hand-written
+comparisons. It held.
+
+**A witness problem for spec 94, found on the way and recorded in the constant's own
+comment.** Engine 9's real estimate on this fixture's book is **exactly zero** — the top
+bid level covers the whole 5,000 basis — so friction is 0.62% rather than the hand-built
+0.67%, and **an engine 10 that ignored the slippage term entirely would produce the same
+number**. Spec 94's acceptance is "engine 10 reads engine 9's slippage, proven by
+recomputation", and a zero cannot prove it. Spec 94 needs a thinner book.
+
+```
+pytest tests/clients/paper/ tests/engines/test_execution.py \
+       tests/engines/test_position_manager.py tests/engines/test_decision.py -q
+                                                              177 passed
+ruff  check (every touched src and test path)                 All checks passed
+mypy  --strict (clients/paper, clients/store, execution, decision)  16 files, clean
+```
+
+### Job 2, second half + the 0004 boundary — DONE 2026-09-16, green in my lane
+
+Everything the lead and A ruled since my last report is in. Files touched, and nothing
+else: `src/acsoe/clients/paper/broker.py`, `src/acsoe/engines/execution/{engine,contracts}.py`
++ `README.md`, `src/acsoe/clients/store/{contracts,client}.py`,
+`db/migrations/0004_leaderboard_base_rate_brier.sql`, and the matching tests in
+`tests/clients/paper/`, `tests/engines/test_execution.py`, `tests/engines/test_exit.py`,
+`tests/clients/store/`, `tests/db/`.
+
+**1. `opened_at` at all five broker sites, and my `placed_at` workaround is retired.**
+The lead was right and the miss was mine: A landed `opened_at` in the same amendment
+and I populated `qty` and `limit_price` without it. The five sites answering `None`
+would have looked **exactly like an exchange that did not report `opentm`**, driving
+engine 18 down a refusal branch built for a real omission while the simulator knew the
+placement time to the microsecond. A defect presenting as a documented behaviour.
+`test_every_order_state_the_broker_builds_carries_an_opening_time` sweeps all five
+shapes in one test, because a site-by-site list is written by whoever forgot a site.
+
+**2. Engine 18 reports the not-a-limit contradiction rather than raising it.** Applied
+as ruled. My reasoning had stopped at "fail-closed and loud is correct", which is true
+of the tick and wrong about the hour: `ERROR` → `block_records.status = 'ERROR'` →
+engine 17's error budget → a frozen account. The tests assert `status is OK` and
+`blocks_trading is False` explicitly, because a raise satisfies every other assertion
+in them.
+
+**3. `entry_unrecorded_at_exchange` narrowed, two new codes.** A asked whether the code
+still describes a real outcome. It does, for one case of three:
+`entry_recovered_from_exchange` (describable, row published),
+`entry_at_exchange_is_not_a_limit` (no row), `entry_unrecorded_at_exchange` (no
+`opened_at`, no row). Three outcomes under one code is a console that cannot tell an
+operator which happened. **C mapped both new codes within the hour**, my tripwire fired,
+and it is retired into a plain renderability assertion over all six.
+
+**4. Migration 0004 `base_rate_brier REAL` nullable, and `all_leaderboard_rows`.**
+Both on disk; C is unblocked. `model_id` is **required, not defaulted** — the method has
+no `LIMIT`, and "no limit" is only safe because one model's rows are bounded by its
+walk-forward where the table is bounded by nothing. C called it with no arguments and
+has one line to change; messaged.
+
+**5. Three CRLF files normalised** — `clients/store/contracts.py` (489 lines, entirely),
+`engines/execution/engine.py` (478, entirely), this build log (127 of 1,204). Byte
+replace, nothing else touched. My own harness had already hit it on `contracts.py`
+during the 0003 sweep and refused with `ANCHOR MATCHED 0x`, which is the only reason it
+cost a minute rather than four silent non-results.
+
+**Seventeen mutations, seventeen killed, two equivalent controls survived.** Plus the
+engine 22 sweep re-run on the settled tree: 21 killed, control survived.
+
+**Two findings about the instrument, and both are worth the lead's eye:**
+
+- **A false kill, caused by C landing a seam mid-sweep.** `K0`, the equivalent control,
+  came back KILLED — `int(x)` as `int(int(x))`, which cannot change an answer. C had
+  landed `all_leaderboard_rows()` with no arguments between two runs, so every test
+  building an approving `state` went red on a `TypeError`. **The control is what caught
+  it**: a control that dies is unmistakable where a twelfth kill in a row is not. With
+  the `.pyc` defect from the engine 22 sweep, the rule is: a sweep whose control dies is
+  a sweep to throw away, and a sweep with no control cannot tell you that.
+- **A witness I got wrong twice in one test.** `all_leaderboard_rows` orders by `id ASC`.
+  My first fixture gave every row the same `trained_at` — tie unbroken, SQLite returned
+  insertion order anyway, mutation survived. My second gave 9000/8000/7000 written
+  newest-first, which `trained_at DESC` reproduces exactly — survived again. The
+  sequence is now **non-monotonic in insertion order** (8000, 9000, 7000), which is the
+  only shape that separates `id ASC`, `trained_at ASC` and `trained_at DESC` at once.
+  Two mutations now, one per direction.
+
+**For C, one thing in the new prose.** `exits_placed` renders as "Exit orders are
+**resting** at the exchange for this position". Every Phase 6 exit is a **market** sell
+— taker, never resting — by the argument in engine 22's README, so the sentence
+describes an order this system does not place. The other five read correctly.
+
+```
+pytest tests/engines/ tests/clients/ tests/db/ -q          1295 passed
+ruff  check src/acsoe/ tests/ scripts/                     All checks passed
+mypy  --strict clients/, engines/exit/, engines/execution/  28 source files, clean
+```
+
+**Two intermittent interpreter faults, neither reproducible and neither diagnosed:** a
+`SystemError` in `yaml/scanner.py` during collection, and a subprocess exiting
+`0xC0000005` in `test_core_can_use_both_writes_importing_only_the_client`. Both passed
+on an immediate re-run and the lane has since run green twice end to end. Recorded
+because three of us are spawning interpreters in one checkout.
+
+### Job 3 — spec 93, engine 22 `exit`, BUILT AND GREEN IN MY LANE 2026-09-16
+
+Files: `src/acsoe/engines/exit/{__init__,engine,contracts}.py` + `README.md`,
+`tests/engines/test_exit.py`, plus `tests/engines/test_decision.py` for the engine 14
+tripwire below. Nothing else. **Not marked complete** — my standing rule: a spec is
+complete once its four gates are green, never in the edit that builds it.
+
+```
+pytest tests/engines/test_exit.py -q                        43 passed
+pytest tests/engines/ tests/clients/ tests/db/ -q         1278 passed
+ruff  check (every touched path)                          All checks passed
+mypy  --strict src/acsoe/engines/exit/                     3 source files, clean
+```
+
+**Twenty-two mutations, twenty-one killed, equivalent control survived.** Table and
+reasoning in the build log. Every item on spec 93's own "Check When Done" list is one
+of them and all five are killed.
+
+**Four things for the lead, two of which are deviations from spec 93:**
+
+1. **Engine 22 never reads a balance, so `balance_last_known_good` is not defined.**
+   Decision entry in the build log. An exit's quantity is the position's, and the only
+   thing a balance could add is a cap at the base holding — which is **zero for every
+   paper position**, because my spec 88 ruling made the ledger quote-side only. A
+   fallback name nothing emits reads as a behaviour the system has. What invariant 14
+   actually requires is that a *failing* balance fetch not stop the liquidation, and the
+   outage test proves exactly that.
+2. **`last_known_good_asset_pairs` is a property, not the method spec 93 writes.**
+   Written as the spec has it, `retained.value` raises `AttributeError`, the
+   per-position catch turns it into `exit_incomplete`, and **a liquidation reports
+   failure for every position during exactly the outage the rule exists for** with the
+   retained snapshot sitting there readable. Third Phase 6 spec whose conclusion is
+   right and whose mechanism does not exist (88's `drain_trades`, 91's `query_orders`).
+3. **A defect the sweep found in my own engine, not in the tests.** A per-position
+   failure was caught so the other positions still liquidate — and the **message** was
+   swallowed with it. An operator would have had `exit_incomplete` and no way to tell a
+   missing fee tier from a foreign quote from a refused order. The failures are now
+   named in `EngineResult.reason`; three tests assert the sentence.
+4. **A defect in my mutation harness, and this one is the instrument rather than the
+   subject.** Three runs returned a verdict with no pytest summary, and once a mutation
+   was reported **KILLED that a re-check showed SURVIVED**. Cause: a mutant lives one
+   run and is overwritten with bytes of the same length, and CPython's `.pyc` check is
+   `(mtime, size)` — Windows mtime granularity lets a stale cache survive the cycle.
+   Fixed with `PYTHONDONTWRITEBYTECODE=1` and the whole sweep re-run. The two earlier
+   "unexplained" observations in this log are almost certainly the same cause.
+
+**The engine 14 tripwire fired too, and is retired rather than narrowed a third time.**
+C landed spec 97 hours after 96. `approving_state` now runs the real
+`AdaptiveRouterEngine`, `router_payload()` is deleted, and **all thirty other tests in
+the file passed unchanged** — two real publishers landed into engine 16's coherence walk
+in one day and neither needed an edit to engine 16. The tripwire is replaced by
+`test_no_publisher_payload_in_this_file_is_hand_built_any_more`, because a tripwire with
+nothing left to trip is green forever while the invariant under it is not.
+
+**For C, spec 99 — four codes are not renderable yet.** `exits_placed`,
+`nothing_to_exit`, `exit_already_placed` and `exit_incomplete` are absent from
+`REASON_PROSE`, so the console renders "No reason was recorded." for all four, silently.
+C's walking test is already red on them (and on engine 9's four). Suggested prose sent
+by message. `test_the_four_codes_spec_93_adds_are_still_waiting_on_cs_prose` asserts
+their **absence** and goes red the moment C maps any of them, with a failure message
+saying what to do. `data_guard_blocked` is deliberately shared with engine 21's
+`hold_reason` spelling — one fact, one word — and is renderable today; a separate test
+pins the sharing.
+
+**For C, spec 98 — the shapes engine 22 publishes.** `state["exit"]` carries `orders`,
+`positions`, `closed_trades`, `positions_closed` and `reason_code`, and the three row
+lists are store-contract payloads minus `run_id`, `cycle_id` and `updated_at`. Engine
+19's `_write_positions`, `_write_orders` and `_write_trades` already read all three from
+the `exit` key, so I believe nothing is owed here — pinned from my side by
+`test_the_field_names_are_the_ones_engine_nineteen_reads`.
+
+**For C, spec 98 (hold_reason).** The column and the row model are on disk. Engine 19 is the only
+writer: put engine 21's `state["position_manager"]["hold_reason"]` onto the position
+payload `_write_positions` validates, **including when it is null**. `PositionRow`'s
+default is `None`, so omitting the key already clears the column — the failure mode to
+avoid is the opposite one, carrying last tick's value forward. A blank string is refused
+by both the row model and the database; `None` is the only spelling of "did not hold".
+
 ## Phase 6, session 2 — CLAIMED 2026-09-16
 
 The first B session died at the usage limit at 23:49Z. Everything below this section was

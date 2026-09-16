@@ -1029,3 +1029,1033 @@ they wait for, which is the state they are supposed to be in. Everything up to e
 is now known to work end to end against the planted subject — six engines, a real
 candidate, a real feature row and a real model score — and that is a stronger position
 than the criteria could report before today.
+
+---
+
+# C-models, session 3 — spec 96, engine 9 `order_book`
+
+Appended under my own heading. Nothing above this line is mine and nothing above it is edited.
+
+### The archive records book **deltas**, so a mid-stream cut has no book in it at all
+
+**Agent:** C (engines and models) · **Task:** spec 96, the fixture · **Date:** 2026-09-16
+
+**What happened.** Spec 96 step 5 says "choose one deep pair and one thin pair from the tier-1
+recording and a window of a few minutes with no gap". Taken literally that produces a fixture
+from which no book can be reconstructed. Every `book` frame in `data/raw/` after the first is a
+Kraken v2 **update**:
+
+```
+{"kind":"tick","pair":"ETH/USD","channel":"book", ...
+ "payload":{"channel":"book","type":"update","data":[{"symbol":"ETH/USD",
+   "bids":[{"price":2396.31,"qty":0.0},{"price":2396.17,"qty":20.8666329}],
+   "asks":[], "checksum":839555268, ...}]}}
+```
+
+A `qty` of `0.0` deletes a level; everything else replaces one. There is no absolute book in any
+of those lines. The only absolute book is a `type:"snapshot"` frame, and Kraken sends one **only
+at subscribe** — which in a continuous recording means only after a reconnect.
+
+**Why this is a trap and not merely an inconvenience.** A cutter window chosen anywhere in the
+middle of the stream produces a file full of well-formed, real, byte-exact book frames that
+cannot answer "what was the bid side" at any instant. It would have read as a good fixture. The
+reconstruction would then have started from an empty book and filled in only the levels that
+happened to change during the window — a *plausible* shallow book, four or five levels deep,
+which a slippage walk would price as far thinner than the market was. That is the failure shape
+`code-standards.md` names twice: a wrong answer that is in range survives, and the levels nobody
+saw are the worst ones, so the error runs in the direction that makes the cost gate refuse for a
+fabricated reason.
+
+**Fix.** Cut from a **resubscribe**, not from a quiet moment. `data/raw/kraken_v2__msi__
+2026-09-16.jsonl` carries four `gap` markers; the first is at `00:17:06.052717Z` with
+`reconnected_at` equal to it, and the ten tier-1 snapshots land 250 to 290 ms later. A window
+opening at `00:17:06.100000Z` therefore
+
+- does **not** intersect the gap's interval `[disconnected_at, reconnected_at]`, which is what
+  A's cutter refuses on, and
+- **does** contain one `snapshot` frame per pair, ahead of every delta.
+
+The dry run confirmed both, per pair: `ADA/USD: {'snapshot': 1, 'update': 451}`,
+`BTC/USD: {'snapshot': 1, 'update': 524}`. The fixture reader can now start from a real ten-level
+book and apply deltas in recorded order, with nothing assumed.
+
+### `order_book.depth` does not exist in `config/default.yaml`, and its value is decided by the archive
+
+**Agent:** C (engines and models) · **Task:** spec 96 step 2 · **Date:** 2026-09-16
+
+**What happened.** Spec 96 step 2 reads `depth` from config key `order_book.depth`, marked
+"requested of the lead, spec 80". There is **no `order_book:` section** in `config/default.yaml`
+and no matching pydantic section in `src/acsoe/platform/config.py`. `Config` is `extra="forbid"`,
+so the key needs both halves or the loader refuses to start, and both files are other agents'.
+
+**Why it matters more than a missing key usually does.** `depth` is not tuning. It is the bound
+on the walk, so it is the definition of `book_too_thin`: a notional the bid side cannot absorb
+*within that many levels* is declined rather than extrapolated. Set it above what the archive
+recorded and the live engine is configured to walk further than any committed evidence can
+validate — the fixture could no longer exercise the refusal it exists to prove, and the README's
+seconds-to-minutes bound would be quietly weaker than it claims.
+
+`scripts/record.py`'s `DEFAULT_DEPTH` is `10`, and every snapshot in the archive confirms it:
+ten bids and ten asks, for all ten tier-1 pairs, at every resubscribe measured. So **10** is the
+value asked for, and it is asked for on the evidence rather than as a round number.
+
+**Fix.** Requested of the lead by message, with the reasoning above, before any code. Until it
+lands, `_depth` treats the absent key exactly as it treats a null one: `OK`,
+`order_book_inputs_unavailable`, no estimate, and engine 10 refuses — which is the same posture
+as every other fail-closed shape and does not special-case the phase's own incompleteness.
+Three cases are told apart rather than conflated, per `code-standards.md` on handlers that cannot
+distinguish two situations: `Config.get` **raises** `ConfigKeyError` (a `KeyError` subclass) for a
+key the model does not declare, **returns `None`** for a declared key the operator left unset, and
+returns the value for a key set to something that is not a count.
+
+### Spec 96 — five mutations, five killed, and which test killed each
+
+**Agent:** C (engines and models), session 4 · **Task:** spec 96 · **Date:** 2026-09-16
+
+Session 3 built engine 9, its tests and the fixture and died before sweeping them. This is
+the sweep, plus the fixtures README row it also owed. Nothing in the engine changed.
+
+**Harness.** `scratchpad/mutate_ob.py`. Baseline first, and it refuses to report if the tree
+is already red — sweeping a red tree marks every mutation KILLED. The target file is copied
+to the scratchpad **before** the mutation and restored from those bytes with the sha256
+compared **in the same statement that writes it back**; never `git checkout --`, because
+`engines/order_book/` is untracked and there is nothing behind it. Every anchor is asserted
+to occur exactly once. Every file that is not the variable is hashed on both sides of the arm
+and reported: all five runs printed `witness files unchanged: True`.
+
+**Arm, and the directory it excludes.** `tests/engines/test_order_book.py` — 51 tests, the
+file that owns this engine. Running the sweep narrowly against the tests that own the code is
+the protection `code-standards.md` asks for in a shared checkout, because a mutation live on
+disk turns another agent's run red and a spurious failure reads as KILLED. **Excluded:**
+`tests/engines/test_cost.py` and the chain rehearsals, which are B's and A's and would have
+made attribution impossible; every verdict below is a kill, and a kill on a subset is a kill.
+No survivor is being claimed on a subset, which is the direction the rule guards.
+
+| | Mutation | Verdict | Newly red |
+|---|---|---|---|
+| O1 | the **ask** side walked instead of the bid side — spec 96's first named one | KILLED | 8 |
+| O2 | the walk **stopping one level early** — spec 96's second | KILLED | 11 |
+| O3 | slippage measured from the fill price rather than the **best bid** — spec 96's third | KILLED | 8 |
+| O4 | a partial walk reported as complete instead of refusing past the fetched depth | KILLED | 7 |
+| O5 | `levels_consumed` published one short of the levels the walk touched | KILLED | 8 |
+
+**O1** was killed by, among others, `test_the_deep_pairs_walk_matches_the_hand_computation`
+and `test_the_cost_gate_prices_the_slippage_engine_nine_published`. Worth naming because the
+two failures say different things: the first is the arithmetic, the second is that engine 10
+priced a different number. A file asserting only the arithmetic would have caught the defect
+and not the consequence.
+
+**O2** is the broadest kill at eleven tests, and the one that most needed the real fixture.
+Stopping one level early is not a small error in one direction: a notional the book *can*
+absorb is declined as `book_too_thin`, and one it can only just absorb is filled at a better
+price than the book offers. `test_the_whole_book_exactly_is_a_fill_and_one_cent_more_is_not`
+is the boundary that separates those two, and it is the test a hand-written ladder alone
+would not have motivated.
+
+**O3 is the interesting one and it is why spec 96 named it.** Measuring `(best_bid −
+fill_price) / fill_price` rather than `/ best_bid` moves the answer by a fraction of a
+percent, which is exactly the size of the thing being measured — a wrong answer in range. The
+consequence downstream is a double charge: engine 10 already adds the measured spread as its
+own term of `friction`, so slippage measured from anything between the bid and the ask
+charges part of that spread twice, and the hurdle refuses trades for a cost the book does not
+impose. Killed by both hand computations and by
+`test_the_published_payload_can_be_recomputed_without_trusting_it`, which is the one that
+recomputes the ratio from `best_bid` and `fill_price` rather than reading the published
+`estimated_slippage_pct` — ruling 7's shape, and the reason that test exists.
+
+**O5 is the checked negative that turned out not to be one.** `levels_consumed` changes no
+decision: it is provenance beside the estimate, and the slippage is identical with it wrong.
+I expected it to survive, which would have said that a published field nobody asserts on can
+say anything. It was killed by eight tests, because the fixture's walks are asserted in full —
+`test_the_engine_publishes_the_walk_it_made` is parametrised over both pairs and pins the
+level count against a hand computation (ADA/USD consuming 10 levels for
+0.0001366891113175430924786514892, BTC/USD consuming 4 for
+0.00006528042192692375531712952815). That is the difference between publishing a number and
+asserting it.
+
+**No survivors, so nothing was re-run wide.** Had one survived, the rule is that a mutation
+surviving a subset has not survived, and it would have gone to
+`tests/engines/test_cost.py` and the chain rehearsal before being believed.
+
+**Also landed, and it was outstanding rather than new:** the `book_sample.jsonl` row in
+`tests/fixtures/README.md`, with the provenance session 3 worked out and did not get to
+write down — the two pairs, the 30-second window, and above all *why the window opens 48 ms
+after a reconnect*. Kraken v2 sends book **deltas**, and the only absolute book is the
+`snapshot` frame at subscribe, so a cut from a quiet moment mid-stream would have produced a
+file of real, byte-exact frames that cannot say what the bid side was at any instant. The
+reconstruction would have started from an empty book and produced a plausible four- or
+five-level ladder — thinner than the market was, in the direction that makes the cost gate
+refuse for a fabricated reason. That reasoning belongs beside the file, not only in a build
+log, because the next person to re-cut it will read the README.
+
+### Decision: engine 14 weights by Brier skill against the fold's own base rate — and the base rate is not in the table
+
+**Agent:** C (engines and models) · **Task:** spec 97 step 3 · **Date:** 2026-09-16
+
+**Proposed here before any of engine 14 is written**, per spec 97 step 3, which makes this a
+methodology choice the lead approves rather than something a lane decides.
+
+**Options.** Three were on the table.
+
+1. **Brier skill against the base rate, clipped at zero, normalised.** For each model version,
+   `skill = 1 - brier / base_rate_brier`, clipped below at zero; `weight = skill / sum(skill)`,
+   or all zero when nothing beats its base rate.
+2. **Inverse Brier**, `weight ∝ 1 / brier`. Needs no base rate at all.
+3. **Rank-based**, weight by position in a Brier ordering.
+
+**Chose option 1**, which is the example spec 97 itself offers.
+
+**Because** the other two both hand weight to a model that has no edge. Inverse Brier is the
+sharper illustration: Brier is bounded and always positive, so `1 / brier` gives a model that
+is *worse than always predicting the base rate* a perfectly respectable weight — and on the
+numbers this project actually has, that is not a hypothetical. Spec 67's first real run came
+in at or slightly worse than base rate on two folds of three. A rule that cannot express "this
+model has no edge" would weight those folds as confidently as a good one, and spec 97's own
+requirement that a model failing to beat its base rate gets weight zero would be unstatable.
+Rank-based has the same defect wearing a different hat: the worst of three models still ranks
+third, and third of three is a weight.
+
+Option 1 also has the property that makes it honest about today: with one model version in the
+table the weight is 1.0 whatever its skill, and with none it is the empty case. The rule does
+not pretend to be doing work it is not.
+
+**The blocker, and it is spec 97's own warning coming true.** `leaderboard` has a `brier`
+column and **no base-rate Brier column** (`db/migrations/0001_initial.sql`). Engine 20 already
+computes `base_rate_brier` per fold — `engines/tournament/engine.py` holds it on `_FoldScore`,
+recomputes it from the out-of-sample rows, and checks the digest against it — and then
+**discards it** on the way into the store, because there is no column to write it to.
+
+**It cannot be recovered from the columns that exist, and the near-miss is worth recording
+because I nearly took it.** `win_rate` is stored, and for a binary outcome the base-rate Brier
+is `p(1-p)`, so `win_rate * (1 - win_rate)` looks like the number. It is not. `brier` and
+`base_rate_brier` are computed over **every** fold row; `win_rate` is computed over the **BUY
+subset** only. Two different populations, and on a fold where the BUY calls are the confident
+ones they differ substantially. A skill score built from those two would be a ratio of
+quantities measured on different sets — in range, plausible, and wrong in whichever direction
+the BUY subset happens to lean. That is exactly the witness rule the lead added to
+`code-standards.md` today, met from the other side: two numbers that look like the same
+quantity, in one table, with nothing saying they are not.
+
+**So this is a schema question, which spec 97 says in as many words is the lead's and not a
+number encoded into `notes` and parsed back out.** What I am asking for: **`base_rate_brier
+REAL` on `leaderboard`**, nullable, written by engine 20 from the value it already has. That
+is a migration (B's `db/migrations/`), a `LeaderboardRow` field (B's `clients/store/`) and one
+line in engine 20's `_write` (mine). Until it lands, engine 14 has no way to evaluate the
+approved rule, and the fail-closed reading is the one I would build meanwhile: a row whose
+`base_rate_brier` is absent gets **weight zero with a reason code**, not a default base rate
+— inventing one would be this lane choosing the line at which a model counts as having edge.
+
+**The regime and the DI margin are published as provenance and are not in the arithmetic**,
+and that is deliberate rather than an omission. Spec 97 has engine 14 read
+`state["regime"]["label"]`, and the mutation list says "the regime ignored **if** the approved
+rule uses it". Conditioning a weight on regime requires per-regime metrics, and the leaderboard
+holds one Brier per model version over the whole out-of-sample window with no regime breakdown
+anywhere. A regime adjustment invented on top of that would be a methodology choice with no
+measurement behind it, which is the thing spec 70 and spec 72 both stopped at rather than
+walked past. The regime goes into `basis` so the operator can see which market the weights were
+published in; it changes none of them. The same for `di_margin`.
+
+**Cost.** One schema change and the seam it opens with B. And the honest statement that engine
+14 is inert today — the walk-forward trains one predictor per fold, so there is one version to
+weight — which the README says and which the fixture is built to work around rather than hide:
+`leaderboard_sample.json` carries three fabricated versions precisely because the real table
+cannot exercise the rule, and its provenance line says so.
+
+### An unmarked position was worth nothing, and one such tick freezes the account
+
+**Agent:** C (engines and models) · **Task:** spec 98 · **Date:** 2026-09-16
+
+**What happened.** `_write_equity` read `positions_value` through
+`decimal_field(manager or {}, ...)`, and `decimal_field` returns `Decimal(0)` for an
+absent field. Only an absent `balances` skipped the row. So on a tick where engine 21
+could not take a mark, `equity = cash + 0` and the position's entire value vanished from
+that tick of the series. Found by the lead while confirming for B that engine 19 treats an
+absent `positions_value` as nothing-to-record. It does not, and the lead checked the code
+rather than the docstring — the docstring said the right thing.
+
+**Why it matters more than a wrong number.** Engine 17 computes
+`(peak_equity - equity) / peak_equity` against a peak read from the store, so on a fully
+invested account one unmarked tick is a drawdown approaching 100% against a
+`safety.max_drawdown_pct` of 0.10. The account freezes over a missing quote. Spec 92 has
+engine 21 publish `positions_value` **absent, never zero**, precisely so this is
+detectable — and `decimal_field`'s default threw that distinction away at the reader.
+
+The lead's framing is the part worth keeping: this is the third instance this phase of
+**a default that is correct in the only state the system has ever been in**.
+`Orchestrator._flag`'s `bool()` was right for an absent payload, `decimal_field`'s zero is
+right for a flat account, and engine 11's concurrency check was right while nothing could
+open a position. All three become wrong on the first tick that holds a position, and none
+of them looks wrong until then.
+
+**Fix.** `store.count_open_positions()` is read **before** the equity arithmetic rather
+than at the write, because this tick's positions have already landed and it is that count
+which decides whether cash-only equity is the truth or a hole. Non-zero count with
+`positions_value` or `unrealised_pnl` absent writes **no** equity row and names itself in
+`equity_skipped_reason`; zero count with an absent mark writes the row on cash alone,
+because there is nothing to mark. `unrealised_pnl` gets the same treatment: an absent one
+reading as zero is a claim that the position sits exactly at its entry price, which Phase
+7's attribution would read as fact.
+
+**One existing test of mine was green because of the defect**, and it is worth naming
+rather than quietly fixing. `test_the_position_count_comes_from_the_store_not_from_this_
+tick_s_state` drove two ticks with an open position and no mark, and asserted
+`open_position_count == 1` on **two equity rows that valued that position at nothing**.
+The fix removes those rows, so the test had to change to supply a mark. Its subject is
+sharper for it: tick 2 now publishes a mark and no positions list, so the store says one
+open position while `state` says none — which is what the test was always about.
+
+### The three new sources, and the write order that decides which row survives
+
+**Agent:** C (engines and models) · **Task:** spec 98 · **Date:** 2026-09-16
+
+`state["execution"]["orders"]`, `state["exit"]["orders"]` and `state["exit"]["positions"]`
+are read now; engine 19 is the single writer of relational rows, so before this those rows
+reached no table at all. Field shapes confirmed by B's audit rather than negotiated: the
+row payloads are the store contract's minus `run_id`, `cycle_id` and `updated_at`, which
+`_stamped` sets itself because a row carrying the publisher's `run_id` cannot be joined to
+the block record for the tick.
+
+**The write order is chain order and it is load-bearing twice**, per the lead's ruling.
+`write_position` upserts on `position_id` and `write_order` on `userref`, so the row
+engine 19 writes *last* is the stored state. Positions: 21 then 22, because engine 22 runs
+after 21 and a position closed this tick must not be stored as open with a mark on it — a
+row the console renders as live and `safety` counts towards its escalation precondition.
+Orders: 18 then 21 then 22, because an entry placed on the opportunity chain and cancelled
+on the manage chain must end cancelled; the other way it is stored as resting, which is a
+live post-only buy to everything that reads the table, and invariant 8 exists for exactly
+that order. Both are tested with an assertion on the **row count** as well as the status,
+because an upsert that had silently become an insert would leave both rows present and the
+status assertion would pass on whichever came back first.
+
+### Spec 98 — eight mutations, eight killed, and the one that survived first
+
+**Agent:** C (engines and models) · **Task:** spec 98 · **Date:** 2026-09-16
+
+Harness `scratchpad/mutate_mem.py`, same guarantees as the other two sweeps: baseline
+first with a refusal if it is red, byte copy before the mutation, sha256 compared in the
+same statement that restores it, every anchor asserted to occur exactly once, witnesses
+hashed on both sides. Arm `tests/engines/test_memory.py` and
+`tests/engines/test_memory_rows.py`. **Excluded and named:** `tests/verify/`, which is the
+other C session's and would make attribution impossible.
+
+| | Mutation | Verdict | Killed by |
+|---|---|---|---|
+| P1 | engine 18's orders not read — spec 98's first named one | KILLED | `test_the_entry_order_engine_18_places_reaches_the_store` |
+| P2 | engine 22's positions not read — spec 98's second | KILLED | the closed-position test and the 22-sources test |
+| P3 | engine 22's orders not read | KILLED | the 22-sources test |
+| P4 | 18's orders written after 21's — spec 98's third | KILLED | `test_a_placement_and_its_same_tick_cancel_end_as_cancelled` |
+| P5 | 22's positions written before 21's | KILLED | `test_a_position_marked_and_closed_on_one_tick_ends_closed` |
+| P6 | the equity row skipped whenever a mark is absent, open position or not | KILLED, 6 tests | `test_a_flat_account_still_writes_its_equity_row` and five older equity tests |
+| P7 | the equity row never skipped — the defect as it stood | KILLED, 3 tests | the three invested-account tests |
+| P8 | the hold reason carried forward instead of cleared | **survived, then killed** | `test_the_hold_reason_is_written_and_then_cleared` |
+
+P6 and P7 are the lead's two required mutations and they fail in opposite directions,
+which is the point: a version that always skips loses the flat account's row — a silent,
+permanent hole in the one series the drawdown breaker reads — and a version that never
+skips is the defect. The two tests they redden differ in **exactly one input**, whether a
+position was published.
+
+**P8 survived the first sweep and the test was at fault, not the engine.** The mutation
+sets `hold_reason` only when there is one, so the previous tick's reason is carried
+forward — an hour-old hold rendered forever, reporting a paused manage chain over one
+running normally. My test drove a tick that held and then a tick that did not, and it
+passed under the mutation: `a_position` dumps a real `PositionRow`, which carries
+`hold_reason: None` as a **model default**, so the row payload itself already said null
+and the column came out null whether or not engine 19 assigned anything. Two sources
+supplying the same value — the lead's witness rule, met from the other side, on a test
+written the same day the rule was added.
+
+The fix is the one the rule prescribes: make the sources differ. Tick 2's row now carries
+a **stale** `hold_reason`, which is not a contrivance — engine 21 builds its published
+rows from the open positions it read out of the store, so last tick's value is exactly
+what comes back — and only engine 19's tick-level assignment can clear it. Tick 1 already
+distinguished the two, with the row saying null and the tick saying `data_guard`, and it
+now asserts that precondition explicitly. P8 is red on re-run.
+
+**One baseline refusal, and the harness was right to make it.** P8's first attempt aborted
+with `REFUSED: baseline is red` on a `TypeError: object of type 'ScalarEvent' has no len()`
+out of PyYAML, loading `config/default.yaml` — another agent mid-save. Nothing was
+mutated, nothing was reported. That is the protection working: without the baseline the
+mutation would have been applied to a tree that was already failing and reported KILLED on
+somebody else's half-written config.
+
+### `Path.write_text` again, this time inside the editing tool, and it broke a mutation sweep
+
+**Agent:** C (engines and models) · **Task:** spec 98 · **Date:** 2026-09-16
+
+**What happened.** Four mutation arms in a row aborted with
+`anchor appears 0 times, expected exactly once`, against anchors I had copied character for
+character out of the file. `src/acsoe/engines/memory/engine.py` was **566 CRLF and 0 bare
+LF** in the working tree; its committed blob is 521 bare LF and no CRLF.
+`tests/engines/test_memory_rows.py` was **mixed**: 614 CRLF and 390 LF.
+
+**Why.** The text-mode round trip `code-standards.md` names, arriving through the editing
+tool rather than through anyone's `Path.write_text`. It rewrites the **whole file's** line
+endings, not the lines it was asked to change — and `.gitattributes` carries
+`* text=auto eol=lf`, so git's clean filter normalises on the way into the index and
+`git diff --numstat` reported only my real changes (53/8 and 416/3). `git status` said
+nothing. The only visible symptom was four sweeps refusing to find an anchor.
+
+**This is the same mechanism that cost the lead the spec 102 revert**, and connecting them
+is the reason this entry exists rather than a one-line fix. Two Phase 5 criterion tests
+patch `modelling/di.py` **by literal anchor** to prove the DI criterion can fail; the
+refactor rewrote those lines and both proofs reported "anchor appears 0 times". A
+whole-file line-ending rewrite does the same thing to every literal-anchor patcher in the
+repository, silently, with no diff to show for it. Anywhere under `tests/fixtures/`, which
+is marked `-text` so that no conversion happens near an evidence fixture, it would change
+committed bytes instead.
+
+**Fix.** Both files rewritten as bytes with `\r\n` replaced by `\n`: engine.py 25,109 →
+24,543 bytes, test_memory_rows.py 39,810 → 39,196. Every file this session has touched was
+then scanned; the only other CRLF file in the set is `tests/engines/test_memory.py`, which
+is **not mine** — its blob is pure LF, `git status` reports it clean, and I have never
+written it, so it is one of the ~120 pre-existing conversions `code-standards.md` already
+records. Left alone rather than tidied, because a file I did not change is not mine to
+rewrite in a shared checkout.
+
+**Consequence.** The scan is worth making a habit rather than a reaction: `CRLF count` on
+every file a session touched, before the mutation sweep rather than after four refusals.
+
+### Engine 9 audited rather than only swept, and what was found sound
+
+**Agent:** C (engines and models), session 4 · **Task:** spec 96 · **Date:** 2026-09-16
+
+A mutation sweep proves the *tests* can fail. It says nothing about whether the engine is
+right, and I inherited engine 9 from session 3 rather than writing it. This log asks for
+what was checked and found sound as well as what was found broken, so: every one of spec
+96's structural requirements was read against the code, and all of them hold.
+
+- **`number = 9`, `is_gate = False`**, matching the registry's Gate column.
+- **It cannot block, and that is structural rather than careful.** `EngineStatus.OK`
+  appears exactly once in the module and `BLOCK`, `PASS` and `ERROR` appear zero times —
+  one return point, one status. Spec 96 step 4 requires a non-gate that refuses on its own
+  criteria to be impossible, and this is the strongest available form of it.
+- **Nothing can escape as an `ERROR` either, which is the half a status count misses.**
+  Contract rule 7 turns an uncaught exception into `ERROR` with `blocks_trading=True`, so
+  a raise here would be engine 9 blocking the tick by the back door. Every `SetupError` —
+  a missing config key, a null depth, a non-integer depth, a missing scout pair, an
+  unreadable quote currency, an unparseable balance — is raised inside the one `try` that
+  turns it into an `OK` with `order_book_inputs_unavailable`. The client call is wrapped
+  separately and catches `KrakenError`, `ValidationError` and `ValueError` only, with the
+  reasoning written beside it: anything that is not exchange-shaped propagates on purpose,
+  because a defect on this side of the boundary is not a thin book.
+- **No `float(` anywhere in the engine or its contracts**, and every money field is typed
+  `Money`. The walk is `Decimal` throughout, and the two inexact operations — a remainder
+  divided by a price, and quote divided by base — are named in the docstring with the
+  reason nothing is quantized.
+- **The README carries spec 96 step 6's bound in the required terms**: validated over
+  seconds to minutes of recorded book rather than years of archive, because the historical
+  archive carries no book at all, and every slippage number this system reports inherits
+  that limit.
+
+The one thing I would still like closed is not a defect in the engine: **engine 9 publishes
+no `pair`**, so B2's engine 16 coherence walk — which checks any payload carrying a `pair`
+against `state["scout"]["pair"]` — is silently exempt from the one engine whose whole job
+is to price a specific pair's book. A cached or misread pair there produces a slippage
+number that is in range, plausible, and about the wrong market. Raised with the lead as a
+field-list question, since spec 96 fixes the payload and B2 is building against the spec.
+
+### The Phase 4 equity replay drove an invested account as though it were all cash
+
+**Agent:** C (verification and interface), session 3 · **Task:** the lead's job 1 ·
+**Date:** 2026-09-16
+
+**What happened.** Three tests in `tests/verify/test_phase4_criteria.py` fail, all with the
+same message:
+
+```
+criterion raised - ValueError: live.drawdown_pct is not a decimal: None
+```
+
+`test_every_phase_4_criterion_passes_against_the_real_repository`,
+`test_a_memory_engine_that_drops_the_closed_trades_is_a_fail` and
+`test_a_memory_engine_that_drops_the_resting_orders_is_a_fail`. The criterion is
+`memory_writes_safety_inputs_live` — the one that closes the project's single forward
+dependency by reading the same six `safety` numbers out of B's Phase 0 seed and out of C's
+engine 19.
+
+**Why.** Nothing is wrong with engine 19. C-models changed it, correctly and by the lead's
+ruling, so that an absent `positions_value` no longer means a position worth nothing:
+`decimal_field` returns `Decimal(0)` for a missing field, and on a fully invested account
+`equity = cash + 0` is a drawdown approaching 100% against the stored peak — an account
+frozen by a missing quote. Engine 19 now reads `store.count_open_positions()` and, where
+positions exist with no mark published, writes **no** equity row and names
+`equity_skipped_reason`.
+
+`_replay_seed_through_memory` in `scripts/verify.py` — mine — had already written the seed's
+open positions into the live database at step 2, and then drove its two equity ticks at step 4
+with `state["exchange"]["balances"]` **and nothing else**. Under the new rule both rows are
+correctly skipped, `equity_snapshots` is empty, `safety` reads `drawdown_pct: None`, and the
+criterion's own `as_decimal` raises on it.
+
+So the replay was asserting a number it was producing by accident. Its two ticks said *this
+account holds positions and is entirely in cash*, which is not a state the system can be in;
+the old engine 19 answered the contradiction by silently discarding the positions' value, and
+the criterion passed on the arithmetic that came out. The new engine 19 refuses the
+contradiction instead, which is what made it visible. **The replay was wrong before this
+change and produced the right answer anyway** — that is the shape worth recording, not the
+red.
+
+**A second defect, found while confirming the first, and worse than it.**
+`test_a_peak_equity_recomputed_from_this_tick_is_a_fail` is **green right now and green for
+the wrong reason**. It induces spec 50's named mutation (`peak = equity`), expects a FAIL, and
+asserts `"drawdown_pct" in outcome.message`. The criterion never reaches its comparison — it
+raises — and `verify.py` renders the raise as a FAIL whose message is
+`criterion raised - ValueError: live.drawdown_pct is not a decimal: None`. That string
+contains `drawdown_pct`, so both assertions hold, and **the one test standing behind the
+reason the replay drives two equity ticks rather than one has not exercised the criterion
+since the engine changed.** It is the substring rule in `code-standards.md` — `match=` can
+only ever say *at least this* — wearing a different hat: `in outcome.message` on a bare
+`FAIL` cannot tell a disagreement from a crash. It went unnoticed because it kept passing,
+which is the only direction of this defect nobody looks in.
+
+**A third thing, and a habit paying off.** `tests/verify/test_phase4_criteria.py` was **mixed**
+in the working tree — 867 CRLF lines against 62 bare LF — measured before touching anything,
+per the rule C-models added to `code-standards.md` today. A multi-line anchor written with
+`\n` would have matched only inside the 62-line region, and the refusal would have surfaced a
+long way from the cause. Note that `grep -c $'\r$'` in this shell reported the file as
+*uniformly* CRLF and was wrong about every file I checked; the byte count
+(`b.count(b'\r\n')` against `b.count(b'\n')`) is the one to trust.
+
+**Fix.** In `scripts/verify.py` and `tests/verify/test_phase4_criteria.py`, both mine. The
+lead approved "give the two equity ticks a `position_manager` payload with `positions_value`
+and `unrealised_pnl` from the seed's latest `equity_snapshots` row and cash of
+`equity - positions_value`". **I built that, measured it, and it was not enough — so what
+landed is one step further, and the step is the reason this entry is long.**
+
+1. `_seed_equity_bounds` became `_seed_equity_ticks`, returning **two whole rows** as
+   `SeedEquityRow` — the row that set the peak and the latest row — each carrying `ts`,
+   `equity`, `peak_equity`, `cash`, `positions_value` and `unrealised_pnl`. The peak row is
+   found by walking the series as `Decimal`, never by `SELECT MAX` on a money column.
+2. Each equity tick now replays **its own row**: the balance is that row's `cash`, the mark is
+   that row's `positions_value` and `unrealised_pnl`. Engine 19 adds them and has to *arrive
+   at* that row's equity.
+3. A new comparison, `_equity_composition_disagreements`, checks engine 19's latest
+   `equity_snapshots` row against the seed's on all five money columns —
+   `realised_pnl_cum` deliberately excluded, being a running total over whichever trades each
+   producer has seen and the one column the two sides are not expected to agree on.
+4. A new refusal, `_no_equity_row_written`, reports "engine 19 wrote no equity_snapshots row"
+   **before** the six readings are compared, so the original symptom can never again reach
+   `as_decimal` and arrive as a raise. The composition comparison is reported **after** the six
+   readings, because those are the criterion's thesis and this is the fidelity underneath them.
+5. `tests/verify/test_phase4_criteria.py`: two parsers, `disagreeing_readings` and
+   `disagreeing_columns`, which refuse a message containing `criterion raised` and then
+   **extract and compare the whole set** of what disagreed. The three induced-failure tests
+   now assert `== ["drawdown_pct"]`, `== ["consecutive_losses"]`, `== ["resting_entry_orders"]`
+   rather than `in outcome.message`. One new test,
+   `test_a_memory_engine_that_stores_the_total_without_its_composition_is_a_fail`.
+6. The file was rewritten as bytes to pure LF, 41,284 → 40,417 bytes, 867 CRLF → 0.
+   `git diff --quiet` rc 0 either side: the blob never changed, because `.gitattributes` had
+   been normalising it into the index the whole time.
+
+**Why the approved fix was not enough, measured rather than argued.** With
+`cash = equity - positions_value`, the arm *"the mark is read out of the wrong column"*
+**survived**: `cash + positions_value` returns the seed's total for **any** mark whatsoever,
+because the cash was derived to cancel it. The replay would have reproduced the number while
+the composition behind it was free. Reading the row's own `cash` turns the addition into an
+assertion, and that arm now dies. Phase 5's closing finding, in a new place: recompute what a
+number was supposed to be computed from — do not rearrange it.
+
+The composition columns also had **no reader at all** before this. `cash`, `positions_value`
+and `unrealised_pnl` are stored because the Phase 7 alpha attribution reads the curve
+*including its cash periods* — `0001_initial.sql` says so in a comment — and every test in the
+project compared the total. A writer keeping the total and losing the split left every
+`safety` reading correct and handed Phase 7 a portfolio that was never invested.
+
+**Mutation sweep — seven arms, six killed, one equivalent control survived as designed.**
+Arm: `tests/verify/test_phase4_criteria.py` alone, 47 tests, named because a narrow arm is
+what the shared-checkout rule asks for. Target `scripts/verify.py`, byte copy taken before any
+arm at sha256 `e59a8f00661112986be8649f159b3c972c34d977f9a840cae3f5912d1a5953ab`, every anchor
+asserted to occur exactly once, every restore written and its sha256 compared **in the same
+statement** — `sha((path.write_bytes(original), path.read_bytes())[1]) == before`, a tuple and
+not an `or`, because `write_bytes(...) or sha(...)` short-circuits on the byte count and
+compares nothing. All hashes matched at the end of the sweep. Baseline green before it started.
+
+| Arm | Mutation | Result | Killed by |
+|---|---|---|---|
+| V1 | the tick's cash is its whole equity, so the position is counted twice | KILLED | `passes_against_the_real_repository`, `drops_the_closed_trades`, `drops_the_resting_orders`, `stores_the_total_without_its_composition` |
+| V2 | the mark published out of the wrong column of the seed's own row | KILLED | the same four |
+| V3 | no mark published at all — **the exact defect this job fixed** | KILLED | those four plus `a_peak_equity_recomputed_from_this_tick` |
+| V4 | **EQUIVALENT CONTROL** — the compared columns listed in a different order | SURVIVED, as designed | — |
+| V5 | one equity tick instead of two, so no peak is ever established | KILLED | the same four as V1 |
+| V6 | the composition comparison dropped, leaving the six readings alone | KILLED | `stores_the_total_without_its_composition` — and **only** that one, which is the evidence the new test was worth writing |
+| V7 | the unrealised mark published as zero | KILLED | `stores_the_total_without_its_composition`, `passes_against_the_real_repository` |
+
+V2 is the arm that changed the design: under the lead-approved arrangement it is the arm that
+**survived**. V6 is the arm that says the new comparison is load-bearing rather than ornamental
+— one test kills it, and that test did not exist this morning.
+
+**One refusal and one thing left unexplained, both recorded rather than tidied away.**
+
+* The sweep's **first** run reported a red baseline — `1 failed, 46 passed` — and printed only
+  the summary line, which named nothing, so nothing was mutated and the run was thrown away.
+  Three captured re-runs were green. The harness now writes each arm's **whole** output to
+  `scratchpad/sweep-logs/<arm>.log` before anything is concluded from an exit code, which is
+  rule 5 applied to a harness rather than to a test: the first version's diagnosis could only
+  ever have been "something failed".
+* A **segmentation fault**, once, running `tests/verify tests/console tests/harness` together:
+  a Windows access violation inside `re` at `scripts/verify.py:509`,
+  `check_docs_vocabulary`'s `pattern.search(line)`, reached from
+  `test_a_planted_term_in_a_current_state_section_fails`. That is the shape of catastrophic
+  regex backtracking overflowing the C stack. It has not recurred in two runs of
+  `test_docs_vocabulary.py` (24 passed each) or a full 780-test lane run, and the lane log
+  carries zero further access violations. **Unexplained**, and written down as unexplained —
+  `check_docs_vocabulary` scans `context/*.md`, three agents share this checkout, and a
+  mid-save file is a plausible cause I have not demonstrated. Flagged to the lead because it
+  is in a criterion that runs in every phase gate.
+
+### Spec 99's map caught up to four engines, and one sentence was describing a repaired defect
+
+**Agent:** C (verification and interface), session 3 · **Task:** spec 99, the lead's job 2 ·
+**Date:** 2026-09-16
+
+**What happened.** `tests/console/test_reason_prose.py`'s walking test went red naming
+**fourteen** codes with no operator prose, across four engines that landed after session 2
+stopped: engine 9 `order_book` (4), engine 14 `adaptive_router` (4), engine 18 `execution`
+(2 of its 6), engine 22 `exit` (4). Engines 16 and 21 were already fully mapped — checked
+against their own `contracts.py` rather than against any list, as the lead asked.
+
+Separately, `console/format.py`'s sentence for `entry_unrecorded_at_exchange` said the system
+"cannot describe it because `OrderState` carries no quantity or limit price", and that had
+stopped being true.
+
+**Why.** Two different causes, and only the first is the walk working as designed.
+
+The fourteen are the seam doing its job: a code with no prose renders `"No reason was
+recorded."` on the console **silently, with no error anywhere**, and the walk is the only
+thing in the project that can notice. Four engines landing in one afternoon is exactly the
+rate the walk was written for.
+
+The stale sentence is the other kind. A's spec 84 amendment added `qty`, `limit_price` and
+`opened_at` to `OrderState`; B then built the row; the lead narrowed
+`REASON_ENTRY_UNRECORDED` to the single remaining case — **the exchange answering with no
+`opentm`**, so the order cannot be dated — and introduced `REASON_ENTRY_RECOVERED` for the
+ordinary crash-recovery case. Every one of those changes was correct, and **the sentence
+survived all of them.** Nothing could have caught it: a stale sentence is not a failing test,
+it is a screen that quietly misinforms whoever reads it at 3am. A listed it in its progress
+file under a heading naming B and C rather than editing another agent's file, which is how it
+reached me at all.
+
+**Fix.** Fourteen sentences in `REASON_PROSE`, one rewrite, and **six new property tests** in
+`tests/console/test_reason_prose.py` — because presence is the weakest thing that can be
+asserted about a sentence, and the editorial decisions are where the value is.
+
+The rewrite names the specific gap instead of a general inability: *"An order is resting at
+the exchange and this system cannot tell when it was placed, so it was left unrecorded; find
+it by its reference."* "when it was placed" rather than "`opentm`", because the operator reads
+this screen and not Kraken's field list, and the `userref` pointer survives because that is
+still the only thing an operator can act on.
+
+The editorial decisions the new tests pin, each of which could otherwise be undone by a
+well-meaning edit with nothing objecting:
+
+- **Engines 9 and 22 cannot refuse, so none of their sentences may read as a refusal.** This
+  is structural rather than stylistic for engine 9: `EngineStatus.OK` appears exactly once in
+  the module and `BLOCK`, `PASS` and `ERROR` zero times. When it cannot price the book it
+  publishes *no estimate* and engine 10 `cost` is what refuses, on the absence. A sentence
+  saying "rejected" here sends the operator past the gate that actually stopped the trade,
+  looking for one that does not exist.
+- **Two of engine 22's codes and one of engine 18's are things the engine *did*, not
+  refusals.** `exits_placed` with no sentence is the console narrating a placed stop-loss as
+  silence.
+- **`exit_incomplete` must say the position is still open.** `positions_closed` is false
+  beside it. A sentence saying only "incomplete" leaves the one question that matters — *am I
+  still holding this?* — unanswered on the screen whose whole job is to answer it.
+- **Engine 14's four codes all mean "no weights" and mean four different things to an
+  operator**, two ordinary states and two refusals to guess. `leaderboard_empty` is where
+  every fresh clone lives and `no_model_beats_its_base_rate` is a *finding* — the tournament
+  reporting, correctly and usefully, that nothing on it has edge. Neither may borrow "could
+  not" from the two beside them.
+- **One fact keeps one spelling and one sentence.** Engine 9 reuses engine 7's
+  `no_quote_balance`; engine 22 spells its hold exactly as engine 21's
+  `HOLD_DATA_GUARD_BLOCKED`. Both are now asserted between the two producing modules, so a
+  parallel code cannot be minted quietly. Two vocabularies for one fact is how a `trades`
+  table ends up carrying both "stop" and "stopped".
+- **The prose and the contract are read in one test.** `test_the_unrecorded_entry_sentence_matches_what_order_state_can_now_carry`
+  asserts `{"qty", "limit_price", "opened_at"} <= OrderState.model_fields` **and** that the
+  sentence no longer claims the order is indescribable, **and** that it names the timing gap.
+  That is the answer to the class of defect this entry is about: the sentence went stale
+  because nothing held it against the contract it described, and now something does.
+
+**Mutation sweep — fifteen arms, fourteen killed, one equivalent control survived as
+designed.** Arm: `tests/console/test_reason_prose.py` alone, 178 tests. Targets
+`src/acsoe/console/format.py` and the test file, both hashed as bytes before any arm, both
+verified CRLF-free before the sweep started (the harness refuses outright on a CRLF target,
+because an LF anchor would match nothing and the refusal would read as "the code moved").
+Every anchor asserted to occur exactly once; every restore written and its sha256 compared in
+the same statement that wrote it. All hashes matched at the end.
+
+| Arm | Mutation | Result | Killed by |
+|---|---|---|---|
+| P1 | an engine 9 sentence reads as a refusal | KILLED | `no_engine_nine_sentence_reads_as_a_refusal` |
+| P2 | the thin-book sentence stops naming the depth fetched | KILLED | `the_thin_book_and_the_unreadable_setup_are_not_one_sentence` |
+| P3 | the unrecorded-entry sentence reverted to the one A's amendment falsified | KILLED | `the_unrecorded_entry_sentence_matches_what_order_state_can_now_carry` |
+| P4 | the recovered entry borrows the already-placed sentence | KILLED | `no_two_codes_share_a_sentence`, `the_three_provenance_codes_are_three_sentences` |
+| P5 | the incomplete exit stops saying the position is still open | KILLED | `the_incomplete_exit_says_the_position_is_still_open` |
+| P6 | the empty leaderboard reads as a fault | KILLED | `the_two_ordinary_router_states_do_not_read_as_faults` |
+| P7 | engine 14's base-rate sentence deleted | KILLED | the walk, `every_reason_code_adaptive_router_declares_has_prose`, `the_four_router_codes_are_four_sentences`, `the_two_ordinary_router_states_do_not_read_as_faults` |
+| P8 | **EQUIVALENT CONTROL** — two entries swapped in declaration order | SURVIVED, as designed | — |
+| P9 | the `OrderState` field set fabricated rather than read | KILLED | `the_unrecorded_entry_sentence_matches_what_order_state_can_now_carry` |
+| P10 | engine 9's fetch-failure sentence deleted | KILLED | the walk, `every_reason_code_order_book_declares_has_prose`, `no_engine_nine_sentence_reads_as_a_refusal` |
+| P11 | engine 22's placed-exit sentence deleted | KILLED | the walk, `every_reason_code_exit_declares_has_prose`, `the_exit_outcome_codes_do_not_read_as_refusals` |
+| P12 | the engine 9 / engine 7 shared-code comparison pointed elsewhere | KILLED | `engine_nine_reuses_the_scouts_empty_balance_code` |
+| P13 | the engine 22 / engine 21 shared-hold comparison pointed elsewhere | KILLED | `engine_twenty_two_spells_the_hold_exactly_as_engine_twenty_one_does` |
+| P14 | engine 22's quiet tick reads as a refusal | KILLED | `the_exit_outcome_codes_do_not_read_as_refusals` |
+| P15 | engine 18's recovered-entry sentence deleted | KILLED | the walk, `every_reason_code_execution_declares_has_prose`, `the_three_provenance_codes_are_three_sentences` |
+
+**Every one of the six new tests was observed red at least once**, which is the question a
+kill count cannot answer. P4 and P7 each killed more than one test, and in both cases the
+*deliberate* assertion is a single one of them — A's Phase 6 finding about `opened_at`'s
+mutation C6 applies here too: a high kill count is not evidence that the property is tested.
+
+**One mutation deliberately not run, and what that costs.** Proving the prose-to-contract
+coupling from the *contract* side means deleting `opened_at` from A's `OrderState`. A owns
+that file, three agents share this checkout, and a live mutation in someone else's run
+surfaces as a spurious failure they may report as real — the direction that hides a survivor,
+which `code-standards.md` already records from Phase 4. P9 mutates the test's own expected
+field set instead. **That proves the set is read from the real model rather than fabricated;
+it does not prove that the model losing a field turns this test red.** Stated rather than
+implied, because the gap is small and the habit of not stating it is not.
+
+**A finding the warning list gave up, and it is not mine to fix.**
+`test_the_inverse_is_reported_as_a_warning_and_never_as_a_failure` warns that `REASON_PROSE`
+carries five sentences no engine publishes. Session 2 wrote that four are the seed
+generator's older spellings and that `insufficient_depth` "is engine 9's, which does not
+exist yet". Engine 9 exists now, so I went and looked, and **that sentence was half wrong in
+a way worth writing down**: `insufficient_depth` is not an engine spelling at all. It is at
+`src/acsoe/clients/store/seed.py:188`, written as
+
+```
+("order_book", "insufficient_depth", "Order book too thin to fill without 0.8% slippage")
+```
+
+— a seeded **rejection row attributed to engine 9**. Two things follow, and both are other
+agents' calls:
+
+1. **Two spellings for one condition.** The seed says `insufficient_depth`, engine 9 says
+   `book_too_thin`, and they render two different sentences. That is exactly the divergence
+   the two sharing assertions added above exist to prevent, arriving from the one direction
+   they cannot see — a *fixture* rather than an engine.
+2. **Worse, and the reason this is a finding rather than tidying: engine 9 cannot reject.**
+   It has one return point and one status, `OK`, and it publishes an absent estimate rather
+   than a refusal; engine 10 `cost` is what refuses. The seed writes a rejection *attributed
+   to* engine 9, so the console will render a refusal from an engine that has no refusal
+   path. The seed predates the engine and nothing has compared the two since.
+
+`clients/store/seed.py` is B's and `engines/order_book/` is C-models'. Raised with the lead
+with both paths named, not touched. Both sentences stay in `REASON_PROSE` meanwhile, because
+the seeded rows exist and must still render — the alternative is silence on the console,
+which is the defect this whole file exists to prevent.
+
+### I told B2 engine 9 publishes no `pair`. It always did, and I had read the spec
+
+**Agent:** C (engines and models), session 4 · **Task:** spec 96 · **Date:** 2026-09-16
+
+**What happened.** B2 asked whether engines 9 or 14 publish a `pair`, because engine 16's
+coherence walk checks any payload that carries one against `state["scout"]["pair"]`. I
+answered that engine 9 does not, argued that it should, and asked the lead to amend spec
+96's field list. The lead approved the amendment. **Engine 9 has published `pair` since
+session 3 built it** — `SlippageEstimate.pair`, set from
+`_require(state.get(SCOUT_KEY), SCOUT_PAIR_FIELD, SCOUT_KEY)`, verbatim from scout, and
+written by `to_state_data`.
+
+**Why.** I answered from **spec 96's step 4 field list**, which names
+`estimated_slippage_pct`, `basis_notional` and `levels_consumed` and does not mention
+`pair`. I had swept the engine's tests and read its refusal paths; I had not read its
+payload model. This is the exact mistake the lead has now made three times from the other
+direction — naming a mechanism without checking its signature against the job — and the
+correction in both directions is the same: **build against the code, not against the
+description of it.** I had been told that an hour earlier and then did the opposite.
+
+**Fix.** Nothing in the engine. B3-store told that the field is already there, and my
+message to B2 corrected. The spec amendment is still worth having, because a field list
+that omits a field the engine publishes is a document that will mislead the next reader
+exactly as it misled me.
+
+**What the episode did produce, and it is worth more than the correction.** My argument to
+the lead was about a **cached or misread** pair — a slippage number in range, plausible
+and about the wrong market, with engine 10 pricing a hurdle on it. Checking the tests, the
+published pair was asserted, but only ever on a single tick against a `state` built with
+that same pair. **One tick cannot tell an echo from a cache**: the assertion is satisfied
+by an engine that reads scout, by one that re-derives the pair from the book it fetched,
+and by one holding the first pair it ever saw. Two sources agreeing by construction is the
+witness problem, and it means the hazard I had just described to the lead was uncovered.
+
+`test_the_published_pair_follows_scout_across_ticks_rather_than_being_cached` drives **one
+engine instance over two ticks with different candidates** and asserts the published pair
+follows scout each time, plus that the two slippage estimates differ — otherwise the pair
+could be wrong with no observable consequence on this fixture. Mutation O6 caches the
+candidate on the instance: **KILLED, by that test and by nothing else in 56**, which is
+the answer to "which test killed it" and confirms it was the only cover.
+
+### Decision: the aggregation across a version's folds, which spec 97 never named
+
+**Agent:** C (engines and models) · **Task:** spec 97 step 3 · **Date:** 2026-09-16
+
+The lead raised this after approving the weighting rule, and it is not obvious: the
+leaderboard holds **one row per model version per fold**, and the rule weights **versions**.
+There is an aggregation step between the rows and the weight, and the three candidates give
+three different numbers.
+
+**Options.** The unweighted mean of the per-fold skills; the most recent fold's skill; a
+fold-count-weighted mean.
+
+**Chose the unweighted mean**, which is the lead's prior and I agree with it. The question
+engine 14 asks is *how good is this model version*, and each fold is one out-of-sample
+measurement of it. A most-recent-fold rule encodes a judgement about recency; a
+fold-count-weighted mean quietly rewards a version for having been around longer. The
+unweighted mean is the only one of the three that does not add a second, unstated judgement
+to the one being asked.
+
+**Two things the lead did not ask about, and one of them changes the answer.**
+
+**Duplicates are not folds.** B's `leaderboard_entries` docstring records that there is no
+unique index on `(model_id, model_version, fold)` and that it deliberately returns *every*
+match, so a broken idempotency convention stays visible rather than being collapsed by the
+reader. Those rows reaching a mean-over-folds would weight one fold twice — a weighting
+decision made by a duplicate row rather than by a measurement. So engine 14 keeps the
+latest row per `(version, fold)` by `updated_at` and reports how many it collapsed in
+`basis`. Absorbed silently, the duplicate would move the weight and leave nothing to notice
+it by; collapsed and counted, the broken convention is still visible where B wanted it.
+
+**Only this engine's own model family is weighted.** The leaderboard is keyed on
+`(model_id, model_version, fold)` and nothing stops a second family appearing in it.
+Weighting across families would put a predictor's Brier in a distribution with a score
+measured on a different question, and normalising would hand that family part of the
+predictor's weight. There is exactly one family today, which is precisely why this would
+have been unnoticeable — and it is what spec 97's "at least two distinct `model_id`s"
+requirement for the fixture is *for*, which I only understood once I had to build the
+fixture.
+
+**Cost.** The aggregation is **inert on the real table**: engine 20 writes one row per
+`(version, fold)` and the fold's artefact run id *is* the version, so every real version has
+exactly one fold and all three aggregations agree. The fixture is the only thing that can
+tell them apart, and `test_the_mean_across_a_versions_folds_is_unweighted` asserts the
+fixture still carries a multi-fold version — otherwise the branch is green and unreached.
+
+### Spec 97 — eight mutations, eight killed, and which test killed each
+
+**Agent:** C (engines and models) · **Task:** spec 97 · **Date:** 2026-09-16
+
+Harness `scratchpad/mutate_ar.py`, same guarantees as the other sweeps: baseline first with
+a refusal if it is red, byte copy before the mutation, sha256 compared in the same statement
+that restores it, every anchor asserted to occur exactly once, witnesses hashed both sides
+and unchanged on all eight runs. Arm `tests/engines/test_adaptive_router.py`. **Excluded and
+named:** everything else, because engine 14 is inert — nothing downstream reads its payload,
+so no other file could observe a change in it, and a wider arm would add runtime and no
+coverage. R6 is the exception and it mutates *engine 15's* source, for the reason below.
+
+| | Mutation | Verdict | Killed by |
+|---|---|---|---|
+| R1 | the clip at zero removed — spec 97's first named one | KILLED | the below-base-rate test and the whole-rule test |
+| R2 | the mean across folds replaced by the most recent fold | KILLED | the aggregation test and the whole-rule test |
+| R3 | the model-family filter dropped | KILLED | `test_a_second_model_family_is_not_weighted` |
+| R4 | duplicate `(version, fold)` rows kept as separate folds | KILLED | `test_a_duplicate_row_for_one_fold_is_collapsed_to_the_latest` |
+| R5 | the truncation tripwire removed from the windowed read | KILLED | `test_a_full_window_publishes_no_weights_rather_than_a_partial_distribution` |
+| R6 | engine 15 reading engine 14's weights — spec 97's third named one | KILLED | `test_engine_fifteen_does_not_read_this_payload` |
+| R7 | a missing base rate defaulted to 0.25 | KILLED | `test_a_version_with_no_base_rate_gets_zero_rather_than_a_default` |
+| R8 | the approved rule starts using the regime — spec 97's second, made concrete | KILLED | `test_the_regime_does_not_change_a_single_weight` |
+
+**R1 is the one worth reading, because it leaves everything looking right.** Removing the
+clip lets a version with *negative* skill shrink the denominator, so every other weight goes
+**above** its true share — and the weights still sum to one, every value stays in [0, 1], and
+the below-base-rate version still reads lowest. Nothing about the shape of the answer says it
+is wrong. What catches it is the whole-rule test recomputing the expected weights from the
+fixture's rows by a second implementation, plus an explicit control asserting the best
+version does *not* equal `0.45 / 0.30`, which is what the unclipped denominator would give.
+
+**R6 had to be applied to engine 15, not to engine 14**, and that is the point of it. Spec
+97's claim is about the *consumer* — that the skeptic's verdict does not depend on a weight —
+and no mutation of engine 14 could ever show it. The test scans engine 15's own source and
+contracts for this engine's state key, which is the structural form of the claim under
+contract rule 3: engine 15 names every key it is allowed to reach, so the absence of
+`adaptive_router` from that list is the guarantee.
+
+**R8 is spec 97's second named mutation made buildable.** The spec says "the regime ignored
+*if* the approved rule uses it" — the approved rule does not, so the informative mutation is
+the inverse: make the rule start using it. A uniform regime factor would have been an
+*equivalent* mutant, because normalisation cancels a constant, so the mutation boosts only
+multi-fold versions when the regime is `trending`. That is what a regime-conditional rule
+would actually look like, and it is killed by the test asserting the weights are identical
+across all three regime labels.
+
+**No survivors, so nothing was re-run wide.**
+
+### Amendment: the lead's fold-aggregation ruling, corrected by what the store does
+
+**Agent:** C (engines and models) · **Task:** spec 97 step 3 · **Date:** 2026-09-16
+
+Correcting the Decision entry above with a new entry rather than editing it, per script rule
+6. The lead has accepted the duplicate-row handling **as an amendment to ruling 3 rather than
+as a detail of the implementation**, and the distinction matters enough to record.
+
+Ruling 3 was "the equal-weighted mean across a version's folds". Written literally, and
+applied to what `leaderboard_entries` actually returns, that weights a fold **twice** when
+the table holds two rows for it — because B's read deliberately returns *every* match on
+`(model_id, model_version, fold)`, there being no unique index, precisely so that a broken
+idempotency convention stays visible rather than being collapsed by the reader.
+
+So under the ruling as written, **a weighting decision would have been made by a data
+artefact rather than by a measurement.** The amendment: collapse to the latest row per
+`(version, fold)` by `updated_at`, and **report how many were collapsed** in `basis`. The
+arithmetic stops depending on the artefact, and B keeps the visibility the store was built
+to give — the duplicate is still discoverable, it just no longer moves a number.
+
+The general form, which is the part worth carrying: **a rule stated over "folds" is not
+stated over "rows", and the gap between them belongs to whoever wrote the read.** Neither
+the spec nor the ruling could have caught this, because both were written against the
+concept and the hazard lives in the storage.
+
+### Why the fixture requirement I did not understand was the one that found the defect
+
+**Agent:** C (engines and models) · **Task:** spec 97 step 6 · **Date:** 2026-09-16
+
+Spec 97 requires the leaderboard fixture to carry **at least two distinct `model_id`s**, and
+it does not say why. I read that as "make the fixture varied" and nearly wrote one family
+with three versions, which satisfies every other clause in the step.
+
+Building the second family is what made me ask what engine 14 should do with it — and the
+answer is that it must be excluded entirely, because normalising across families hands one
+family part of another's weight. **There is one model family on the real table today, which
+is exactly why this would have gone unnoticed**: with a single `model_id` the filter never
+fires, the weights are correct by accident, and no test, metric or review could distinguish
+an engine that filters from one that does not.
+
+So the requirement was load-bearing and I could not see it from the requirement. The
+transferable part: **write the fixture the spec asks for even when the reason is not
+stated**, because a fixture clause that looks like arbitrary variety is often the only thing
+standing between a correct-by-accident branch and a measurement. Mutation R3 drops the
+filter and dies on `test_a_second_model_family_is_not_weighted`; without that fixture row,
+R3 is an equivalent mutant and the sweep reports a clean kill rate over a hole.
+
+### Correction: the scipy import crash is the known native fault, not unexplained
+
+**Agent:** C (engines and models) · **Task:** spec 97 · **Date:** 2026-09-16
+
+I filed the wide-arm crash as `unexplained`. **That attribution is wrong and the lead
+corrected it.** A `Windows fatal exception: access violation` is the signature of the native
+memory fault in the tracker's Known Risks, open since Phase 0 and seen inside pydantic-core,
+inside `sqlite3`'s C extension, inside pure-Python PyYAML and inside CPython's own
+`ast.walk`. Four unrelated libraries, one of them not compiled, which is what process-level
+memory corruption looks like and is not what any library defect looks like.
+
+**The new site is `scipy._lib._array_api._make_capabilities_note` → `textwrap.dedent` →
+`re.sub`, during `import sklearn`, before any test ran.** The locus is new; the signature is
+not. My evidence fits it exactly — nothing of mine on the stack, the identical command clean
+immediately afterwards, and `tests/engines/` green through the same imports an hour earlier.
+
+The standing rule I should have applied first: **suspect the known native fault before
+treating a one-off in an untouched path as a defect.** `unexplained` stays an acceptable
+thing to write, and writing it where a documented mechanism already fits is not caution, it
+is a second unexplained entry diluting a real one. Distinct from the Phase 5 scipy entry,
+which was a `TypeError` during collection and remains genuinely unexplained.
+
+### Correction: spec 96's field list was wrong, and that is half of the `pair` mistake
+
+**Agent:** C (engines and models) · **Task:** spec 96 · **Date:** 2026-09-16
+
+Correcting my own earlier entry with a new one, per script rule 6. I wrote that telling B2
+"engine 9 publishes no `pair`" was my mistake for reading spec 96's field list instead of
+`engines/order_book/contracts.py`. That is true and it is not the whole account: **the
+field list was wrong.** The lead has amended spec 96 to list `pair`, with a note that the
+engine always published it.
+
+The general form the lead put on it, kept here because it is the reusable part: **a spec's
+field list is a description; `contracts.py` is the fact, and where they disagree the spec
+is what is wrong.** That is the same shape as spec 97 step 2 naming `leaderboard_entries`,
+a method whose signature cannot enumerate — a conclusion written correctly and the nearest
+plausible mechanism reached for without checking it against the job.
+
+So the reading rule stands unchanged — build against the code — but the failure is not
+only a reader's. A description that disagrees with the code will mislead every reader in
+turn until somebody checks, and the fix is to correct the description rather than to
+remember that a particular one was unreliable.
+
+**What being wrong produced, which cost less than it returned.** The published pair had
+only ever been asserted on single ticks, against a `state` built with that same pair — two
+sources agreeing by construction — so a **cached** pair was uncovered in the one engine
+whose output is defined by which market it walked. Mutation O6 caches the candidate on the
+instance and now dies on `test_the_published_pair_follows_scout_across_ticks_rather_than_
+being_cached`, and on nothing else in the file.
+
+### Migration 0004 landed, and the double was simpler than the read in the one dimension that changed
+
+**Agent:** C (engines and models) · **Task:** spec 97 close-out · **Date:** 2026-09-16
+
+**What happened.** B3 landed `all_leaderboard_rows(*, model_id)` and `base_rate_brier`.
+Engine 14 called `enumerate_all()` with no argument, which raised `TypeError` and was red
+in B3's lane before it was red in mine. One line. But re-pointing the tests at the real
+row model turned 15 of 26 red with `_Store._all() got an unexpected keyword argument
+'model_id'` — **the test double had the old signature**, and it had been green for as long
+as the engine and the double agreed with each other rather than with the store.
+
+**Why that is worth an entry rather than a fix.** It is `code-standards.md`'s double rule
+arriving from the direction that rule does not describe. The usual form is a double too
+simple to exhibit the property under test. This one was faithful enough on the day it was
+written and then **stopped tracking the thing it stood for**, silently, because nothing
+compares a double's signature against the real method. The engine and the double moved as
+a pair and the store moved separately.
+
+**Fix, and the part that is not just a signature.** `_Store` now mirrors
+`all_leaderboard_rows` faithfully — **including that the store filters by family itself**
+— and records the `model_id` it was asked for. Modelling the filter honestly immediately
+exposed something I had not seen: **on the enumerating path engine 14's own family filter
+is redundant**, because the store has already applied it. The filter is only load-bearing
+on the **windowed fallback**, which returns every family.
+
+So `test_a_second_model_family_is_not_weighted` now drives the *windowed* store. Left on
+the enumerating path it would have been green against an engine with no filter at all —
+the store would have filtered for it — and mutation R3 would have become an equivalent
+mutant without anything saying so. It is the witness rule again: two sources capable of
+producing the same correct answer, and the test must drive the one where only the subject
+can.
+
+A new test asserts the store was **asked** for `MODEL_ID`, rather than asserting the rows
+that came back, because a filtered result is equally consistent with the engine filtering
+afterwards. Mutation R9 asks for a different family: killed by eight tests.
+
+**B3's `model_id` being required rather than defaulted is right** and the reasoning is
+worth keeping: the read has no `LIMIT`, and "no limit" is only safe because one model's
+rows are bounded by its walk-forward while the table is bounded by nothing. A default
+would hide the scope at the call site, which is the same fault as the truncating window.
+
+### The truncation tripwire was wrong on the real read, and B3 found it by reading
+
+**Agent:** C (engines and models) · **Task:** spec 97 close-out · **Date:** 2026-09-16
+
+**What happened.** The tripwire was `len(rows) == _WINDOWED_PROBE` on **both** read paths.
+B3 pointed out that against the unlimited read it fires on a model that genuinely has
+exactly `_WINDOWED_PROBE` rows — a false positive costing that tick **all** of its weights.
+
+**Why it was wrong.** "Came back exactly full" is a fact about a *limited* read. The
+enumerating read has no limit, so the comparison is not a weaker version of the check, it
+is a different claim that happens to share its arithmetic — and one that cannot
+distinguish a truncation from a coincidence. Over 405 folds the coincidence is not
+negligible.
+
+**Fix.** The length check stays on the windowed fallback, where it is exactly right, and
+is gone from the enumerating path. The lead's requirement that the detection survive B's
+read as "the assertion that the fallback is unreachable" is met **by a test** rather than
+by a runtime heuristic, which is what an assertion is. `test_a_window_that_did_not_fill_is_
+weighted_normally` and `test_a_full_window_publishes_no_weights_rather_than_a_partial_
+distribution` keep the fallback's behaviour pinned; R5 still kills.
+
+**Found by a colleague reading the code.** No fixture would have had exactly that many
+rows, so no test would ever have shown it, and the sweep would have reported a clean kill
+rate over it. Worth recording as evidence that review catches a class of defect mutation
+testing structurally cannot: a wrong branch that no input in the suite reaches.
+
+### One red in B's lane that I could not attribute, and did not
+
+**Agent:** C (engines and models) · **Task:** spec 97 close-out · **Date:** 2026-09-16
+
+`tests/clients/store/test_store.py::test_all_leaderboard_rows_is_scoped_to_one_model`
+failed once in a batch of 180 and passed on an identical re-run of the same batch, same
+order, minutes later. B3 had told me it was landing that exact method at that time.
+
+**I did not hash the file on either side, so I cannot prove it was a save rather than a
+flake** — `code-standards.md` says to hash what is not the variable on both sides of an
+A/B in a shared checkout, and I did not. The honest statement is that the evidence is
+consistent with B3 mid-save and I cannot rule out the native fault. Recorded as B's, not
+chased, and flagged to B3 rather than filed as a defect. Re-running in isolation passed,
+which tells me nothing and is noted only so nobody treats it as having told me something.

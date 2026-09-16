@@ -36,6 +36,65 @@ produce both.**
    gate, so nothing either publishes may make the system more willing to trade (invariant 4), and
    making it less willing is a veto only a gate may issue.
 
+### Where Phase 6 stands, 2026-09-16 06:30Z
+
+**All six engines and the fill simulator are built.** 9 `order_book`, 14 `adaptive_router`,
+16 `decision` (a gate, by operator ruling), 18 `execution`, 21 `position_manager`, 22 `exit`,
+the paper broker in `clients/paper/`, and engine 19 rewritten to record what 18 and 22 publish.
+**Nothing is registered yet** — spec 82 is held until the two rehearsals (A's spec 87 over
+18/21/22, B's spec 94 over 9/14) are green, which is the same deferral Phases 2 to 5 took.
+
+Nine Phase 6 criteria are registered and PENDING. Seven were waiting on engine 22, which now
+exists; two need engines 9 and 14 driven against their fixtures.
+
+**Outstanding at this point:** B's migration 0004 (`base_rate_brier`) and a non-truncating
+leaderboard enumeration; C's remaining reason-code prose and the criteria bodies; then the
+rehearsals, then registration, then the final gate. Engine 20's write of `base_rate_brier` and
+engine 14's skill computation are one line each and wait on 0004.
+
+**Two schema changes landed this phase**, both lead-approved on escalation: 0003
+`positions.hold_reason`, because the console had no way to read why the manage chain held and
+inferring it from `block_records` was rejected on the same grounds the system mode is never
+inferred from the `commands` trail; and 0004 `leaderboard.base_rate_brier`, because engine 20
+computes it per fold and discarded it for want of a column, and it cannot be recovered from
+`win_rate` — `brier` is over every fold row, `win_rate` over the BUY subset only.
+
+**Five spec lines of the lead's named a mechanism that could not do the job** — `drain_trades`
+for the broker's fill rule, `query_orders` as engine 18's idempotency probe, `leaderboard_entries`
+for an enumeration it cannot perform, spec 96's field list omitting `pair`, and
+`last_known_good_asset_pairs` written as a method when it is a property. Every one was caught by
+an agent building against the code rather than the spec, and the general rule is now in
+`code-standards.md`: **a description of the code is not the code.**
+
+### FINDING: the Phase 0 seed's refusal vocabulary is invented, and no engine can emit any of it
+
+Found 2026-09-16 by spec 99's walking test, from the one direction it cannot see directly — a
+fixture rather than an engine. `clients/store/seed.py` writes seeded `rejections` rows as
+`(engine, code, sentence)` triples, and **not one of those codes exists in the named engine's
+`contracts.py`**: `order_book`/`insufficient_depth`, `prediction`/`dissimilarity_index`,
+`decision`/`no_candidate_cleared`, `anomaly`/`outlier_market_state`,
+`skeptic`/`meta_label_veto`. The real codes are `book_too_thin` (which is **not** a refusal),
+`di_refused`, `pair_disagreement` and its four siblings, and so on.
+
+**Why it happened and why nothing caught it.** The seed was written in Phase 0, before any engine
+existed, so inventing plausible codes was the only option — and correct at the time. Nothing has
+compared the two since. `REASON_PROSE` maps both vocabularies, so the console renders every row
+and looks right; the walking test added in Phase 6 walks **engines**, so it can prove no engine
+code is unmapped but not that no mapped code is unproduced.
+
+**The sharpest instance, and the reason this is a finding rather than housekeeping.** Engine 9
+`order_book` **cannot refuse at all** — one `EngineStatus.OK` in the module, zero of the others,
+by operator-consistent ruling — so when a book is too thin it publishes no estimate and engine 10
+`cost` refuses on the absence. The seeded row therefore shows the console a trade stopped by an
+engine that is structurally incapable of stopping one. Since Phase 1, the console's rejection
+feed has displayed a refusal vocabulary the system cannot produce.
+
+**Ruled, scheduled after the Phase 6 gate:** B reconciles every seeded rejection to an
+`(engine, code)` pair the live system can emit — engine 9's becomes engine 10 refusing on the
+absent estimate — and C then retires the prose that no longer has a producer. Every code stays
+mapped until B's half lands, because the seeded rows exist and must render; silence on the
+console is the defect `REASON_PROSE` exists to prevent.
+
 ### The operator's five rulings of 2026-09-16
 
 1. **The fill simulator is a client-layer paper broker**, `src/acsoe/clients/paper/`, B-owned,

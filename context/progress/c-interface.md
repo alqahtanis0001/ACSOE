@@ -1819,3 +1819,488 @@ That is spec 100 step 1 complete: the named tier-3 profile and the book, trade a
 feeds a criterion can script tick by tick. Step 2's subject is done and measured. What
 remains in spec 100 is the criteria bodies, and four of the seven trade-driving ones are
 blocked on engine 18 and two on engine 22.
+
+### Session 3 of C-verify — CLAIM, 2026-09-16
+
+Sessions 1 and 2 of this half are stopped and their work is committed. Same lane, same three
+specs: **99, 100, 101**. Same files: `src/acsoe/console/`, `scripts/verify.py`, `tests/verify/`,
+`tests/harness/`, `tests/console/`, and the `tests/fixtures/` entries those specs name. Nothing
+under `engines/`, `modelling/` or `research/` — `C-models` is running right now and owns them.
+
+**Claimed, in the lead's order:**
+
+1. **The three red Phase 4 criterion tests** —
+   `tests/verify/test_phase4_criteria.py::{test_every_phase_4_criterion_passes_against_the_real_repository,
+   test_a_memory_engine_that_drops_the_closed_trades_is_a_fail,
+   test_a_memory_engine_that_drops_the_resting_orders_is_a_fail}`, all three
+   `criterion raised - ValueError: live.drawdown_pct is not a decimal: None`. The cause is
+   C-models' **correct** change to engine 19 (an absent `positions_value` on an invested
+   account now skips the equity row rather than valuing the position at nothing), and the fix
+   is in **my** file: `_replay_seed_through_memory` in `scripts/verify.py` drives its two
+   equity ticks with `BALANCES_FIELD` alone. Files touched: `scripts/verify.py`,
+   `tests/verify/test_phase4_criteria.py`. Approved by the lead; blocking the lead's next gate.
+2. **Spec 99's map caught up to the engines that landed since session 2** — engine 9
+   `order_book`, and a re-walk of 16, 18, 21, 22 against each engine's own `contracts.py`
+   rather than against any list. Plus the one prose rewrite the lead named:
+   `console/format.py`'s sentence for `entry_unrecorded_at_exchange`, which still says
+   `OrderState` carries no quantity or limit price after A added `qty`, `limit_price` and
+   `opened_at` and B built the row.
+3. **Spec 100's criteria bodies**, as B's engines land.
+
+**Not mine and not touched:** `engines/`, `modelling/`, `research/`, `bootstrap.py`,
+`config/default.yaml`, and everything under A's or B's ownership.
+
+### Job 1 — the three red Phase 4 criterion tests — DONE
+
+`tests/verify/test_phase4_criteria.py`: **47 passed**, and Phase 4 is green in my lane.
+`mypy --strict src/ scripts/` clean (153 files); `ruff check src/ tests/ scripts/` clean.
+Full write-up and the mutation table are in `docs/build-log/phase-6/c-interface.md`.
+
+**What landed is one step past what the lead approved, and the extra step was measured, not
+argued.** The approved fix — cash as `equity - positions_value`, mark from the seed's latest
+row — was built first, and then the arm *"the mark is read out of the wrong column"*
+**survived it**: `cash + positions_value` returns the seed's total for any mark at all when
+the cash was derived to cancel it. So each equity tick now replays a **whole seed row** — its
+own `cash`, its own `positions_value`, its own `unrealised_pnl` — and engine 19's addition has
+to *arrive at* that row's equity instead of being handed it rearranged. Two rows are read, the
+one that set the peak and the latest, each replayed with its own composition.
+
+Three things came with it:
+
+- **The composition is now compared.** `equity_snapshots` stores `cash`, `positions_value` and
+  `unrealised_pnl` for the Phase 7 alpha attribution — `0001_initial.sql` says so — and
+  **nothing in the project had ever read them back.** A writer keeping the total and losing
+  the split left all six `safety` readings correct. `realised_pnl_cum` is deliberately
+  excluded: it is a running total over whichever trades each producer saw.
+- **"No equity row at all" is now a FAIL with a sentence**, reported before the six readings,
+  so the original symptom can never again arrive as `criterion raised - ValueError`.
+- **A second defect, and the one worth carrying.**
+  `test_a_peak_equity_recomputed_from_this_tick_is_a_fail` was **green for the wrong reason**
+  and had been since engine 19 changed: it asserted `"drawdown_pct" in outcome.message`, and
+  the crash message `criterion raised - ValueError: live.drawdown_pct is not a decimal: None`
+  contains that string. The only live proof that spec 50's named mutation is caught had
+  quietly stopped being one, and it kept *passing*, which is the direction nobody looks in.
+  All three tests now extract the disagreeing set and compare the whole of it, and refuse any
+  message containing `criterion raised`. This is `code-standards.md`'s `match=` rule reached
+  from the other side; **it is the third time this shape has cost this project something and
+  the first time it cost us a passing test rather than a failing one.** The lead may want it
+  in the standards under the existing `match=` entry — I have not edited `context/` .
+
+**Sweep:** 7 arms, 6 killed, 1 equivalent control survived as designed, each kill naming its
+killing test, target hashed before and compared in the same statement that restored it.
+
+**One refusal and one unexplained**, both in the build log: the sweep's first run reported a
+red baseline naming nothing, so nothing was mutated and it was thrown away (the harness now
+writes each arm's whole output to a log before reading an exit code); and a **one-off
+segmentation fault** — a Windows access violation inside `re` at
+`scripts/verify.py:509`, `check_docs_vocabulary`'s `pattern.search`, reached from
+`test_a_planted_term_in_a_current_state_section_fails`. Not reproduced in two
+`test_docs_vocabulary.py` runs (24 passed each) or two full 780-test lane runs, zero further
+access violations in either log. **Unexplained**, flagged to the lead because
+`docs_vocabulary` runs in every phase gate.
+
+**Lane state after job 1**, two identical runs of `tests/verify tests/console tests/harness`:
+**9 failed, 771 passed**. All nine are my own in-progress work, none is a regression — eight
+are `test_phase6_criteria.py::test_pending_on_the_real_tree_names_the_subject_and_the_spec`
+going red **because B's and C-models' engines have landed and the criteria are no longer
+PENDING**, which is job 3, and the ninth is spec 99's walking test naming 14 unmapped codes,
+which is job 2.
+
+### Job 2 — spec 99's map caught up to four engines — DONE
+
+`tests/console` **350 passed**; `mypy --strict src/ scripts/` clean (153 files);
+`ruff check src/ tests/ scripts/` clean. Full write-up and the mutation table are in
+`docs/build-log/phase-6/c-interface.md`.
+
+**The walk found fourteen unmapped codes**, checked against each engine's own
+`contracts.py` rather than against any list: engine 9 `order_book` (4), engine 14
+`adaptive_router` (4), engine 18 `execution` (2 of its 6 — the other four were already
+mapped), engine 22 `exit` (4). **Engines 16 and 21 were already complete**, as the lead
+suspected. Four engines landing in one afternoon is the rate the walk was written for.
+
+**The one prose rewrite the lead named is done**, and it needed the reason behind it more
+than the wording. `entry_unrecorded_at_exchange` said the system "cannot describe" the order
+because `OrderState` carries no quantity or limit price. A's spec 84 amendment added `qty`,
+`limit_price` and `opened_at`, B built the row, and the lead narrowed the code to the single
+remaining case — the exchange answering with **no `opentm`**, so the order cannot be dated.
+Every one of those changes was right and **the sentence survived all of them**, because
+nothing held it against the contract it described. It now names the timing gap, keeps the
+`userref` pointer, and `entry_recovered_from_exchange` carries the ordinary case.
+
+**Six new property tests, because presence is the weakest thing assertable about a
+sentence.** What they pin: engines 9 and 22 **cannot refuse**, so none of their sentences may
+read as one (structural for engine 9 — one return point, one status, and engine 10 `cost` is
+what refuses on the absence); `exit_incomplete` must say the position is **still open**;
+engine 14's two ordinary states must not borrow the two refusals' vocabulary; one fact keeps
+one spelling, asserted between the producing modules for engine 9 / engine 7's
+`no_quote_balance` and engine 22 / engine 21's `data_guard_blocked`; and the prose and the
+contract are read in **one** test, which is the direct answer to how the stale sentence
+survived.
+
+**Sweep:** 15 arms, 14 killed, 1 equivalent control survived as designed, **every one of the
+six new tests observed red at least once** — which is the question a kill count cannot
+answer. Both targets verified CRLF-free before the sweep (the harness refuses outright on a
+CRLF target), anchors asserted unique, restores hashed in the same statement that wrote them.
+
+**One mutation deliberately not run, stated rather than implied.** Proving the
+prose-to-contract coupling from the *contract* side means deleting `opened_at` from A's
+`OrderState`, and a live mutation in another agent's run surfaces as a spurious failure they
+may report as real. P9 mutates the test's own expected field set instead: that proves the set
+is read from the real model rather than fabricated, and **does not** prove the model losing a
+field turns the test red.
+
+**Raised with the lead, not fixed — `insufficient_depth`, and it is bigger than a spelling.**
+Session 2 recorded it as "engine 9's, which does not exist yet". Engine 9 exists now, so I
+looked: it is at `src/acsoe/clients/store/seed.py:188`, a seeded **rejection row attributed
+to engine 9**. Two consequences, both other agents' paths. The seed says
+`insufficient_depth` where the engine says `book_too_thin` — two spellings and two sentences
+for one condition, arriving from the one direction the sharing assertions cannot see, a
+fixture rather than an engine. And **engine 9 has no refusal path at all**, so the seed
+writes a refusal from an engine that cannot make one. `clients/store/seed.py` is B's,
+`engines/order_book/` is C-models'. Both sentences stay in `REASON_PROSE` meanwhile, because
+the seeded rows exist and must render.
+
+---
+
+
+---
+
+
+---
+
+---
+
+## C-models, session 3 — CLAIM 2026-09-16, spec 96
+
+Written **before any code**, per Phase 6 rule 1. I am the third `C-models` session of Phase 6.
+Sessions 1 and 2 are committed; spec 95 is done, and **spec 102 is parked by the operator and
+reverted in full** (diff preserved at `scratchpad/di-102-second-attempt.diff`). I do **not**
+touch `modelling/di.py`.
+
+**This session, in order: 96, then 97, then 98.** Spec 96 is the critical path for the phase.
+
+### Spec 96 — engine 9 `order_book` — CLAIMED
+
+Files I will create or touch, and nothing else:
+
+| Path | New? |
+|---|---|
+| `src/acsoe/engines/order_book/__init__.py` | new |
+| `src/acsoe/engines/order_book/contracts.py` | new |
+| `src/acsoe/engines/order_book/engine.py` | new |
+| `src/acsoe/engines/order_book/README.md` | new |
+| `tests/engines/test_order_book.py` | new |
+| `tests/fixtures/book_sample.jsonl` | new (cut by A's `scripts/cut_book_fixture.py`) |
+| `tests/fixtures/README.md` | append one row |
+
+**Not mine and not touched:** `console/format.py` (the two new reason codes go to `C-verify`
+by message), `bootstrap.py` (registration is the lead's, spec 82), `config/default.yaml` (the
+`order_book.depth` key is requested of the lead, spec 80), `scripts/verify.py`, `tests/verify/`,
+`tests/harness/`, and every path under A's or B's ownership.
+
+**Open question raised with the lead before code:** `config/default.yaml` has **no
+`order_book:` section** — spec 96 step 2 reads `order_book.depth` and spec 80 owed it. Asked
+for `depth: 10`, matching `scripts/record.py`'s `DEFAULT_DEPTH`, which is the depth every
+recorded book frame in the archive actually carries. A fixture cannot validate a walk past the
+depth it was recorded at.
+
+
+## C-models, session 4 — 2026-09-16
+
+Session 3 died mid-spec-96. Claim, before any code: **finish 96, then 97, then 98.** Spec 102
+is **parked by the operator** and reverted; I do not touch `modelling/di.py`.
+
+### Spec 96 — engine 9 `order_book` — DONE
+
+Session 3 built the engine, its 51 tests and the fixture and died before the sweep. This
+session added the two things it owed and changed nothing in the engine.
+
+- **Five mutations, five killed**, each naming its killing tests, in
+  `docs/build-log/phase-6/c-interface.md`. Spec 96's three named ones (the ask side walked;
+  the walk stopping one level early; slippage from the fill price rather than the best bid),
+  plus a partial walk reported as complete, plus `levels_consumed` under-counting. Baseline
+  green before each arm; each file copied to the scratchpad before the mutation and restored
+  from those bytes with the sha256 compared in the same statement that writes it back
+  (`engines/order_book/` is untracked, so there is nothing behind a `git checkout --`);
+  every anchor asserted to occur exactly once; witnesses hashed both sides and unchanged on
+  all five runs. Arm: `tests/engines/test_order_book.py` alone, and the excluded directories
+  are named in the log.
+- **`O5` was expected to survive and did not**, which is the useful result: `levels_consumed`
+  changes no decision, so a published-but-unasserted field could have said anything. It is
+  asserted, per pair, against a hand computation.
+- **`tests/fixtures/README.md`** now carries the `book_sample.jsonl` row and its provenance —
+  including why the window opens 48 ms after a reconnect, which is the fixture's correctness
+  rather than a detail: Kraken v2 sends book **deltas** and the only absolute book is the
+  `snapshot` at subscribe, so a mid-stream cut reconstructs a plausible shallow ladder that
+  prices slippage far too high, in the direction that makes the cost gate refuse for a
+  fabricated reason.
+- `mypy --strict src/ scripts/` clean (147 files); `ruff check src/ tests/ scripts/` clean;
+  `tests/engines/test_order_book.py` 51 passed.
+- **Still owed by others:** registration of engine 9 in `bootstrap.py` (lead, spec 82) and
+  operator prose for engine 9's reason codes (C-verify, spec 99).
+
+### Spec 97 — engine 14 `adaptive_router` — CLAIMED, weighting rule with the lead
+
+Files: `engines/adaptive_router/` (four files), `tests/engines/test_adaptive_router.py`,
+`tests/fixtures/leaderboard_sample.json`, one row in `tests/fixtures/README.md`.
+
+**Blocked on two decisions, both raised with the lead, neither guessed at.** The weighting
+rule is proposed as a Decision entry in the build log — Brier skill against the fold's own
+base rate, clipped at zero, normalised — and **the `leaderboard` table has no base-rate Brier
+column**. Engine 20 computes it per fold and discards it for want of somewhere to put it, and
+it cannot be recovered from `win_rate`: `brier` and `base_rate_brier` are over every fold row
+while `win_rate` is over the BUY subset, so a skill score built from those two is a ratio of
+quantities measured on different populations. I have asked for `base_rate_brier REAL` on
+`leaderboard`. Meanwhile engine 14 gives a row with no base rate **weight zero and a reason
+code** rather than defaulting one.
+
+The regime and the DI margin are published as provenance and are **not** in the arithmetic:
+the leaderboard holds one Brier per version over the whole window with no regime breakdown,
+so a regime-conditional weight would be invented rather than measured.
+
+### Spec 98 — engine 19 records what 18 and 22 publish — CLAIMED
+
+Files: `engines/memory/engine.py`, `contracts.py`, `README.md`,
+`tests/engines/test_memory_rows.py`. Carries the lead's equity defect (an absent
+`positions_value` currently reads as `Decimal(0)`, so one unmarked tick on an invested
+account is a near-100% drawdown against a 0.10 limit), the three new source keys B confirmed,
+the lead's write-order ruling (21's positions then 22's, 18's orders then 21's), and B3's
+`positions.hold_reason` column, which engine 19 is the only writer of and which must be
+cleared to NULL on every tick that did not hold.
+
+### Spec 98 — engine 19 records what 18 and 22 publish — BUILT, one red owed to C-verify
+
+- **The lead's equity defect is fixed.** `store.count_open_positions()` read before the
+  equity arithmetic; a non-zero count with `positions_value` or `unrealised_pnl` absent
+  writes no row and names itself in `equity_skipped_reason`; a zero count with an absent
+  mark writes the row on cash alone. `unrealised_pnl` treated the same way.
+- **Three new sources read**: `state["execution"]["orders"]`, `state["exit"]["orders"]`,
+  `state["exit"]["positions"]`. Write order is chain order and decides the upsert winner:
+  positions 21 then 22, orders 18 then 21 then 22. Both pinned with an assertion on the
+  row **count** as well as the status.
+- **B3's `positions.hold_reason`** written on every position engine 21 marked and set to
+  `None` on every tick that did not hold.
+- **Eight mutations, eight killed**, each naming its killing test, in the build log. P6
+  and P7 are the lead's two required ones and redden in opposite directions. **P8
+  survived the first sweep and my test was at fault**: `a_position` dumps a real
+  `PositionRow` whose `hold_reason` defaults to `None`, so the row already said null and
+  the column cleared whether or not engine 19 assigned anything — two sources supplying
+  one value, the lead's witness rule met from the other side. Tick 2's row now carries a
+  stale reason, which is what engine 21 republishing store rows would actually hand over.
+- **One baseline refusal, correctly**: PyYAML `TypeError` loading `config/default.yaml`
+  mid-save by another agent. Nothing mutated, nothing reported.
+- **A CRLF finding bigger than this spec.** The editing tool did a text-mode round trip on
+  `engines/memory/engine.py` (566 CRLF, 0 bare LF, against a pure-LF blob) and
+  `tests/engines/test_memory_rows.py` (mixed), which broke four mutation arms with
+  "anchor appears 0 times" and was invisible to `git status` and `git diff`. **Same
+  mechanism as the spec 102 revert's anchor failures.** Both normalised as bytes. The only
+  other CRLF file among those I touched is `tests/engines/test_memory.py`, which is not
+  mine and is one of the ~120 pre-existing conversions; left alone.
+
+**Owed to C-verify, not mine to fix.** Three tests in `tests/verify/test_phase4_criteria.py`
+fail with `live.drawdown_pct is not a decimal: None`. `_replay_seed_through_memory` in
+`scripts/verify.py` writes the seed's open positions and then drives two equity ticks
+carrying only `BALANCES_FIELD`, so under the new rule both rows are skipped. The fix is to
+give those two ticks a `position_manager` payload with `positions_value` and
+`unrealised_pnl` from the seed's own latest `equity_snapshots` row and cash of
+`equity - positions_value` — which reproduces the seed's split instead of replaying an
+invested account as all cash. Raised with the lead; `scripts/verify.py` and `tests/verify/`
+are not mine and I have not touched them.
+
+**Gates:** `mypy --strict src/ scripts/` clean (147 files); `ruff check src/ tests/ scripts/`
+clean; `tests/engines/test_memory.py` and `test_memory_rows.py` 43 passed.
+
+### Session 4 close — where the lane stands
+
+**95 done and committed** (`8941eec`). **96 done** — engine, 51 tests, fixture, fixtures
+README row, five mutations killed, and an audit of the engine itself recorded in the build
+log rather than only a sweep of its tests. **98 built** — the lead's equity defect fixed,
+three new sources read, the write order pinned both ways, `hold_reason` written and
+cleared, eight mutations killed. **97 is blocked on two rulings from the lead** and is the
+only thing left in this lane.
+
+**`tests/engines/` in full: 709 passed, 0 failed, 237.70 s.** That is every engine test in
+the repository, A's and B's included, so engine 19's new behaviour breaks nothing
+downstream. `mypy --strict src/ scripts/` clean at 147 files; `ruff check src/ tests/
+scripts/` clean. The one red I know of is the three Phase 4 criterion tests in
+`tests/verify/`, caused by my change and fixable only in C-verify's files — raised with
+the lead with the exact fix.
+
+**Spec 97's two open rulings**, both raised, neither guessed at:
+1. `leaderboard` has no base-rate Brier column, and it **cannot** be recomputed from
+   `win_rate` — `brier` and `base_rate_brier` are over every fold row while `win_rate` is
+   over the BUY subset, so a skill score from those two is a ratio of quantities measured
+   on different populations. Asked for `base_rate_brier REAL`.
+2. **`leaderboard_entries(*, model_id, model_version, fold)` cannot enumerate versions** —
+   it is B's existence check for engine 20's idempotency and takes the version as an
+   argument. The only enumerating read is the console's truncating `leaderboard(limit=50)`.
+   Proposed: `leaderboard(limit=N)` with N from config plus **truncation detection** —
+   when `len(rows) == N` engine 14 publishes no weights and a `leaderboard_truncated`
+   code, rather than a plausible distribution over a set it knows is partial.
+
+**CRLF in four files that are not mine**, reported rather than touched: `context/
+code-standards.md` (1 CRLF line in an otherwise pure-LF file — the signature of a
+single tool-inserted edit), `docs/build-log/phase-6/b-store.md` (127), `src/acsoe/
+clients/store/contracts.py` (fully, 489) and `src/acsoe/engines/execution/engine.py`
+(fully, 478). Every file this session wrote is pure LF, verified by a scan over the whole
+working tree. `clients/store/contracts.py` is the one worth acting on: other lanes patch
+it by literal anchor, and that is exactly what a whole-file line-ending rewrite breaks
+invisibly.
+
+### Spec 97 — engine 14 `adaptive_router` — BUILT to the column, 8 mutations killed
+
+`engines/adaptive_router/` (four files), `tests/engines/test_adaptive_router.py` (25 tests),
+`tests/fixtures/leaderboard_sample.json` and its row in the fixtures README.
+
+- **The weighting rule is the lead's approved one**: `skill = max(0, 1 - brier /
+  base_rate_brier)` per fold, unweighted mean across a version's folds, normalised; all
+  zero with a reason code when nothing beats its base rate. **The aggregation across folds
+  was not in spec 97** and is recorded as a Decision entry with the lead's prior adopted.
+- **Two things the ruling did not cover and which change the answer**, both in the same
+  Decision entry: duplicate `(version, fold)` rows are collapsed to the latest rather than
+  averaged as folds — B's store deliberately returns every duplicate so a broken
+  idempotency convention stays visible, and averaging them would let a duplicate row move
+  a weight — and only this engine's own `model_id` is weighted, because normalising across
+  families would hand a second family part of the predictor's weight.
+- **Blocked only on B's migration 0004.** `base_rate_brier` does not exist, so `_fold_skill`
+  returns `None` for every real row today and every weight is zero with
+  `no_model_beats_its_base_rate`. That is the correct live behaviour rather than a stub —
+  a version whose base rate cannot be read has not been shown to have edge — and when the
+  column lands nothing in the engine changes, `getattr` simply starts finding it.
+- **B's non-truncating read does not exist either**, so engine 14 falls back to the
+  console's windowed `leaderboard(limit=...)` and publishes **no weights** when it comes
+  back exactly full. Per the lead's ruling the detection stays after the real read lands,
+  as the assertion that the fallback is unreachable.
+- **Eight mutations, eight killed**, each naming its killing test. R6 is applied to
+  **engine 15's** source, because spec 97's claim there is about the consumer and no
+  mutation of engine 14 could show it. R8 makes spec 97's conditional second mutation
+  concrete — the rule starting to use the regime — and had to vary per version, because a
+  uniform regime factor cancels under normalisation and would have been an equivalent
+  mutant.
+- `mypy --strict src/ scripts/` clean (153 files); `ruff check src/ tests/ scripts/` clean;
+  `test_adaptive_router.py` 25 passed.
+
+**Owed to C-verify, spec 99**: operator prose for eight reason codes the walking test has
+correctly caught — engine 9's four and engine 14's four. Suggested wording sent to the lead.
+`console/format.py` is not mine.
+
+**One transient recorded as unexplained.** The first run of the wide arm died with a Windows
+access violation inside `scipy._lib._array_api._make_capabilities_note` → `textwrap.dedent`
+→ `re.sub`, during `import sklearn`, before any test ran. Nothing of mine is on that stack.
+The identical command re-run immediately afterwards completed normally, and
+`tests/engines/` had run 709 green an hour earlier through the same imports. Not attributed
+and not chased.
+
+## C-models, session 4 — FINAL STATE, 2026-09-16. Stood down at the lead's instruction.
+
+Everything left in this lane needs B's migration 0004 and B's enumerating read, both in
+flight. The lead will bring this session back when 0004 lands; the engine 20 write and the
+skill computation are a minute each and they are mine.
+
+### The four specs
+
+| Spec | State |
+|---|---|
+| **95** — engine 8 omits `is_buy` on a refusal | **DONE**, committed at `8941eec`. 4 mutations killed. |
+| **96** — engine 9 `order_book` + book fixture | **DONE**. 56 tests, 6 mutations killed, engine audited as well as swept. |
+| **97** — engine 14 `adaptive_router` + leaderboard fixture | **BUILT to the column**. 25 tests, 8 mutations killed. |
+| **98** — engine 19 records 18 and 22 | **DONE**. 8 mutations killed, the equity defect proven both ways. |
+| **102** — the DI at size | **PARKED by the operator** and reverted. Not touched this session. |
+
+**Gates at stand-down:** `mypy --strict src/ scripts/` clean, 153 files. `ruff check src/
+tests/ scripts/` clean. `tests/engines/` 709 passed. `test_adaptive_router.py` 25 passed.
+The full suite has not been run by this session.
+
+### What is outstanding, and who owns it — none of it mine
+
+1. **B, migration 0004:** `base_rate_brier REAL` on `leaderboard`, plus a non-truncating
+   enumeration of the table. Engine 14 needs **no change** when they land — `_fold_skill`
+   reads the column with `getattr` and `_read_leaderboard` resolves the enumeration by
+   name. I owe one line in engine 20's write at that point.
+2. **C-verify, spec 99:** operator prose for eight reason codes — engine 9's four and
+   engine 14's four. `leaderboard_unreadable` and `leaderboard_truncated` must stay
+   **distinct**: one means the table could not be read, the other means part of it was read
+   and weighting a partial set was refused. Collapsing them removes the tripwire.
+3. **C-verify, spec 98's tail:** three Phase 4 criterion tests red from my equity fix.
+   `_replay_seed_through_memory` drives two equity ticks carrying only `BALANCES_FIELD`
+   while the store holds the seed's open positions, so both rows are now correctly skipped.
+   The fix takes `positions_value` and `unrealised_pnl` from the seed's own latest
+   `equity_snapshots` row with cash of `equity - positions_value` — which reproduces the
+   seed's split rather than replaying an invested account as all cash.
+
+### Three mistakes this session, each of which produced something
+
+Recorded because a progress file with no mistakes in it is one nobody will believe, and
+because the pattern behind all three is the same.
+
+1. **`modelling/di.py` left half-renamed across a save** — `_CHUNK` gone, its two call
+   sites not updated — which cost the Phase 6 baseline 171 errors. Produced the ordering
+   rule now standing for the whole phase: define the new thing, point the call sites at it,
+   rename last, and announce in the channel before making an intermediate state that cannot
+   import.
+2. **Told B2 that engine 9 publishes no `pair`.** It always had. I read spec 96's field
+   list instead of `engines/order_book/contracts.py`, an hour after being told to build
+   against the code. Produced the finding that the published pair was only ever asserted on
+   single ticks against a `state` built with that same pair — so a cached pair was
+   uncovered, and mutation O6 now dies on the one test that closes it.
+3. **A `hold_reason` test that passed under its own mutation**, because `a_position` dumps
+   a real `PositionRow` whose `hold_reason` defaults to `None` — the row already said null
+   and the column cleared whether or not engine 19 assigned anything. Produced a fixture
+   where the two sources carry different values, which is the witness rule.
+
+**The pattern in all three is reading a description instead of the code**, and it is the
+same fault I caught in spec 97's named store method from the other side. The correction is
+not "be more careful"; it is that a description and an implementation are two sources, and
+when they agree the agreement proves nothing.
+
+### One thing I would tell the next session in this lane
+
+Engine 14 is **inert by construction** — nothing downstream reads its payload to decide —
+and its tests are correspondingly narrow. When B's column lands and the weights become real
+numbers, the thing to check is not the arithmetic, which is swept, but whether anything has
+quietly started reading `state["adaptive_router"]`. The test that holds that line is
+`test_engine_fifteen_does_not_read_this_payload`, and it scans engine 15 alone. Engines 16
+and 18 are B's and grew after it was written.
+
+### Closing correction to the record, 2026-09-16
+
+The lead has **amended spec 96's field list** to include `pair` and attributed the omission
+to the spec rather than to my reading of it. My build-log entry on the episode is corrected
+by a later one rather than edited. Both records stand: I should have read `contracts.py`,
+**and** the field list was wrong. The reusable form is the lead's — *a spec's field list is
+a description; `contracts.py` is the fact, and where they disagree the spec is what is
+wrong* — and it is the same shape as spec 97 step 2 naming a store method whose signature
+could not do the job.
+
+Nothing else changed. This session is stopped, with 95, 96 and 98 done and 97 built to the
+boundary of B's migration 0004.
+
+### UNBLOCKED and closed out — migration 0004 landed, 2026-09-16
+
+B3 landed `all_leaderboard_rows(*, model_id)` and `base_rate_brier`. Both of my remaining
+items are done.
+
+- **Engine 20's write** carries `base_rate_brier=score.base_rate_brier`. It was computed
+  per fold and discarded for want of a column since spec 74.
+- **Engine 14 calls `enumerate_all(model_id=MODEL_ID)`.** My missing argument was red in
+  B3's lane before mine.
+- **The tests are re-pointed at real `LeaderboardRow`s**; the stand-in dataclass and its
+  tripwire are gone, replaced by the assertion the tripwire handed over to. The tripwire
+  did its job: it went red the moment the column landed and its message said what to do.
+- **Two things B3's landing exposed**, both in the build log: the test double had the old
+  signature and had been green only because it and the engine agreed with each other
+  rather than with the store; and the truncation check was wrong on the unlimited read,
+  where it fires on a model with exactly `_WINDOWED_PROBE` rows and costs that tick all
+  its weights. The check now applies to the windowed fallback only, and the "fallback is
+  unreachable" requirement is met by a test rather than a runtime heuristic.
+- **Nine mutations, nine killed.** R3 now dies via the *windowed* path, because the real
+  store filters by family itself and driving the enumerating path there would have been
+  green against an engine with no filter at all.
+
+**Gates:** `mypy --strict src/ scripts/` clean, 153 files. `ruff check src/ tests/
+scripts/` clean. `test_adaptive_router.py` 26 passed; `test_adaptive_router` +
+`test_tournament` + `test_execution` + `tests/research/` 377 passed in 549 s.
+
+**Spec 97 is complete.** All four specs — 95, 96, 97, 98 — are done. What remains in lane
+C is C-verify's: operator prose for twelve reason codes (engine 9's four, engine 14's
+four, engine 22's four) and the Phase 4 replay fix.

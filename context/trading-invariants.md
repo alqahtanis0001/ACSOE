@@ -61,6 +61,10 @@ With real credentials in paper mode the fetch *succeeds* and returns the real ac
 
 Every fill in the ledger is one the store recorded, so the ledger a restarted daemon rebuilds is the same one it had.
 
+**A fallback's legitimacy is per-reader, not per-key.** The row above licenses the balance on one stated ground — a fallback is only legitimate where the value it stands in for cannot change the answer to *"can this trade pay for itself"* — and that test is applied to **the reader**, not to the key. Engine 11 `risk` sizing a position satisfies it. Engine 9 `order_book` does **not**: there the balance *is* the basis notional, the basis notional sets how deep the walk goes, the walk sets the estimated slippage, and slippage is one of the four terms of `friction`. A stood-in balance would therefore price the hurdle, which is the one thing this rule forbids. So engine 9 omits its estimate and publishes `no_quote_balance`, and engine 10 — a gate — refuses on the absent key.
+
+Two engines reading one key and answering differently is not an inconsistency to tidy away; it is this rule working. Raised by C-models while building engine 9, Phase 6, 2026-09-16, and recorded here rather than in that engine's README so the next reader of a fallback applies the test to their own use of it. The same shape as the config rule in `code-standards.md`: the landing order is universal, the resting state is per-reader.
+
 **A ledger balance is not recorded as a fallback fired.** It is what the account *is* in paper mode, not a substitute for something that failed, and the run's mode already says every figure derived from it is simulated. The rule below — every decision affected by a fallback records which fallback fired — is unchanged for the three rows that block and for live mode.
 
 **The fee-tier row named a tier and told the system to ~~assume~~ it. That is retired, 2026-09-10.**

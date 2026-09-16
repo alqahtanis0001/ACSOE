@@ -1,5 +1,38 @@
 # Phase 6 — shared task list
 
+## HANDOFF 2, 2026-09-16 06:20Z — every remaining piece of Phase 6 runs through B
+
+**Read this before HANDOFF 1, which is now history rather than state.**
+
+**Committed and pushed** (nine commits, `4d9e106` to `fe06a72`): specs 84, 85, 86, 88, 89, 90,
+91, 92, 95, the four loose ends, spec 99's first codes and spec 100's registration, and the lead's
+81, 83 and `EngineContext.previous_now`. **Uncommitted on disk**, all lane-green, awaiting the
+next gate: A's `OrderState` amendment (`qty`, `limit_price`, `opened_at`) and the `order_book`
+config landing; B's migration 0003, the broker's `OrderState` sites and engine 18's unrecorded-row
+build; C-models' engines 9, 14 and 19's rewrite; C-verify's walking test, nine criteria, the
+scripted market harness and the tier-3 profile.
+
+**Engines built:** 9, 14, 16, 18, 19 (rewritten), 21. **Engine 22 is the only one left.**
+
+| Owner | State |
+|---|---|
+| **B3-store** | **The whole critical path.** Engine 22 (spec 93); migration 0004 `base_rate_brier REAL` nullable; a **non-truncating leaderboard enumeration** (`leaderboard_entries` takes the version as an argument and cannot enumerate); three CRLF files in its lane, `clients/store/contracts.py` most consequentially. |
+| **C4-verify** | The Phase 4 replay fix in `scripts/verify.py` (three red criterion tests, caused by a correct engine 19 change); then twelve reason codes; then the criteria bodies. |
+| **C-models** | **Stood down, lane complete.** Returns for two one-minute changes when 0004 lands: engine 20's write of `base_rate_brier`, and engine 14's skill computation. |
+| **A** | **Stood down.** Spec 87's rehearsal of 18, 21 and 22 waits on engine 22. |
+| **Lead** | Spec 82 registration (held until the 87 and 94 rehearsals are green); spec 80's remaining cross-chain rows; the gate and the commits. |
+
+**Nine criteria are registered and PENDING.** Seven name engine 22 or the drivers that need it;
+two name engines 9 and 14 and are answerable as soon as their fixtures are driven.
+
+**Sessions die and revive in this project.** Four died at a usage limit at 23:49Z; two later
+revived on their own and one of those collided with its own replacement in the same lane. The
+protocol that works: the lead **hard-stops** every session before a gate rather than asking for a
+hold, because a hold reaches an agent at its next tool boundary and by then the nearest coherent
+stopping point is several steps away. Two gate runs were spent measuring a moving tree before this
+was accepted. **A revived session is not a rogue one** — it is a session six hours out of date, and
+the first thing it should do is read this file.
+
 ## HANDOFF 1, 2026-09-16 00:00Z — all four teammates died at the usage limit. Read this first.
 
 **What happened.** A, B, C-models and C-verify all hit the session limit within 40 seconds of

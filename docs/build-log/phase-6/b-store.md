@@ -1072,3 +1072,633 @@ harness defect, and this is the first time it has fired for me.
 **Green:** `pytest tests/engines/test_execution.py -q` 34 passed. Whole lane — execution,
 decision, position_manager, risk, clients/paper — **216 passed**. `ruff check` clean on all six
 paths; `mypy --strict` clean on the three packages, 9 source files.
+
+### SQLite's one-argument `trim()` strips spaces and nothing else, so a tab was a hold reason
+
+**Agent:** B (session 3) · **Task:** migration 0003 · **Date:** 2026-09-16
+
+**What happened.** Migration 0003 adds `positions.hold_reason` with a CHECK whose whole
+job is condition 3 of the lead's ruling — NULL means "did not hold", never "unknown" —
+by refusing the blank string, which is how "unknown" normally gets past a nullable
+column: non-null, so every `IS NOT NULL` read calls it a hold, and blank, so it renders
+as nothing. Written the obvious way, `CHECK (hold_reason IS NULL OR trim(hold_reason) <> '')`,
+and the parametrised test failed on one case of three: `DID NOT RAISE IntegrityError` for
+a lone tab.
+
+**Why.** **`trim(X)` in SQLite removes spaces only** — not tabs, not newlines. The
+two-argument form `trim(X, Y)` removes any character in `Y`, and that is the form this
+needed. Python's `str.strip()` removes all whitespace, so the row model's validator and
+the database's CHECK — written to be the same refusal, deliberately, because a constraint
+the two layers disagree about is one of them not really applying it — disagreed on every
+whitespace character except the space.
+
+**Fix.** `trim(hold_reason, ' ' || char(9) || char(10) || char(11) || char(12) || char(13))`,
+which is the ASCII whitespace `str.strip()` removes. Python stays the stricter of the two on
+exotic Unicode whitespace, which is the safe direction: `PositionRow` is the only supported
+way in. The parametrisation now carries a tab, a newline and a CRLF-plus-spaces case rather
+than three kinds of space, and the migration's comment says why those and not more spaces.
+
+**Consequence.** The general shape is worth more than the bug: a parametrised case list whose
+entries are all the *same* thing is a single test wearing a costume. Three kinds of space
+would have been three copies of one question. The finding is the same family as the day's
+recurring one — a witness that cannot distinguish the hypotheses — arriving in the inputs
+rather than in the assertion.
+
+### Decision: `hold_reason` is a column on `positions` with no enumeration of its values
+
+**Agent:** B (session 3) · **Date:** 2026-09-16
+
+**Options.** The lead's ruling settles *that* the database must carry the manage chain's
+hold reason and rejects inferring it from a `data_guard` row in `block_records`. Three
+things were still open when I wrote the migration.
+
+**Chose, 1 — a column on `positions`, not a new table.** The hold is per position and is read
+per position: the console renders it on the row it is already drawing, and a position is the
+only thing that can be held. `positions` is already in `StoreClient.WATERMARK_TABLES`, so
+writing a hold moves the console's poll watermark for free; a new table would have to be added
+to that tuple, changing behaviour under every existing watermark test mid-phase, and would be
+a lead escalation on its own because `db_migrates_from_empty` asserts the documented table set.
+Same reasoning as 0002's, which put the system mode on `runs` rather than in a state table.
+
+**Chose, 2 — no CHECK enumerating the hold reasons, unlike `runs.system_mode`.** Idle/running/
+frozen is a closed set the console must render as a status band, so 0002's CHECK is right there.
+Hold reasons are not closed: engine 21 declares them in its contracts and the console maps them
+in `REASON_PROSE`. A CHECK would be a **third** copy of that list and the only one that cannot
+be corrected without another migration, so it is the copy that would drift — and the failure it
+would buy is a liquidation-era write refused at runtime by SQLite over a reason nobody had
+enumerated. The list is already enforced where it can be kept true: spec 99's walking test goes
+red at *test* time on a code the console cannot render.
+
+**Chose, 3 — the blank string is refused, in both layers.** It is the one part of condition 3
+a database can enforce. Whether a hold *happened* is a property of the tick and not of the row,
+so no CHECK can enforce condition 2's "cleared on every tick that did not hold"; that is a
+property of the writer and is pinned by tests.
+
+**Cost.** A hold reason the console cannot render still reaches the database and still renders
+as "No reason was recorded." — silently, exactly as `ownership.md` warns. That is deliberate:
+the alternative pushes the failure into the write path of the one engine that must never fail
+to record, and invariant 12 says a rejection that is not written is a defect equal to a lost
+trade.
+
+### Migration 0003 — eight mutations, eight killed, equivalent control survived
+
+**Agent:** B (session 3) · **Task:** migration 0003 · **Date:** 2026-09-16
+
+Subject `tests/db/test_migrations.py` plus `tests/clients/store/`. First pass: seven applied,
+five killed, **one refused by the harness and one survivor**. Both are below, and the whole
+sweep was re-run from scratch after the fix rather than the two being re-checked.
+
+| # | Mutation | Verdict | Killed by |
+|---|---|---|---|
+| H1 | the CHECK replaced by `1 = 1` — a blank is a hold reason | KILLED | `test_a_blank_hold_reason_is_refused`, all five cases |
+| H2 | the obvious one-argument `trim()` | KILLED | the same test's tab and two newline cases — **and only those three**, which is the defect above |
+| H3 | `PositionRow`'s validator never fires | KILLED | `test_a_blank_hold_reason_is_refused_by_the_row_model`, all four cases, and nothing else in 245 |
+| H4 | `hold_reason` defaults to `""` rather than `None` | KILLED | `test_the_seed_writes_no_hold_reason` plus every seeded test in the lane — the database refuses the write, so 76 fixtures error |
+| H5 | the upsert omits the column entirely | KILLED | the round-trip test and the clearing test |
+| H6 | **condition 2 as a defect** — written on insert, never updated | KILLED | `test_rewriting_the_position_without_a_hold_reason_clears_it`, and nothing else |
+| H7 | `open_positions` orders by `position_id` **descending** | KILLED (second pass) | `test_open_positions_breaks_a_tie_on_position_id_and_not_on_insertion_order` |
+| H0 | **equivalent control** — `not value.strip()` spelled `value.strip() == ""` | **SURVIVED**, as required | — |
+
+**H4 was the refusal, and the harness guard did its job for the second time this phase.**
+`contracts.py` is one of the ~120 CRLF files `code-standards.md` records, and the anchor was
+typed with LF, so the harness reported `ANCHOR MATCHED 0x — REFUSED, not applied` rather than
+counting a silent non-result as a kill. The harness now retries a multi-line anchor with CRLF
+before refusing, and the restore is still byte-exact because it writes the original bytes back.
+
+**H6 is the one worth naming.** It is condition 2 of the ruling written as code: the column is
+set when the row is first inserted and never updated afterwards, which is exactly "a hold
+written and never cleared". One test kills it, and the test's own value is that the clearing
+happens *by* the writer writing the row it would have written anyway — `_upsert` sends every
+column — rather than by engine 19 remembering to blank a field. A mechanism nobody has to
+remember is the only kind that survives the tick it was written for.
+
+**H7 survived the first pass and is a real hole in code I did not write.** `open_positions()`
+has ordered `opened_at ASC, position_id ASC` since Phase 0 and **nothing asserted the
+tie-break**. Every position these builders and the seed make shares one `opened_at`, so the
+tie is the ordinary case rather than a contrived one — a liquidation closes positions together
+and the console renders them together — and with no tie-break SQLite may return them in any
+order, so the console's list would reorder itself between two polls of a database nothing had
+written to. It survived all 244 tests in the lane. The fix is one test and no change to the
+client: the rows are written in the reverse of the expected order, so insertion order and sort
+order disagree, and the first assertion checks the tie exists before the second checks how it
+was broken.
+
+**One unexplained observation, recorded rather than chased.** H3's first run reported `4 failed,
+240 passed, 1 error`, the error in a `seed_fixtures`-backed test; the same mutation re-applied
+and re-run over the same subject reported `4 failed, 241 passed` with no error and the same four
+killing tests. Not reproduced, not diagnosed, and it does not change H3's verdict. `unexplained`
+is an acceptable thing to write (HANDOFF 1, rule 5).
+
+### `OrderState` gained `qty` and `limit_price`, and the order engine 18 could not describe is now recorded
+
+**Agent:** B (session 3) · **Task:** job 2, A's spec 84 amendment · **Date:** 2026-09-16
+
+**What happened.** Spec 91 shipped with a hole I found and could not close from my side:
+`PaperBroker.open_orders()` tells engine 18 that an order is at the exchange, the store
+has never heard of it, and `OrderState` carried no `qty` and no `limit_price` — so the
+order could be **detected and not described**, and engine 18 published no row under
+`entry_unrecorded_at_exchange`. Nothing would ever cancel that order, because engine 21
+assembles entries from the store plus `state["execution"]` and it was in neither. A
+landed both fields; this is my half.
+
+**The five construction sites in `broker.py`**, one per shape, and each now says what the
+order *is* beside what has happened to it: a resting order, a resting order that filled,
+a market fill, a recorded row that is already over, and a cancel. Two of them are worth
+naming because the value was available in more than one place:
+
+* **A cancel takes both from the state it just resolved**, not re-derived from the
+  `_Pending` or the `OrderRow`. A cancel changes what has *happened* to an order and
+  never what the order *is*, so restating either would be a second place they could be
+  computed, and the only way the two could differ is if one were wrong.
+* **A market fill's `limit_price` is `None` because the request has none**, not because
+  the field was left out. `OrderState` carries no `order_type` on purpose — presence
+  *is* the statement — so the mutation that claims `pending.fill_price` as a limit price
+  is the one that matters, and it dies to one test.
+
+**Engine 18 now publishes the row**, and `_AlreadyPlaced.row` stopped being optional
+rather than being left unreachable. Three of that row's fields still are not
+observations, and each is a statement about what this system places rather than a guess
+at a number: `pair`/`side`/`intent`/`order_type` (the `userref` is `userref_for(pair,
+bar)`, so an order resting under it is this candidate's by construction, and the only
+order this engine places is a post-only limit buy — an exchange answer with no limit
+price therefore **raises** rather than being recorded as a limit order with a null
+price), and `oflags` (invariant 8 says post-only; `""` would be the same kind of claim
+with the opposite content).
+
+**`placed_at` is the one gap the amendment does not close, and it is flagged rather than
+taken quietly.** `OrderState` carries `closed_at` and no placement time. The row says
+*this* tick — the earliest moment the system can attest to anything about the order —
+and the cost is that engine 21's entry window restarts from here, so an already-stale
+order is cancelled up to one window (300s) late. Two things make that the right trade.
+The cost is bounded and the failure it replaces is not: an unrecorded order is one
+nothing ever cancels. And the kill switch is complete the moment the row exists, because
+**`close_all` cancels every resting entry immediately, regardless of that window**
+(invariant 8) — which is the property that was actually broken, not the timeout.
+Back-dating `placed_at` to force an immediate cancel was the alternative: it writes a
+time that never happened into the column research and the console read as a placement
+time, which is a downstream rule's logic smuggled into a data field.
+
+### Job 2 — ten mutations, ten killed, equivalent control survived
+
+**Agent:** B (session 3) · **Task:** job 2 · **Date:** 2026-09-16
+
+Subject `tests/clients/paper/`, `tests/engines/test_execution.py` and
+`tests/engines/test_position_manager.py`. First pass: nine applied, eight killed, one
+**refused** and one **equivalent by accident**; both are below and the whole sweep was
+re-run from scratch afterwards.
+
+| # | Mutation | Verdict | Killed by |
+|---|---|---|---|
+| J1 | a resting state reports a quantity that is not the order's | KILLED | 5 tests, including engine 21's `..._filled_during_the_cancel_becomes_a_position` |
+| J2 | a resting state reports no limit price | KILLED | 5 tests, three of them the new broker ones |
+| J3 | a terminal recorded row reports `filled_qty` as `qty` | KILLED | `test_a_filled_entry_still_says_what_it_asked_for_and_at_what_limit` and `test_a_recorded_order_wins_over_this_ticks_copy` |
+| J4 | a terminal recorded row reports `avg_fill_price` as `limit_price` | KILLED | `..._still_says_what_it_asked_for_and_at_what_limit` — and nothing else |
+| J5 | a cancel forgets the limit the order rested at | KILLED | `test_a_cancel_still_describes_the_order_it_cancelled` — and nothing else |
+| J6 | a market fill claims its fill price as a limit price | KILLED | `test_a_market_sell_reports_no_limit_price_because_it_has_none` — and nothing else |
+| J7 | engine 18 goes back to describing the unrecorded order by guessing | KILLED | the unrecorded test and the no-limit-price test |
+| J8 | engine 18 reads `filled_qty` where it means `qty` | KILLED | `..._that_the_store_never_recorded_places_nothing` — and nothing else |
+| J9 | the no-limit-price guard removed | KILLED | `test_an_exchange_order_with_no_limit_price_is_refused_rather_than_recorded` |
+| J10 | the unrecorded row carries `placed_at` 0 | KILLED | `test_the_unrecorded_row_is_stamped_with_this_tick_and_not_left_unset` |
+| J0 | **equivalent control** — `state.qty` read through a lambda | **SURVIVED**, as required | — |
+
+**J4 was the refusal, and it is the harness earning its place for the third time this
+phase.** The anchor `qty=row.qty,\n            limit_price=row.limit_price,` matches
+**twice** in `broker.py` — once in `_terminal_state_of_row`'s `OrderState` and once in
+`_state_of_row`'s call to `_resolve_resting`, which passes the same two fields by the
+same names one indent level out. `ANCHOR MATCHED 2x — REFUSED` rather than a mutation
+applied to whichever came first and a kill credited to the wrong branch. The fix is one
+more line of context in the anchor, and the general point is that a *renamed-through*
+value is exactly the text a positional anchor cannot tell apart.
+
+**J1 was equivalent by accident on the first pass and that is worth recording as a
+mistake rather than quietly fixed.** I wrote it as `qty=Decimal(0) + qty * 0 + qty`,
+intending "reports the filled quantity", and that expression **is** `qty`. It survived,
+and for a moment it read like a hole. The realistic wrong source, `filled_qty`, is zero
+on a resting order and `OrderState` refuses a zero quantity outright, so there is no
+in-universe wrong value to substitute — the mutation became a wrong constant, which asks
+the assertion a slightly different question: does it pin the value, or only its presence?
+It pins the value.
+
+**One thing the witnesses had to be built around.** The obvious test of "a filled order
+still says what it asked for" cannot be written against this simulator: it fills a
+resting maker buy **in full at its own limit**, so `qty`, `filled_qty`, `limit_price` and
+`avg_fill_price` are 10, 10, 99.00 and 99.00 and no assertion over them can tell which
+field the broker read. The same shape as engine 21's fill-price test in the morning and
+engine 16's expected move. So that test drives a **recorded row** that filled *partially*
+and *below* its limit — 10, 4, 99.00, 98.50, four distinct numbers — which a real
+exchange produces, `OrderRow` validates, and the simulator correctly never reaches. The
+same reasoning made the engine 18 test move the book and the intent between the two runs:
+with the same tick twice, "read from the exchange" and "guessed from this tick" produce
+identical numbers and the assertion is about nothing.
+
+### The engine 9 tripwire fired, and acting on it made engine 16's coherence walk real
+
+**Agent:** B (session 3) · **Task:** job 2 tail · **Date:** 2026-09-16
+
+**What happened.** `test_engines_nine_and_fourteen_still_do_not_exist` went red during
+job 2 — not because of anything I changed, but because C landed spec 96 and engine 9
+`order_book` now exists. That is the second tripwire of this phase to fire and be acted
+on rather than weakened (the first was spec 89's two reason codes).
+
+**What it asked for, and what it got.** The tripwire's own message says to replace the
+hand-built payload with the real engine's output and to *check what it publishes for a
+`pair` and a `bar_ts`*. `approving_state` in `tests/engines/test_decision.py` now runs
+`OrderBookEngine()` in chain order, `order_book_payload()` is **deleted** rather than
+kept "for the unit tests" — a stand-in that outlives its publisher is a second
+description of engine 9 that nothing keeps true — and all 29 other tests in the file
+passed unchanged, which is the evidence that engine 16's walk needed no edit. That was
+the design claim made when engine 16 was built: the pair and bar clauses are a **walk
+over the payloads**, not a hand-written list of four comparisons, precisely so that a
+publisher landing later is checked without engine 16 being touched. This is the first
+time that claim has been tested by an actual new publisher, and it held.
+
+The seam is now pinned rather than assumed:
+`test_engine_nines_own_payload_is_walked_by_the_coherence_check` asserts engine 9 appears
+in `checked`, and splices a **real** engine 9 payload for the other candidate — not the
+SOL/USD one with its `pair` edited — to prove a disagreement blocks. The tripwire is
+narrowed to engine 14 and keeps its shape: it asserts absence, so it fails when C is
+right, which is the only direction a placeholder should be able to fail in.
+
+**And a witness problem it exposed, which is not mine to fix here.** Engine 9's real
+estimate on this fixture's book is **exactly zero**: the fake's top bid level holds more
+than the 5,000 quote basis, so the walk consumes one level and fills at the best bid.
+Friction drops from the hand-built 0.67% to 0.62% and the constant comment is corrected.
+That is engine 9 working correctly, and it makes a **weak witness** — an engine 10 that
+ignored the slippage term entirely produces the same friction. Spec 94's acceptance is
+"engine 10 reads engine 9's slippage, **proven by recomputation**", and a zero cannot
+prove it. Recorded here and in the constant's own comment so spec 94 starts from a book
+thin enough for the estimate to be non-zero, rather than discovering it while writing the
+assertion.
+
+### Decision: engine 22 never reads a balance, so spec 93's `balance_last_known_good` is not defined
+
+**Agent:** B (session 3) · **Task:** spec 93 · **Date:** 2026-09-16
+
+**Options.** Spec 93 item 4 names two fallbacks to record on a liquidation's trade,
+`asset_pairs_last_known_good` and `balance_last_known_good`, and item 7 asks for a test
+in which the balance fetch fails. Either engine 22 reads a balance somewhere, or the
+second constant describes a behaviour it does not have.
+
+**Chose.** Engine 22 reads no balance at all, defines only
+`asset_pairs_last_known_good`, and the outage test proves the liquidation completes
+**while the balance fetch is failing** rather than proving a fallback fired.
+
+**Because.** An exit's quantity is the position's, from the `positions` row. The only
+thing a balance could add is a cap at the base currency actually held — and **the paper
+ledger is quote-side only**, by my own spec 88 ruling: it does not credit base on a buy,
+because engine 19 already represents the base leg as the `positions` row and crediting
+it here would be a second representation of one exposure. So the base balance of every
+paper position is zero, and a cap would round every paper exit to nothing. The rule the
+constant would be serving is real and is satisfied by a different mechanism: invariant
+14 requires that a *failing* balance fetch must not stop the liquidation, and nothing on
+this path asks for one.
+
+**Cost.** A constant spec 93 names does not exist, so a reader comparing the spec to the
+code finds a gap and has to come here. That is better than the alternative: a fallback
+name nothing ever emits reads as a behaviour the system has, and the first person to
+query `fallbacks_used` for it would conclude the balance was always fresh.
+
+**Escalated to the lead**, because it is a deviation from a written spec rather than a
+detail inside one.
+
+### Two things spec 93 says that the surfaces do not
+
+**Agent:** B (session 3) · **Task:** spec 93 · **Date:** 2026-09-16
+
+**`last_known_good_asset_pairs` is a property, not a method.** Spec 93 item 4 writes
+`clients.kraken.last_known_good_asset_pairs()`. A's client, C's fake and my paper broker
+all declare it `@property`. Written as the spec has it, the engine would have got a bound
+method, `retained.value` would have raised `AttributeError`, and — because a per-position
+failure is caught — a **liquidation would have reported `exit_incomplete` for every
+position during exactly the outage the rule exists for**, with the retained snapshot
+sitting there readable. Recorded rather than silently corrected, because it is the third
+time in Phase 6 a spec has named a mechanism that does not exist (`drain_trades` in 88,
+`query_orders` as the second idempotency probe in 91) and the pattern is worth the
+count: the specs' *conclusions* have been right every time and their *mechanisms* wrong.
+
+**The paper broker cannot price a market sell during a total outage, and that is the
+simulator rather than the rule.** The liquidation test fails `balance` and `asset_pairs`
+and leaves the book and the fee tier up. Neither is retained — invariant 2 is explicit
+that a stale spread is a loaded gun pointed at the cost gate and that a fee nobody
+fetched invalidates it — so `PaperBroker._fill_market` has nothing to walk and no rate to
+charge if they fail. In live mode the exchange prices the market order itself and neither
+call is on the path. The test says so in its own docstring rather than arranging it
+quietly.
+
+### Spec 93 — engine 22, and the mutation that found a hole in the *reason* rather than the code
+
+**Agent:** B (session 3) · **Task:** spec 93 · **Date:** 2026-09-16
+
+**Twenty-two mutations, twenty-one killed, equivalent control survived.** Subject
+`tests/engines/test_exit.py`. First pass: nineteen applied, sixteen killed, **three
+survivors and three refusals**; four tests added, one engine change, and the whole sweep
+re-run from scratch twice.
+
+| # | Mutation | Verdict | Killed by |
+|---|---|---|---|
+| E1 | the hold does not suppress exits | KILLED | `test_a_triggered_stop_places_no_exit_on_a_data_guard_tick` — and nothing else |
+| E2 | a liquidation is held by a `data_guard` block | KILLED | the two liquidation tests |
+| E3 | retained rules read on an ordinary tick | KILLED | `test_the_retained_rules_are_not_read_outside_a_liquidation` — and nothing else |
+| E4 | `positions_closed` true with a position still open | KILLED | 6 tests |
+| E5 | the exit quantity rounded **up** | KILLED | 22 tests, including the rounding test's 10.12-against-10.13 |
+| E6 | the `userref` idempotency probe removed | KILLED | the same-tick-twice test and the collision test |
+| E7 | a `userref` recorded against another position reused | KILLED | the collision test — and nothing else |
+| E8 | the `\|exit` salt dropped from the digest | KILLED (third pass) | `test_the_exit_userref_scheme_is_pinned_to_its_values` |
+| E9 | the missing-entry-fee guard removed | KILLED (second pass) | `test_an_entry_order_with_no_fee_is_refused_rather_than_priced_at_zero` |
+| E10 | a foreign quote currency priced at 1 anyway | KILLED | `..._refused_rather_than_priced` — and nothing else |
+| E11 | realised PnL ignores both fees | KILLED | the recomputation test — and nothing else |
+| E12 | the entry price recorded as the exit price | KILLED | the same |
+| E13 | a liquidation recorded as a barrier outcome | KILLED | `test_close_intent_exits_a_position_no_barrier_touched` |
+| E14 | an unfilled exit closes the position | KILLED | `test_positions_closed_is_false_when_an_exit_did_not_fill` |
+| E15 | the request reaches the client as a **buy** | KILLED (second pass) | `test_the_request_that_reaches_the_client_is_a_market_sell_and_not_only_the_row` |
+| E16 | a position that could not be exited is not reported | KILLED | 6 tests |
+| E17 | the retained-rules fallback not recorded | KILLED | the outage test — and nothing else |
+| E18 | a flat account never finishes its liquidation | KILLED | `test_a_liquidation_on_a_flat_account_is_finished` |
+| E19 | `close_intent` read with `bool()` | KILLED | the four text-shaped parametrised values |
+| E20 | a short client answer treated as "no such order" | KILLED (second pass) | `test_a_client_that_answers_for_fewer_orders_than_it_was_asked_is_a_defect` |
+| E21 | the per-position failure messages dropped from the reason | KILLED | 4 tests |
+| E0 | **equivalent control** — `not still_open` spelled `len(...) == 0` | **SURVIVED**, as required | — |
+
+**E9 is the one worth the entry, and it found a hole in the engine rather than in the
+tests.** Deleting the guard that refuses an entry order with no fee left
+`test_an_entry_order_with_no_fee_is_refused_rather_than_priced_at_zero` **green**. The
+test was not wrong about its subject: no trade was written and the status was `ERROR`,
+exactly as it asserts. What happened instead is that the next line raised `TypeError` on
+`Decimal(None)`, the per-position `except` caught it, and both the guard and the crash
+arrive as the same `exit_incomplete`.
+
+That is a real defect and it is in the engine. A per-position exception is caught so the
+other positions are still liquidated — on a liquidation, flat on two of three beats flat
+on none — and the message was being **swallowed with it**. An operator during an
+emergency would have had `exit_incomplete` and no way to tell a missing fee tier from a
+foreign quote currency from an order the exchange refused, and each of those needs a
+different response. The engine now collects the per-position messages and names them in
+`EngineResult.reason`; three tests assert the sentence rather than only the status, and
+E21 exists to keep it that way.
+
+**E15 is the "a record of intent is not a record of what happened" shape again, and this
+time on an order rather than a number.** Every assertion about the exit being a market
+sell read the **published row** — which is engine 22's own claim about what it sent.
+Pointing the request at `ClientOrderSide.BUY` left the row saying `"side": "sell"` and
+survived. What kills it is a wrapper that captures the real `OrderRequest` handed to the
+client, the same device engine 18's test uses. Phase 5's closing finding, fourth
+appearance in this lane.
+
+**E8 was a survivor I nearly wrote off as equivalent, and the argument for testing it is
+the one worth recording.** Dropping the `|exit` salt from the digest changes the
+`userref` and changes nothing a test could reasonably assert: still deterministic, still
+positive, still in range, still derived from the position, same collision probability. It
+is equivalent *within* a version. It is not equivalent **across** one — and that is the
+hazard: change the scheme and the next release computes a different identifier for an
+exit the exchange is already holding, finds no recorded order under it, and places a
+second market sell. Invariant 8's named failure arriving through a deploy instead of
+through a crash. So the values are pinned as golden numbers with a docstring saying that
+a failure here is a question about the orders resting under the old identifiers, not an
+invitation to update the literals.
+
+**E20 needed a test the simulator cannot produce**, and the answer is engine 21's:
+`_AnswersAboutNothing` wraps the real broker and replaces exactly one answer. The paper
+broker *raises* on a `userref` it does not know, correctly, so "the client answers about
+fewer orders than it was asked" is a state a real exchange reaches and this simulator by
+design never does. Named for the mechanism rather than the consequence, which is the
+lesson engine 21's sweep left behind: two branches three lines apart had one test name
+between them.
+
+**Three refusals, all from the anchor guard, and one of them mattered.** `E4` and `E0`
+pointed at a line the E9 fix had reindented; `E16` pointed at `incomplete = True`, which
+that fix replaced with `problems.append(...)`. The harness reported `ANCHOR MATCHED 0x —
+REFUSED` each time rather than counting a silent non-result as part of a clean sweep.
+That is now the fourth and fifth time that guard has fired in Phase 6.
+
+### A mutation harness defect: a stale `.pyc` can report a kill that did not happen
+
+**Agent:** B (session 3) · **Task:** spec 93 tail · **Date:** 2026-09-16
+
+**What happened.** Three runs across the day came back with a non-zero exit and **no
+pytest summary at all** — a verdict of KILLED with an empty list of killing tests. Twice
+that was only a missing explanation. Once it was worse: `E8` was reported KILLED, and
+re-applying the identical mutation on its own reported SURVIVED. A harness that reports a
+kill that did not happen is the failure the equivalent-mutant control exists to catch and
+would not have caught, because the control is one mutation out of twenty-two.
+
+**Why.** Every incident followed a mutation to the **same file** as the one before it.
+A mutant lives for exactly one pytest run and is then overwritten with bytes of the same
+length; CPython validates a cached `.pyc` against `(source mtime, source size)`, and
+Windows mtime granularity is coarse enough that an apply-run-restore cycle inside one
+tick of the clock leaves a cache entry the next run considers current. The next run then
+imports either the previous mutant or a half-written module, and pytest dies before it
+prints a summary.
+
+**Fix.** The subprocess runs with `PYTHONDONTWRITEBYTECODE=1`, which removes the
+mechanism rather than working around it. The whole engine 22 sweep was re-run afterwards:
+twenty-two mutations, seventy-nine `FAILED` lines, **every mutation now reporting its
+killers** and none silent.
+
+**Consequence.** This is a defect in the *instrument*, and the two earlier "unexplained"
+observations in this log — `H3` reporting one spurious error, and `E8` — are almost
+certainly the same cause. Worth the entry because a mutation sweep's whole value is that
+its negatives mean something, and a harness that can report a false kill quietly reduces
+it to theatre. The same care the previous B session's anchor guard was added with.
+
+### Engine 14 landed and the tripwire fired a second time; it is retired rather than narrowed again
+
+**Agent:** B (session 3) · **Task:** spec 93 tail · **Date:** 2026-09-16
+
+C landed spec 97 hours after spec 96, so `test_engine_fourteen_still_does_not_exist` —
+itself the narrowed remnant of the two-engine tripwire — went red the same day it was
+written. `approving_state` now runs the real `AdaptiveRouterEngine` in chain order and
+`router_payload()` is deleted, the same treatment engine 9's stand-in got.
+
+**All thirty other tests in the file passed unchanged, again.** Two real publishers
+landed into engine 16's coherence walk on one day and neither needed an edit to engine
+16, which is what the walk-over-payloads design was for. `test_a_source_that_names_no_pair
+_is_not_a_disagreement` is now asserted against engine 14's **real** payload rather than
+against a dict that agreed with it by construction — the pass half of the pair clause got
+stronger for free.
+
+The tripwire is replaced by the property it was protecting rather than by a third
+narrowing: `test_no_publisher_payload_in_this_file_is_hand_built_any_more` asserts both
+engines exist and that neither payload function does. A tripwire that has run out of
+things to trip is a test that will be green forever; the invariant underneath it is not.
+
+### `opened_at` closed the `placed_at` gap, and the fix is smaller than the workaround was
+
+**Agent:** B (session 3) · **Task:** job 2, second half · **Date:** 2026-09-16
+
+**What happened.** I recorded `placed_at` on engine 18's recovered row as *this tick*,
+argued at length that the resulting late cancel was bounded and therefore acceptable,
+and wrote a test asserting it. A landed `OrderState.opened_at` — Kraken's `opentm` — in
+the same amendment, and I had not read it: my five broker sites populated `qty` and
+`limit_price` and silently dropped the field that answered my own objection. The lead
+caught it by `grep`.
+
+**Why it matters more than a missed field.** The five broker sites answering `None`
+would have looked exactly like an exchange that did not report `opentm`, and engine 18
+has a fail-closed branch for that — so **the simulator would have driven engine 18 down
+a refusal path built for a real exchange's omission**, publishing no row for an order it
+knew the placement time of to the microsecond. A defect that presents as a documented
+behaviour is the worst kind to find later.
+
+**Fix.** All five sites carry it: a resting order and a resting order that filled use
+the placement time, a recorded row uses `row.placed_at`, a cancel passes the resolved
+state's through unchanged, and a market fill uses the one injected clock reading for
+both `opened_at` and `closed_at` — which is precisely the case A's seventh coupling
+allows equality for. `test_every_order_state_the_broker_builds_carries_an_opening_time`
+sweeps all five shapes in one test rather than trusting five separate ones, because the
+property is "no site may answer `None`" and a site-by-site list is written by the person
+who forgot a site.
+
+**Consequence: the trade-off I reasoned my way into was the wrong question.** The "a
+time that never happened" objection was right, and it applies to a case one-hundredth
+the size of the one I applied it to — only an exchange that genuinely omits `opentm`.
+`OrderRow` has no `fallbacks_used` column (that is a `trades` column), so a substituted
+time could not even be recorded as a substitution, which is what keeps that case a
+refusal rather than a fallback. **The general lesson is the lead's, not mine: read the
+working tree, not `HEAD`, for anything another lane landed this session.** I had checked
+`OrderState` at `fe06a72` and concluded A had not landed; A had, uncommitted.
+
+### Decision, reversed: engine 18 reports the contradiction rather than raising it
+
+**Agent:** B (session 3) · **Date:** 2026-09-16
+
+**Options.** An `OrderState` for one of engine 18's own entries coming back with no
+`limit_price` contradicts the placement — invariant 8 makes every entry a post-only buy
+limit. I implemented the refusal as a `raise`; contract rule 7 turns that into `ERROR`
+with `blocks_trading=True`, which is fail-closed and loud.
+
+**Chose**, on the lead's ruling: a named reason code, no row, no raise, the candidate
+abandoned for the tick. The sibling of `entry_unrecorded_at_exchange`.
+
+**Because `ERROR` has a second consumer.** Engine 19 writes `block_records.status =
+'ERROR'`, and engine 17 `safety` counts those rows in the trailing hour against
+`safety.max_errors_in_window` and **freezes the account**. An exchange contradicting
+itself about one order is not the system malfunctioning, and it must not spend the
+circuit breaker's budget. My reasoning had stopped at "fail-closed and loud is correct",
+which is true of the single tick and wrong about the hour.
+
+**Cost.** A contradiction now looks, to anything reading `status`, like an ordinary tick
+that placed nothing. That is what the reason code is for, and the test asserts
+`status is OK` and `blocks_trading is False` explicitly rather than only asserting the
+code — the half that would otherwise be missing, because a raise would satisfy every
+other assertion in that test.
+
+**The general shape is worth more than the ruling.** A fail-closed answer is not free:
+it is spent out of a budget somewhere, and `ERROR` is the one status in this system
+with an account-level consequence attached. Worth checking, before making something an
+`ERROR`, what else counts them.
+
+### `entry_unrecorded_at_exchange` narrowed to one case, and the other two got their own codes
+
+**Agent:** B (session 3) · **Date:** 2026-09-16
+
+A raised this rather than deciding it: once the row is buildable, the code may no longer
+describe a real outcome, and its console prose and spec 99's walking test both hang off
+whether the branch still publishes nothing.
+
+It does — for one case out of three, so the code stays and is narrowed, and the two
+cases it lost got their own spellings:
+
+| Code | Outcome |
+|---|---|
+| `entry_recovered_from_exchange` | fully describable; the row is published and engine 21 cancels the order in the ordinary window |
+| `entry_at_exchange_is_not_a_limit` | no `limit_price`; no row |
+| `entry_unrecorded_at_exchange` | no `opened_at`; no row |
+
+Three outcomes under one code is how a console ends up unable to tell an operator which
+of them happened, and they call for different responses: the first needs nothing, the
+second means the exchange is answering about an order this system did not place, the
+third is an exchange quirk. `test_the_six_outcomes_this_engine_reports_have_six_spellings`
+pins the count so a fourth outcome cannot quietly join an existing code.
+
+### Migration 0004 and the enumeration engine 14 weights from
+
+**Agent:** B (session 3) · **Task:** the 0004 boundary · **Date:** 2026-09-16
+
+Two things at one boundary, both from C-models building against the store rather than
+against the spec's description of it.
+
+**`base_rate_brier REAL` nullable.** Engine 20 already computes it per fold and discarded
+it for want of a column. The reasoning that matters is C's near-miss, and it is in the
+migration's own comment because it will look reasonable again: deriving it as
+`win_rate * (1 - win_rate)` gives a plausible number answering a different question,
+because `brier` is over every row of the fold and `win_rate` is over the BUY subset
+only. Nullable with no default, because `0.0` is a perfect baseline that would make
+every pre-0004 row look skill-less and `0.25` is a guess about folds nobody measured.
+
+**`all_leaderboard_rows(*, model_id)`.** Neither existing read can enumerate:
+`leaderboard_entries` takes `model_version` as an argument, and `leaderboard()` is the
+console's truncating window. My own docstring on the first was the argument against
+reusing the second, and C found the consequence for weighting is worse than for an
+existence check — **a version outside the window gets no weight because nobody looked,
+not zero weight for having no edge, and the weights still sum to one over the wrong
+set.** Nothing downstream can tell.
+
+`model_id` is **required and not defaulted**, and that is the one design decision here.
+The method has no `LIMIT`, and "no limit" is only safe because the read is bounded: one
+model's rows are bounded by its walk-forward, the table as a whole by nothing. A default
+would hide the bound at the call site, which is the same class of problem as the
+truncating window — the caller cannot see what it is getting.
+
+### A seam landed mid-sweep and produced a false kill on my equivalent control
+
+**Agent:** B (session 3) · **Task:** the 0004 boundary · **Date:** 2026-09-16
+
+**What happened.** The `opened_at` sweep reported `K0`, the **equivalent control**, as
+KILLED — `int(x)` rewritten as `int(int(x))`, which cannot change an answer. Six tests
+failed, including `test_engine_sixteen_really_approved_before_engine_eighteen_is_asked`,
+which does not read `opened_at` at all.
+
+**Why.** Not the mutation. C-models landed engine 14's `_read_leaderboard` between two
+runs of the sweep, calling `all_leaderboard_rows()` with no arguments against the
+signature I had landed an hour earlier as `(*, model_id)`. Every test that builds an
+approving `state` went red on a `TypeError`, and the control happened to be the arm
+running when it did.
+
+**Fix.** One line on C's side; the signature stays required, for the reason in the entry
+above. The control survived on the re-run, which is the confirmation.
+
+**The lesson is about the instrument, and it is the second one today.** A mutation sweep
+assumes the subject is otherwise still. In a shared checkout with three agents it is
+not, and a *false kill* is the dangerous direction — a false survivor sends you to write
+a test, a false kill sends you nowhere at all. **The equivalent-mutant control is what
+caught this**, and it caught it only because a control that dies is unmistakable where a
+twelfth kill in a row is not. That is the whole argument for carrying one, arriving as
+evidence rather than as a principle. Combined with the `.pyc` defect from the engine 22
+sweep, the rule I would write is: a sweep whose control dies is a sweep to throw away,
+and a sweep with no control cannot tell you it should have been thrown away.
+
+### Two more intermittent interpreter faults, recorded and not diagnosed
+
+**Agent:** B (session 3) · **Date:** 2026-09-16
+
+Two runs in my lane died in ways my code cannot explain and neither reproduced: a
+`SystemError` inside `yaml/scanner.py` during collection, and a subprocess exiting
+`3221225477` — `0xC0000005`, a Windows access violation — inside
+`test_core_can_use_both_writes_importing_only_the_client`, which spawns a child
+interpreter. Both passed on an immediate re-run of the same command, and the full lane
+has since run green twice end to end.
+
+`unexplained` is an acceptable thing to write (HANDOFF 1, rule 5), and writing it is
+better than the alternative, which is a plausible story. Recorded because three agents
+share this checkout and are spawning interpreters concurrently, so if anyone else sees
+an access violation it is worth knowing it has happened here too rather than each of us
+concluding independently that our own change caused it.
+
+### Three CRLF files normalised, and what the conversion would have cost
+
+**Agent:** B (session 3) · **Date:** 2026-09-16
+
+`src/acsoe/clients/store/contracts.py` (489 lines, entirely CRLF),
+`src/acsoe/engines/execution/engine.py` (478, entirely) and this build log (127 of
+1,204), all against pure-LF blobs. Byte-replaced, `\r\n` to `\n`, and nothing else
+touched.
+
+It is invisible by construction: `.gitattributes` carries `* text=auto eol=lf`, so the
+clean filter normalises into the index and `git status` and `git diff --numstat` both
+say nothing. The cost is not cosmetic — **a text-mode round trip disarms every
+literal-anchor patcher in the repository at once**, because an anchor written with `\n`
+matches nothing in a file whose every line ends `\r\n`. My own harness hit exactly that
+on `contracts.py` during the migration 0003 sweep, reported `ANCHOR MATCHED 0x` and
+refused, which is the only reason it was a nuisance rather than a silent non-result
+counted as a clean sweep. Found across the team by C-models after it cost four mutation
+arms.

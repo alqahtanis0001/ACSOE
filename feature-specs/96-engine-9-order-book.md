@@ -25,7 +25,16 @@ fixture cut from the live archive, and its README says plainly how little that v
    balance in the pair's quote currency**, because invariant 6 forbids allocating more than that
    and slippage does not fall as size rises — so the estimate is an upper bound and the cost gate
    errs toward refusing. `estimated_slippage_pct` = (best bid − volume-weighted fill price) / best
-   bid over that walk, exact `Decimal`, published beside `basis_notional` and `levels_consumed`.
+   bid over that walk, exact `Decimal`, published beside **`pair`**, `basis_notional` and
+   `levels_consumed`.
+
+   **`pair` corrected into this list 2026-09-16.** The engine always published it; *this spec's
+   field list omitted it*, and C-models read the list rather than the contracts module and told B
+   on that basis that engine 9 publishes no `pair` — which would have left engine 16's coherence
+   walk silently exempting the one engine whose entire output is defined by a pair. Take it
+   **verbatim from `state["scout"]["pair"]`**, so the walk compares a value against its own
+   source. A spec's field list is a description; `contracts.py` is the fact, and where they
+   disagree the spec is what is wrong.
 4. **Fail-closed shapes, and engine 9 does not block on any of them.** It is not a gate, and a
    non-gate that refuses on its own criteria makes `is_gate` wrong — the principle the operator
    applied to engine 16. (Engine 8's `di_refused` block is the one operator-ruled exception,
