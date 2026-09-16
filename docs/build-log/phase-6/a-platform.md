@@ -1333,3 +1333,38 @@ file and read in full:
   same 8. `docs_vocabulary` PASSes over these entries.
 
 No failure outside the known one.
+
+### Finding 1 closed by spec 103: the strict xfail is now a plain test, and it can still fail
+
+**Agent:** A · **Task:** spec 87, after spec 103 (B, `178a0a8`) · **Date:** 2026-09-16
+
+**What happened.** Once spec 103 landed, the paper ledger counts every fill the broker has
+executed, recorded or not. The strict xfail on
+`test_a_filled_position_is_watched_across_quiet_ticks` then XPASSed, which is what it was
+for. The lead's log is `logs/verify/b103-A-xfail-default.log`.
+
+**Fix.** The marker is removed. The docstrings now tell the finding in the past tense:
+the module docstring, test 4's note that engine 17 co-blocked on tick B, and test 5's note
+on why its drawdown is written into the store. The test keeps its history paragraph. No
+assertion changed.
+
+**Proof it can still fail.** One arm, B1, run through the same harness, with
+`PYTHONDONTWRITEBYTECODE=1`, a byte copy, the restore in `finally`, and the sha256
+compared in the same statement:
+
+- **Mutation:** in `src/acsoe/clients/paper/broker.py`, `balance()` loses its loop over
+  executed fills (`for userref, executed in list(self._executed.items()):` becomes
+  `for userref, executed in []:`). That reverts spec 103's half: executed but unrecorded
+  fills are left out of the ledger again. The anchor occurs once; the file is 0 CRLF and
+  865 LF.
+- **Hashes:** broker `98c0df71…8c70e6201` before and after restore; mutant
+  `c15e1c2a…bfa0a4c1`. The test file is `79cc6747…8ba0b3a2`, unchanged by the run.
+- **Verdict:** KILLED, `1 failed, 6 passed in 59.92s`. The only failure is
+  `test_a_filled_position_is_watched_across_quiet_ticks`:
+  `AssertionError: the fill tick's equity counts the entry's notional twice`,
+  `assert Decimal('8332.414226591') == ...`. That is the original finding's number, exactly.
+- **After restore:** `sha256sum -c` OK, and `git status` shows only the test file.
+
+**Runs on the restored tree.** The file: `7 passed in 69.75s`
+(`logs/verify/a87-after103-file.log`). `tests/clients/paper/`: `77 passed in 17.60s`
+(`logs/verify/a87-after103-paper.log`). No full gate was run; the lead runs it.

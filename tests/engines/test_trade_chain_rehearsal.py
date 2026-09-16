@@ -40,17 +40,18 @@ byte-for-byte what it was. See :func:`check_recorded`.
 
 ## The finding this rehearsal made, and how the scenarios are arranged around it
 
-**Every paper fill inflates `peak_equity` by the position's notional**, and engine 17
-freezes the account two ticks later. Engine 1 reads the paper ledger at the top of the
-tick, before engine 19 has recorded this tick's fill, while engine 21 already counts the
-new position in `positions_value`. Build log, 2026-09-16, "FINDING, not fixed". It is
-not fixed here: engines 19 and 21 and the broker are not this file's to change.
+**Every paper fill inflated `peak_equity` by the position's notional**, and engine 17
+froze the account two ticks later. Engine 1 read the paper ledger at the top of the tick,
+before engine 19 had recorded that tick's fill, while engine 21 already counted the new
+position in `positions_value`. Build log, 2026-09-16, "FINDING, not fixed". Spec 103 (B,
+`178a0a8`) fixed it in the broker: the ledger now counts every fill the broker has
+executed, recorded or not.
 
-`test_a_filled_position_is_watched_across_quiet_ticks` is the scenario it breaks, and is
-a strict `xfail` naming the finding, so it goes red the day the defect is fixed rather
-than staying quietly skipped. Every other scenario puts the tick it is *about* directly
-after the fill, where engine 17 reads the fill tick's own row — equity equal to peak, a
-drawdown of zero — so that tick is clean and nothing below depends on the defect.
+`test_a_filled_position_is_watched_across_quiet_ticks` is the scenario it broke. It was a
+strict `xfail` naming the finding until spec 103 landed and it passed, and it is now a
+plain test. Every other scenario still puts the tick it is *about* directly after the
+fill. That arrangement was made so those scenarios would not depend on the defect, and
+it costs nothing now that the defect is gone.
 """
 
 from __future__ import annotations
@@ -882,10 +883,10 @@ def test_a_data_guard_block_holds_a_touched_stop_and_close_intent_then_exits_it(
     and the operator presses Close all; the same position is liquidated regardless of the
     guard, and the orchestrator clears `close_intent` because both flags came back true.
 
-    On tick B engine 17 also blocks, as a second guard blocker. That is the finding in
-    the module docstring — tick A's equity row sits under the fill tick's inflated peak —
-    and nothing here asserts on it either way; `data_guard` is still the primary blocker,
-    which is the only thing the hold reads.
+    Before spec 103, engine 17 also blocked on tick B, as a second guard blocker, because
+    of finding 1 in the module docstring. Nothing here asserts on engine 17 either way.
+    `data_guard` is the primary blocker, and the primary blocker is the only thing the hold
+    reads.
     """
     rehearsal = build(tmp_path, trained, window)
     entry, _ = the_entry(rehearsal)
@@ -952,8 +953,8 @@ def test_a_block_by_any_other_engine_does_not_hold_a_touched_stop(
     snapshot written into the store between the fill tick and this one, standing in for
     an account whose recorded history puts it 60% below its peak: engine 17 reads only
     the store, so this is the one input it has, and nothing in `state` is touched.
-    Written this way rather than borrowed from the finding in the module docstring, so
-    the scenario keeps its witness after that defect is fixed.
+    Written this way rather than borrowed from finding 1 in the module docstring, so the
+    scenario kept its witness once spec 103 fixed that defect.
     """
     rehearsal = build(tmp_path, trained, window)
     entry, _ = the_entry(rehearsal)
@@ -1059,20 +1060,10 @@ def test_a_restarted_process_does_not_place_the_same_entry_twice(
 
 
 # --------------------------------------------------------------------------- #
-# 7. A position watched across quiet ticks — broken by the finding
+# 7. A position watched across quiet ticks — the scenario finding 1 broke
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "FINDING, spec 87 (docs/build-log/phase-6/a-platform.md, 2026-09-16): on the fill "
-        "tick engine 19 writes equity = pre-fill ledger cash + the new position, so "
-        "peak_equity is inflated by the notional and engine 17 freezes the account two "
-        "ticks later. Not fixed here; engines 19 and 21 and the paper broker are not A's."
-    ),
-)
 def test_a_filled_position_is_watched_across_quiet_ticks(
     tmp_path: Path, trained: tuple[Path, str], window: list[Bar]
 ) -> None:
@@ -1080,7 +1071,12 @@ def test_a_filled_position_is_watched_across_quiet_ticks(
 
     The fill tick's equity is recomputed from the account rather than from engine 1's
     payload: the opening cash, less what the entry spent and its maker fee, plus the
-    position at what was paid. That is the assertion the finding fails.
+    position at what was paid.
+
+    History: this was a strict `xfail` for finding 1 (spec 87, build log 2026-09-16), and
+    that equity assertion is the one it failed. Engine 19 wrote `8332.414226591`, which is
+    the pre-fill cash of `5000.00` plus the position, and engine 17 then froze the account.
+    Spec 103 fixed the broker's ledger, and the marker was removed once the test passed.
     """
     rehearsal = build(tmp_path, trained, window)
     entry, _ = the_entry(rehearsal)

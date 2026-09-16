@@ -13,7 +13,7 @@ in that order. Nobody else may start them.
 | 84 | The order surface — `OrderRequest`, `OrderAck`, `OrderState`, `OrderClientProtocol`; the live client refuses every order call until Phase 8 | `src/acsoe/clients/kraken/contracts.py`, `rest.py`, `client.py`, `__init__.py`, `README.md`, `tests/clients/kraken/test_orders.py` | **LANDED 2026-09-16** |
 | 85 | Engine 3 publishes each pair's trade low, high and count since the previous tick | `src/acsoe/engines/market_sensor/{contracts,engine,README}.py`, `tests/engines/test_market_sensor.py` | **LANDED 2026-09-16** |
 | 86 | Paper broker wired into `build_clients` in paper mode only; `scripts/cut_book_fixture.py` | `src/acsoe/cli/engine.py`, `scripts/cut_book_fixture.py`, `tests/cli/test_paper_broker_wiring.py`, `tests/scripts/test_cut_book_fixture.py` | **LANDED 2026-09-16** |
-| 87 | Rehearse B's engines 18, 21, 22 through real orchestrator ticks | `tests/engines/test_trade_chain_rehearsal.py` | **BUILT 2026-09-16, two findings reported, not fixed** (see SPEC 87 below). 6 scenarios green, 1 strict xfail naming finding 1; 4 mutations killed + 1 equivalent control |
+| 87 | Rehearse B's engines 18, 21, 22 through real orchestrator ticks | `tests/engines/test_trade_chain_rehearsal.py` | **DONE 2026-09-16** (see SPEC 87 below). 7 scenarios green after spec 103 closed finding 1; 5 mutations killed (M1-M4, and B1 on the broker) + 1 equivalent control. Finding 2 is with specs 104/105 |
 
 Spec 84 is first because nothing else in the phase can start without it: B's paper broker (88)
 implements it and engines 18, 21 and 22 call it. The concrete signatures are under
@@ -39,7 +39,7 @@ is C's `ScriptedMarket` under B's `PaperBroker`, and everything runs at **fee ti
 | `data_guard` block holds a touched stop, `hold_reason` recorded; `close_all` then liquidates the same position under the same block | green |
 | a non-`data_guard` block (engine 17 drawdown) does not hold a touched stop | green |
 | the same bar evaluated by a restarted process places one entry (engine 18's `open_orders` probe) | green |
-| position watched across quiet ticks | **strict xfail, finding 1** |
+| position watched across quiet ticks | green since spec 103 (`178a0a8`); was a strict xfail for finding 1. Marker removed 2026-09-16; with the broker fix reverted (B1) it goes red on `8332.414226591` |
 
 After every tick, `orders`, `positions`, `trades` and `equity_snapshots` are read back and
 compared row for row with what 18, 21 and 22 published.
