@@ -27,7 +27,8 @@ from typing import Any
 import pytest
 from tests.harness.fake_kraken import FakeKrakenClient
 
-from acsoe.clients.kraken.contracts import QuoteTick, TradeTick
+from acsoe.clients.kraken.contracts import OrderState, QuoteTick, TradeTick
+from acsoe.clients.kraken.contracts import OrderStatus as ClientOrderStatus
 from acsoe.clients.paper.broker import PaperBroker
 from acsoe.clients.store.client import StoreClient
 from acsoe.clients.store.contracts import (
@@ -140,6 +141,87 @@ def context(engine_context: Any, broker: PaperBroker, store: StoreClient) -> Any
 @pytest.fixture
 def manager() -> PositionManagerEngine:
     return PositionManagerEngine()
+
+
+class _BrokerAnswering:
+    """The real `PaperBroker` with **one** answer overridden, and nothing else changed.
+
+    The four tests below need an answer the simulator cannot produce: a fill at a price
+    that is not the limit, a query that reports on fewer orders than it was asked about,
+    and a cancel that comes back filled or still resting. Each is a state a real exchange
+    reaches and the paper broker, correctly, never does — it fills a resting maker buy at
+    its own limit and it raises on a `userref` it does not know.
+
+    This is deliberately a *wrapper* rather than a fake order client. Everything the
+    engine reads still comes from the real broker over the real fake's book; only the
+    single field under test is replaced, and it is replaced with a freshly constructed
+    `OrderState` so A's validators still apply. A hand-built fake would have let the
+    whole surface drift into agreement with the engine, which is the failure mode the
+    module docstring above exists to prevent.
+    """
+
+    def __init__(
+        self,
+        real: PaperBroker,
+        *,
+        query: str = "pass through",
+        cancel: str = "pass through",
+        fill_price: Decimal | None = None,
+    ) -> None:
+        self._real = real
+        self._query = query
+        self._cancel = cancel
+        self._fill_price = fill_price
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+    async def query_orders(self, userrefs: Sequence[int]) -> tuple[OrderState, ...]:
+        if self._query == "reports on nothing":
+            return ()
+        states = await self._real.query_orders(userrefs)
+        if self._fill_price is None:
+            return states
+        return tuple(
+            state
+            if state.avg_fill_price is None
+            else OrderState(
+                userref=state.userref,
+                order_id=state.order_id,
+                status=state.status,
+                filled_qty=state.filled_qty,
+                avg_fill_price=self._fill_price,
+                fee=state.fee,
+                closed_at=state.closed_at,
+            )
+            for state in states
+        )
+
+    async def cancel_order(self, userref: int) -> OrderState:
+        state = await self._real.cancel_order(userref)
+        if self._cancel == "filled instead":
+            return OrderState(
+                userref=state.userref,
+                order_id=state.order_id,
+                status=ClientOrderStatus.FILLED,
+                filled_qty=Decimal("10"),
+                avg_fill_price=LIMIT,
+                fee=Decimal("10") * LIMIT * Decimal(MAKER),
+                # The real cancel reports a terminal state, so it carries one. Passed
+                # through rather than invented: `OrderState` requires `closed_at` on a
+                # terminal status, so a `None` here fails loudly at construction instead
+                # of teaching the engine that a filled order has no close time.
+                closed_at=state.closed_at,
+            )
+        if self._cancel == "did not take":
+            return OrderState(
+                userref=state.userref,
+                order_id=state.order_id,
+                status=ClientOrderStatus.RESTING,
+                filled_qty=Decimal("0"),
+                fee=Decimal("0"),
+            )
+        return state
 
 
 def build_state(
@@ -351,6 +433,43 @@ def test_a_fill_sets_the_barriers_from_the_fill_price_and_not_the_bar_close(
     assert position["entry_userref"] == USERREF
 
 
+def test_the_barriers_come_from_the_price_the_client_reports_not_the_limit_on_record(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    broker: PaperBroker,
+) -> None:
+    """The same ruling as the test above, asked of a fixture that can tell the two apart.
+
+    The test above compares `entry_price` against `LIMIT`, and the paper broker fills a
+    resting post-only buy **at its limit** — so `avg_fill_price` and `limit_price` are
+    the same number there and the assertion passes whichever one the engine reads. A
+    mutation swapping `filled.avg_fill_price` for `entry.limit_price` survived all forty
+    tests in this file. The test was not wrong about its subject; it was wrong about its
+    witness, which is Phase 5's closing finding in a different engine.
+
+    Here the client answers 98.50 for an order resting at 99.00, so only the client's
+    answer produces these numbers. It is not a hypothetical distinction: `entry` may be a
+    `_PublishedEntry` built out of this tick's `state["execution"]`, which is engine 18's
+    claim about what it asked for, while `avg_fill_price` is the exchange's answer about
+    what happened. Engine 11 sized the quantity against the stop distance from the price
+    actually paid, so barriers from any other price risk a different amount of money than
+    the gate approved.
+    """
+    paid = Decimal("98.50")
+    assert paid != LIMIT, "the whole point is a fill price the record does not carry"
+    store.write_order(resting_entry(context))
+    traded(kraken, context, ["98.00"])
+    context.clients.kraken = _BrokerAnswering(broker, fill_price=paid)
+
+    position = manager.process(context, build_state(context)).data[POSITIONS_FIELD][0]
+
+    assert Decimal(position["entry_price"]) == paid
+    assert Decimal(position["target_price"]) == paid * (Decimal(1) + Decimal("0.03"))
+    assert Decimal(position["stop_price"]) == paid * (Decimal(1) - Decimal("0.015"))
+
+
 def test_the_timeout_is_the_configured_bars_after_the_fill(
     manager: PositionManagerEngine,
     context: Any,
@@ -470,6 +589,61 @@ def test_a_stale_entry_is_still_cancelled_during_a_data_guard_hold(
     assert data[ORDERS_FIELD][0]["status"] == OrderStatus.CANCELLED.value
 
 
+def test_an_entry_that_filled_during_the_cancel_becomes_a_position_not_a_cancellation(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    broker: PaperBroker,
+) -> None:
+    """The race between the query and the cancel, and it is the expensive one.
+
+    The engine asked to cancel and the exchange answered "it filled". The money is
+    already spent. Recording a cancellation would leave the account holding a position
+    with no `positions` row against it — nothing marks it, no barrier can fire on it and
+    engine 22 will never exit it, so it sits until someone reads the exchange by hand.
+
+    The engine handles this and the branch carries a comment saying why; nothing asked
+    for it until a mutation that reported the fill as a cancellation survived all forty
+    tests. The entry is stale, so an ordinary tick reaches the cancel without needing a
+    liquidation.
+    """
+    store.write_order(resting_entry(context, age_s=WINDOW_S + 1))
+    context.clients.kraken = _BrokerAnswering(broker, cancel="filled instead")
+
+    data = manager.process(context, build_state(context)).data
+
+    assert [row["status"] for row in data[ORDERS_FIELD]] == [OrderStatus.FILLED.value]
+    assert len(data[POSITIONS_FIELD]) == 1, "the money bought something, so it is held"
+    assert data[POSITIONS_FIELD][0]["entry_userref"] == USERREF
+
+
+def test_a_cancel_that_did_not_take_leaves_the_completion_flag_false(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    broker: PaperBroker,
+) -> None:
+    """The kill switch's retry, which `_manage`'s comment states in three lines and
+    nothing asserted.
+
+    `entry_orders_cancelled` means **only** "nothing is resting any more". A cancel the
+    exchange did not act on leaves the order on the book, so the flag must stay `False`,
+    the orchestrator must keep `close_intent` set, and the next tick must try again. A
+    `True` here ends the liquidation with a live post-only buy still able to fill —
+    invariant 8's named failure.
+
+    One input differs from `test_close_intent_cancels_a_fresh_entry_inside_its_window`:
+    what the cancel comes back as.
+    """
+    store.write_order(resting_entry(context, age_s=1))
+    context.clients.kraken = _BrokerAnswering(broker, cancel="did not take")
+
+    data = manager.process(context, build_state(context, close_intent=True)).data
+
+    assert data[ENTRY_ORDERS_CANCELLED_FIELD] is False
+    assert data[ORDERS_FIELD] == [], "nothing is recorded as cancelled, because nothing was"
+
+
 def test_an_entry_is_never_replaced_or_re_placed(
     manager: PositionManagerEngine, context: Any, store: StoreClient
 ) -> None:
@@ -557,8 +731,17 @@ def test_a_liquidation_never_holds_even_on_a_data_guard_block(
         ("97.52", "101.98", Barrier.TARGET),
         ("97.52", "101.96", None),
         ("97.51", "101.96", Barrier.STOP),
+        ("97.515", "101.96", Barrier.STOP),
+        ("97.52", "101.97", Barrier.TARGET),
     ],
-    ids=["both touched resolves to stop", "target only", "neither", "stop only"],
+    ids=[
+        "both touched resolves to stop",
+        "target only",
+        "neither",
+        "stop only",
+        "a print exactly at the stop is a touch",
+        "a print exactly at the target is a touch",
+    ],
 )
 def test_both_barriers_in_one_tick_resolve_to_stop(
     manager: PositionManagerEngine,
@@ -576,6 +759,14 @@ def test_both_barriers_in_one_tick_resolve_to_stop(
     well have stopped out first. Resolving to `stop` cannot flatter the strategy, and it
     keeps the live outcome and the label computed the same way — which is the only thing
     that makes the backtest comparable to the live record.
+
+    **The last two cases are the boundary itself, and they are here because a sweep found
+    nothing asking for it.** The first four straddle each barrier by a cent and never land
+    on one, so `<=` and `<` were indistinguishable across all forty tests in this file.
+    The comparison has to be inclusive, and not as a matter of taste:
+    `research/labelling.py:343-344` computes the training label with `high >= target_price`
+    and `low <= stop_price`, so a strict engine would disagree with the label on exactly
+    the bars that touch — which would break the one property the paragraph above rests on.
     """
     store.write_position(open_position(context))
     traded(kraken, context, [low, high])
@@ -699,6 +890,35 @@ def test_the_totals_are_absent_and_not_zero_when_a_mark_could_not_be_taken(
     assert len(data[POSITIONS_FIELD]) == 2, "both are still published and still managed"
 
 
+def test_a_position_opened_by_this_ticks_fill_is_counted_in_the_portfolio_value(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+) -> None:
+    """A position that exists only because of this tick's fill still has value.
+
+    Found by a mutation that deleted the `value +=` in the fills loop and survived all
+    forty tests: every marking test used a position the store already held, so nothing
+    asked what the totals do with a brand-new one. Left out, engine 19 writes an
+    `equity_snapshots` row short by the whole notional of every position opened that
+    tick, `peak_equity` keeps the real figure, and the difference is a drawdown engine 17
+    acts on — a breaker firing on a position that was just opened successfully.
+
+    It is valued at what was paid rather than re-marked at the bid, which is why the
+    expectation is `qty x entry_price` and the unrealised total is exactly zero: a
+    position that has existed for no time has made and lost nothing.
+    """
+    store.write_order(resting_entry(context))
+    traded(kraken, context, ["98.00"])
+
+    data = manager.process(context, build_state(context)).data
+
+    assert len(data[POSITIONS_FIELD]) == 1, "the fill became a position"
+    assert Decimal(data[POSITIONS_VALUE_FIELD]) == Decimal("10") * LIMIT
+    assert Decimal(data[UNREALISED_PNL_FIELD]) == 0
+
+
 def test_a_position_with_no_quote_carries_no_last_price(
     manager: PositionManagerEngine, context: Any, store: StoreClient, kraken: Any
 ) -> None:
@@ -764,6 +984,35 @@ def test_the_flag_is_false_while_an_entry_the_client_will_not_report_on_still_re
 
     assert result.status is EngineStatus.ERROR
     assert result.data[ENTRY_ORDERS_CANCELLED_FIELD] is False
+
+
+def test_the_flag_is_false_while_the_client_answers_for_fewer_orders_than_it_was_asked(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    broker: PaperBroker,
+) -> None:
+    """Invariant 3 again, through the branch the test above does not reach.
+
+    There are two ways the client can fail to say where an order stands, and they are
+    different branches three lines apart. The test above drives the one where it
+    **raises**; this one drives the one where it **answers, and the order is not in the
+    answer**. A mutation deleting `still_resting = True` from the second survived all
+    forty tests, because the name of the first test covers both readings and nothing
+    exercised the second.
+
+    The paper broker cannot produce this — it raises on a `userref` it does not know,
+    which is `test_an_unknown_userref_raises_rather_than_answering_nothing` over in
+    `tests/clients/paper/`. A live exchange returning a short list is the case this
+    guards, and an order missing from the answer is not an order that is gone.
+    """
+    store.write_order(resting_entry(context))
+    context.clients.kraken = _BrokerAnswering(broker, query="reports on nothing")
+
+    data = manager.process(context, build_state(context, close_intent=True)).data
+
+    assert data[ENTRY_ORDERS_CANCELLED_FIELD] is False
+    assert data[ORDERS_FIELD] == []
 
 
 def test_the_completion_flag_is_the_literal_true_the_orchestrator_requires(
@@ -843,6 +1092,43 @@ def test_an_entry_placed_this_tick_is_seen_before_engine_nineteen_records_it(
 
     assert [row["status"] for row in data[ORDERS_FIELD]] == [OrderStatus.CANCELLED.value]
     assert data[ENTRY_ORDERS_CANCELLED_FIELD] is True
+
+
+def test_an_entry_in_both_the_store_and_this_ticks_payload_is_settled_once(
+    manager: PositionManagerEngine, context: Any, store: StoreClient
+) -> None:
+    """The two sources overlap on the tick after a placement, and one order is one order.
+
+    Engine 18 publishes the placement, engine 19 records it at the end of that tick, and
+    on the next tick engine 21 sees the same `userref` from both `store.resting_orders()`
+    and `state["execution"]`. `_resting_entries` dedupes on `userref`; a mutation
+    removing that check survived all forty tests, because every test supplied exactly one
+    of the two sources.
+
+    Settled twice, one order produces two cancel rows for engine 19 to write against one
+    `userref` — or, when it filled, **two positions out of one fill**, which double-counts
+    the account's exposure everywhere downstream and would let engine 11's per-pair
+    refusal be the only thing standing between it and a third.
+    """
+    store.write_order(resting_entry(context, age_s=WINDOW_S + 1))
+    state = build_state(context)
+    state["execution"] = {
+        "orders": [
+            {
+                "userref": USERREF,
+                "pair": PAIR,
+                "intent": OrderIntent.ENTRY.value,
+                "status": OrderStatus.RESTING.value,
+                "qty": "10",
+                "limit_price": format(LIMIT, "f"),
+                "placed_at": to_micros(context.now) - (WINDOW_S + 1) * MICROSECONDS_PER_SECOND,
+            }
+        ]
+    }
+
+    data = manager.process(context, state).data
+
+    assert [row["userref"] for row in data[ORDERS_FIELD]] == [USERREF], "one order, one row"
 
 
 def test_no_execution_payload_at_all_is_an_ordinary_tick(

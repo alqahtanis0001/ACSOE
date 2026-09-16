@@ -29,6 +29,17 @@ supplies `paper.starting_balances` and nothing else. `clock` is invariant 9's in
 clock, needed because `BalancesSnapshot.fetched_at` is required and the ledger must
 answer whether or not the real `Balance` call worked.
 
+**"Every stream call" is checked by a walk over the protocol, not by a list.** In paper
+mode this object *is* the stream every engine sees, so a member the broker fails to
+declare does not fail loudly — engine 2 reaches for `drain_gaps` with `getattr` and
+records nothing when it is absent, which is how the first version of this class produced
+an archive with no `gap` line in it at all (invariant 11; see the build log of
+2026-09-16). `test_the_broker_forwards_every_member_of_the_stream_protocol` walks
+`MarketStreamProtocol.__protocol_attrs__` and requires each member both to be present and
+to reach the wrapped client. It is a walk rather than one test per method because the
+omission and its missing test have a single cause: nobody writes a test for the method
+they forgot.
+
 Keyword-only after `real`, deliberately. Phase 5 cost a collision where `models_dir`
 landed positional after B had told A it would be keyword-only.
 

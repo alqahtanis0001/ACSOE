@@ -37,11 +37,16 @@ minimum is the number that would actually be sent.
 
 Invariant 6's last clause — "one open position per pair" — is enforced here, by
 :meth:`RiskEngine._pair_exposure`, and it was enforced **nowhere** before spec 89: the
-portfolio cap above it counts open positions and never asks which pair they are on. A
-resting post-only entry on the pair refuses a second candidate exactly as an open
-position does, because it is exposure that has not happened yet; that is the reading
-invariant 14 already applies to `safety`'s escalation precondition, and a second entry
-placed beside an unfilled one doubles the money at risk the moment both fill.
+portfolio cap counts open positions and never asks which pair they are on. A resting
+post-only entry on the pair refuses a second candidate exactly as an open position does,
+because it is exposure that has not happened yet; that is the reading invariant 14
+already applies to `safety`'s escalation precondition, and a second entry placed beside
+an unfilled one doubles the money at risk the moment both fill.
+
+**It is asked before the portfolio cap**, by a lead ruling of 2026-09-16 that reverses
+the order spec 89 shipped with. The cap is inert at the configured balance — three
+allowed positions against a balance that affords one — so cap-first would have hidden
+this clause on every tick where it is the rule doing the work.
 
 ## Which side of the book, and why it is two sides
 
@@ -194,9 +199,27 @@ class RiskEngine(BaseEngine):
         except MissingInputError as missing:
             return self._blocked_on_missing_input(str(missing), started)
 
-        # Checked before sizing: the portfolio is already full, so what this candidate
-        # would have been sized to is not a question worth answering, and answering it
-        # would put a quantity in the payload of a refused candidate.
+        # Invariant 6: **one open position per pair.** Checked before sizing, because what
+        # this candidate would have been sized to is not a question worth answering once
+        # it is refused, and answering it would put a quantity in the payload of a refused
+        # candidate.
+        #
+        # **Asked before the portfolio cap below, and the order is a lead ruling of
+        # 2026-09-16 that reverses the one spec 89 shipped with.** Both refusals can be
+        # true on one tick and both block, so the order decides only which `reason_code`
+        # the rejection row carries. It matters because the cap is *inert* at the
+        # configured balance: `max_concurrent_positions` is 3, and at $5,000 with 1% risk
+        # against a 1.5% stop one position is ~$3,333 notional, so the balance binds at
+        # one. Checking the cap first would therefore hide invariant 6's specific clause
+        # on every tick where it is the rule actually doing the work, not merely on a rare
+        # tie. The earlier order was chosen to keep pre-spec-89 rejection codes stable,
+        # and there are no such rows: no engine before Phase 6 could open a position.
+        if exposure is not None:
+            return self._reject(inputs, exposure.reason_code, exposure.reason, fallbacks, started)
+
+        # The portfolio as a whole is full. The coarser of the two statements, and the one
+        # that refuses a candidate on a pair the account does *not* already hold — which
+        # is the only case where it is reachable once the per-pair rule has been asked.
         if open_positions >= max_concurrent:
             return self._reject(
                 inputs,
@@ -205,17 +228,6 @@ class RiskEngine(BaseEngine):
                 fallbacks,
                 started,
             )
-
-        # Invariant 6: **one open position per pair.** Checked after the portfolio cap and
-        # before sizing, for the same reason the cap is: what this candidate would have
-        # been sized to is not a question worth answering once it is refused.
-        #
-        # The order between the two is deliberate and both refuse, so it decides only
-        # which `reason_code` the rejection row carries. The cap is the coarser statement
-        # — the account as a whole is full — and it was here first; keeping it first means
-        # no existing rejection changes its code because spec 89 landed.
-        if exposure is not None:
-            return self._reject(inputs, exposure.reason_code, exposure.reason, fallbacks, started)
 
         risk_amount = inputs.equity * inputs.risk_fraction
         target_notional = risk_amount / inputs.stop_pct

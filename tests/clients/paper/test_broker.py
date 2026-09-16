@@ -567,6 +567,52 @@ def test_open_orders_reports_what_is_resting_and_nothing_terminal(
     assert [state.userref for state in open_now] == [USERREF]
 
 
+def test_open_orders_reports_an_order_accepted_this_tick_that_the_store_has_not_seen(
+    broker: PaperBroker, store: StoreClient
+) -> None:
+    """The gap between placing and recording, which is every tick anything is placed.
+
+    Engine 19 writes at the **end** of the manage chain, so between `add_order` and that
+    write the broker's `_pending` is the only thing that knows the order exists. Until
+    2026-09-16 `open_orders()` was derived from `store.resting_orders()` alone and
+    answered "nothing is open" while a post-only buy sat on the book.
+
+    That is invariant 3's shape, and it is also a difference between paper and live: a
+    real exchange lists an order the moment it rests, whatever this system has recorded.
+    The broker exists so engines 18, 21 and 22 run the same code in both modes, and a
+    read that answers differently defeats the point of it.
+
+    The test that was here drove only orders the store already held, which is why it
+    could not fail on this. One input differs: nothing is written to the store.
+    """
+    run_blocking(broker.add_order(buy(limit="99.00")))
+    assert store.order_by_userref(USERREF) is None, "engine 19 has not run"
+
+    open_now = run_blocking(broker.open_orders())
+
+    assert [state.userref for state in open_now] == [USERREF]
+
+
+def test_open_orders_reports_one_order_once_when_both_sources_hold_it(
+    broker: PaperBroker, store: StoreClient, fixed_clock: Any
+) -> None:
+    """The union must not double-count on the tick engine 19 catches up.
+
+    `_lookup` prefers the store's row and drops `_pending`'s copy, so one `userref`
+    resolves once — but that is a property of `_lookup`, and `open_orders` builds the
+    list of `userref`s before `_lookup` is reached. This is the assertion that says the
+    list itself is deduplicated rather than relying on the resolver downstream.
+    """
+    run_blocking(broker.add_order(buy(limit="99.00")))
+    store.write_order(
+        recorded(buy(limit="99.00"), status=RowStatus.RESTING, placed_at=to_micros(fixed_clock.now()))
+    )
+
+    open_now = run_blocking(broker.open_orders())
+
+    assert [state.userref for state in open_now] == [USERREF]
+
+
 # --------------------------------------------------------------------------- #
 # The ledger
 # --------------------------------------------------------------------------- #
@@ -706,6 +752,85 @@ def test_every_read_is_the_real_clients_answer_unchanged(
     assert run_blocking(broker.asset_pairs()) == run_blocking(kraken.asset_pairs())
     assert run_blocking(broker.trade_volume()) == run_blocking(kraken.trade_volume())
     assert run_blocking(broker.order_book(PAIR, 10)) == run_blocking(kraken.order_book(PAIR, 10))
+
+
+class _RecordingStream:
+    """Records which attribute the broker reached for, and answers nothing.
+
+    Not a subclass of the fake and not typed against anything: the only question here is
+    *which names* the broker touches on the object it wraps, so answering every call with
+    an empty tuple is enough and giving realistic answers would only add ways to be wrong.
+    """
+
+    def __init__(self) -> None:
+        self.touched: list[str] = []
+
+    def __getattr__(self, name: str) -> Any:
+        self.touched.append(name)
+        return lambda *args: ()
+
+
+def test_the_broker_forwards_every_member_of_the_stream_protocol(
+    store: StoreClient, paper_config: Any, fixed_clock: Any
+) -> None:
+    """Walks `MarketStreamProtocol` rather than listing its members by hand.
+
+    Asked for by A after measuring the omission this replaces: the broker declared six of
+    the protocol's seven stream members and dropped `drain_gaps`. Engine 2 takes gaps with
+    `getattr(stream, "drain_gaps", None)` and records none when it is absent, so in paper
+    mode — where the broker *is* the stream every engine sees — the archive got no `gap`
+    line at all and would have read as continuous across a reconnect. Invariant 11, and it
+    disarms the book cutter's refusal to cut a window containing a gap.
+
+    **A test per method cannot find that class of defect**, which is why this one walks the
+    protocol. The omission and the missing test have one cause: nobody writes a test for
+    the method they forgot. A hand-written list here would be written by the same person
+    who wrote the hand-written forwarding.
+
+    Both halves are asserted, because presenting a member and forwarding it are different
+    failures: a stub that returned `()` without asking the real client would pass a
+    `hasattr` check and would be exactly as silent.
+    """
+    import inspect
+
+    from acsoe.clients.kraken.contracts import MarketStreamProtocol
+
+    members = set(MarketStreamProtocol.__protocol_attrs__)
+
+    # `__protocol_attrs__` is a private typing detail. If a future version renames it the
+    # attribute access would raise, but an *empty* set would make the walk below pass
+    # vacuously — a test that checks nothing while staying green is worse than a red one.
+    assert "drain_gaps" in members, "the walk is reading the wrong protocol"
+    assert len(members) >= 7, f"MarketStreamProtocol shrank unexpectedly: {sorted(members)}"
+
+    for name in sorted(members):
+        real = _RecordingStream()
+        broker = PaperBroker(real, store=store, config=paper_config, clock=fixed_clock)
+
+        # Asked of the **class**, not the instance: `hasattr` on an instance evaluates a
+        # property, which would forward it here and again below and leave the forwarding
+        # assertion reading two calls where it expects one.
+        assert hasattr(PaperBroker, name), (
+            f"the broker does not present `{name}`; in paper mode it is the stream every "
+            "engine sees, so a caller reaching for it gets an AttributeError or a silent "
+            "getattr fallback"
+        )
+
+        declared = inspect.getattr_static(PaperBroker, name)
+        if isinstance(declared, property):
+            getattr(broker, name)
+        else:
+            bound = getattr(broker, name)
+            required = [
+                PAIR
+                for parameter in inspect.signature(bound).parameters.values()
+                if parameter.default is inspect.Parameter.empty
+            ]
+            bound(*required)
+
+        assert real.touched == [name], (
+            f"`{name}` did not reach the wrapped client: touched {real.touched!r}"
+        )
 
 
 def test_the_broker_never_drains_the_trade_window_itself(

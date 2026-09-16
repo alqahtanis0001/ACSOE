@@ -93,12 +93,14 @@ a later refactor could quietly start filling with `ordermin`.
 
 In order, because the order is part of the behaviour:
 
-1. **Portfolio already full** — `max_concurrent_positions`. Checked before sizing, so a
-   refused candidate never has a quantity computed for it at all.
-2. **This pair already has an open position** — `position_open_on_pair`. Invariant 6's
-   last clause, "one open position per pair". See below; also checked before sizing.
-3. **This pair already has an entry order resting on the book** —
+1. **This pair already has an open position** — `position_open_on_pair`. Invariant 6's
+   last clause, "one open position per pair". Checked before sizing, so a refused
+   candidate never has a quantity computed for it at all. See below.
+2. **This pair already has an entry order resting on the book** —
    `entry_resting_on_pair`. Same rule, same clause; see below.
+3. **Portfolio already full** — `max_concurrent_positions`. Also checked before sizing.
+   Asked *after* the two per-pair refusals since the lead's ruling of 2026-09-16; see
+   below for why the order changed.
 4. **Notional exceeds the quote balance** — `insufficient_quote_balance`. Invariant 6:
    never allocate cash the account does not hold in that pair's quote currency. Rejected
    rather than capped to fit: a position quietly resized is no longer the position the
@@ -157,10 +159,29 @@ refusing twin in one field:
   getting in, and engine 22 will be writing those constantly — a check that read `orders`
   without filtering `intent` would refuse every candidate on a pair being exited.
 
-**Order against the portfolio cap.** Both can be true at once and either is a correct
-refusal, so the order decides only which `reason_code` the rejection row carries. The cap
-stays first because it was first: a rejection that would have been recorded as
-`max_concurrent_positions` before spec 89 is still recorded that way after it.
+**Order against the portfolio cap: the per-pair rule is asked first.** Both can be true
+at once and either is a correct refusal, so the order decides only which `reason_code`
+the rejection row carries — nothing is weakened either way, and no quantity is computed
+for a refused candidate either way.
+
+Spec 89 shipped with the cap first, on the argument that a rejection recorded as
+`max_concurrent_positions` before spec 89 should still read that way after it. **The lead
+reversed it on 2026-09-16**, because that argument weighed continuity against a history
+that does not exist and ignored the one number that decides the question: the cap is
+**inert at this balance**. `max_concurrent_positions` is 3, and `config/default.yaml`
+says on that very key that the balance binds first — at $5,000, 1% risk against a 1.5%
+stop is ~$3,333 notional, so the account affords one position. Cap-first therefore does
+not shadow the specific clause on a rare tie; with one position open it shadows it on
+*every* tick on that pair, which is exactly where invariant 6's per-pair clause is the
+rule doing the work. And there were no pre-spec-89 rows to protect: no engine in phases 0
+to 5 could open a position, so nothing has ever written a `max_concurrent_positions` row
+from a real portfolio.
+
+The cost is the mirror of the old one and is smaller: a query counting how often the
+*cap* fires now undercounts. That query is uninteresting while the cap is inert, and a
+balance large enough for the cap to bind would bind it on pairs the account does not
+already hold, where no per-pair refusal exists to shadow it. Pinned by
+`test_a_full_portfolio_that_also_holds_this_pair_reports_the_pair_rule`.
 
 ## The entry price: a lead ruling, not a default
 

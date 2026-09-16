@@ -253,6 +253,19 @@ class PaperBroker:
     def drain(self) -> Any:
         return self._real.drain()
 
+    def drain_gaps(self) -> Any:
+        """Forwarded untouched, and it must be: this is how invariant 11 reaches disk.
+
+        Engine 2 takes gaps with `getattr(stream, "drain_gaps", None)` and records none
+        when the attribute is absent. In paper mode the broker *is* the stream every
+        engine sees, so a broker without this method makes engine 2 write no `gap` line
+        at all — an archive that claims to be continuous while spanning reconnects, and
+        one that disarms the book cutter's refusal to cut across a gap. The omission cost
+        nothing only because no daemon had run when it was found; see the build log entry
+        of 2026-09-16.
+        """
+        return self._real.drain_gaps()
+
     def latest_quote(self, pair: str) -> Any:
         return self._real.latest_quote(pair)
 
@@ -528,9 +541,25 @@ class PaperBroker:
         One code path deliberately. Two readings of "is this order still open" is the
         shape where a cancel loop and a fill check disagree, and engine 21 runs both on
         one tick.
+
+        **Both sources, and the second one was missing until 2026-09-16.** The store's
+        resting rows are what engine 19 has recorded; `_pending` is what this broker has
+        accepted and engine 19 has not written yet, which is the state of every order
+        between the opportunity chain and the end of the manage chain — that is, on
+        every tick anything is placed. Reading only the store made this method answer
+        "nothing is open" while an order was on the book, which is invariant 3's shape
+        and, worse, is a difference between paper and live: a real exchange lists an
+        order the moment it rests, whatever this system has recorded. Found by engine
+        18's invariant 8 probe; see the build log.
+
+        `_lookup` already prefers the store's row over `_pending`'s copy, so the union
+        cannot double-count: `query_orders` resolves each `userref` once, through the
+        same single path.
         """
-        resting = self._store.resting_orders()
-        states = await self.query_orders([row.userref for row in resting])
+        userrefs = [row.userref for row in self._store.resting_orders()]
+        known = set(userrefs)
+        userrefs.extend(userref for userref in self._pending if userref not in known)
+        states = await self.query_orders(userrefs)
         return tuple(
             state for state in states if state.status not in TERMINAL_ORDER_STATUSES
         )

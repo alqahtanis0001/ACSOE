@@ -688,7 +688,12 @@ def test_the_portfolio_cap_is_counted_from_the_store_not_from_state(
 ) -> None:
     """This gate runs in the opportunity chain and the manage chain runs after it, so
     `state["position_manager"]` does not exist yet — the same structural reason engine 17
-    reads the store. `max_concurrent_positions` is 3 in the committed config."""
+    reads the store. `max_concurrent_positions` is 3 in the committed config.
+
+    None of the three positions is on the candidate's pair, which is what keeps the cap
+    reachable now that the per-pair rule is asked first: this is the shape the cap still
+    refuses on its own, and the paired test below is the shape where it no longer does.
+    """
     for index, pair in enumerate(("BTC/USD", "ETH/USD", "XRP/USD")):
         store.write_position(open_position(f"p-{index}", pair))
 
@@ -865,22 +870,27 @@ def test_the_resting_entry_refusal_names_the_pair_and_the_userref(
     assert "qty" not in result.data
 
 
-def test_a_full_portfolio_that_also_holds_this_pair_reports_the_cap(
+def test_a_full_portfolio_that_also_holds_this_pair_reports_the_pair_rule(
     risk: RiskEngine, sized_context: Any, store: StoreClient
 ) -> None:
     """Both refusals are true at once; the order between them is fixed, not accidental.
 
     Either code is a correct refusal, so this pins *which* one the rejection row carries
-    rather than claiming one rule outranks the other. The cap is first because it was
-    first: keeping it there means no rejection that existed before spec 89 changes its
-    code because spec 89 landed.
+    rather than claiming one rule outranks the other.
+
+    The per-pair rule is first, by the lead's ruling of 2026-09-16 reversing the order
+    spec 89 shipped with. The cap is inert at the configured balance — three allowed
+    positions against a balance that affords one, which `config/default.yaml` states on
+    the key itself — so cap-first would not have shadowed the specific clause on a rare
+    tie: with one position open on the pair it would shadow it on every tick, which is
+    precisely where invariant 6's per-pair clause is the rule doing the work.
     """
     for index, pair in enumerate((PAIR, "ETH/USD", "XRP/USD")):
         store.write_position(open_position(f"p-{index}", pair))
 
     result = risk.process(sized_context, build_state(sized_context))
 
-    assert result.data["reason_code"] == REASON_MAX_CONCURRENT_POSITIONS
+    assert result.data["reason_code"] == REASON_POSITION_OPEN_ON_PAIR
 
 
 def test_an_unreadable_orders_table_blocks_rather_than_reading_as_no_exposure(
@@ -1123,7 +1133,14 @@ def test_a_missing_publisher_blocks(
 
 def test_every_reason_code_this_engine_emits_is_renderable_by_the_console() -> None:
     """A code absent from C's `REASON_PROSE` renders "No reason was recorded." with no
-    error anywhere. `ownership.md` now carries this as a seam row."""
+    error anywhere. `ownership.md` now carries this as a seam row.
+
+    `position_open_on_pair` and `entry_resting_on_pair` joined this list when C landed
+    spec 99's prose. Until then they were held by a tripwire asserting their *absence*,
+    which went red the moment C was right and was deleted here, as its own failure
+    message instructed. The tripwire is gone; the codes it guarded are now checked the
+    same way as the other five.
+    """
     from acsoe.console.format import REASON_PROSE
 
     for code in (
@@ -1132,36 +1149,10 @@ def test_every_reason_code_this_engine_emits_is_renderable_by_the_console() -> N
         REASON_INSUFFICIENT_QUOTE_BALANCE,
         REASON_MAX_CONCURRENT_POSITIONS,
         REASON_NO_FX_RATE,
+        REASON_POSITION_OPEN_ON_PAIR,
+        REASON_ENTRY_RESTING_ON_PAIR,
     ):
         assert code in REASON_PROSE
-
-
-def test_the_two_codes_spec_89_added_are_still_waiting_on_cs_prose() -> None:
-    """A tripwire, not a coverage test, and it is written to go red when C lands.
-
-    Spec 89 step 6 hands `position_open_on_pair` and `entry_resting_on_pair` to C for
-    `REASON_PROSE` (spec 99). Until they arrive the console renders "No reason was
-    recorded." for both, silently and with no error anywhere — which is exactly the
-    failure mode `ownership.md` carries as a seam row.
-
-    Asserting the *absence* means this test fails the moment C maps either one, and the
-    failure names what to do: move the code into the renderable list above and delete
-    this test. A second, weaker "it is renderable if present" test would have sat green
-    forever in both states.
-    """
-    from acsoe.console.format import REASON_PROSE
-
-    unmapped = sorted(
-        code
-        for code in (REASON_POSITION_OPEN_ON_PAIR, REASON_ENTRY_RESTING_ON_PAIR)
-        if code not in REASON_PROSE
-    )
-
-    assert unmapped == sorted((REASON_POSITION_OPEN_ON_PAIR, REASON_ENTRY_RESTING_ON_PAIR)), (
-        "C has mapped one or both of spec 89's codes: move them into "
-        "test_every_reason_code_this_engine_emits_is_renderable_by_the_console "
-        "and delete this test"
-    )
 
 
 def test_the_published_payload_is_json_serialisable(
