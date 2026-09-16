@@ -1049,6 +1049,47 @@ class StoreClient:
         ).fetchall()
         return tuple(LeaderboardRow(**_row_to_dict(row)) for row in rows)
 
+    def all_leaderboard_rows(self, *, model_id: str) -> tuple[LeaderboardRow, ...]:
+        """**Every** row for one model, oldest first. No limit, and that is the point.
+
+        The enumeration engine 14 `adaptive_router` weights from, added on the lead's
+        ruling of 2026-09-16 after C-models found there was no read it could use.
+
+        Neither of the two that existed can do this job, and the reasons are different:
+
+        - :meth:`leaderboard_entries` takes `model_version` as an **argument**. It is an
+          existence check — "have I written this fold already" — so it cannot enumerate
+          the versions engine 14 has to compare.
+        - :meth:`leaderboard` is the **console's** read and truncates to the newest 50
+          by `trained_at`. My own docstring above is the argument against reusing it:
+          deciding anything from a truncating window is the rows-versus-ticks defect of
+          spec 51 again. C worked out the consequence precisely, and it is worse here
+          than for the existence check. A model version outside the newest fifty gets
+          **no weight because nobody looked**, not zero weight for having no edge, and
+          the two are indistinguishable downstream — **the weights would still sum to
+          one, over the wrong set.** A real run has 405 folds.
+
+        Scoped by `model_id` rather than returning the whole table, because that is what
+        makes "no limit" safe: one model's folds are bounded by its walk-forward, where
+        the table as a whole is bounded by nothing. There is no `LIMIT` to get wrong and
+        no window to fall out of.
+
+        `ORDER BY id ASC` is insertion order and is deliberately not `trained_at`:
+        `trained_at` is not unique across folds written in one run, so ordering on it
+        alone leaves ties SQLite may break differently between two reads of a database
+        nothing wrote to. Every money and metric column comes back typed through
+        `LeaderboardRow`, so a caller never sees a raw row.
+
+        Empty is a real answer and is not an error: a fresh database has trained
+        nothing. Engine 14 refuses on it with `leaderboard_empty` rather than weighting
+        an empty set.
+        """
+        rows = self.connection.execute(
+            "SELECT * FROM leaderboard WHERE model_id = ? ORDER BY id ASC",
+            (str(model_id),),
+        ).fetchall()
+        return tuple(LeaderboardRow(**_row_to_dict(row)) for row in rows)
+
     # ------------------------------------------------------------------
     # Trained artefacts — `models/<run_id>/`
     #

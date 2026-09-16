@@ -1,0 +1,89 @@
+-- 0003_position_hold_reason.sql — the lead's ruling of 2026-09-16 on C's escalation.
+--
+-- Forward-only and purely additive: one nullable column on `positions`. No existing
+-- column or table is altered, nothing is dropped, and no table is added — so the
+-- documented table set of `architecture-context.md` and `EXPECTED_TABLES` are
+-- unchanged, as are `EXPECTED_INDEXES` and every existing CHECK.
+--
+-- WHY THE DATABASE HAS TO CARRY IT AT ALL
+--
+--   Spec 101 asks the console to render *why* the manage chain held. Engine 21
+--   publishes `hold_reason` into `state["position_manager"]`, engine 19 republishes it
+--   into `state["memory"]`, and `state` is rebuilt from nothing every tick. The console
+--   is a **separate process** reading this SQLite file, so a value that only ever lives
+--   in `state` is a value the console can never see.
+--
+-- WHY IT IS NOT INFERRED FROM `block_records`
+--
+--   A `data_guard` row for the tick is *almost* the same fact and is not the same fact.
+--   It says the guard rejected the tick's data; it does not say the manage chain held,
+--   which is engine 21's decision and which invariant 14 suspends outright during a
+--   liquidation — `hold_reason` is null throughout one while the block row is still
+--   written. Inferring one from the other was explicitly rejected, on the same grounds
+--   `engine-contracts.md` already rejected inferring the system mode from the `commands`
+--   trail: a derived reading is confidently wrong in exactly the cases that matter.
+--
+-- WHY A COLUMN ON `positions` AND NOT A NEW TABLE
+--
+--   The hold is per position and is read per position: the console renders it on the
+--   position row it is already drawing, and a position is the only thing that can be
+--   held. `positions` is already in `StoreClient.WATERMARK_TABLES`, so writing a hold
+--   moves the console's poll watermark for free. A new table would need adding to that
+--   tuple, would change behaviour under every existing watermark test mid-phase, and is
+--   a lead escalation in its own right because `db_migrates_from_empty` asserts the
+--   documented table set.
+--
+-- THE THREE CONDITIONS OF THE RULING, AND THE SECOND IS THE ONE THAT MATTERS
+--
+--   1. **Engine 19 `memory` is the only writer** (spec 98, C). Engine 21 decides the
+--      hold and publishes it; engine 22 never touches it; nothing else writes this
+--      column. One writer is what stops two engines disagreeing about one tick.
+--
+--   2. **It is cleared to NULL on every tick that did not hold.** This column is a fact
+--      about *now*, exactly like `last_price`, and not an event log. A hold written once
+--      and never cleared renders an hour-old hold forever, so the console would report a
+--      paused manage chain over one that is running normally — worse than rendering
+--      nothing, because it is an assertion rather than an absence. There is no CHECK that
+--      can enforce this: "was there a hold on the tick that wrote this row" is not a
+--      property of the row. It is a property of the writer, and it is pinned by engine
+--      19's tests.
+--
+--   3. **NULL means "did not hold", never "unknown".** The two are not collapsed here for
+--      the same reason `runs.system_mode` does not collapse NULL and 'idle'. Because NULL
+--      is load-bearing, the one thing the database *can* refuse is the empty string —
+--      the usual way "unknown" gets smuggled past a nullable column as a non-null value
+--      that renders as nothing. It is refused below.
+--
+-- WHY THERE IS NO CHECK ENUMERATING THE HOLD REASONS
+--
+--   `runs.system_mode` carries one because idle/running/frozen is a closed set the
+--   console must render as a status band. Hold reasons are not a closed set: engine 21
+--   declares them in `engines/position_manager/contracts.py` and the console maps them in
+--   `console/format.py`'s `REASON_PROSE`. A CHECK would be a **third** copy of that list
+--   and the only one that cannot be corrected without another migration, so it would be
+--   the copy that drifts. The list is already enforced where it can be kept true: spec
+--   99's walking test fails at test time on a code the console cannot render, rather than
+--   the database failing at runtime on a hold it has never seen.
+
+-- NULL means the manage chain did not hold on the tick that last wrote this row. It does
+-- not mean "unknown" and it does not mean "not checked". A non-null value is one of
+-- engine 21's hold reasons, rendered by the console through `REASON_PROSE`.
+--
+-- The CHECK refuses a blank string only: '', '   ' and a lone tab are none of them a hold
+-- reason and none of them NULL. Each renders as nothing in the console while being a
+-- non-null value that every `IS NOT NULL` read takes as "held".
+--
+-- The second argument to `trim()` is not decoration. **SQLite's one-argument `trim()`
+-- strips spaces and nothing else** — not tabs, not newlines — so `trim(char(9)) <> ''` is
+-- true and a tab would have passed a CHECK written the obvious way. This was found by the
+-- parametrised test rather than by reading, which is why the parametrisation carries a tab
+-- and not three kinds of space. The character set below is the ASCII whitespace Python's
+-- `str.strip()` removes, so the database refuses what `PositionRow._a_hold_reason_or_null`
+-- refuses. Python remains the stricter of the two on exotic Unicode whitespace, which is
+-- the safe direction: the row model is the only supported way in.
+ALTER TABLE positions ADD COLUMN hold_reason TEXT
+    CHECK (
+        hold_reason IS NULL
+        OR trim(hold_reason, ' ' || char(9) || char(10) || char(11) || char(12) || char(13))
+           <> ''
+    );

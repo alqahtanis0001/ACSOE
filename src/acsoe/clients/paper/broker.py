@@ -513,12 +513,20 @@ class PaperBroker:
         state = await self._state_of(known)
         if state.status in TERMINAL_ORDER_STATUSES:
             return state
+        # `qty`, `limit_price` and `opened_at` are taken from the state just resolved
+        # rather than re-derived from `known`. A cancel changes what has *happened* to an
+        # order, never what the order *is* or when it began, so restating any of them here
+        # would be a second place they could be computed — and the only way the two could
+        # ever differ is if one of them were wrong.
         return OrderState(
             userref=userref,
             order_id=self._order_id(userref),
             status=OrderStatus.CANCELLED,
+            qty=state.qty,
+            limit_price=state.limit_price,
             filled_qty=Decimal(0),
             fee=Decimal(0),
+            opened_at=state.opened_at,
             closed_at=self._now(),
         )
 
@@ -606,13 +614,23 @@ class PaperBroker:
 
     async def _state_of_pending(self, pending: _Pending) -> OrderState:
         if pending.status is OrderStatus.FILLED:
+            # A `_Pending` that is already FILLED is a market order — `_fill_market` is
+            # the only writer of that status — so `limit_price` is `None` here because
+            # the request has none, not because it was left out.
+            #
+            # `opened_at` and `closed_at` are the **same** injected clock reading, which
+            # A's seventh coupling allows on purpose: a marketable order opens and closes
+            # within one tick and the simulator has one reading of the clock per tick.
             return OrderState(
                 userref=pending.request.userref,
                 order_id=self._order_id(pending.request.userref),
                 status=OrderStatus.FILLED,
+                qty=pending.request.qty,
+                limit_price=pending.request.limit_price,
                 filled_qty=pending.filled_qty,
                 avg_fill_price=pending.fill_price,
                 fee=pending.fee,
+                opened_at=pending.placed_at,
                 closed_at=pending.placed_at,
             )
         return await self._resolve_resting(
@@ -651,9 +669,12 @@ class PaperBroker:
             userref=row.userref,
             order_id=row.order_id or self._order_id(row.userref),
             status=OrderStatus(str(row.status)),
+            qty=row.qty,
+            limit_price=row.limit_price,
             filled_qty=row.filled_qty,
             avg_fill_price=row.avg_fill_price if filled else None,
             fee=(row.fee or Decimal(0)) if filled else Decimal(0),
+            opened_at=int(row.placed_at),
             closed_at=row.closed_at if row.closed_at is not None else self._now(),
         )
 
@@ -685,16 +706,22 @@ class PaperBroker:
                 userref=userref,
                 order_id=self._order_id(userref),
                 status=OrderStatus.RESTING,
+                qty=qty,
+                limit_price=limit_price,
                 filled_qty=Decimal(0),
                 fee=Decimal(0),
+                opened_at=placed_at,
             )
         return OrderState(
             userref=userref,
             order_id=self._order_id(userref),
             status=OrderStatus.FILLED,
+            qty=qty,
+            limit_price=limit_price,
             filled_qty=qty,
             avg_fill_price=fill_price,
             fee=fee_on(notional=fill_price * qty, rate=await self._maker_rate()),
+            opened_at=placed_at,
             closed_at=self._now(),
         )
 

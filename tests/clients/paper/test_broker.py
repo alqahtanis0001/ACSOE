@@ -886,3 +886,248 @@ def test_the_broker_and_engine_three_see_the_same_trades_on_one_tick(
     assert Decimal(str(ranges[PAIR]["low"])) == min(seen)
     assert Decimal(str(ranges[PAIR]["high"])) == max(seen)
     assert ranges[PAIR]["trades"] == len(seen)
+
+
+# --------------------------------------------------------------------------- #
+# What the order *is* — `qty` and `limit_price`, A's spec 84 amendment of
+# 2026-09-16
+#
+# Every `OrderState` this broker builds must describe the order and not only what
+# has happened to it. The reason is engine 18's: an order at the exchange that the
+# store never recorded could be detected and not *described*, so no row could be
+# written and nothing would ever cancel it — unmanaged exposure, and the failure
+# invariant 8 exists to prevent.
+#
+# There are five construction sites in `broker.py` and one test below per shape,
+# because a mutation in one of them is invisible to a test that drives another.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_resting_order_describes_its_quantity_as_well_as_its_progress(
+    broker: PaperBroker,
+) -> None:
+    """`qty` is what was asked for; `filled_qty` is what has happened. On a resting
+    order they are 10 and 0, which is what makes this assertion able to tell them
+    apart — the same two numbers would be indistinguishable on a full fill."""
+    run_blocking(broker.add_order(buy(limit="99.00")))
+
+    state = run_blocking(broker.query_orders([USERREF]))[0]
+
+    assert state.status is OrderStatus.RESTING
+    assert state.qty == Decimal("10")
+    assert state.filled_qty == Decimal("0")
+    assert state.limit_price == Decimal("99.00")
+
+
+def test_a_filled_entry_still_says_what_it_asked_for_and_at_what_limit(
+    broker: PaperBroker, store: StoreClient, fixed_clock: Any
+) -> None:
+    """A recorded order that filled **partially, below its limit** — the one shape
+    where all four numbers differ.
+
+    The simulator itself cannot reach it: it fills a resting maker buy in full at its
+    own limit, so `qty`, `filled_qty`, `limit_price` and `avg_fill_price` would be
+    10, 10, 99.00 and 99.00 and the assertion could not tell which field the broker
+    read. Engine 19's row can carry it, a real exchange produces it, and the row is
+    built through `OrderRow` so a shape engine 19 could not write is refused before
+    the broker sees it.
+    """
+    request = buy(limit="99.00")
+    store.write_order(
+        recorded(
+            request,
+            status=RowStatus.FILLED,
+            placed_at=to_micros(fixed_clock.now()) - 1,
+            filled_qty="4",
+            avg_fill_price="98.50",
+            fee="1.00",
+            closed_at=to_micros(fixed_clock.now()),
+        )
+    )
+
+    state = run_blocking(broker.query_orders([USERREF]))[0]
+
+    assert state.qty == Decimal("10")
+    assert state.filled_qty == Decimal("4")
+    assert state.limit_price == Decimal("99.00")
+    assert state.avg_fill_price == Decimal("98.50")
+
+
+def test_a_market_sell_reports_no_limit_price_because_it_has_none(
+    broker: PaperBroker,
+) -> None:
+    """Presence **is** the statement — A's `OrderState` carries no `order_type`
+    precisely so the two cannot disagree. A market order's `limit_price` is `None`
+    because the order has none, not because the field was left out, and a consumer
+    asking "is this a limit order" reads exactly this."""
+    run_blocking(broker.add_order(sell(qty="3")))
+
+    state = run_blocking(broker.query_orders([USERREF + 1]))[0]
+
+    assert state.status is OrderStatus.FILLED
+    assert state.qty == Decimal("3")
+    assert state.limit_price is None
+
+
+def test_a_cancel_still_describes_the_order_it_cancelled(broker: PaperBroker) -> None:
+    """A cancel changes what has *happened* to an order, never what the order *is*.
+
+    This is the one the kill switch needs: engine 21 cancels a stale entry and engine
+    19 records the row, and a cancellation row with no quantity is a record nobody can
+    reconcile against the placement.
+    """
+    run_blocking(broker.add_order(buy(limit="99.00")))
+
+    state = run_blocking(broker.cancel_order(USERREF))
+
+    assert state.status is OrderStatus.CANCELLED
+    assert state.qty == Decimal("10")
+    assert state.limit_price == Decimal("99.00")
+
+
+def test_open_orders_describes_every_order_it_lists(
+    broker: PaperBroker, store: StoreClient, fixed_clock: Any
+) -> None:
+    """The surface engine 18's second invariant 8 probe reads.
+
+    Two resting entries with **different** quantities and limits, one from the store
+    and one only in `_pending`, so the assertion is about which order each description
+    belongs to rather than about "some description was produced".
+    """
+    other = USERREF + 7
+    store.write_order(
+        recorded(
+            buy(limit="99.00"),
+            status=RowStatus.RESTING,
+            placed_at=to_micros(fixed_clock.now()) - 1,
+        )
+    )
+    run_blocking(
+        broker.add_order(
+            OrderRequest(
+                pair=PAIR,
+                side=OrderSide.BUY,
+                order_type=OrderType.LIMIT,
+                qty=Decimal("2"),
+                limit_price=Decimal("97.25"),
+                post_only=True,
+                userref=other,
+            )
+        )
+    )
+
+    described = {
+        state.userref: (state.qty, state.limit_price)
+        for state in run_blocking(broker.open_orders())
+    }
+
+    assert described == {
+        USERREF: (Decimal("10"), Decimal("99.00")),
+        other: (Decimal("2"), Decimal("97.25")),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# `opened_at` — A's spec 84 amendment, second half
+#
+# Kraken's `opentm`. It is what lets engine 18 date an order it found at the
+# exchange and never recorded, which is what lets engine 21 cancel it in the
+# **ordinary** unfilled window instead of one window late. The broker knows the
+# placement time exactly, from the injected clock, so there is never a reason for
+# it to answer `None`.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_resting_order_is_dated_by_when_it_was_placed_and_not_by_now(
+    broker: PaperBroker, store: StoreClient, fixed_clock: Any
+) -> None:
+    """The witness needs the two times to differ, so the order is one the store
+    recorded ten minutes ago rather than one placed on this tick — where `placed_at`
+    and `_now()` would be the same number and either source would pass."""
+    placed_at = to_micros(fixed_clock.now()) - 600 * 1_000_000
+    store.write_order(recorded(buy(limit="99.00"), status=RowStatus.RESTING, placed_at=placed_at))
+
+    state = run_blocking(broker.query_orders([USERREF]))[0]
+
+    assert state.opened_at == placed_at
+    assert state.opened_at != to_micros(fixed_clock.now())
+    assert state.closed_at is None, "a resting order has not closed"
+
+
+def test_a_market_fill_opens_and_closes_on_the_same_clock_reading(
+    broker: PaperBroker, fixed_clock: Any
+) -> None:
+    """A's seventh coupling allows `closed_at == opened_at` **on purpose**, and this is
+    the case it was allowed for: a marketable order opens and closes inside one tick and
+    the simulator has one reading of the injected clock per tick. A stricter bound would
+    refuse every simulated taker exit."""
+    run_blocking(broker.add_order(sell(qty="3")))
+
+    state = run_blocking(broker.query_orders([USERREF + 1]))[0]
+
+    assert state.opened_at == to_micros(fixed_clock.now())
+    assert state.closed_at == state.opened_at
+
+
+def test_a_cancel_keeps_the_time_the_order_opened(
+    broker: PaperBroker, store: StoreClient, fixed_clock: Any
+) -> None:
+    """A cancel changes what has happened to an order, never when it began.
+
+    The two timestamps must be different numbers for this to mean anything, so the
+    order is again one placed ten minutes ago: `opened_at` stays there and `closed_at`
+    moves to now.
+    """
+    placed_at = to_micros(fixed_clock.now()) - 600 * 1_000_000
+    store.write_order(recorded(buy(limit="99.00"), status=RowStatus.RESTING, placed_at=placed_at))
+
+    state = run_blocking(broker.cancel_order(USERREF))
+
+    assert state.status is OrderStatus.CANCELLED
+    assert state.opened_at == placed_at
+    assert state.closed_at == to_micros(fixed_clock.now()) != placed_at
+
+
+def test_every_order_state_the_broker_builds_carries_an_opening_time(
+    broker: PaperBroker, store: StoreClient, kraken: FakeKrakenWithStream, fixed_clock: Any
+) -> None:
+    """A sweep over all five construction sites rather than one test each.
+
+    `opened_at` is optional on `OrderState` because a real exchange may omit `opentm`,
+    and engine 18 has a fail-closed branch for that. **The simulator never has an
+    excuse**: it placed the order, or the store recorded when it was placed. A site that
+    quietly left the field out would look exactly like an exchange that did not answer,
+    and engine 18 would refuse a row it could perfectly well have written.
+
+    Five shapes: a resting pending order, a resting recorded order, a resting order that
+    filled, a market fill, and a terminal recorded order.
+    """
+    older = to_micros(fixed_clock.now()) - 600 * 1_000_000
+    run_blocking(broker.add_order(buy(limit="99.00")))
+    store.write_order(
+        recorded(buy(limit="98.00", userref=USERREF + 3), status=RowStatus.RESTING, placed_at=older)
+    )
+    store.write_order(
+        recorded(
+            buy(limit="97.00", userref=USERREF + 4),
+            status=RowStatus.FILLED,
+            placed_at=older,
+            filled_qty="10",
+            avg_fill_price="97.00",
+            fee="2.13",
+            closed_at=older + 1,
+        )
+    )
+    run_blocking(broker.add_order(sell(qty="2")))
+    kraken.add_trade(PAIR, "96.00", fixed_clock.now() + timedelta(seconds=1))
+
+    refs = [USERREF, USERREF + 1, USERREF + 3, USERREF + 4]
+    states = run_blocking(broker.query_orders(refs))
+
+    assert len(states) == 4
+    assert [state.opened_at for state in states] == [
+        to_micros(fixed_clock.now()),
+        to_micros(fixed_clock.now()),
+        older,
+        older,
+    ]

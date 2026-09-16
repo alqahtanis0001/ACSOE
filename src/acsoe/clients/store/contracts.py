@@ -286,7 +286,19 @@ class EquitySnapshotRow(_Row):
 
 
 class PositionRow(_Row):
-    """One position. `safety` counts the open ones; the console renders them."""
+    """One position. `safety` counts the open ones; the console renders them.
+
+    `hold_reason` (migration 0003) is why the manage chain placed no exit on the tick
+    that last wrote this row, and it belongs with `last_price` and `unrealised_pnl`
+    rather than with `opened_at` and `closed_at`: all three are facts about **now**,
+    overwritten every tick, not events. Engine 19 `memory` is the only writer.
+
+    **`None` means "did not hold", never "unknown".** Engine 21 publishes null on every
+    tick it did not hold — including throughout a liquidation, which never holds — and
+    engine 19 writes that null through. A hold left in place after the hold ended would
+    render an hour-old reason forever, which is worse than rendering nothing: the console
+    would assert a paused manage chain over one running normally.
+    """
 
     position_id: str
     run_id: str
@@ -304,6 +316,7 @@ class PositionRow(_Row):
     entry_userref: int | None = None
     last_price: Money | None = None
     unrealised_pnl: Money | None = None
+    hold_reason: str | None = None
     opened_at: Micros
     closed_at: Micros | None = None
     trade_id: str | None = None
@@ -314,6 +327,23 @@ class PositionRow(_Row):
     def _long_only(cls, value: str) -> str:
         if value != "long":
             raise ValueError("the system is long-only; see context/project-overview.md")
+        return value
+
+    @field_validator("hold_reason")
+    @classmethod
+    def _a_hold_reason_or_null(cls, value: str | None) -> str | None:
+        """Refuse a blank hold reason; `None` is the way to say "did not hold".
+
+        Mirrors migration 0003's CHECK, deliberately down to `trim()`. A blank string is
+        the usual way "unknown" gets past a nullable column: it is non-null, so every
+        `is not None` read calls it a hold, and it renders as nothing, so the console
+        shows a held position with no reason on it.
+        """
+        if value is not None and not value.strip():
+            raise ValueError(
+                "hold_reason is a reason or None; None means the manage chain did not "
+                "hold, and a blank string means neither"
+            )
         return value
 
 
@@ -421,6 +451,14 @@ class LeaderboardRow(_Row):
     """One trained model version, ranked.
 
     The metrics are statistics, so `float` is correct for them. `net_pnl` is money.
+
+    `base_rate_brier` (migration 0004) is the score a model predicting the fold's own
+    class frequency every time would have got — the null hypothesis `brier` is measured
+    against. **`None` means "not recorded", never "no baseline"**: every row written
+    before 0004 has none, and engine 14 must read the absence as an absence. It is
+    deliberately not derived from `win_rate * (1 - win_rate)`, which is a plausible
+    number answering a different question — `brier` is over every row of the fold and
+    `win_rate` is over the BUY subset only.
     """
 
     id: int | None = None
@@ -436,6 +474,7 @@ class LeaderboardRow(_Row):
     alpha: float | None = None
     beta: float | None = None
     brier: float | None = None
+    base_rate_brier: float | None = None
     net_pnl: Money | None = None
     reporting_currency: str | None = None
     promoted: bool = False

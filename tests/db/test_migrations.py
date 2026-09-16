@@ -132,7 +132,10 @@ def test_fresh_database_migrates_from_empty(tmp_path: Path) -> None:
     silently skipped, applied twice, or applied out of order still fails.
     """
     expected = list(range(1, len(_migration_files()) + 1))
-    assert len(expected) >= 2, "0002 is spec 31's; a shorter list means one went missing"
+    assert len(expected) >= 4, (
+        "0002 is spec 31's, 0003 is the hold-reason ruling's and 0004 is the "
+        "base-rate-Brier ruling's; a shorter list means one went missing"
+    )
     db_path = tmp_path / "fresh.sqlite"
     assert not db_path.exists()
 
@@ -551,3 +554,182 @@ def test_the_system_mode_columns_did_not_disturb_the_existing_runs_contract(
     finally:
         close_connection(conn)
     assert (row["mode"], row["system_mode"]) == ("paper", "frozen")
+
+
+# --------------------------------------------------------------------------- #
+# 0003 — the manage chain's hold reason on a position (lead ruling 2026-09-16)
+#
+# The console is a separate process and reads this file, so a hold that lives
+# only in `state` is one it can never render. Engine 19 `memory` is the only
+# writer; these tests are about what the database itself carries and refuses.
+# --------------------------------------------------------------------------- #
+
+def test_a_new_position_row_has_no_hold_reason(migrated_db: Path) -> None:
+    """NULL means the manage chain did not hold, never "unknown".
+
+    The column is nullable with no default precisely so the writer states the fact
+    every tick rather than inheriting one, and so a reader may treat NULL as an
+    answer rather than as missing information.
+    """
+    conn = open_connection(migrated_db)
+    try:
+        conn.execute(_POSITION_INSERT, ("pos-a", "SOL/USD", "open"))
+        row = conn.execute(
+            "SELECT hold_reason FROM positions WHERE position_id = 'pos-a'"
+        ).fetchone()
+    finally:
+        close_connection(conn)
+    assert row["hold_reason"] is None
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\t", "\n", "\r\n  "])
+def test_a_blank_hold_reason_is_refused(migrated_db: Path, blank: str) -> None:
+    """The one thing the database can enforce about condition 3 of the ruling.
+
+    Whether a hold *happened* is a property of the tick and not of the row, so no
+    CHECK can enforce "cleared when it did not hold". A blank string is enforceable
+    and is the way "unknown" normally gets past a nullable column: non-null, so every
+    `IS NOT NULL` read calls it a hold, and blank, so it renders as nothing.
+
+    `trim()` rather than `<> ''`, so the database refuses exactly what `PositionRow`
+    refuses — a constraint the two layers disagree about is one of them not applying it.
+    The tab and the newlines are what pay for the parametrisation rather than three kinds
+    of space: SQLite's **one-argument** `trim()` strips spaces and nothing else, so the
+    obvious CHECK let both through, and this case is what found it.
+    """
+    conn = open_connection(migrated_db)
+    try:
+        conn.execute(_POSITION_INSERT, ("pos-a", "SOL/USD", "open"))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "UPDATE positions SET hold_reason = ? WHERE position_id = 'pos-a'", (blank,)
+            )
+    finally:
+        close_connection(conn)
+
+
+def test_the_hold_reason_column_enumerates_no_reasons(migrated_db: Path) -> None:
+    """A reason the database has never seen is stored, not refused.
+
+    Unlike `runs.system_mode`, the hold reasons are not a closed set: engine 21
+    declares them and `console/format.py` maps them, and a CHECK here would be a third
+    copy that only another migration could correct. The list is enforced at test time
+    by spec 99's walk over every engine's codes, not at runtime by SQLite.
+    """
+    conn = open_connection(migrated_db)
+    try:
+        conn.execute(_POSITION_INSERT, ("pos-a", "SOL/USD", "open"))
+        conn.execute(
+            "UPDATE positions SET hold_reason = 'a_reason_engine_21_does_not_have_yet' "
+            "WHERE position_id = 'pos-a'"
+        )
+        stored = conn.execute(
+            "SELECT hold_reason FROM positions WHERE position_id = 'pos-a'"
+        ).fetchone()["hold_reason"]
+    finally:
+        close_connection(conn)
+    assert stored == "a_reason_engine_21_does_not_have_yet"
+
+
+def test_0003_did_not_disturb_the_existing_positions_contract(migrated_db: Path) -> None:
+    """0003 is additive. The two constraints on `positions` that carry money rules —
+    invariant 6's one-open-position-per-pair index and the long-only CHECK — still
+    refuse what they refused before, asserted here alongside a written hold reason so
+    the additive claim is made on a row that actually uses the new column."""
+    conn = open_connection(migrated_db)
+    try:
+        conn.execute(_POSITION_INSERT, ("pos-a", "SOL/USD", "open"))
+        conn.execute(
+            "UPDATE positions SET hold_reason = 'data_guard_blocked' "
+            "WHERE position_id = 'pos-a'"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(_POSITION_INSERT, ("pos-b", "SOL/USD", "open"))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE positions SET side = 'short' WHERE position_id = 'pos-a'")
+        row = conn.execute(
+            "SELECT side, status, hold_reason FROM positions WHERE position_id = 'pos-a'"
+        ).fetchone()
+    finally:
+        close_connection(conn)
+    assert (row["side"], row["status"], row["hold_reason"]) == (
+        "long",
+        "open",
+        "data_guard_blocked",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 0004 — `leaderboard.base_rate_brier` (lead ruling 2026-09-16)
+#
+# The null hypothesis `brier` is measured against: the score a model predicting
+# the fold's own class frequency every time would have got. Engine 20 already
+# computes it per fold and discarded it for want of a column.
+# --------------------------------------------------------------------------- #
+
+_LEADERBOARD_INSERT = (
+    "INSERT INTO leaderboard (model_id, model_version, trained_at, n_trades, "
+    "promoted, updated_at) VALUES ('predictor', ?, 1000, 5, 0, 1000)"
+)
+
+
+def test_a_new_leaderboard_row_has_no_base_rate_brier(migrated_db: Path) -> None:
+    """NULL means "not recorded", never "no baseline".
+
+    There is no honest default: `0.0` is a perfect baseline and would make every row
+    written before 0004 look skill-less, and `0.25` is the balanced-fold value and
+    would be a guess about folds nobody measured. Engine 14 must read the absence as
+    an absence — absent is never zero.
+    """
+    conn = open_connection(migrated_db)
+    try:
+        conn.execute(_LEADERBOARD_INSERT, ("v1",))
+        row = conn.execute("SELECT base_rate_brier FROM leaderboard").fetchone()
+    finally:
+        close_connection(conn)
+    assert row["base_rate_brier"] is None
+
+
+def test_the_base_rate_brier_is_a_real_and_deliberately_not_a_money_column(
+    migrated_db: Path,
+) -> None:
+    """A statistic, so `REAL` is correct — `code-standards.md` allows float for
+    "features, indicators, model inputs and statistics", and every other metric on this
+    table is `REAL` for the same reason.
+
+    The second assertion is the one that matters: `EXPECTED_MONEY_COLUMNS` is the set a
+    money column must be in, and a money column added as `REAL` is exactly the defect
+    `test_every_money_column_is_declared_any_with_a_text_check` exists to catch. This
+    one is not money and says so here rather than relying on nobody adding it later.
+    """
+    conn = open_connection(migrated_db)
+    try:
+        conn.execute(_LEADERBOARD_INSERT, ("v1",))
+        conn.execute("UPDATE leaderboard SET base_rate_brier = 0.245")
+        row = conn.execute("SELECT base_rate_brier FROM leaderboard").fetchone()
+        declared = {
+            str(column["name"]): str(column["type"])
+            for column in conn.execute("PRAGMA table_info(leaderboard)")
+        }
+    finally:
+        close_connection(conn)
+    assert row["base_rate_brier"] == 0.245
+    assert isinstance(row["base_rate_brier"], float)
+    assert declared["base_rate_brier"] == "REAL"
+    assert ("leaderboard", "base_rate_brier") not in EXPECTED_MONEY_COLUMNS
+
+
+def test_0004_did_not_disturb_the_existing_leaderboard_contract(migrated_db: Path) -> None:
+    """0004 is additive. `net_pnl` is still the one money column on this table and
+    still refuses a number, asserted beside a written `base_rate_brier` so the claim is
+    made on a row that actually uses the new column."""
+    conn = open_connection(migrated_db)
+    try:
+        conn.execute(_LEADERBOARD_INSERT, ("v1",))
+        conn.execute("UPDATE leaderboard SET base_rate_brier = 0.25, net_pnl = '10.00'")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE leaderboard SET net_pnl = 10.0")
+        row = conn.execute("SELECT net_pnl, base_rate_brier FROM leaderboard").fetchone()
+    finally:
+        close_connection(conn)
+    assert (row["net_pnl"], row["base_rate_brier"]) == ("10.00", 0.25)

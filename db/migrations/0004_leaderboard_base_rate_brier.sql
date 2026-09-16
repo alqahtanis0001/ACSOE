@@ -1,0 +1,47 @@
+-- 0004_leaderboard_base_rate_brier.sql — approved by the lead 2026-09-16.
+--
+-- Forward-only and purely additive: one nullable column on `leaderboard`. No existing
+-- column or table is altered, nothing is dropped, and no table is added — so the
+-- documented table set of `architecture-context.md`, `EXPECTED_TABLES` and
+-- `EXPECTED_INDEXES` are all unchanged and `db_migrates_from_empty` needs no edit.
+--
+-- WHAT IT IS
+--
+--   The Brier score of the **base rate** on the same fold: the score a model that
+--   ignored its inputs and predicted the fold's own class frequency every time would
+--   have got. It is the null hypothesis `brier` is measured against — a Brier of 0.24
+--   is skill on a balanced fold and is worse than doing nothing on a fold that was 90%
+--   one class.
+--
+-- WHY IT IS A COLUMN AND NOT A DERIVATION
+--
+--   Engine 20 `tournament` already computes it per fold and **discards it for want of
+--   a column**, so this is recovering a number the system has rather than adding work.
+--
+--   C nearly derived it instead, as `win_rate * (1 - win_rate)`, and caught the reason
+--   that is wrong before it shipped: `brier` is computed over **every** row of the
+--   fold, and `win_rate` is over the **BUY subset only**. Two different populations, so
+--   the derived figure would be a plausible number that answers a different question —
+--   and engine 14's weighting rule would rank models against a baseline none of them
+--   was measured on. Worth stating in the schema, because the derivation will look
+--   reasonable again to the next person who wants to avoid a migration.
+--
+-- WHY `REAL` AND NOT AN EXACT DECIMAL STRING
+--
+--   It is a statistic, and `code-standards.md` allows `float` for "features,
+--   indicators, model inputs and statistics". Every other metric on this table is
+--   `REAL` for the same reason; `net_pnl` is the one money column here and stays an
+--   exact decimal string. A money column added as `REAL` is the defect
+--   `test_every_money_column_is_declared_any_with_a_text_check` exists to catch, and
+--   this is deliberately not one.
+--
+-- WHY NULLABLE
+--
+--   Every row written before this migration has no value for it, and there is no
+--   honest default: `0.0` is a perfect baseline, which would make every existing model
+--   look skill-less, and `0.25` is the balanced-fold value, which would be a guess
+--   about folds nobody measured. NULL means "not recorded", and engine 14 must treat it
+--   as an absence rather than as a baseline — absent is never zero, invariant 3's
+--   posture applied to a statistic.
+
+ALTER TABLE leaderboard ADD COLUMN base_rate_brier REAL;

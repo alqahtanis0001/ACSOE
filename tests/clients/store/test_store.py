@@ -102,8 +102,13 @@ def make_trade(
 
 
 def make_position(
-    *, position_id: str, pair: str, status: PositionStatus = PositionStatus.OPEN
+    *,
+    position_id: str,
+    pair: str,
+    status: PositionStatus = PositionStatus.OPEN,
+    hold_reason: str | None = None,
 ) -> PositionRow:
+    """One position row. `hold_reason` defaults to `None` — "did not hold"."""
     return PositionRow(
         position_id=position_id,
         run_id="run-a",
@@ -117,6 +122,7 @@ def make_position(
         target_price=Decimal("152.65"),
         stop_price=Decimal("145.98"),
         timeout_at=9_999_999,
+        hold_reason=hold_reason,
         opened_at=1_000,
         closed_at=None if status is PositionStatus.OPEN else 2_000,
         updated_at=1_000,
@@ -1269,6 +1275,7 @@ def make_leaderboard(
     training_run_id: str | None = "train-1",
     net_pnl: str | None = "12.34",
     promoted: bool = False,
+    base_rate_brier: float | None = None,
 ) -> LeaderboardRow:
     return LeaderboardRow(
         model_id=model_id,
@@ -1279,6 +1286,7 @@ def make_leaderboard(
         n_trades=n_trades,
         win_rate=win_rate,
         brier=brier,
+        base_rate_brier=base_rate_brier,
         net_pnl=None if net_pnl is None else Decimal(net_pnl),
         reporting_currency="USD",
         promoted=promoted,
@@ -1640,3 +1648,280 @@ def test_filled_orders_is_empty_on_a_database_with_no_fills(store: StoreClient) 
     """Empty, not an error: a paper account that has never traded is the ordinary
     starting state and its ledger is the opening balance."""
     assert store.filled_orders() == ()
+
+
+# --------------------------------------------------------------------------- #
+# Migration 0003 — `positions.hold_reason`, ruled by the lead 2026-09-16
+#
+# B provides the column and the row model. Engine 19 `memory` is the only writer
+# (spec 98, C's), so nothing here writes it through an engine: these tests are
+# about what the store will carry and what it refuses to carry.
+#
+# The value is read by the **console**, a separate process, which is the whole
+# reason the fact has to reach the database at all: engine 21 publishes it into
+# `state` and `state` dies at the end of the tick.
+# --------------------------------------------------------------------------- #
+
+#: Engine 21's one hold reason today, spelled here rather than imported. A store
+#: test importing an engine constant would assert the two agree by construction,
+#: and the column deliberately carries no enumeration of them — see 0003's comment.
+HELD_ON_GUARD = "data_guard_blocked"
+
+#: A second, different reason, so an assertion can tell one row's value from
+#: another's rather than from "some hold reason was written".
+HELD_ON_SOMETHING_ELSE = "manage_chain_paused_by_operator"
+
+
+def test_a_hold_reason_round_trips_on_the_position_it_was_written_for(
+    store: StoreClient,
+) -> None:
+    """Two open positions, two *different* reasons, read back through `open_positions`.
+
+    One position with one reason would be satisfied by a client that read the column
+    from the wrong row, or that returned a constant. Two differing values make the
+    assertion about which position held and why.
+    """
+    store.write_position(
+        make_position(position_id="p-1", pair="XBT/USD", hold_reason=HELD_ON_GUARD)
+    )
+    store.write_position(
+        make_position(position_id="p-2", pair="ETH/USD", hold_reason=HELD_ON_SOMETHING_ELSE)
+    )
+
+    by_id = {row.position_id: row.hold_reason for row in store.open_positions()}
+
+    assert by_id == {"p-1": HELD_ON_GUARD, "p-2": HELD_ON_SOMETHING_ELSE}
+
+
+def test_a_position_that_did_not_hold_reads_back_none(store: StoreClient) -> None:
+    """`None` is the answer, not `''` and not a missing attribute.
+
+    The ruling is explicit that NULL means "did not hold" and never "unknown", so a
+    reader may treat `hold_reason is None` as a statement about the tick rather than
+    as an absence of information.
+    """
+    store.write_position(make_position(position_id="p-1", pair="XBT/USD"))
+
+    assert store.open_positions()[0].hold_reason is None
+
+
+def test_rewriting_the_position_without_a_hold_reason_clears_it(store: StoreClient) -> None:
+    """Condition 2 of the ruling, which is the one that matters.
+
+    `hold_reason` is a fact about *now*, exactly like `last_price`: a hold written on
+    one tick and left in place on the next renders an hour-old reason forever, so the
+    console reports a paused manage chain over one running normally. The mechanism is
+    that `write_position` upserts every column, so the writer clears it by writing the
+    row it would have written anyway — it does not have to remember to blank a field.
+
+    `last_price` moves in the same write, so this also fails if the upsert stopped
+    updating the row at all rather than specifically stopping at `hold_reason`.
+    """
+    store.write_position(
+        make_position(position_id="p-1", pair="XBT/USD", hold_reason=HELD_ON_GUARD)
+    )
+    held = store.open_positions()[0]
+    assert held.hold_reason == HELD_ON_GUARD
+
+    store.write_position(
+        held.model_copy(update={"hold_reason": None, "last_price": Decimal("149.00")})
+    )
+
+    cleared = store.open_positions()[0]
+    assert cleared.hold_reason is None
+    assert cleared.last_price == Decimal("149.00")
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\t", "\n  "])
+def test_a_blank_hold_reason_is_refused_by_the_row_model(blank: str) -> None:
+    """A blank string is how "unknown" gets past a nullable column.
+
+    It is non-null, so every `is not None` read calls it a hold, and it renders as
+    nothing, so the console shows a held position with no reason on it. `None` is the
+    only way to say "did not hold". The same refusal is in migration 0003's CHECK,
+    down to `trim()`, and the test below drives that one through SQL.
+    """
+    with pytest.raises(ValidationError, match="hold_reason is a reason or None"):
+        make_position(position_id="p-1", pair="XBT/USD", hold_reason=blank)
+
+
+def test_the_seed_writes_no_hold_reason(seeded_db: Path) -> None:
+    """A seeded position was never held, so every one of them reads back `None`.
+
+    Not a vacuous assertion: the seed carries at least one open position by Phase 0's
+    own requirement, and the count is asserted before the values are.
+    """
+    conn = sqlite3.connect(seeded_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT position_id, hold_reason FROM positions").fetchall()
+    finally:
+        conn.close()
+
+    assert len(rows) > 0
+    assert [row["hold_reason"] for row in rows] == [None] * len(rows)
+
+
+def test_open_positions_breaks_a_tie_on_position_id_and_not_on_insertion_order(
+    store: StoreClient,
+) -> None:
+    """`ORDER BY opened_at ASC, position_id ASC` — the tie-break is the whole point.
+
+    Every position the seed and these builders make shares one `opened_at`, and two
+    positions opened on the same tick is the ordinary case rather than a contrived one:
+    a liquidation closes them together and the console renders them together. With no
+    tie-break SQLite may return them in any order, and the console's list would reorder
+    itself between two polls of a database nothing had written to.
+
+    Found by a mutation — `position_id DESC` survived all 244 tests in this lane — and
+    the tie is created here by writing the rows in the opposite order to the one
+    expected, so insertion order and sort order disagree.
+    """
+    store.write_position(make_position(position_id="p-z", pair="SOL/USD"))
+    store.write_position(make_position(position_id="p-a", pair="XBT/USD"))
+
+    opened_at = {row.opened_at for row in store.open_positions()}
+    order = [row.position_id for row in store.open_positions()]
+
+    assert opened_at == {1_000}, "the tie-break is untested unless the first key ties"
+    assert order == ["p-a", "p-z"]
+
+
+# --------------------------------------------------------------------------- #
+# Migration 0004 and the enumeration engine 14 weights from
+#
+# Both landed on the lead's ruling of 2026-09-16, after C-models found that
+# neither existing leaderboard read could enumerate model versions.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_base_rate_brier_round_trips_and_is_none_when_not_recorded(
+    store: StoreClient,
+) -> None:
+    """Two rows, one with a baseline and one without, so the assertion is about which
+    row carries which rather than about "a float came back"."""
+    store.write_leaderboard_entry(
+        make_leaderboard(model_version="v1", trained_at=1_000, base_rate_brier=0.2475)
+    )
+    store.write_leaderboard_entry(make_leaderboard(model_version="v2", trained_at=2_000))
+
+    by_version = {
+        row.model_version: row.base_rate_brier
+        for row in store.all_leaderboard_rows(model_id="predictor")
+    }
+
+    assert by_version == {"v1": 0.2475, "v2": None}
+
+
+def test_all_leaderboard_rows_returns_what_the_console_read_would_have_truncated(
+    store: StoreClient,
+) -> None:
+    """The whole reason this method exists, asserted against the read it replaces.
+
+    Sixty rows against the console's limit of fifty, so the oldest ten are exactly the
+    ones `leaderboard()` drops. C's finding is what makes that a defect rather than an
+    inconvenience: a model version outside the window gets **no weight because nobody
+    looked**, not zero weight for having no edge, and the two are indistinguishable
+    downstream — the weights still sum to one, over the wrong set.
+
+    More rows than the limit, deliberately: a fixture with fifty or fewer would pass
+    against both reads and prove nothing.
+    """
+    for index in range(60):
+        store.write_leaderboard_entry(
+            make_leaderboard(model_version=f"v{index:02d}", trained_at=1_000 + index)
+        )
+
+    everything = store.all_leaderboard_rows(model_id="predictor")
+    console = store.leaderboard()
+
+    assert len(everything) == 60
+    assert len(console) == 50, "the console read is still the truncating one"
+    assert "v00" in {row.model_version for row in everything}
+    assert "v00" not in {row.model_version for row in console}
+
+
+def test_all_leaderboard_rows_is_scoped_to_one_model(store: StoreClient) -> None:
+    """Scoping by `model_id` is what makes "no limit" safe: one model's folds are
+    bounded by its walk-forward, where the table as a whole is bounded by nothing.
+
+    Two models with the **same** version string, so an implementation that filtered on
+    nothing, or on the wrong column, comes back with two rows instead of one.
+    """
+    store.write_leaderboard_entry(make_leaderboard(model_version="v1", trained_at=1_000))
+    store.write_leaderboard_entry(
+        make_leaderboard(model_version="v1", trained_at=2_000, model_id="skeptic")
+    )
+
+    rows = store.all_leaderboard_rows(model_id="predictor")
+
+    assert [(row.model_id, row.trained_at) for row in rows] == [("predictor", 1_000)]
+
+
+def test_all_leaderboard_rows_orders_by_insertion_and_not_by_trained_at(
+    store: StoreClient,
+) -> None:
+    """`ORDER BY id ASC`, and the fixture is built so the two candidate keys disagree.
+
+    **It took two goes to get the fixture right, and both misses are the same mistake.**
+    The first version wrote three rows sharing one `trained_at`: with the key equal
+    everywhere, `ORDER BY trained_at DESC` leaves the tie unbroken, SQLite happened to
+    return insertion order anyway, and the mutation survived. The second wrote 9000,
+    8000, 7000 in that order — which `trained_at DESC` reproduces exactly, so it
+    survived too. Both times the witness agreed with the claim while measuring nothing.
+
+    The sequence below is **non-monotonic in insertion order**, which is the only shape
+    that separates all three candidates at once:
+
+    | order by | result |
+    |---|---|
+    | `id ASC` (correct) | 8000, 9000, 7000 |
+    | `trained_at ASC` | 7000, 8000, 9000 |
+    | `trained_at DESC` | 9000, 8000, 7000 |
+    """
+    for index, trained_at in enumerate((8_000, 9_000, 7_000)):
+        store.write_leaderboard_entry(
+            make_leaderboard(
+                model_version="v1", trained_at=trained_at, fold=f"fold-{index}"
+            )
+        )
+
+    rows = store.all_leaderboard_rows(model_id="predictor")
+
+    assert [row.trained_at for row in rows] == [8_000, 9_000, 7_000], (
+        "insertion order; sorting by trained_at in either direction gives a "
+        "different list, which is what makes this assertion about the sort key"
+    )
+    assert [row.fold for row in rows] == ["fold-0", "fold-1", "fold-2"]
+
+
+def test_all_leaderboard_rows_breaks_a_trained_at_tie_deterministically(
+    store: StoreClient,
+) -> None:
+    """The other half, and the reason `trained_at` is not the sort key at all.
+
+    A walk-forward writes every fold of one run with the same `trained_at`, so the tie
+    is the **ordinary** case rather than the edge one. `id` is the primary key, so the
+    order is total and two reads of a database nothing wrote to cannot disagree.
+    """
+    for fold in ("fold-c", "fold-a", "fold-b"):
+        store.write_leaderboard_entry(
+            make_leaderboard(model_version="v1", trained_at=7_000, fold=fold)
+        )
+
+    first = store.all_leaderboard_rows(model_id="predictor")
+    second = store.all_leaderboard_rows(model_id="predictor")
+
+    assert {row.trained_at for row in first} == {7_000}, "the tie is untested unless it ties"
+    assert [row.fold for row in first] == ["fold-c", "fold-a", "fold-b"]
+    assert [row.id for row in first] == sorted(row.id or 0 for row in first)
+    assert first == second
+
+
+def test_all_leaderboard_rows_is_empty_on_a_model_that_has_never_trained(
+    store: StoreClient,
+) -> None:
+    """Empty is a real answer, not an error. Engine 14 refuses on it with
+    `leaderboard_empty` rather than weighting an empty set, which is its decision to
+    make and not this client's."""
+    assert store.all_leaderboard_rows(model_id="predictor") == ()
