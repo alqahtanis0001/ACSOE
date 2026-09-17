@@ -2388,3 +2388,56 @@ fallback (C's); spec 105's criterion keeps a NULL-mark branch only the defect no
 `engines/cost/contracts.py` and README call `fallbacks_used` a `rejections` column, and
 `clients/paper/broker.py` exports an unused `FALLBACK_PAPER_LEDGER` under a stale comment (mine,
 for a later session).
+
+### Spec 108, diagnosis — prose in B's lane still describes a fallback that no longer exists
+
+**Agent:** B (session 6) · **Task:** spec 108 · **Date:** 2026-09-17
+
+**What happened.** Spec 106 removed the last paper-mode fallback (engine 11's balance), and
+invariant 2 now reads "Every row blocks. There is no paper-mode fallback left in this table" and
+"A ledger balance is not recorded as a fallback fired." Six places in B's lane still say
+otherwise, or name the wrong table:
+
+| Where | What it says | Why it is stale |
+|---|---|---|
+| `engines/cost/contracts.py` module docstring and `CostAssessment` docstring | `fallbacks_used` is "a real `rejections` column" / "one of those columns" | Migration 0001 puts `fallbacks_used` on `trades` (line 271). `rejections` has no such column; engine 19 harvests exactly the four `ECONOMICS_FIELDS` from a blocker's payload and nothing else |
+| `engines/cost/engine.py` `_fallbacks` docstring | "the `rejections` column that records it" | Same |
+| `engines/cost/README.md` ("Output", and the paragraph after "every pair blocks here") | "a real `rejections` column that engine 19 fills"; "**Balance is the only paper-mode fallback left in this system**, and it belongs to engine 11" | Wrong table; and since spec 106 there is no paper-mode fallback anywhere |
+| `tests/engines/test_cost.py`, `test_this_engine_applies_no_fallback_and_says_so_by_recording_none` docstring | "a real `rejections` column" | Same |
+| `clients/paper/broker.py`, the comment on `FALLBACK_PAPER_LEDGER` and the constant itself | "invariant 2 requires the decision to carry it either way" | Invariant 2 now says the opposite: a ledger balance is not a fallback fired. The constant has no user (below) |
+| `clients/paper/broker.py`, the comment on `PAPER_STARTING_BALANCES_KEY` | "Invariant 2's one substituted value" | Invariant 2 substitutes nothing; the starting balance is the ledger's opening figure, and the broker is the authority on its cash |
+| `clients/paper/broker.py`, the "forwarded reads" banner | "the one row of that table that does substitute a value is the balance" | Every row of that table now blocks |
+
+**Why.** Each was true, or believed true, when written: the cost docstrings date from spec 40,
+when B still expected engine 19 to copy the payload wholesale into `rejections`; the broker's
+comments were written during spec 88 under ruling 3's first wording, before the operator removed
+engine 11's fallback and wrote "A ledger balance is not recorded as a fallback fired." Spec 106
+fixed the code and engine 11's prose, not these.
+
+**`FALLBACK_PAPER_LEDGER` has no user.** `git grep` over the whole tracked tree finds it only in
+`clients/paper/broker.py` (definition, `__all__`), `clients/paper/__init__.py` (re-export,
+`__all__`) and in records (tracker, spec 108, the build log, the overnight log, this progress
+file). `grep -rn` over `src tests scripts`, untracked files included, finds the same four source
+lines and nothing else. The string `balance_from_paper_ledger` appears nowhere else either, so no
+stored row or fixture carries it. Output: `logs/verify/b108-grep-constant-before.log`.
+
+**`CostAssessment.fallbacks_used` — a producer, no reader.** Producer: `CostEngine.process` sets
+it from `_fallbacks()`, which returns `()` unconditionally, so the published `state["cost"]` always
+carries `"fallbacks_used": []`. Readers of `state["cost"]` in `src/` and `scripts/`: engine 16
+`decision._compose` reads `net_edge_pct`, `hurdle_pct`, `expected_move_pct`; engine 19
+`memory._write_rejection` reads the four `ECONOMICS_FIELDS` and `reason_code`; `scripts/verify.py`
+imports the engine and its contracts but reads no `fallbacks_used` off the payload. **Nothing in
+`src/` or `scripts/` reads it.** The only readers are tests: `tests/engines/test_cost.py` (asserts
+it is `[]`, priced and blocked) and C's/the lead's fake cost engine in
+`tests/verify/test_phase3_criteria.py:227`, which *publishes* `"fallbacks_used": []` in its
+stand-in payload. It is not removed here: removing it changes the published payload shape, and a
+stand-in in another lane mirrors that shape. Listed for the lead.
+
+**The line endings.** `engines/cost/engine.py` is 328 CRLF / 0 LF in the working tree (blob LF,
+per `.gitattributes`). The only literal-anchor patchers on it are two in
+`tests/verify/test_phase3_criteria.py` — `"inputs.maker_fee_pct + inputs.taker_fee_pct +
+inputs.spread_pct + inputs.slippage_pct"` and `"clears = net_edge > hurdle"` — each single-line,
+each counted once in the file today, and `patch_module` reads in text mode anyway. No other
+`tests/` or `scripts/` file patches it (grep for `cost/engine`, `engines.cost`). `contracts.py`
+(288 CRLF) and `README.md` (140 CRLF) are CRLF as well.
+

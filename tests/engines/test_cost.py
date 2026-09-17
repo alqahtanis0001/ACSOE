@@ -580,7 +580,7 @@ def test_this_engine_applies_no_fallback_and_says_so_by_recording_none(
     fake_kraken: FakeKrakenClient,
     publish_exchange: ExchangePublisher,
 ) -> None:
-    """`fallbacks_used` is a real `rejections` column and it is empty, in every mode.
+    """`fallbacks_used` on the published payload is empty, in every mode.
 
     Invariant 2 requires every decision affected by a fallback to record which one fired,
     and after spec 37 this gate has no fallback to apply: `AssetPairs` carries no fee

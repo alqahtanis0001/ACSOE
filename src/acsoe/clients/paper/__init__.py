@@ -5,6 +5,6 @@ See `README.md` in this directory for every fill rule and why each one is the pe
 reading.
 """
 
-from acsoe.clients.paper.broker import FALLBACK_PAPER_LEDGER, PaperBroker, PaperBrokerError
+from acsoe.clients.paper.broker import PaperBroker, PaperBrokerError
 
-__all__ = ["FALLBACK_PAPER_LEDGER", "PaperBroker", "PaperBrokerError"]
+__all__ = ["PaperBroker", "PaperBrokerError"]

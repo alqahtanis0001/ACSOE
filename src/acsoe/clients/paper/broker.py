@@ -117,22 +117,19 @@ from acsoe.clients.store.contracts import OrderIntent, OrderRow
 from acsoe.clients.store.contracts import OrderStatus as RowStatus
 from acsoe.platform.clock import Clock
 
-__all__ = ["FALLBACK_PAPER_LEDGER", "PaperBroker", "PaperBrokerError"]
+__all__ = ["PaperBroker", "PaperBrokerError"]
 
 #: The depth the broker fetches when it has to walk the book for a market sell. It is the
 #: same default the real client uses, so the simulated sweep sees exactly the book a live
 #: sweep's caller would have seen and no more.
 _BOOK_DEPTH = 10
 
-#: Recorded on a fill priced against the paper ledger rather than a fetched balance. The
-#: ledger is *always* the balance in paper mode (operator ruling 3, 2026-09-16), so this
-#: is a statement of provenance rather than of failure, and invariant 2 requires the
-#: decision to carry it either way.
-FALLBACK_PAPER_LEDGER = "balance_from_paper_ledger"
-
-#: The opening balance the ledger adjusts. Invariant 2's one substituted value, and
-#: operator ruling 3 of 2026-09-16 makes it paper mode's balance outright rather than a
-#: fallback for a failed fetch.
+#: The opening balance the ledger adjusts, and nothing more. It is not a substituted
+#: value: invariant 2 has no paper-mode fallback left, and in paper mode the balance is
+#: always this broker's — this opening figure adjusted by every fill it has executed
+#: (operator ruling 3 of 2026-09-16, and its amendment). The broker is the authority on
+#: its own cash, so when it cannot say what its fills spent `balance()` raises rather
+#: than answering with this figure unadjusted, and engine 1 publishes no balance.
 #:
 #: **It is the only config key this broker reads.** An earlier draft also read
 #: `trading.entry_unfilled_window_s`, to bound an observation buffer that no longer
@@ -244,9 +241,9 @@ class PaperBroker:
     # --------------------------------------------------------- forwarded reads
     #
     # Every one of these is `self._real`'s answer, unchanged. The broker adds no
-    # fallback of its own to any of them: invariant 2 gives pair rules, the spread and
-    # the fee tier none, and the one row of that table that does substitute a value is
-    # the balance, which is below and is not a fallback here but the ruled behaviour.
+    # fallback of its own to any of them, and invariant 2 has none to give: every row of
+    # its paper-mode table blocks. The balance is not forwarded, and that is not a
+    # fallback either: the broker is the authority on its own cash (the ledger, below).
 
     async def asset_pairs(self) -> Any:
         return await self._real.asset_pairs()

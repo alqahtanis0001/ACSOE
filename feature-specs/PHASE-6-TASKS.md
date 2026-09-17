@@ -1,5 +1,55 @@
 # Phase 6 — shared task list
 
+## HANDOFF 5, 2026-09-17 ~10:15 local — engines registered; the operator is asleep and the lead runs unattended
+
+**Read this first. HANDOFF 4 and earlier are history.**
+
+**The operator is asleep and has authorised unattended work until they say they are back.**
+The rules, verbatim in substance: *how* choices (naming, placement, test structure,
+equivalent mechanisms, order) may be taken and must be logged with the rejected option in
+`docs/build-log/phase-6/overnight-decisions-2026-09-17.md`, flagged **REVIEW** where a
+competent objection exists; *what* choices — anything weakening a gate or criterion,
+changing a config value, threshold or barrier, making the system more willing to trade,
+amending an invariant or locked decision, or a cheaper option that proves less — **stop**:
+write the options there under "Open questions" and move to unblocked work. One authoritative
+gate per boundary immediately before the commit; commit and push each boundary; stop only if
+the gate is red after two fix attempts on the same thing. **Do not close the phase: when the
+nine Phase 6 criteria are green, report and stop** — the operator wants to see the first paper
+trade first. When the operator says they are back, the normal rhythm resumes.
+
+### Where it stands
+
+| Done | Commit |
+|---|---|
+| Spec 87 (A) rehearsal of 18/21/22; its two defects fixed by 103 (B) and 104 (C) | `3b2cedf`, `178a0a8`, `ab2bf4f`, `3e1ded8` |
+| Spec 94 (B) rehearsal of 9/14 on the thin book | `49e369a` |
+| Spec 105 (C) criterion `paper_equity_continuous_across_fill` | `76035be` |
+| C's nothing-built PENDING test moved to `unbuilt_tree` | `d28b756` |
+| Spec 106 (B): engine 11's fallback removed; engine 21's fill-tick mark | `268f49e` |
+| **Spec 82: engines 9, 14, 16, 18, 21, 22 registered**; phases 0–6 re-gated, only `toolchain_green` (the known 8) failing | `69038a7` |
+| Spec 108 (B): stale fallback prose, unused `FALLBACK_PAPER_LEDGER`, engine 10 LF | the commit after this handoff |
+
+**The only red** is spec 100's eight `test_pending_on_the_real_tree_names_the_subject_and_the_spec`
+parametrisations and `toolchain_green` in every phase that follows from them. They clear when
+the criteria bodies are written.
+
+### The order from here
+
+1. **C, spec 107** — engine 9's stale prose; spec 105's criterion stops accepting a NULL mark
+   (decision D3, REVIEW).
+2. **C, spec 100 criteria bodies** — the nine Phase 6 criteria against the **registered**
+   `bootstrap` chains, at fee tier 3, each proven PENDING/PASS/FAIL. Fold in: the tier-sentence
+   test on `bare_tree` that never observes PENDING, and the four-quote docstring at
+   `tests/verify/test_phase6_criteria.py:671`. Spec 105's criterion should switch from its
+   hand-built chains to `bootstrap` in the same work.
+3. **C, spec 101** — the console shows the position live.
+4. **Seed-vocabulary reconciliation** — B repoints every seeded rejection to an `(engine,
+   code)` pair the live system can emit; then C retires prose with no producer.
+5. **Stop and report** when the nine criteria are green. Do not close the phase.
+
+One agent in the tree at a time (decision D1). The recorder, its supervisor and the funding
+poller keep running. The network was down 03:13–08:20 UTC overnight (event E1).
+
 ## HANDOFF 4, 2026-09-16 — spec 87 is done and found two defects; three specs added
 
 **Read this first; HANDOFF 3 below still holds except where this says otherwise.** A's spec 87

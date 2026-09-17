@@ -221,9 +221,12 @@ class CostEngine(BaseEngine):
         """The fallbacks **this engine applied**. There are none, and that is the point.
 
         Invariant 2: "Every decision affected by a fallback records which fallback
-        fired", and `CostAssessment.fallbacks_used` is the `rejections` column that
-        records it. Spec 37 retired the fee-tier row of the paper-mode table on
-        2026-09-10 — `AssetPairs` carries no fee schedule, so there was no runtime source
+        fired", and `CostAssessment.fallbacks_used` is where this engine would record
+        it. It is a payload field, not a `rejections` column: `fallbacks_used` is a
+        `trades` column (migration 0001), and nothing in `src/` reads this one.
+
+        Spec 37 retired the fee-tier row of the paper-mode table on 2026-09-10 —
+        `AssetPairs` carries no fee schedule, so there was no runtime source
         the named tier could have come from, and the only way to honour that row was to
         write a fee percentage into the code. A confirmed pair with no fee data now
         blocks, in every mode, and this gate has no fallback left to apply.

@@ -1,5 +1,32 @@
 # Agent B — Store and trading
 
+## Phase 6, session 6 — CLAIMED 2026-09-17, spec 108
+
+Tree clean at `69038a7` when claimed. Claimed before any edit, per rule 1. Step 0 of the spec
+(spec 106's sweep entry and DONE line) was already done by session 5: build log "Spec 106 —
+nine mutations" and the DONE block below.
+
+**Spec 108 — stale remnants of the removed paper-mode fallback in B's lane.** No behaviour
+change: prose, one unused constant, line endings.
+
+1. `src/acsoe/engines/cost/{contracts,engine}.py` + `README.md`: `fallbacks_used` is a `trades`
+   column (migration 0001), not a `rejections` one; the README's "Balance is the only paper-mode
+   fallback left" goes. `CostAssessment.fallbacks_used` is reported, not removed.
+2. `src/acsoe/clients/paper/{broker,__init__}.py`: `FALLBACK_PAPER_LEDGER` removed (unused;
+   grep recorded); the starting-balance comment and the forwarded-reads comment rewritten to
+   invariant 2 as now written.
+3. `tests/engines/test_cost.py`: the one docstring repeating "a real `rejections` column".
+4. `src/acsoe/engines/cost/engine.py` CRLF -> LF, after the `tests/verify/` anchor check.
+
+**Line endings measured in Python at claim time:** `engines/cost/engine.py` 328 CRLF / 0 LF,
+`contracts.py` 288 / 0, `README.md` 140 / 0 — `contracts.py` and `README.md` are edited through a
+byte-level helper that keeps CRLF (the spec converts `engine.py` only). The broker, its
+`__init__.py` and README, `tests/engines/test_cost.py` and both records are pure LF.
+
+Records: this file and `docs/build-log/phase-6/b-store.md`. Scratch `...\scratchpad\b108\`;
+logs `logs/verify/b108-*`. Not touched: `bootstrap.py`, `core/`, `context/*`, other lanes,
+the recorder processes.
+
 ## Phase 6, session 5 — CLAIMED 2026-09-16, spec 106
 
 Tree clean at `e29c84e` when claimed. Claimed before any code, per rule 1. Operator rulings of

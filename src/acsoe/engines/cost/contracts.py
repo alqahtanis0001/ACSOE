@@ -57,11 +57,15 @@ one returned an empty tuple on every tick, silently.
 
 After spec 37 retired the fee-tier row of invariant 2's paper-mode table, **there is no
 fee-tier fallback in any mode**: a confirmed pair with no fee data blocks. So this engine
-applies no fallback at all, and :attr:`CostAssessment.fallbacks_used` — a real `rejections`
-column — is correspondingly empty. It is kept, and it is sourced from fallbacks *this
-engine applied*, not from engine 1's failed fetches. Copying a failed fetch into that
-column would misreport the record invariant 2 asks for: a failure to fetch is not a
-fallback, it is the opposite of one.
+applies no fallback at all, and :attr:`CostAssessment.fallbacks_used` is correspondingly
+empty. It names fallbacks *this engine applied*, never engine 1's failed fetches. Copying
+a failed fetch into it would misreport the record invariant 2 asks for: a failure to
+fetch is not a fallback, it is the opposite of one.
+
+It is **not** a `rejections` column, whatever this docstring said before spec 108.
+Migration 0001 puts `fallbacks_used` on `trades` only, engine 19 builds a rejection from
+the four percentages and `reason_code` of the engine that blocked, and nothing in `src/`
+reads this field.
 
 `failed_fetches` is still read, for one purpose only: when the fee tier is missing and the
 `trade_volume` call is named there, the operator sentence quotes *that call's* reason.
@@ -249,12 +253,13 @@ class CostAssessment(BaseModel):
     the engine that computes a number and the table that stores it, which is a place for
     them to stop meaning the same thing.
 
-    `fallbacks_used` is one of those columns and is kept for that reason. It holds the
-    fallbacks **this engine applied**, and after spec 37 retired the fee-tier row of
-    invariant 2's paper-mode table there are none, in any mode — so it is empty and this
-    engine has nothing to put in it. It is not a copy of engine 1's `failed_fetches`: a
-    failed fetch is the opposite of a fallback, and recording one there would misreport
-    exactly the thing invariant 2 wants recorded.
+    `fallbacks_used` is **not** one of those columns: `rejections` has none, migration
+    0001 puts it on `trades`, and engine 19 reads only the four percentages from here
+    (spec 108). It holds the fallbacks **this engine applied**, and after spec 37
+    retired the fee-tier row of invariant 2's paper-mode table there are none, in any
+    mode — so it is empty and this engine has nothing to put in it. It is not a copy of
+    engine 1's `failed_fetches`: a failed fetch is the opposite of a fallback, and
+    recording one there would misreport exactly the thing invariant 2 wants recorded.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

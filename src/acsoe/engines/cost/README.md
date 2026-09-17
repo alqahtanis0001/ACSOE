@@ -109,14 +109,20 @@ takes no paper trades and produces no rejection rows past this gate. That is the
 description of an unauthenticated clone, and it beats one that generates a research
 dataset priced on a fee somebody guessed.
 
-So `fallbacks_used` on this engine's payload is **always empty**, and it is kept rather
-than removed because it is a real `rejections` column that engine 19 fills. It records
+So `fallbacks_used` on this engine's payload is **always empty**. It records
 fallbacks *this engine applied*. It is **not** a copy of engine 1's `failed_fetches`, and
 the distinction is the whole reason the old dead read was deleted rather than re-pointed:
 a failed fetch is the opposite of a fallback. Nothing was substituted, so nothing was
-traded on, and writing one into that column would misreport exactly the thing invariant 2
-asks to be recorded. **Balance is the only paper-mode fallback left in this system**, and
-it belongs to engine 11 `risk`, not here.
+traded on, and writing one into that field would misreport exactly the thing invariant 2
+asks to be recorded. **There is no paper-mode fallback left anywhere in this system**:
+the last one, engine 11 `risk`'s balance, was removed by the operator on 2026-09-16
+(spec 106).
+
+**`fallbacks_used` is not a `rejections` column.** This page used to say it was, and that
+engine 19 filled it. Migration 0001 puts `fallbacks_used` on `trades` only; engine 19
+builds a rejection row from the four percentages and `reason_code` of the engine that
+blocked, and nothing in `src/` reads this field. It stays on the payload because removing
+it changes the published shape, which spec 108 reported to the lead rather than decided.
 
 ## Two things worth knowing before you change this
 

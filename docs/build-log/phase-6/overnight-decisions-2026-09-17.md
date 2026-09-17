@@ -78,3 +78,18 @@ the commit, and this is not literally that. The case for: no source, test or con
 changed after the gate started (checked with `git diff --stat`), so a second run would
 re-measure identical code; the docs delta is covered by the check that reads it. Cheaper,
 but not because it proves less about anything that changed.
+
+## Open questions for the operator — not decided overnight
+
+### Q1 — `CostAssessment.fallbacks_used` has no producer and no reader
+
+Spec 108 (B) found that engine 10's payload field `fallbacks_used` is always empty (no
+fee-tier fallback exists since spec 37) and that nothing in `src/` reads it — the column of
+that name is on `trades`, not `rejections`. Spec 106 removed the same field from engine 11
+on exactly those grounds. **Not removed here**, because removing it changes engine 10's
+published shape, which is a "what" choice.
+**Options.** (a) Remove it, as engine 11's was — consistent, and an always-empty field reads
+as "no fallback fired" on a record that cannot record one. (b) Keep it as a reserved,
+always-empty field. **Recommendation: (a).** **Case against:** engine 22 still publishes a
+real `fallbacks_used` (for rule 14's liquidation), so a uniform "every money-deciding engine
+carries the field" convention has some value for readers of the payloads.
