@@ -170,6 +170,39 @@ fails only `toolchain_green`, on spec 100's known eight — phase 0 6/7, 1 9/10,
   takes `bare_tree` and never observes the PENDING its name promises; a four-quote docstring at
   `tests/verify/test_phase6_criteria.py:671` that `ruff format --check` flags.
 
+### FINDING, 2026-09-17: the exit-cycle equity row described no real instant — found by the first criteria to run the registered chain
+
+C's spec 100 criterion bodies are the first code to drive a whole paper trade through
+`bootstrap.build_chains()`. Their round trips reconcile the trigger, the trade, the orders and the
+position, and then **fail on the exit tick's equity row**: cash from engine 1 at the start of the
+tick, positions value from engine 21 before the sale, open positions from the store after it. On the
+stop leg the row read equity 4945.02 with 0 open positions and a positions value of 3281.10, against
+a true 4938.79; on the target leg it sat above the true account and moved `peak_equity` to a figure
+the account never held. Every unit test and both rehearsals were green, because each checked that
+the row equalled the published totals — which it did. Not paper-only.
+
+**Ruled by the operator, after one withdrawn design.** The first proposal had engine 22 publish
+post-exit totals by subtracting engine 21's marks; the operator withdrew it because it couples engine
+22 to engine 21's valuation method, which would change silently if that method did. The ruled design
+(specs 113 B, 114 C): engine 22 publishes `net_proceeds` per closed trade; engine 21 publishes a
+per-row `value`; on an exit tick engine 19 drops the closed positions from engine 21's rows, sums
+the rest, and adds the net proceeds to engine 1's cash; totals on every other tick, with a sum test —
+proven capable of failing — guarding the seam; a remaining unmarked position means no row, proven by
+a test; `cash_source` recorded (migration 0005). And a criterion,
+`equity_row_never_values_positions_it_does_not_hold`, observed FAIL on today's code before the fix.
+
+**The criterion sweep found two assertions that could not fail and one real hole.** V8: engine 9's
+walk was compared by level count alone, so a wrong walk with the right number of levels passed. V12:
+the trained subject's cache key could be made constant with nothing noticing — the tests checked
+what the criteria *said*, not what they *read*. V1: the check that every registered gate ran could
+be disabled with nothing noticing, because the committed orchestrator never skips a gate and no test
+built one that does. All three are now killed: V8 by arms that keep the level count and move the
+price, V12 by a copied tree whose different training must be judged on its own subject, V1 by an arm
+whose orchestrator skips the gates. **Also:** C's third heredoc slip in one session (an escape turned
+into a real newline, a NUL byte, an unterminated heredoc) — the Phase 0 lesson recurring; C now writes
+any escape-carrying script with the file tool. `research/labelling.py` is wholly CRLF in the working
+tree (C's lane, not yet converted).
+
 ### The operator's rulings on the overnight log, 2026-09-17 morning
 
 **D3 accepted** (spec 105's criterion rejects a NULL fill-tick mark: the branch was reachable only by a

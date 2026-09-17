@@ -1,5 +1,91 @@
 # Phase 6 — shared task list
 
+## HANDOFF 6, 2026-09-17 19:20 local — the criteria bodies exist; the exit-cycle row is mid-fix; MUCH IS UNCOMMITTED
+
+**Read this first. HANDOFF 5 and earlier are history.** Written at the operator's instruction
+because the last commit predates a full day's work.
+
+### Committed and pushed (HEAD = `dd9ea39`)
+
+Everything through spec 107: both rehearsals (87, 94) and the two defects they found (103 the
+paper-fill double count, 104 the unrecorded errored tick); spec 105's equity-continuity criterion
+and 107's tightening of it; spec 106 (engine 11's balance fallback removed, engine 21's fill-tick
+mark); **spec 82, the registration of engines 9, 14, 16, 18, 21, 22** (`69038a7`) with phases 0–6
+re-gated; spec 108; the operator's rulings in the documents.
+
+### UNCOMMITTED AND UNGATED, on disk right now
+
+| What | Where | State |
+|---|---|---|
+| **C's spec 100 criteria bodies** | `scripts/verify.py`, `tests/verify/test_phase6_criteria.py`, `tests/verify/test_runner.py` | complete, swept; 5 criteria PASS, 1 PENDING, 4 FAIL on the exit-cycle row |
+| **B's spec 113 v2** | `engines/exit/`, `engines/position_manager/`, `clients/store/`, `db/migrations/0005_equity_cash_source.sql`, their tests | complete, swept, reported |
+| **C's spec 114** | `engines/memory/`, `tests/engines/test_memory_rows.py` | **in progress** |
+| **Lead documents** | `context/engine-contracts.md`, `ownership.md`, `architecture-context.md`, `progress-tracker.md`, `docs/build-log/phase-6/*`, `feature-specs/109–116` | committed in the commit carrying this handoff (docs-only, D4 rule) |
+
+**No full gate has run since `dd9ea39`.** The code above is ungated. The authoritative gate runs
+after spec 114 and 116, and is now **mypy + ruff, then `verify.py --phase 6` only** — the separate
+`pytest tests/ -q` is retired (operator, 2026-09-17: `toolchain_green` runs the identical command;
+the test count comes from its attempt log, and spec 115 will put it in the PASS message).
+
+### The nine Phase 6 criteria, plus two
+
+| Criterion | Real tree |
+|---|---|
+| `unfilled_entry_cancels_without_chasing` | **PASS** |
+| `escalation_completes_during_outage` | **PASS** (both legs: positions via `safety`'s escalation, the resting-entry cancel via an operator `close_all`) |
+| `order_book_slippage_on_recorded_book` | **PASS** |
+| `adaptive_router_weights_on_fixture` | **PASS** |
+| `paper_equity_continuous_across_fill` (spec 105, now on `bootstrap.build_chains()`) | **PASS** |
+| `paper_trade_round_trip_target` / `_stop` / `_timeout` | **FAIL** — the exit-cycle equity row |
+| `triggered_stop_holds_on_data_guard_block` | **FAIL** — same cause |
+| `equity_row_never_values_positions_it_does_not_hold` (new) | **FAIL** on purpose, until the fix |
+| `console_shows_position_live` | **PENDING**, naming spec 101 |
+
+**The one defect behind every FAIL.** On the tick engine 22 sells, engine 19's equity row mixed
+three moments: engine 1's start-of-tick cash, engine 21's pre-sale valuation, and the store's
+post-sale position count. Operator ruling (one earlier design withdrawn): engine 22 publishes
+`net_proceeds` per closed trade, engine 21 publishes `value` per marked position row, and engine 19
+**filters and sums** — drop the closed `position_id`s, sum the rest, add the proceeds to engine 1's
+cash — recording `cash_source`. The rule is in `context/engine-contracts.md`.
+
+**The tree is red on 26 tests right now**, every one because engine 19 has not yet accepted the two
+new payload keys (`_Row` is `extra="forbid"`): 20 in `tests/verify/test_phase6_criteria.py`, 5 in
+A's `tests/engines/test_trade_chain_rehearsal.py`, 1 in B's `tests/engines/test_position_manager.py`.
+
+### Mutation survivors, all three now killed
+
+- **V8** — engine 9's walk compared by level count only. Killed by arms that keep the level count
+  and move the price.
+- **V12** — the trained subject's cache key made constant; the tests checked what the criteria
+  *said*, not what they *read*. Killed by a copied tree whose different training must be judged on
+  its own subject. No other criterion has this shape.
+- **V1** — the "every registered gate ran" check could be disabled unnoticed, because the committed
+  orchestrator never skips a gate. **A real hole.** Killed by an arm whose orchestrator skips them.
+
+### The exact next three steps
+
+1. **C finishes spec 114** (engine 19: accept the two payload keys as facts, strip them before the
+   stored-row validation, build the exit-cycle row, write `cash_source`, the partial-mark test —
+   a *remaining* unmarked position means **no** row — and the new criterion's FAIL arm).
+2. **A does spec 116**: its rehearsal re-derives the ruled equity expectation independently (not a
+   copy of engine 19's code), and strips the two keys before validating.
+3. **The lead gates once** (mypy + ruff + `verify.py --phase 6`) and **commits everything above in
+   one commit**, then reports to the operator.
+
+Then: B's 111 (remove `CostAssessment.fallbacks_used`), 112 (the window/escalation config test),
+110; C's 115; C's 101 (the console, which turns the ninth criterion green); the seed-vocabulary
+reconciliation (B then C); A's 109. **Do not close the phase**: when the nine criteria are green,
+report and stop — the operator wants to see the first paper trade.
+
+### Standing rules in force
+
+One agent in the tree at a time. A gate immediately before every commit, and the agent's records
+must be on disk before the commit, not only its logs. Push notification to the operator **only**
+when blocked on a ruling. Decisions taken while the operator was asleep, with the rejected option
+for each, are in `docs/build-log/phase-6/overnight-decisions-2026-09-17.md`; open questions Q1
+(engine 10's unused `fallbacks_used`, ruled: remove, spec 111) and Q2 (ruled: spec 112's test) are
+closed there.
+
 ## HANDOFF 5, 2026-09-17 ~10:15 local — engines registered; the operator is asleep and the lead runs unattended
 
 **Read this first. HANDOFF 4 and earlier are history.**

@@ -5,6 +5,51 @@ Never edit the tracker directly.
 
 ## Current Task
 
+### CLAIM 2026-09-17 — spec 114, the exit-cycle equity row (Agent C, Interface and models, Opus 5 1M)
+
+Written before any code. Assigned by the lead from the operator's ruling of 2026-09-17 on Q-C1,
+following B's spec 113. The only agent in the checkout. No commits, no registration, no `core/`,
+`bootstrap.py`, `config/`, `context/*` (except this file), `clients/**`, engines 21 or 22, or A's
+and B's tests. Cross-lane mutations only from a byte copy, restored with sha256 compared in the
+same statement, `PYTHONDONTWRITEBYTECODE=1`, and a pytest summary line required for every verdict.
+
+| Spec | Files I will touch |
+|---|---|
+| **114** — engine 19 builds the exit-cycle equity row by filtering and summing, and records `cash_source` | `src/acsoe/engines/memory/{engine.py,contracts.py,README.md}`, `tests/engines/test_memory_rows.py`, `tests/verify/test_phase6_criteria.py` (the FAIL arm), `scripts/verify.py` only if a criterion message must move |
+
+**The tree is red on 26 tests at claim time**, every one of them engine 19 refusing spec 113's two
+new payload keys (`PositionRow` and `TradeRow` are `extra="forbid"`): 5 in
+`tests/engines/test_trade_chain_rehearsal.py` (A's), 20 in `tests/verify/test_phase6_criteria.py`,
+1 in `tests/engines/test_position_manager.py` (B's). All 26 must be green when this is done.
+
+Records: this file and `docs/build-log/phase-6/c-interface.md`. Logs under `logs/verify/c114-*`;
+scratch under the session scratchpad.
+
+#### 114 — IN PROGRESS
+
+**Engine 19 accepts the two payload keys and builds the exit-cycle row.** `value` comes off the
+position row and `net_proceeds` off the trade row before the stored row is validated; neither
+became a column and `extra="forbid"` is untouched for everything else. On a tick where engine 22
+closed positions the row is engine 21's rows minus the closed `position_id`s, summed, plus engine
+22's net proceeds on engine 1's cash, `cash_source = 'after_exit'`; on every other tick the totals
+as before, `'cycle_start'`.
+
+**Two how-choices, reported to the lead** (build log, "three ways the exit-cycle row can be a
+plausible lie"): a closed trade with no `net_proceeds`, and engine 21's remaining rows not
+covering what the store says the account still holds, both skip the row with the reason recorded,
+exactly as the operator's named partial-mark case does. Both can only write fewer rows.
+
+**STOP-AND-REPORT #1, sent to the lead: the 5 reds in `tests/engines/test_trade_chain_rehearsal.py`
+are not fixable from engine 19.** A's `check_recorded` builds its *expectation* by re-validating
+the published payload through `PositionRow` / `TradeRow`, so it hits `extra="forbid"` on its own
+account, and its equity block asserts the pre-exit reading directly. Probed by byte copy with a
+three-anchor patch (strip `value`; strip `net_proceeds`; the exit-tick arithmetic in the equity
+block): `7 passed in 65.72s`, file restored, sha256 `79cc6747dfe3` before and after, nothing left
+on disk. **A's file, not changed by me.** The patch text is in the session scratchpad at
+`probe_rehearsal.py`.
+
+**FINDING for the lead, on B's `cash_source` default** — see the final report.
+
 ### CLAIM 2026-09-17 — spec 107, then the spec 100 criteria bodies (Agent C, Interface and models, Opus 5 1M)
 
 Written before any code. Assigned by the lead under HANDOFF 5 (operator asleep, unattended
@@ -31,6 +76,70 @@ copied tree. Sweep: S1 and S2 were killed by the new test, and control S0 surviv
 wide (the failing set was the known 8). Next: the criteria bodies, on the lead's go-ahead (the lead
 ruled 2026-09-17 on the balance mechanism and the resting-entry leg; see the build log). `tests/verify` wide: only the known 8 fail. ruff and mypy are clean.
 Full account in the build log.
+
+#### 100 bodies — IN PROGRESS, one what-choice raised to the lead (2026-09-17)
+
+**Open question Q-C1, the exit tick's equity row** (build log, "FINDING, spec 100 bodies").
+On the tick engine 22 sells, engine 19 writes `equity = pre-exit cash + pre-exit
+positions_value` with `open_position_count` 0. That overstates the account by the exit fee
+plus the mark-to-fill gap, and on a target exit it can raise `peak_equity`. Three criteria
+FAIL on it: the target and stop round trips, and the held stop.
+
+- **(a) Recommended:** engine 19 composes the post-exit account on a tick where engine 22
+  closed positions. Cash gains the proceeds minus the exit fee of the trades it records this
+  tick, and positions_value loses engine 21's mark of those positions. That is a small spec in
+  lane C (engine 19). The criteria keep the requirement and turn PASS once it lands.
+  *Case against:* engine 19 then computes an account figure from two publishers instead of
+  copying one, which is the kind of arithmetic the single-writer rule keeps thin.
+- **(b)** Accept a one-tick lag. The criterion asserts that the exit tick's row is the
+  pre-exit valuation and the next tick's row is the post-exit account. *Case against:* it
+  enshrines a row with 0 open positions and a non-zero positions value, and a peak the account
+  never held. It is a cheaper assertion that proves less, so it is not mine to choose.
+- **(c)** Reconcile only the next tick's row. It proves less than (b); not recommended.
+
+Until the lead rules, the three criteria report FAIL on the real tree. The other six are done
+or in test (see below).
+
+**Q-C1 ruled (operator, 2026-09-17).** Engine 22 publishes the post-exit figures (B, spec 113),
+and engine 19 uses them and records the cash source (C, spec 114, migration 0005). The three
+criteria keep their assertion. A new criterion,
+`equity_row_never_values_positions_it_does_not_hold`, is registered and was **observed FAIL** on
+the current code (build log). Engines 19 and 22 are untouched.
+
+**State per criterion, on the real registered tree:**
+
+| Criterion | State |
+|---|---|
+| `paper_trade_round_trip_target` | FAIL, waiting on 113/114 (exit-tick equity row). Arm killed |
+| `paper_trade_round_trip_stop` | FAIL, waiting on 113/114. Two arms killed |
+| `paper_trade_round_trip_timeout` | FAIL, waiting on 113/114. Arm killed; cadence changed to cut 436 s to 38 s |
+| `unfilled_entry_cancels_without_chasing` | PASS. Arm killed |
+| `triggered_stop_holds_on_data_guard_block` | FAIL, waiting on 113/114. Two arms killed |
+| `escalation_completes_during_outage` | PASS, both legs. Three arms killed |
+| `console_shows_position_live` | PENDING on spec 101 (`PositionView` has no `hold_reason`) |
+| `order_book_slippage_on_recorded_book` | PASS. Two arms killed |
+| `adaptive_router_weights_on_fixture` | PASS. Two arms killed |
+| `paper_equity_continuous_across_fill` | PASS, now on `build_chains()` |
+| `equity_row_never_values_positions_it_does_not_hold` | FAIL on current code, as intended; turns PASS with 113/114 |
+
+**Engine arms:** 19 committed in `MUTATIONS`, each killed by its own parametrisation.
+**Criterion sweep over `verify.py`:** 15 weakenings and a control. Round 1 killed 11 (V1, V8, V12 and
+V13 survived). Rounds 2 and 3 killed all four after new assertions, and V1b was added and
+killed. The control C0 survived both rounds, as required. V1 was a real hole (an orchestrator
+that skips a gate), not an equivalent mutant. The build log has every table.
+
+**Findings raised:** Q-C1, the exit-tick equity row (ruled; specs 113 and 114).
+`research/labelling.py` is wholly CRLF in the working tree (lane C, outside this task's write
+list; not changed). The heredoc lesson recurred twice (build log).
+
+**Final run:** `pytest tests/verify`: `5 failed, 417 passed` in 760 s. The five are the known
+reds waiting on 113/114 (`logs/verify/c100c-verify-wide-final.log`).
+
+**STOPPED 2026-09-17, on the lead's instruction.** B takes the tree for spec 113. Nothing is
+running and no mutant is on disk (`verify.py` sha256 `c73034fe…`). Next for C: spec 114
+(engine 19 reads engine 22's post-exit figures and records `cash_source`), then spec 101.
+
+**Not committed.** The lead commits once 113 and 114 make the real-tree tests green.
 
 CRLF at claim time (Python byte count): every file above is 0 CRLF except
 `tests/verify/conftest.py`, which is 811 CRLF / 0 LF in the working tree (not planned to be

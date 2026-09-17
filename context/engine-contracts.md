@@ -278,6 +278,20 @@ Most of an engine's `data` is its own business, typed in its own `contracts.py`.
 | `state["prediction"]["is_buy"]` | 8 `prediction` (C) | 15 `skeptic` (C), 14 `adaptive_router` (C, Phase 6) | Whether the scored model called a BUY. **Absent when no model scored** — which is every refusal — so a consumer cannot read "engine 8 made no call" as "not a BUY". Phase 6, spec 95: it was `bool = False` published unconditionally, and engine 14 is its first reader outside a gate |
 | `state["prediction"]["di"]`, `["di_threshold"]` | 8 `prediction` (C) | 14 `adaptive_router` (C, Phase 6), console | The Dissimilarity Index of this candidate against the active model's reference set. A refusal is a `BLOCK` with reason code `di_refused` and **no** `expected_move_pct`, so engine 10 fails closed on the absent key |
 | `state["regime"]["label"]` | 12 `regime` (C) | 14 `adaptive_router` (C, Phase 6), console | `trending`, `choppy`, `high_volatility`, or `null` with a reason |
+| `state["exit"]["closed_trades"][*]["net_proceeds"]` | 22 `exit` (B) | 19 `memory` (C) | Per closed trade, `qty × exit_price − exit_fee` as an exact decimal string: a fact about a sale engine 22 executed. Phase 6, spec 113, operator ruling 2026-09-17 |
+| `state["position_manager"]["positions"][*]["value"]` | 21 `position_manager` (B) | 19 `memory` (C) | Per open position, `qty × last_price` as an exact decimal string, **present exactly when `last_price` is**. The per-row values sum to `positions_value` whenever that total is present. Phase 6, spec 113 |
+
+**The exit-cycle equity row, ruled by the operator 2026-09-17.** On a tick where engine 22 closed
+positions, engine 19's equity row must describe the account *after* those sales. Engine 1's balance
+is from the start of the tick, engine 21's valuation is from before the sale, and the store's
+position count is from after it — three moments that never coexisted, which is how the row came to
+read 0 open positions beside a non-zero positions value. So on an exit tick engine 19 **filters and
+sums**: engine 21's position rows minus every `position_id` engine 22 closed, and engine 1's cash
+plus engine 22's `net_proceeds`; on every other tick it uses the totals as before. A remaining
+position with no `value` means no equity row, exactly as an absent total does. The row records
+`cash_source` (`cycle_start` or `after_exit`). No engine reads another engine's valuation method,
+and no engine publishes a figure about positions it did not touch — an earlier design in which
+engine 22 subtracted engine 21's marks was withdrawn for exactly that coupling.
 
 **On the last four, added 2026-09-09.** B built engine 10 needing all four and could read only the fee tier's location from a spec, so it proposed paths as `Final` constants under a heading marking them unratified rather than inventing behaviour. Three are ratified as proposed. The fourth is **re-pointed**: B proposed `state["exchange"]["pairs"][pair]["spread_pct"]`, and it belongs on engine 3, not engine 1.
 

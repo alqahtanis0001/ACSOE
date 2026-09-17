@@ -1,5 +1,73 @@
 # Agent B — Store and trading
 
+## Phase 6, session 7 — CLAIMED 2026-09-17, spec 113 (version 2)
+
+Claimed before any code, per rule 1. HEAD `dd9ea39`; the working tree carries C's spec 100
+criteria bodies (`scripts/verify.py`, `tests/verify/*`) and lead docs, uncommitted and not mine.
+Known red in `tests/verify` with them: 5 tests, all waiting on specs 113/114.
+
+**Spec 113 v2 — the facts engine 19 needs for the exit-cycle equity row** (operator ruling
+2026-09-17 on Q-C1; the first version, engine 22 subtracting engine 21's marks, was withdrawn).
+
+1. Engine 22: `net_proceeds = qty × exit_price − exit_fee` on every `closed_trades` row, from
+   that row's own fields only.
+2. Engine 21: `value = qty × last_price` on every position row carrying `last_price`, absent
+   otherwise. Totals unchanged.
+3. Migration 0005: `equity_snapshots.cash_source` (`cycle_start` | `after_exit`), backfilled
+   `cycle_start`; `EquityRow.cash_source`; the seed writes `cycle_start`.
+4. Tests, including a sum test proven capable of failing; mutations from byte copies.
+
+**Line endings measured in Python at claim time:** `clients/store/seed.py` 1276 CRLF / 0 LF
+(kept CRLF, byte-level edit). Every other file on my write list for this spec is pure LF:
+engines 21 and 22 (`engine.py`, `contracts.py`, `README.md`), `clients/store/{contracts,client}.py`,
+migrations 0001-0004, `tests/db/test_migrations.py`, `tests/clients/store/*.py`,
+`tests/engines/test_{exit,position_manager}.py`, and both records.
+
+Records: this file and `docs/build-log/phase-6/b-store.md`. Scratch `...\scratchpad\b113\`;
+logs `logs/verify/b113-*`. Not touched: engine 19, `core/`, `bootstrap.py`, `context/*`, other
+lanes, the recorder processes. No commit.
+
+### Spec 113 — DONE 2026-09-17, not committed (the lead commits)
+
+- **Engine 22** publishes `net_proceeds` (`qty * exit_price - exit_fee`) on every
+  `closed_trades` row, from that row's own fields. **Engine 21** publishes `value`
+  (`qty * last_price`) on every row that carries `last_price` and on no other. The totals,
+  and when they are omitted, are unchanged. **Migration 0005** adds
+  `equity_snapshots.cash_source` (`cycle_start` | `after_exit`, CHECK, NOT NULL, existing rows
+  backfilled `cycle_start`); `EquitySnapshotRow.cash_source` and `CashSource`; the seed writes
+  `cycle_start`.
+- **Reported, not changed — engine 19 refuses both new keys.** `_Row` is `extra="forbid"`, so
+  `PositionRow.model_validate` (`engines/memory/engine.py:387`) and `TradeRow.model_validate`
+  (`:420`) raise `extra_forbidden`, engine 19 records nothing on the tick, and every test that
+  runs engine 21 or 22 into the real engine 19 is red until spec 114 (C) accepts them. Measured:
+  `logs/verify/b113-engine19-refusal.log`. Engine 19 not edited; the lead was told at the time.
+- **The tree's red, measured: 26 tests**, all of them that refusal — A's five rehearsal tests,
+  20 in `tests/verify/test_phase6_criteria.py`, and my own spec 106 fill-tick test. No other
+  cause found.
+- **Mutations:** ten arms, eight killed by the tests written for them, two controls (N0, V0)
+  behaviourally survived the whole suite — both `26 failed, 3243 passed, 2 skipped`, the **same
+  26 tests** in both arms, both restored by hash (`c131dabea938…`, `0a68c73b23ee…`), and the set
+  equal to the measured baseline with an empty difference either way. The operator's sum test
+  was run **on its own** under the three arms that make the rows and the total disagree, and
+  failed each time: V2 (row value from `entry_price`) `3 failed, 1 passed`; V3 (total leaves
+  this tick's fill out) `2 failed, 2 passed`; V3b (total leaves the first stored position out)
+  `3 failed, 1 passed`. The passing case each time is the one the mutation cannot reach.
+  V1 needed a re-run: the first exited 0xC0000005 with no summary line, so the harness refused a
+  verdict. The build log has the table, the how-choices with their rejected options, and the
+  caveat that the wide baseline is the union of two unmutated runs rather than one.
+- **Line endings:** `clients/store/seed.py` kept CRLF (1281 CRLF / 0 LF), edited through an LF
+  view and written back; every other file I touched is pure LF and stayed so. All eleven
+  `tests/verify/test_phase6_criteria.py` patcher anchors on engines 21 and 22 (nine distinct
+  lines; two arms share the hold line) still match exactly once, checked in Python, and
+  `test_phase3_criteria.py` + `test_phase4_criteria.py` are `95 passed`.
+- **Gate in my lane:** `ruff check src/ tests/ scripts/` `All checks passed!`;
+  `mypy --strict src/ scripts/` `Success: no issues found in 153 source files`;
+  `tests/db` + `tests/clients/store` `271 passed`; my two engine files `1 failed, 103 passed`
+  (the refusal). No full gate from me, by instruction.
+- **For spec 114:** `EquitySnapshotRow.cash_source` defaults to `CashSource.CYCLE_START` so
+  engine 19 keeps working today. **Remove the default once engine 19 writes the field on every
+  row**, or a writer that forgets it gets `cycle_start` silently.
+
 ## Phase 6, session 6 — CLAIMED 2026-09-17, spec 108
 
 Tree clean at `69038a7` when claimed. Claimed before any edit, per rule 1. Step 0 of the spec

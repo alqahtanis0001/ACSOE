@@ -142,7 +142,7 @@ Engine 9 (order book) and the spread component of Engine 10 cannot be backtested
 | Trades, rejections, runs, leaderboard | SQLite | Small, relational, queried constantly |
 | Open and closed positions | SQLite, table `positions` | What the console renders and what `safety` counts |
 | Orders, including resting entries | SQLite, table `orders` | Keyed by `userref`; a resting post-only buy lives here |
-| Equity series | SQLite, table `equity_snapshots` | One row per tick. Feeds `safety`'s drawdown and the Phase 7 alpha curve, which needs cash periods too |
+| Equity series | SQLite, table `equity_snapshots` | One row per tick. Feeds `safety`'s drawdown and the Phase 7 alpha curve, which needs cash periods too. `cash_source` (migration 0005) says whether the row's cash is engine 1's start-of-tick balance (`cycle_start`) or that balance plus the proceeds of this tick's exits (`after_exit`) — see the exit-cycle rule in `engine-contracts.md` |
 | Block records | SQLite, table `block_records` | One row per guard blocker per **tick**, plus one for an opportunity-chain engine that errored (invariant 12). Not a column on `rejections` — see below |
 | Trained models | Files in `models/` | Versioned by training run id, never overwritten |
 | SHAP explanations | Parquet, joined by decision id | One row per decision |

@@ -2531,3 +2531,273 @@ Run one after another, each to its own file, with nothing else of mine running. 
 
 Committed by the lead as `40bbc6b`, which went in before this gate finished. This entry was
 written afterwards at the lead's request.
+
+### Spec 113, diagnosis — what engines 21 and 22 must publish, and the one thing engine 19 will refuse
+
+**Agent:** B (session 7) · **Task:** spec 113 (version 2) · **Date:** 2026-09-17
+
+**What happened.** C's spec 100 criteria are the first code to run a whole paper trade through
+the registered chain. On the exit tick, engine 19's equity row mixed three moments: cash from
+engine 1 at the start of the tick, positions value from engine 21 before the sale, and the open
+position count from the store after it. The operator ruled (Q-C1): each engine publishes only
+what it knows, and engine 19 builds the exit-tick row by filtering and summing. B's part is
+three facts: a sale's net proceeds (engine 22), a position's value (engine 21), and a column
+saying where a row's cash came from (migration 0005).
+
+**Read in the code, not the spec.**
+
+- Engine 22, `ExitEngine._trade_row` (`engines/exit/engine.py`): `qty` is the client's
+  `filled_qty`, `exit_price` its `avg_fill_price`, and `exit_fee` its `fee`. The row already
+  computes `proceeds = qty * exit_price`, so `net_proceeds = proceeds - exit_fee` uses exactly
+  the numbers the row carries. `format(x, "f")` round-trips a `Decimal` exactly, so these
+  locals are the row's own fields. Engine 22 reads no balance and no engine 21 total for this.
+- Engine 21, `PositionManagerEngine._mark` (`engines/position_manager/engine.py`): a stored
+  position gets `last_price` and `unrealised_pnl` only when `_bid` answers. A position opened
+  by this tick's fill always gets `last_price` = fill price (spec 106). The totals are
+  `value += qty * mark`, in two loops. `value` goes beside `last_price` in both loops, and
+  nowhere else.
+- The equity model is **`EquitySnapshotRow`** (`clients/store/contracts.py`), not the
+  `EquityRow` the spec names. The store writes it with `_insert(model_dump())`, so a new model
+  field is a new column in every insert. Engine 19 builds it with keyword arguments and no
+  `cash_source` (`engines/memory/engine.py:603`).
+- `ALTER TABLE ... ADD COLUMN ... NOT NULL` in SQLite needs a non-null `DEFAULT`, so migration
+  0005's form is decided by the engine: `DEFAULT 'cycle_start'`, which also backfills the
+  existing rows.
+
+**Why engine 19 will refuse both new keys.** Every store row model inherits `_Row`, whose
+`model_config` is `extra="forbid"`. Engine 19 passes the publishers' dicts straight to it:
+`store.write_position(PositionRow.model_validate(stamped))` (`engines/memory/engine.py:387`)
+and `TradeRow.model_validate(self._stamped(row, ...))` (`engines/memory/engine.py:420`). A
+position row carrying `value` or a trade row carrying `net_proceeds` raises
+`ValidationError: Extra inputs are not permitted`. `MemoryEngine.process` does not catch it,
+so contract rule 7 turns the tick into `ERROR` and **nothing** is recorded on it: no position,
+no order, no trade, no equity row. That happens on every tick with a marked position. Engine 19
+is C's. The operator approved C accepting the keys in spec 114, so B reports this and does not
+edit engine 19. The alternative in B's lane, adding `value` and `net_proceeds` to `PositionRow`
+and `TradeRow`, would make them columns (`_upsert` writes every field) with no migration. It is
+rejected. So between spec 113 and spec 114, every test that runs engine 21 or 22 into the real
+engine 19 is expected to go red. That includes my own spec 106 test
+`test_a_position_opened_by_this_ticks_fill_is_stored_marked_at_its_fill_price`. The next entry
+measures it.
+
+**Line endings.** `clients/store/seed.py` is 1276 CRLF / 0 LF and stays CRLF: it gets a
+byte-level edit. Every other file on this spec's write list is pure LF.
+
+**Anchors to keep at exactly one occurrence** (`tests/verify/test_phase6_criteria.py`):
+engine 21's `position_row["last_price"] = format(mark, "f")`,
+`bid = _money(quote[QUOTE_BID_FIELD])`, the target, timeout, hold, cancel and `close_intent`
+lines; engine 22's `realised = proceeds - cost_basis - entry_fee - exit_fee`,
+`return system.get(CLOSE_INTENT_FIELD) is True` and `if not close_intent:`. The new lines are
+written so that none of them repeats an anchor.
+
+### Spec 113, fix — `net_proceeds` on each sale, `value` on each marked position, `cash_source` on each equity row
+
+**Agent:** B (session 7) · **Task:** spec 113 (version 2) · **Date:** 2026-09-17
+
+**Fix.**
+
+- Engine 22, `_trade_row`: `NET_PROCEEDS_FIELD: format(proceeds - exit_fee, "f")`, where
+  `proceeds = qty * exit_price` is the line the row already had. The constant
+  (`"net_proceeds"`) is in `engines/exit/contracts.py`, with the reason it reads no other
+  engine. The README's trade-row section says the same.
+- Engine 21, `_mark`: `row[POSITION_VALUE_FIELD] = format(position.qty * bid, "f")` beside the
+  stored row's `last_price`, and `position_row[POSITION_VALUE_FIELD] = format(qty * mark, "f")`
+  beside the fill-tick row's. Neither is written on a row without a mark. The two `value +=`
+  lines are unchanged, and so is when the totals are omitted. The constant (`"value"`) is in
+  `engines/position_manager/contracts.py`, and the README gained a paragraph.
+- `db/migrations/0005_equity_cash_source.sql`: `ALTER TABLE equity_snapshots ADD COLUMN
+  cash_source TEXT NOT NULL DEFAULT 'cycle_start' CHECK (cash_source IN ('cycle_start',
+  'after_exit'))`. The default is the backfill. `EXPECTED_TABLES` and `EXPECTED_INDEXES` are
+  unchanged, because no table or index was added.
+- `clients/store/contracts.py`: `CashSource(StrEnum)` with `CYCLE_START` and `AFTER_EXIT`, and
+  `EquitySnapshotRow.cash_source: CashSource = CashSource.CYCLE_START`. Exported from
+  `clients/store/__init__.py`. `_to_sql` already writes an enum's value, and `_row_to_dict`
+  hands the text back for pydantic to validate.
+- `clients/store/seed.py` passes `cash_source=CashSource.CYCLE_START` explicitly. The file is
+  CRLF and stays CRLF (1276 lines before, 1281 CRLF / 0 LF after). The edit was made on an LF
+  view with every anchor counted once, then written back with CRLF. A diff against the byte copy
+  shows only the import line and the four added lines.
+
+**How-choices, with the option rejected.**
+
+- **`cash_source` defaults to `cycle_start` in the model.** Rejected: making it required.
+  Engine 19 builds `EquitySnapshotRow` by keyword without the field
+  (`engines/memory/engine.py:603`), so a required field raises on every tick and no equity
+  row is written until spec 114. The default is also the true label for everything engine
+  19 writes today. The risk is the one `code-standards.md` names: a model default can
+  satisfy an assertion on your behalf. So the store test asserts the stored text for
+  `after_exit`, and the docstring says the default should go once engine 19 passes the
+  field. **Recommendation for spec 114: remove the default when engine 19 writes the field
+  on every row.**
+- **A `StrEnum`, not a bare `str` with a validator.** Rejected: `str` plus a
+  `field_validator`. Every other closed set in this module is an enum (`BlockStatus`,
+  `PositionStatus`, `OrderStatus`), and C's spec 114 gets a name to import rather than
+  spelling `"after_exit"` by hand.
+- **`NOT NULL DEFAULT` in the migration.** Rejected: a nullable column, which would be a third
+  answer meaning "not recorded", and a table rebuild to get NOT NULL without a default, which
+  must recreate `ux_equity_snapshots_tick` and gains nothing, because every write goes through
+  the model. The reasons are written in the migration itself.
+- **A closed CHECK.** 0003 refused to enumerate hold reasons. The difference is written in
+  0005: two values answer a yes-or-no question, and a third would be a new design.
+- **Each row's value is computed beside its total, not the total from the rows.** Rejected:
+  `value += row_value`, which would make the rows and the total agree by construction. That
+  would change how `positions_value` is computed, which spec 113 rules out. It would also
+  leave the operator's sum test comparing one number with itself, the shape the operator
+  warned against.
+- **`net_proceeds` from the locals, not re-parsed from the row's strings.** `format(x, "f")`
+  of a `Decimal` parses back to the same `Decimal`, so the locals *are* the row's fields.
+  The test checks the claim by recomputing from the strings.
+- **Named constants** (`NET_PROCEEDS_FIELD`, `POSITION_VALUE_FIELD`), because both contracts
+  modules say every cross-engine key is a `Final`. Neither can yet be pinned against
+  `engines/memory/contracts.py`, which does not name them until spec 114. That pin belongs
+  to spec 114, beside the existing `test_the_field_names_are_the_ones_engine_nineteen_reads`.
+
+**Tests.**
+
+- `tests/engines/test_exit.py`:
+  - `test_the_net_proceeds_are_the_rows_own_qty_times_exit_price_less_its_exit_fee`:
+    recomputed from the row's strings and from the fixture (10 × 99.99 less the tier 3
+    taker fee), and not equal to the figure less the entry fee as well.
+  - `test_the_net_proceeds_read_neither_engine_twenty_ones_valuation_nor_the_balance`: the
+    same sale is run twice, the second time with engine 21's totals and marks replaced and
+    engine 1's `balances` removed, and the figure is unchanged. The exit order is recorded
+    between the runs, as in the run-twice test. My first draft did not do this, and the
+    second run was refused a second placement under the same `userref` (0 closed trades).
+- `tests/engines/test_position_manager.py`:
+  - `MARKED_TICKS` has four shapes: one stored position; two stored positions at two bids
+    (SOL 99.99 against entry 99.00, BTC 60000.50 against entry 59000); a stored position
+    plus this tick's fill; a fill alone.
+  - `test_every_marked_row_carries_its_value_recomputed_from_its_own_fields[4]`.
+  - `test_each_row_is_valued_at_its_own_mark_and_not_its_entry`: pinned to the numbers.
+  - `test_value_is_present_exactly_when_last_price_is`: a partial mark, with BTC unquoted
+    and a SOL fill. BTC has neither field, the fill row has both, and the totals are
+    absent.
+  - **`test_the_row_values_sum_exactly_to_positions_value_whenever_it_is_present[4]`**, the
+    operator's sum test. It also requires every row to carry a value whenever the total is
+    present.
+  - `test_a_position_with_no_quote_carries_no_last_price` now also asserts that there is no
+    `value`.
+- `tests/db/test_migrations.py`, a 0005 section:
+  - both values accepted;
+  - blank, upper case, a third value, a trailing space and NULL all refused;
+  - **the backfill, measured**: migrations 1-4 applied from a copy of the real directory,
+    two rows written before the column exists, 0005 applied alone (`== [5]`), both rows
+    read `cycle_start`, and their money is untouched;
+  - the one-row-per-tick index still fires, and the column is `TEXT` and not a money
+    column.
+  - The "at least N migrations" floor went from 4 to 5.
+- `tests/clients/store/test_store.py`: the round trip for both values, including the stored
+  text; the model default; the refusal matched on the constraint, not on the name.
+- `tests/clients/store/test_seed.py`: every seeded row is `cycle_start`.
+
+**What the neighbours said** (`logs/verify/b113-*`):
+
+- My two engine files: `1 failed, 103 passed`. The one is
+  `test_a_position_opened_by_this_ticks_fill_is_stored_marked_at_its_fill_price`, the engine 19
+  refusal (`b113-engines-second.log`, and `b113-engine19-refusal.log` for the traceback).
+- `tests/db` + `tests/clients/store`: `271 passed` (`b113-store-first.log`).
+- `tests/engines/test_memory*.py`, read only: `50 passed` (`b113-memory.log`). They build their
+  own payloads, so they cannot see the refusal.
+- `tests/verify/test_phase3_criteria.py` + `test_phase4_criteria.py`: `95 passed`
+  (`b113-phase34.log`).
+- A's rehearsal + `tests/verify/test_phase6_criteria.py` + `test_runner.py`:
+  `25 failed, 74 passed` in 375.53s (`b113-neighbours.log`). The lead's baseline was 5 known.
+  The other 20 are all the refusal:
+  - A's five rehearsal tests say "engine 19 raised on this tick".
+  - Every criterion message reads "a trade below the limit … did not fill it: the stored order
+    is 'resting'": engine 19 raised on the fill tick, so the fill was never recorded.
+  - That covers the five real-tree criteria. `escalation_completes_during_outage` is new red
+    among them, while target, stop, timeout and held stop were already known.
+  - It also covers the four equity-across-fill tests and ten of the `MUTATIONS` arms, whose
+    criteria fail earlier than the fragment they expect.
+  - All of it turns green only when engine 19 accepts the keys (spec 114). Engine 19 is not
+    edited here.
+- `ruff check src/ tests/ scripts/`: `All checks passed!`, after fixing my own seven findings:
+  `×`/`−` in new comments, one import order, and one non-raw `match=`.
+- `mypy --strict src/ scripts/`: `Success: no issues found in 153 source files`.
+
+### Spec 113 — ten mutations: eight killed by the tests written for them, two controls, and the sum test proven red on its own
+
+**Agent:** B (session 7) · **Task:** spec 113 steps 5 and 6 · **Date:** 2026-09-17
+
+Harness: `scratchpad/b113/sweep113.py`, on spec 106's machinery — byte copy to scratch, the
+anchor refused unless it appears exactly once, `PYTHONDONTWRITEBYTECODE=1`,
+`-p no:cacheprovider`, `sys.executable`, the restore in a `finally` **before** the next arm with
+the sha256 compared in the same statement, and no verdict without a pytest summary line. Both
+engine files are pure LF, so the anchors carry bare `\n`. Hashes before the sweep and after every
+arm, identical throughout: `engines/position_manager/engine.py` `c131dabea938…58fac`,
+`engines/exit/engine.py` `0a68c73b23ee…f8c2a`
+(`logs/verify/b113-sweep-hashes-before.txt`). Narrow targets:
+`tests/engines/test_position_manager.py` and `tests/engines/test_exit.py`. Logs
+`logs/verify/b113-sweep-*`.
+
+**The narrow baseline is `1 failed, 103 passed`**, and that one failure is the engine 19
+refusal (`…fill_is_stored_marked_at_its_fill_price`). It appears in every arm below and is
+never the kill. **Controls chosen after grepping `tests/` and `scripts/` for their line text**:
+`format(qty * mark, "f")` and `format(proceeds - exit_fee, "f")` appear in no patcher; the only
+hits are two assertions inside my own new exit test, which are expressions and not anchors.
+
+| Arm | Mutation | Verdict (narrow) | Killing test — written for it |
+|---|---|---|---|
+| N0 | `proceeds - exit_fee` → `-exit_fee + proceeds` — **control** | survived, `1 failed` (the baseline) | — |
+| N1 | net proceeds without the exit fee | killed, `2 failed` | `test_the_net_proceeds_are_the_rows_own_qty_times_exit_price_less_its_exit_fee` |
+| N2 | net proceeds less the entry fee as well | killed, `2 failed` | the same test, at its `!=` assertion |
+| V0 | fill-tick row valued at `entry_price`, which **is** its mark — **control, equivalent** | survived, `1 failed` (the baseline) | — |
+| V1 | a value at cost on a row with no mark | killed, `3 failed` | `test_value_is_present_exactly_when_last_price_is`, and `test_a_position_with_no_quote_carries_no_last_price` |
+| V1b | a value of `"0"` on a row with no mark | killed, `3 failed` | the same two |
+| V2 | stored row value from `entry_price` while the total uses the bid | killed, `8 failed` | **the sum test, 3 of its 4 cases**; also the recompute test (3 cases) and `test_each_row_is_valued_at_its_own_mark_and_not_its_entry` |
+| V3 | the total left this tick's fill out | killed, `4 failed` | **the sum test, 2 of its 4 cases**; also `…fill_is_counted_in_the_portfolio_value` (spec 106's) |
+| V3b | the total left the first stored position out | killed, `5 failed` | **the sum test, 3 of its 4 cases**; also `test_a_position_is_marked_at_the_bid` |
+| V4 | the fill-tick row carries no value | killed, `5 failed` | the recompute test (2 cases), the sum test (2 cases), the present-iff test |
+
+**The operator's condition, met directly (spec 113 step 6).** V2, V3 and V3b were re-run with
+**only the sum test selected**, so nothing else could be the killer
+(`logs/verify/b113-sweep-V2-only.log` and its siblings):
+
+- V2 — row value from the entry price, total from the bid: `3 failed, 1 passed`.
+- V3 — total over one row fewer (the fill): `2 failed, 2 passed`.
+- V3b — total over one row fewer (the first stored position): `3 failed, 1 passed`.
+
+In each case the case that passes is the one the mutation cannot reach: V2 cannot move a
+fill-tick row, whose mark *is* its entry price, so the fill-only tick still agrees; V3 touches
+only the fills loop, so the stored-only ticks still agree. That is the shape the operator asked
+for — the test compares two computations and goes red on its own when they disagree, rather than
+comparing one number with itself.
+
+**V1 had to be run twice, and the first run was not a result.** It exited `3221226505`
+(0xC0000005) with **no pytest summary line at all**. That is the registered native fault, and the
+harness refused a verdict rather than reporting one. The re-run gave `3 failed, 100 passed,
+1 error`, and the error is the same register: a `TypeError: object of type 'MappingStartEvent'
+has no len()` inside pure-Python PyYAML, loading the committed config in the setup of an
+unrelated test (`test_a_touched_barrier_wins_over_an_elapsed_timeout`). The config is unmodified
+in the working tree, the two killing tests are the ones named above, and neither touches YAML.
+Not filed as a new mystery; it fits the entries already on the register.
+
+**The two controls, against the whole of `tests/`** (`logs/verify/b113-sweep-N0-wide.log`,
+`…V0-wide.log`). Both: `26 failed, 3243 passed, 2 skipped`, **the same 26 tests in both arms**,
+and both restored by hash.
+
+The 26 are exactly the tree's current red, measured unmutated in two runs that between them
+cover every one of those files: the neighbour run's 25 (`b113-neighbours.log` — A's five
+rehearsal tests and 20 in `tests/verify/test_phase6_criteria.py`) plus the one in my own two
+files (`b113-engines-second.log`). Compared as sets, and the difference either way is empty. So
+both controls **behaviourally survived**: the harness labels them KILLED because pytest exits 1
+on a tree that is already red, and the failing set is the verdict. All 26 are the engine 19
+refusal and go green with spec 114.
+
+**What I did not run:** a single unmutated whole-suite run. The baseline above is the union of
+two unmutated runs rather than one, which is enough to compare the sets and is worth saying
+plainly. The lead's gate after spec 114 is the authoritative one.
+
+**The patcher anchors, re-counted in Python after the last edit.** All eleven anchors that
+`tests/verify/test_phase6_criteria.py` applies to engines 21 and 22 — nine distinct lines, with
+two arms sharing the hold line — still appear exactly once in the files as they now stand,
+including `position_row["last_price"] = format(mark, "f")`, which the new `value` line sits
+directly beneath. `test_phase3_criteria.py` + `test_phase4_criteria.py`: `95 passed`.
+
+**Not swept: the store.** Migration 0005, `CashSource` and the seed line change no engine
+arithmetic, and their proofs are the tests instead: the backfill measured by applying 1-4,
+writing rows, then applying 5 alone; the CHECK refusing five shapes of wrong value including
+NULL; the round trip asserting the stored text so a writer that dropped the field and let the
+database default fill it fails the `after_exit` case. Named here because an unswept area is a
+hole with a shape the next reader needs.

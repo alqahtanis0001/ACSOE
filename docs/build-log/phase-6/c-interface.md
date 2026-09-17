@@ -2564,3 +2564,415 @@ run. Result: `8 failed, 384 passed in 508.32s`, and the failing set is identical
 baseline's known 8, so S0 survived behaviourally. The harness prints exit `0x1`, but the
 verdict comes from comparing the two failing sets. `verify.py` sha256 after the restore:
 `a7040cd4…6b07`, the same as before.
+
+### FINDING, spec 100 bodies — the exit tick's equity row values the account as it was before the exit
+
+**Agent:** C (interface and models) · **Task:** spec 100 criteria bodies · **Date:** 2026-09-17
+
+**What happened.** The first run of the round-trip bodies on the real registered tree:
+`paper_trade_round_trip_target`, `_stop` and `triggered_stop_holds_on_data_guard_block`
+FAIL at the same assertion. The trade, the orders and the position reconcile exactly. The
+`equity_snapshots` row of the exit tick does not. Stop leg, measured
+(`logs/verify/c100c-probe-exit-equity.log`):
+
+| cycle | tick | cash | positions_value | equity | open | realised_cum |
+|---|---|---|---|---|---|---|
+| 4 | watch | 1663.9201177597499 | 3333.07073057575 | 4996.9908483354999 | 1 | 0 |
+| 5 | **exit** | 1663.9201177597499 | 3281.10187514294 | **4945.0219929026899** | **0** | -61.212100660081686 |
+| 6 | next | 4938.787899339918314 | 0 | 4938.787899339918314 | 0 | -61.212100660081686 |
+
+The account after the sale holds 4938.787899339918314. The exit tick records 4945.02, and the
+gap is 6.234, which is the taker fee on the sale. Here the mark equals the fill, so there is
+no price gap. The row is also internally inconsistent: `open_position_count` is 0 and
+`positions_value` is 3281.10. On the target leg the exit tick records 5097.62 against a true
+5091.10, which is **above the 5000.00 peak**, so `peak_equity` takes a figure the account never
+held.
+
+**Why.** The order of reads within one tick. Engine 1 reads the paper ledger at the top of the
+tick, before engine 22 sells. Engine 21 marks every open position before engine 22 sells.
+Engine 19 writes `equity = cash + positions_value` from those two payloads, but it counts
+`open_position_count` from the store after it has recorded the close. So the row is the
+pre-exit valuation with a post-exit count and a post-exit `realised_pnl_cum`. This is the
+exit-side mirror of spec 87's finding 1, but milder: there is no double count, and the error is
+the exit fee plus any gap between engine 21's mark and the walked fill. Spec 103's fix cannot
+reach it, because the broker decides a market sell inside `add_order`, after engine 1 has read
+the balance. On a liquidation into a thin book the mark-to-fill gap is the book's slippage, so
+the overstatement, and the peak it can set, grows with it.
+
+**Why no unit test saw it.** Engine 19's tests hand it the payloads of one tick. A's rehearsal
+checks that the equity row equals `cash + positions_value` **as published**, which is true
+here. Nothing compared the exit tick's row with the account after the exit. Only a criterion
+that recomputes the round trip from the market does.
+
+**Not fixed.** Engine 19 is in lane C, but it is outside this task's write list. The remedy
+changes what an equity row means, so it is a decision, not a correction. The criterion keeps
+its requirement (the exit tick's row equals the account after the exit) and reports FAIL.
+Options are in the progress file and have gone to the lead.
+
+### Spec 100 bodies — the operator's criterion for the exit-tick row, observed FAIL before the fix
+
+**Agent:** C (interface and models) · **Task:** spec 100, operator ruling on Q-C1 · **Date:** 2026-09-17
+
+**Ruling (operator, relayed by the lead).** Engine 22 publishes the post-exit figures for the
+positions it closed: cash adjusted by its proceeds and fees, and positions value less engine
+21's marks of those positions. Engine 19 uses them when present and does no arithmetic of its
+own, and it records the cash source in a new column (migration 0005). The work is B's spec 113,
+then C's spec 114. My options (a), (b) and (c) were not taken. Until both specs land, the three
+failing criteria keep asserting what they assert now.
+
+**The new criterion,** `equity_row_never_values_positions_it_does_not_hold`, is registered for
+phase 6 after spec 105's. It drives a real round trip to the stop plus one tick after the exit,
+and FAILs if any `equity_snapshots` row carries a non-zero `positions_value` with
+`open_position_count` 0. It refuses to judge a drive that wrote no row on the fill tick, the exit
+tick or the tick after, because an empty series satisfies any rule about its rows.
+
+**Observed FAIL on the code as it stands** (`logs/verify/c100c-probe-2.log`, 40.3 s), verbatim:
+
+> FAIL equity_row_never_values_positions_it_does_not_hold — the equity rows of a round trip: 1 of 8 equity rows value positions the account does not hold, as (cycle, ts, positions_value, open_position_count, equity): [(7, 1715983501000000, '3281.10187514294', 0, '4945.0219929026899')]. A row that counts no open position and still carries a positions value is an equity figure for an account that no longer exists, and engine 17 reads its drawdown, and peak_equity keeps it, from exactly this series; at fee tier 3, reference friction about 0.65% round trip and a hurdle of 1.625%; tier 1 is a no-trade regime at the current barriers
+
+The row is the exit tick's. The test that asserts it PASSes on the real tree
+(`test_equity_rows_passes_on_the_real_tree`) is red until specs 113 and 114. Its FAIL proof
+is today's code. Once the fix lands, a mutation arm is owed that restores the pre-exit figures
+in the copy.
+
+### Recurrence of the Phase 0 heredoc lesson: a bash heredoc wrote two NUL bytes into `verify.py`
+
+**Agent:** C (interface and models) · **Task:** spec 100 criteria bodies · **Date:** 2026-09-17
+
+**What happened.** I spliced the content-keyed subject cache into `scripts/verify.py` with a
+Python script passed through a quoted bash heredoc. The source I meant to write contained
+`b"\0"`, the two-character escape. The file on disk contained **two real NUL bytes**, and
+mypy refused it: `Source code string cannot contain null bytes`. ruff did not flag it.
+Earlier in the same session, another heredoc body failed with `unexpected EOF while looking
+for matching '`.
+
+**Why this is a recurrence and not a new finding.** Phase 0's build log records the same
+defect: "Bash heredocs mangled Python source, twice, in two different ways", including
+backslashes in a heredoc body not arriving literally. The fix recorded then was to stop
+writing Python source through heredocs and to write files directly. I went back to heredocs
+for convenience, and they failed again on the same kind of character. The operator asked for
+it to be recorded as a recurrence of that lesson.
+
+**Fix.** The bytes were replaced by a script written with the file tool
+(`scratchpad/c100c/fixnul.py`), and the count was confirmed zero. Every later edit in this task
+was a Python script written with the file tool, and each checks NUL and CRLF counts
+afterwards. mypy was the only gate that caught it. A file with a NUL in it cannot be imported,
+so pytest would have gone red too, but with nothing that points at the byte.
+
+### Spec 100 bodies — how-choices taken, with the options rejected
+
+**Agent:** C (interface and models) · **Date:** 2026-09-17
+
+1. **The subject is A's rehearsal window (`_fill_subject_model`), not the planted market.**
+   *Rejected:* the planted-market subject `_trade_subject_model`, built for spec 100 step 2.
+   *Why:* the fill subject is the one on which the real chain has been measured end to end, by
+   A and by spec 105. The planted subject stays for its own test. *Objection:* two trained
+   subjects now exist in one file, and one of them drives nothing. REVIEW.
+2. **The trained subject is cached by a digest of what training reads**
+   (`research/`, `modelling/`, `core/`, `platform/`, the config, the harness's config loader),
+   not by root. *Rejected:* the root key, which retrains about 30 s in every copied tree of
+   every mutation arm. *Why:* an engine mutation cannot change the artefacts, and a mutation of
+   anything training reads changes the digest. A tree with none of those files falls back to
+   its root.
+3. **"No market order" and "no second entry" are observed at the broker, through a
+   transparent `RecordingBroker`.** *Rejected:* reading the broker's private `_pending` and
+   `_executed`, and the store alone. The store cannot see a replacement nobody recorded.
+   *Objection, stated in the class's docstring:* an order an engine built and never handed
+   over is invisible, and seeing it would mean replacing the contract class. REVIEW.
+4. **The timeout leg is watched minute by minute for the first bar, then once a bar, and
+   exits on the `timeout_at` tick.** *Rejected:* every minute of the horizon. That was measured
+   at 436 s, and the criterion runs three times per gate. *Objection:* a defect that only shows
+   on a non-bar minute tick mid-horizon is not watched. The first bar and every bar-close tick
+   are. REVIEW.
+5. **The escalation's balance failure is realised by failing `AssetPairs` as well as
+   `Balance`** (operator D8). **Is a balance-only failure achievable in paper mode?** Not in a
+   way that leaves a liquidation completable. `PaperBroker.balance()` never calls the real
+   `Balance`, so failing it alone changes nothing. The ledger fails in exactly two ways:
+   (i) `AssetPairs` fails, and it cannot tell which currency a fill spent; (ii) a fill is due
+   and `TradeVolume` fails, so the fill cannot be priced. (ii) was not used. In the positions leg
+   the only fill due during the outage is the liquidation's own market sell, which is priced
+   inside `add_order` and would fail with the same missing fee tier. Engine 22 then records the
+   position unclosed and retries, by design (no fee is invented), so the liquidation could not
+   complete and the criterion would be asserting the impossible. In the entry leg, a due fill
+   means the entry filled rather than being cancelled. The message names both failed fetches,
+   engine 1's reason for the balance, and the retained-`AssetPairs` fallback on the trade.
+6. **The escalation criterion has two drives**, positions through engine 17 and a resting
+   entry through an operator `close_all` 60 s into its 300 s window (operator ruling via the
+   lead). *Rejected:* asserting `entry_orders_cancelled` on the escalation tick, which is
+   trivially true at the committed config. The message computes and states why.
+7. **The two criteria that trade nothing now name tier 3.** Their drive runs at tier 3, and
+   engine 14 can be reached at no other. *Rejected:* keeping
+   `test_the_two_criteria_that_drive_no_trade_claim_no_fee_regime`, which was right while they
+   applied no tier. They now say the thing they judge reads no fee. *Objection:* engine 9 could
+   be reached at tier 1, and the old sentence was the operator-visible line. REVIEW.
+8. **Engine 9 is judged on the fixture's opening snapshot of each pair**, loaded into the fake
+   exchange, with the thin pair made the candidate by streaming ADA/USD first. ADA/USD's rules
+   are the same invented fake-exchange values `test_order_book.py` uses. *Rejected:* relabelling
+   the ADA book as BTC/USD, which would put a recorded book under a pair it was not recorded
+   for.
+9. **The console criterion PENDINGs on a concrete absence**, `PositionView` having no
+   `hold_reason` (spec 101 step 3), and keeps PENDING until spec 101 writes the drive.
+   *Rejected:* writing the drive now behind the PENDING, which would be a body that never
+   executes.
+10. **`test_the_tier_sentence_is_pending_…` was made real**, not renamed. It now removes
+    `tests/harness` from a copied tree and observes PENDING naming the harness, for all seven
+    trade-driving criteria.
+11. **Real-tree verdicts are computed once per module** (`real_tree_outcomes`), and every
+    real-tree assertion reads from them.
+
+### Spec 100 bodies — fourteen engine mutations, each killed by the criterion it names
+
+**Agent:** C (interface and models) · **Task:** spec 100 · **Date:** 2026-09-17
+
+These are the committed arms: `MUTATIONS` in `tests/verify/test_phase6_criteria.py`, driven by
+`test_each_criterion_fails_against_its_named_wrong_implementation`. Each is applied in a copied
+tree, and the real file is hashed on both sides. Each anchor occurs once in its file and
+nowhere in `tests/`, and every engine file touched is 0 CRLF. A scratch runner captured the
+verbatim verdicts (`scratchpad/c100c/arm_messages.py`, `logs/verify/c100c-arm-messages.log`).
+Each verdict carries the arm's fragment, and every real file's sha256 was unchanged. The
+narrow file run was `5 failed, 80 passed`, and all five are the known reds (below); the
+fourteenth arm ran on its own: `1 passed`.
+
+In the table, the killing test is the arm's own parametrisation of
+`test_each_criterion_fails_against_its_named_wrong_implementation`.
+
+| Arm | Break (copied tree) | Criterion, verdict (abridged) |
+|---|---|---|
+| `target_never_triggers` | engine 21's target branch is `elif False:` | target: "engine 21 triggered [] on the exit tick, not [{… 'barrier': 'target'}]" |
+| `held_with_no_block` | engine 21 `_held` returns True | stop: "on flat trading at 1715983321 engine 21 triggered [] and held for 'data_guard_blocked'" |
+| `timeout_compared_strictly` | `now >= timeout_at` becomes `>` | timeout: "engine 21 triggered [] on the exit tick, not [{… 'barrier': 'timeout'}]" |
+| `realised_without_exit_fee` | engine 22's realised PnL omits the exit fee | stop: "the trade … is (… Decimal('-54.9780070973101') …); recomputed it is (… Decimal('-61.212100660081686') …)" |
+| `cancelled_entry_replaced` | engine 21 re-places the cancelled entry at its limit, userref + 1 | unfilled: "the broker was asked for [('buy','limit',True,1690626088), ('buy','limit',True,1690626089)]; … any second order is a chase (invariant 8)" |
+| `hold_removed_from_21` | engine 21 `_held` returns False | held stop: "engine 21 triggered [{… 'stop'}] and published hold_reason None on a tick data_guard blocked" |
+| `liquidation_held_by_22` | engine 22 `_close_intent` returns False | held stop: "with close_intent set the held position was not sold: 'data_guard_blocked'" |
+| `liquidation_needs_fresh_pair_rules` | engine 22 refuses retained pair rules in every case | escalation: "the liquidation did not complete during the outage: engine 21 held None, engine 22 said 'exit_incomplete'" |
+| `safety_escalates_a_tick_early` | engine 17 `>` becomes `>=` | escalation: "engine 17 escalated after 15 blocked ticks; the limit is 15 and it escalates on the tick after it, not before" |
+| `cancel_on_window_only` | engine 21 `if close_intent or expired:` becomes `if expired:` | escalation: "with close_intent set 60s into a 300s window engine 21 published [], not the entry cancelled at 1715983261000000" |
+| `walks_the_ask_side` | engine 9 walks `book.asks` | order book: "engine 9's thin walk of ADA/USD disagrees …: fill_price 0.19479… vs 0.19464…, levels_consumed (7, 10), estimated_slippage_pct (-0.0000198…, 0.000136…)" |
+| `walk_off_by_a_level` | the walk skips the top bid | order book: "… levels_consumed (9, 10) …" |
+| `skill_not_clipped` | engine 14's skill is not clipped at zero | router: "engine 14 published … cccc: -0.833… ; recomputed … cccc: 0.0" |
+| `older_duplicate_kept` | engine 14 keeps the first row of a duplicated (version, fold) | router: "… aaaa: 0.333…, bbbb: 0.666… ; recomputed … aaaa: 0.818…, bbbb: 0.181…" |
+
+**What the arms cannot show while Q-C1 is open.** The target, stop and held-stop arms kill
+before reconciliation reaches the equity row, so they stay valid while those criteria are red
+on the real tree for the exit-tick reason. `realised_without_exit_fee` kills at the trade row,
+which is compared before the equity row.
+
+### Spec 100 bodies — mutations of the criteria themselves, round 1: eleven killed, four survived
+
+**Agent:** C (interface and models) · **Task:** spec 100 · **Date:** 2026-09-17
+
+Harness: `scratchpad/c100c/sweep100.py`. It takes a byte copy of `scripts/verify.py` (0 CRLF,
+every anchor exactly once there and absent from `tests/`), restores it in a `finally` before the
+next arm, and compares the sha256 in the same statement. It runs with
+`PYTHONDONTWRITEBYTECODE=1` and `sys.executable -X faulthandler`. Target:
+`tests/verify/test_phase6_criteria.py` and `tests/verify/test_runner.py`, whose baseline is
+`5 failed, 81 passed`, the five known reds (four real-tree verdicts waiting on specs 113 and 114,
+and the new equity-rows criterion's PASS test). **A verdict is the failing set compared with
+the baseline's**, never the exit code, which is 1 in every arm. File sha256 before and after:
+`d0309c1d…05de`. Summary: `logs/verify/c100c-sweep-summary.log`; each arm has its own log.
+
+| Arm | Weakening | Verdict | Killed by (added to the failing set) |
+|---|---|---|---|
+| V1 | `_entry` stops checking that every registered gate ran | **survived** | — |
+| V2 | the unfilled window compared strictly | killed | real-tree `unfilled`, arm `cancelled_entry_replaced` |
+| V3 | the broker-requests check in `unfilled` removed | killed | arm `cancelled_entry_replaced` |
+| V4 | the held-tick trigger/hold check removed | killed | arm `hold_removed_from_21` |
+| V5 | the early-escalation check removed | killed | arm `safety_escalates_a_tick_early` |
+| V6 | the retained-AssetPairs fallback no longer required on the trade | killed | real-tree `escalation`, arm `cancel_on_window_only` |
+| V7 | the operator-cancel row check removed | killed | arm `cancel_on_window_only` |
+| V8 | engine 9's payload compared by `levels_consumed` only | **survived** | — |
+| V9 | engine 14's weights not compared | killed | arms `older_duplicate_kept`, `skill_not_clipped` |
+| V10 | the trade row not compared | killed | arm `realised_without_exit_fee` |
+| V11 | the equity-rows rule made inert | killed | the equity-rows real-tree test **left** the failing set (it PASSed) |
+| V12 | the subject cache key replaced by a constant | **survived** | — |
+| V13 | the watch stops checking the stored mark | **survived** | — |
+| V14 | the expected exit request is a limit, not a market sell | killed | real-tree `escalation`, arm `cancel_on_window_only` |
+| C0 | control: `taken = min(volume, remaining)` in `_sold_at` | survived, as required | — |
+
+**Why each survived, and what was done** (the operator required V8 and V12 killed before
+commit):
+
+- **V8.** Both engine-9 arms (ask side, skipped top level) also change the level count, so a
+  criterion comparing only the count still failed on them. Nothing tested a walk over the right
+  levels at the wrong price. **Added:** arms `slippage_against_the_fill` (the slippage divides
+  by the fill, not the best bid) and `partial_level_priced_at_the_top` (the partly taken level
+  priced at the top bid). Both keep the level count and change the price, and both are asserted
+  on the price fields of the FAIL.
+- **V12.** Every test checked what a criterion *said*. A criterion driving the wrong trained
+  subject says the same things. **Added:**
+  `test_a_tree_whose_training_differs_is_judged_on_its_own_subject`. With the real subject
+  already cached, it runs a criterion on a copied tree whose labeller calls every touch `stop`,
+  and requires the FAIL only that tree's own subject can produce ("fitted no skeptic.txt").
+  **Other criteria of this shape:** the only other module-level cache in `verify.py` is
+  `_TRADE_SUBJECTS`, keyed by root and read by no criterion (only by its own two tests). No
+  criterion of phases 0 to 5 caches anything.
+- **V13.** No engine arm broke the mark. **Added:** arm `marked_at_the_ask`.
+- **V1.** Judged against the registered chain, a gate that was never registered is invisible,
+  and a registered gate that did not run while engine 18 still placed an order cannot happen,
+  because the orchestrator writes every engine's payload into `state` before the next one runs.
+  **Added:** `_entry` now compares the registered gates with the Gate column of
+  `context/engine-contracts.md` (through `parse_engine_registry`), and arm `gate_unregistered`
+  drops engine 15 from a copied `bootstrap.py`. V1b, which disables that comparison, is in round 2.
+
+### Third instance in one session of the heredoc lesson
+
+**Agent:** C (interface and models) · **Date:** 2026-09-17
+
+**What happened.** After the NUL-byte entry above, I added one arm to the scratch sweep harness
+through a Python heredoc. `b"\n"` arrived in the file as a real line break, the harness died
+with `SyntaxError: unterminated string literal`, and no arm ran. `verify.py`'s hash was the same
+before and after, `c73034fe…`. The fix was written with the file tool.
+
+**Why it is recorded.** It is the same mechanism as the NUL bytes, and it happened within an
+hour of writing that entry. The rule I wrote there ("every later edit in this task was a Python
+script written with the file tool") was already broken by my next edit. A rule that relies on
+remembering it is not a rule. From here, every script that carries an escape sequence is
+written with the file tool, with no exceptions for small edits.
+
+### Spec 100 bodies — criterion mutations, rounds 2 and 3: every non-control arm killed
+
+**Agent:** C (interface and models) · **Task:** spec 100 · **Date:** 2026-09-17
+
+Same harness and target as round 1. The baseline is still the five known reds. File sha256
+before and after both rounds: `c73034fe…9eab6f`. Summaries:
+`logs/verify/c100c-sweep-round2-summary.log` and `…-round3-summary.log`.
+
+| Arm | Round 1 | Round 2 | Round 3 | Killing test |
+|---|---|---|---|---|
+| V8, engine 9 compared by level count only | survived | **killed** | — | arms `slippage_against_the_fill`, `partial_level_priced_at_the_top` |
+| V12, subject cache key made constant | survived | **killed** | — | `test_a_tree_whose_training_differs_is_judged_on_its_own_subject` |
+| V13, the watch's mark check removed | survived | **killed** | — | arm `marked_at_the_ask` |
+| V1b, the registry-table gate comparison disabled | — | **killed** | — | arm `gate_unregistered` |
+| V1, the unrun-gate check disabled | survived | survived | **killed** | arm `orchestrator_skips_the_gates` |
+| C0, control | survived | survived | — | — (as required) |
+
+**V1 was a real hole, not an equivalent mutant.** With the committed orchestrator it could not be
+observed: `_run_opportunity_chain` writes every engine's payload into `state` and stops at the
+first block or PASS, so a registered gate cannot have not run while engine 18 did. The check
+exists to catch an orchestrator that skips a gate, though, and nothing tested that. Arm
+`orchestrator_skips_the_gates` makes a copied `core/orchestrator.py` (the lead's file; the real
+one is hashed on both sides) run the opportunity chain without its gates. Only the unrun check
+objects, with "did not run every registered gate". I considered calling V1 equivalent and
+rejected it: an equivalent mutant is one no change to any file could expose, and a one-line
+change to the orchestrator exposes this one.
+
+**The new arms' verbatim verdicts** are in `logs/verify/c100c-arm-messages-2.log`.
+
+### Spec 100 bodies — the final runs, and where this stops
+
+**Agent:** C (interface and models) · **Task:** spec 100 · **Date:** 2026-09-17
+
+**`pytest tests/verify`, whole directory** (`logs/verify/c100c-verify-wide-final.log`):
+`5 failed, 417 passed, 2 warnings in 760.36s`. The five are exactly the known reds:
+`test_the_real_tree_verdict_and_what_it_says` for the target, stop and timeout round trips and for
+the held stop, and `test_equity_rows_passes_on_the_real_tree`. All five wait on specs 113 and 114.
+
+**The timeout round trip fails for the same reason as target and stop.** Its verdict
+(`logs/verify/c100c-final-messages.log`) is on the exit tick's equity row. The row holds the
+pre-exit cash 1663.9201177597499 and the pre-exit positions value 3333.07073057575 with 0 open
+positions, and the recomputed account is 4990.658013947405975. The trigger, the trade, the
+orders and the position all reconcile before that point. Every criterion's final verbatim
+verdict is in that log. The PENDING lines at the bottom were produced outside pytest, where the
+repository root is not on `sys.path`, so the seven that drive a trade name the missing harness
+first. Inside pytest the harness resolves from the repository and the first missing engine is
+named instead (`engine 9 \`order_book\` does not exist yet (C, spec 96)`), which is what
+`test_pending_on_a_tree_with_nothing_built` asserts.
+
+**The three heredoc slips, counted.** (1) A bash heredoc appending draft code to a scratch file
+failed with `unexpected EOF while looking for matching '`; nothing was written. (2) A Python
+heredoc wrote two NUL bytes into `scripts/verify.py`, and mypy caught it. (3) A Python heredoc
+turned `\n` into a real line break in the scratch sweep harness, which then failed to compile, so
+no arm ran and `verify.py` was untouched. (2) and (3) are the ones recorded above. All three are
+the Phase 0 lesson.
+
+**Stopped here, on the lead's instruction.** B takes the tree for spec 113. Nothing of mine is
+running, and no mutant is on disk: `verify.py` sha256 is `c73034fe…9eab6f`, and every engine
+file the arms touched was hashed unchanged. Not committed.
+
+### Spec 114 — engine 19 refused spec 113's two payload keys, and lost the tick when it did
+
+**Agent:** C (interface and models) · **Task:** spec 114 · **Date:** 2026-09-17
+
+**What happened.** With B's spec 113 on disk the tree is red on 26 tests: 5 in A's
+`tests/engines/test_trade_chain_rehearsal.py`, 20 in `tests/verify/test_phase6_criteria.py` and
+1 in B's `tests/engines/test_position_manager.py`. Every one of them is the same failure inside
+engine 19, at `src/acsoe/engines/memory/engine.py:387`:
+
+> `pydantic_core._pydantic_core.ValidationError: 1 validation error for PositionRow` ·
+> `Extra inputs are not permitted [type=extra_forbidden, input_value='990.00', input_type=str]`
+
+**Why.** `_Row` in `clients/store/contracts.py` is `extra="forbid"`, and engine 19 validates the
+publisher's payload *as* the stored row: `PositionRow.model_validate(stamped)` and
+`TradeRow.model_validate(stamped)` are handed the whole published mapping. Spec 113 added
+`value` to every marked position row and `net_proceeds` to every closed trade row — facts about
+the tick, not columns — so the first marked position of a run raises. The raise is converted by
+contract rule 7 into an `ERROR` result for engine 19, which means the whole tick is recorded
+nowhere: no positions, no orders, no trades, no block record and no equity row. It is the same
+shape as the loss invariant 12's 2026-09-16 ruling was written about, arriving from the other
+direction — there the tick was lost because an engine's payload was *empty*, here because it
+carries one field more than the store has a column for.
+
+B flagged the risk in spec 113 step 2 and left it, correctly: engine 19 is lane C.
+
+**Fix (this spec).** Engine 19 strips the two payload-only fields off its copy of the row before
+validating the stored row, and uses them for the equity row. No column is added for either and
+`extra="forbid"` is not weakened for anything else, so the next unknown key on a stored row still
+raises. The names live in `engines/memory/contracts.py` beside the engine that owns each, as
+contract rule 3 requires, restated rather than imported.
+
+### Decision: three ways the exit-cycle row can be a plausible lie, and each one skips the row
+
+**Agent:** C (interface and models) · **Task:** spec 114 · **Date:** 2026-09-17
+
+**Options.** The operator ruled the arithmetic — filter engine 21's rows by the position
+ids engine 22 closed, add engine 22's net proceeds to engine 1's cash — and named one
+refusal: a *remaining* position with no `value` writes no row. Two more cases are reachable
+and the ruling does not name them, and each could be read either way.
+
+**Chose.** Both skip the row, with the reason recorded, exactly as the named case does.
+
+- **A closed trade with no `net_proceeds`.** `decimal_field` returns `Decimal(0)` for an
+  absent field, so the row would read as an account that sold a position and was paid
+  nothing for it: a realised loss of the whole notional, in the series engine 17 reads its
+  drawdown from. That is the same absent-is-not-zero rule this engine is arranged around.
+- **Engine 21's remaining rows not covering what the account still holds.** The count comes
+  from the store after this tick's rows land, so it is what survived the sale. Fewer rows
+  than that and the sum is over a subset of the account — the same hole as the named case,
+  arriving through a position engine 21 never published a row for at all, where the
+  field-by-field check cannot see it because there is no row to find a missing field on.
+
+**Because.** Both can only make engine 19 write fewer rows, never a wrong one, and a gap in
+the curve names itself in `equity_skipped_reason` while a wrong row does not. The operator's
+own reasoning for the named case — a partial sum is a drawdown that did not happen — applies
+unchanged to both.
+
+**Cost.** Engine 19 now has three ways to decline the exit tick's row where it had one, and
+each needs its own test or it is an unreachable branch. There are three. Reported to the
+lead as how-choices rather than decided silently, because they are refusals the ruling did
+not name.
+
+### Decision: `value` and `net_proceeds` are stripped per row, not tolerated model-wide
+
+**Agent:** C (interface and models) · **Task:** spec 114 · **Date:** 2026-09-17
+
+**Options.** Engine 19 hands the publisher's whole mapping to `PositionRow.model_validate`
+and `TradeRow.model_validate`, and `_Row` is `extra="forbid"`. Three ways out: relax
+`extra` to `ignore` on those two models (B's file); add columns for the two figures
+(a migration, and B's file again); or take the two named fields off engine 19's own copy
+of the row before validating.
+
+**Chose.** The third, which is also what the spec approved.
+
+**Because.** `extra="ignore"` would silently drop *every* unknown key, so the next field a
+publisher renames or misspells reaches the store as a null instead of raising — and this
+engine's whole failure mode is defects that leave the suite green. A column for either
+figure would be a second copy of a number the store already keeps: `net_proceeds` is
+recomputable from the trade's `qty`, `exit_price` and `exit_fee`, and `value` from the
+position's `qty` and `last_price`, so the column could only ever disagree with them.
+
+**Cost.** Two names engine 19 must keep in step with engines 21 and 22, restated in
+`engines/memory/contracts.py` under contract rule 3 rather than imported. A rename upstream
+does not raise — engine 19 would simply stop reading the field — which is the standing
+hazard of every key in that file, and the reason they all live in one place with the owning
+engine written beside each.
