@@ -545,3 +545,19 @@ def test_rejection_reasons_are_written_for_the_operator(seeded: SeedFixtures) ->
         assert "=" not in row.reason
         assert " " not in row.reason_code
         assert row.reason_code == row.reason_code.lower()
+
+
+def test_every_seeded_equity_row_says_its_cash_is_the_start_of_tick_figure(
+    seeded: SeedFixtures,
+) -> None:
+    """Spec 113. The seed writes `cash_source` itself, and it writes `cycle_start` on
+    every row. Read from the column, so a row the database default filled would also
+    pass. The seed module's own call site is what states the value."""
+    with _connect(seeded.db_path) as conn:
+        sources = [
+            str(row["cash_source"])
+            for row in conn.execute("SELECT cash_source FROM equity_snapshots")
+        ]
+
+    assert sources, "the seed writes an equity series"
+    assert set(sources) == {"cycle_start"}

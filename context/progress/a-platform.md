@@ -19,6 +19,56 @@ Spec 84 is first because nothing else in the phase can start without it: B's pap
 implements it and engines 18, 21 and 22 call it. The concrete signatures are under
 **SPEC 84 — THE ORDER SURFACE, FOR B** immediately below.
 
+## SPEC 116 — THE REHEARSAL FOLLOWS THE EXIT-CYCLE RULING — CLAIMED 2026-09-17
+
+A claims **spec 116**. Nobody else may start it.
+
+| Spec | What | Files I will touch | State |
+|---|---|---|---|
+| 116 | `test_trade_chain_rehearsal.py` follows the operator's exit-cycle ruling of 2026-09-17: strip the two payload-only fields before the row models, and restate the equity expectation as the account *after* engine 22's sales | `tests/engines/test_trade_chain_rehearsal.py`, this file, `docs/build-log/phase-6/a-platform.md` | **DONE 2026-09-17** — `7 passed in 66.79s`; 2 mutation arms KILLED |
+
+No engine, `core/`, `bootstrap.py`, `clients/`, `scripts/verify.py` or other lane's test was
+touched. The mutations were run in a **copied tree** under my scratchpad, never in the
+working tree, and the copy was deleted afterwards.
+
+**What changed in the file.** Two things, both in `check_recorded`.
+
+1. A `without(row, field)` helper drops `POSITION_VALUE_FIELD` and `NET_PROCEEDS_FIELD`
+   before `PositionRow` / `TradeRow` validate the *expectation*. `_Row` is `extra="forbid"`
+   and neither field is a column — engine 19 reads both off the payload — so this is the
+   column set the tables actually have, not a relaxed comparison. Both names are imported
+   from their owning engine's contracts, so a rename breaks the import.
+2. A `ruled_equity(state)` helper returns the `(cash, positions_value, unrealised_pnl,
+   cash_source)` the ruling licenses, or `None` for "no row is due". On an exit tick cash is
+   engine 1's start-of-tick balance **plus** the published `net_proceeds`, the two position
+   totals are sums over engine 21's marked rows **less** every `position_id` engine 22
+   carries as closed, and the label is `after_exit`; otherwise engine 21's own totals and
+   `cycle_start`. `None` now *requires* engine 19 to have skipped, so "it skipped" is no
+   longer an unconditional early exit from the check.
+
+**How it was kept independent.** Written from `context/engine-contracts.md` — the ruling and
+the two cross-chain rows — and from the payload builders that produce the facts (engine 21's
+`_mark`, engine 22's `_trade_row` / `_closed_position_row`), which are the sources, not the
+consumer. `engines/memory/engine.py` was not opened until the file was already green and the
+mutation needed an anchor; C's probe and C's build-log entry quoting it were not read. It also
+does not copy engine 19's shape in three places, each a way for the two to disagree: whether a
+row is due is decided from the remaining marked rows rather than from engine 21's withheld
+total; the sums are taken over the per-row fields rather than the totals; and `cash_source` is
+derived rather than read back. Full reasoning in the build log.
+
+**Proof it can fail** (`logs/verify/a116-mutation-e19.log`). A1, the arm spec 116 names —
+engine 19's `if sold or closed:` → `if False:`, so it writes the pre-exit row again — is
+**KILLED, `4 failed, 3 passed in 75.06s`**, on `the row's cash is not the account the ruling
+describes`, `Decimal('1663.92…') == Decimal('4924.37…')`. A2 — the label alone,
+`CashSource.AFTER_EXIT` → `CYCLE_START` — is **KILLED, `4 failed, 3 passed in 70.26s`**, on
+`the row is labelled for the wrong instant`. A2 exists because A1 dies on the cash assertion
+in front of the label assertion and so leaves it unwitnessed. The three survivors under both
+arms are the three scenarios with no exit tick, which is correct survival.
+
+Nothing disagreed between the ruled behaviour and the rehearsal, so there is no finding to
+escalate. Four of the seven scenarios reach an exit and `check_recorded` runs after every
+tick, which is why one defect in engine 19 shows up as four failures rather than one.
+
 ## SPEC 87 — THE REHEARSAL OF 18, 21 AND 22 — BUILT 2026-09-16
 
 File: `tests/engines/test_trade_chain_rehearsal.py`. Only that file, this file and

@@ -2976,3 +2976,287 @@ position's `qty` and `last_price`, so the column could only ever disagree with t
 does not raise — engine 19 would simply stop reading the field — which is the standing
 hazard of every key in that file, and the reason they all live in one place with the owning
 engine written beside each.
+
+### Spec 114 — the exit-cycle row landed, and the five criteria it was written for turned PASS
+
+**Agent:** C (interface and models) · **Task:** spec 114 · **Date:** 2026-09-17
+
+**The four criteria that had been FAILing since the spec 100 bodies, and the one written to
+observe the defect, all PASS on the real tree** (`logs/verify/c114-criterion-messages.log`,
+verbatim, tier sentence trimmed where it repeats):
+
+> PASS `paper_trade_round_trip_target` — BTC/USD entry 1690626088: a post-only buy of
+> 26.26015939 at 126.9, placed on the bar close past all 8 registered gates (data_guard,
+> safety, scout, anomaly, cost, risk, skeptic, decision), filled at its limit on the next
+> tick, watched for 3 ticks, then a trade at 130.757 crossed the target 130.707 the minute
+> before 1715983501; it exited at the target when engine 22 sold 26.26015939 as a taker at
+> 130.757. Entry fee 3.6656556492501, exit fee 6.524029356580637 and realised
+> 91.095749761399263 were recomputed from the pinned book and engine 1's fee tier, and the
+> orders, positions, trades and equity rows engine 19 wrote match them exactly; at fee tier
+> 3, reference friction about 0.65% round trip and a hurdle of 1.625%; tier 1 is a no-trade
+> regime at the current barriers
+
+> PASS `paper_trade_round_trip_stop` — … a trade at 124.9465 crossed the stop 124.9965 the
+> minute before 1715983501; it exited at the stop when engine 22 sold 26.26015939 as a taker
+> at 124.946. Entry fee 3.6656556492501, exit fee 6.234093562771586 and realised
+> -61.212100660081686 were recomputed from the pinned book and engine 1's fee tier, and the
+> orders, positions, trades and equity rows engine 19 wrote match them exactly; …
+
+> PASS `paper_trade_round_trip_timeout` — … watched for 61 ticks, then the clock reached its
+> timeout at 1716026461 with neither barrier traded; it exited at the timeout when engine 22
+> sold 26.26015939 as a taker at 126.925. Entry fee 3.6656556492501, exit fee
+> 6.332834388093925 and realised -9.341986052594025 were recomputed … and the orders,
+> positions, trades and equity rows engine 19 wrote match them exactly; …
+
+> PASS `triggered_stop_holds_on_data_guard_block` — BTC/USD position pos-1690626088: a trade
+> at 124.9465 touched the stop 124.9965 on a tick engine 4 blocked for a crossed quote, and
+> engines 21 and 22 placed no exit - no trigger, no order at the broker - with hold_reason
+> 'data_guard_blocked' published and stored on the position. The operator's close_all on the
+> next tick, with data_guard still blocking, sold the same position as a taker at 124.296
+> (outcome liquidation, realised -78.248772966735036, every row reconciled), cleared the
+> hold, and the orchestrator cleared close_intent and consumed the command; …
+
+> PASS `equity_row_never_values_positions_it_does_not_hold` — all 8 equity rows of a round
+> trip (4 with a position open, including the fill tick, the exit tick and the tick after
+> it) carry a positions_value of zero whenever they count no open position; at fee tier 3,
+> reference friction about 0.65% round trip and a hurdle of 1.625%; tier 1 is a no-trade
+> regime at the current barriers
+
+**The stop leg is the one to compare against the finding.** It read equity 4945.02 with 0
+open positions and a positions value of 3281.10 against a true 4938.79. It now reconciles to
+the digit against the account recomputed from the scripted market, with no tolerance.
+
+**`tests/verify/test_phase6_criteria.py` and `tests/verify/test_runner.py`: `93 passed in
+438.76s`** (`logs/verify/c114-phase6-criteria-1.log`) — the 20 reds green, including all four
+`test_the_real_tree_verdict_and_what_it_says` arms and `test_equity_rows_passes_on_the_real_tree`.
+
+**The FAIL arm is committed as a mutation.** `pre_exit_figures_restored` in `MUTATIONS` forces
+engine 19's ordinary branch in the copied tree (`if sold or closed:` → `if False:`), which is
+exactly the pre-exit row: engine 1's start-of-tick cash, engine 21's total from before the
+sale, the store's count from after it. The criterion FAILs on it naming "value positions the
+account does not hold". Killing test:
+`test_each_criterion_fails_against_its_named_wrong_implementation[pre_exit_figures_restored]`.
+The criterion's own FAIL text against the *unfixed* engine is in the earlier entry of this log.
+
+**Mutation sweep over the exit-cycle branch** (`logs/verify/c114-sweep-narrow.log`). Every arm
+from a byte copy, restored in a `finally` with sha256 compared in the same statement; anchors
+asserted to occur exactly once; `PYTHONDONTWRITEBYTECODE=1`; `sys.executable`; every verdict
+carries a pytest summary line. Baseline `58 passed in 2.72s`. Engine 19 hash
+`6d0c226f921f…` before and after every arm.
+
+| Arm | What it breaks | Verdict | Killed by |
+|---|---|---|---|
+| M1 closed position not dropped | the sold position's mark stays in the sum | KILLED, 4 failed / 54 passed | `test_the_exit_ticks_row_is_the_account_after_the_sale` (+3) |
+| M2 unmarked remaining worth zero | a remaining position with no `value` is summed as nothing | KILLED, 1 failed / 57 passed | `test_a_remaining_position_with_no_value_writes_no_equity_row` |
+| M3 net proceeds not added | the exit tick's cash stays at engine 1's balance | KILLED, 2 failed / 56 passed | `test_the_exit_ticks_row_is_the_account_after_the_sale` (+1) |
+| M4 wrong `cash_source` | the post-exit row is labelled start-of-tick cash | KILLED, 2 failed / 56 passed | `test_the_exit_ticks_row_is_the_account_after_the_sale` (+1) |
+| M5 exit branch on every tick | the filtering branch is taken where engine 22 sold nothing | KILLED, 5 failed / 53 passed | `test_an_ordinary_tick_still_reads_engine_21s_totals_and_says_cycle_start` (+4) |
+| C0 control (equivalent) | two independent accumulators initialised in the other order | SURVIVED, 58 passed | — |
+
+**The sweep excludes `tests/engines/test_trade_chain_rehearsal.py`, and the exclusion is the
+point.** That file is red in A's lane (spec 116) for a reason engine 19 cannot fix. Leaving a
+red file in marks every arm killed regardless, which manufactures a clean sweep out of someone
+else's broken tree.
+
+**The control's line text was grepped in `tests/` and `scripts/` first**: neither
+`positions_value = Decimal(0)` nor `unrealised = Decimal(0)` appears in either tree, so no
+assertion is written against the text of the line the control moves.
+
+### Spec 114 — M1's kill came from the neighbouring guard, so the assertion it was written for was untested
+
+**Agent:** C (interface and models) · **Task:** spec 114 · **Date:** 2026-09-17
+
+**What happened.** M1 — the sold position left in engine 21's sum — reported KILLED by four
+tests, `test_the_exit_ticks_row_is_the_account_after_the_sale` among them. Asking *how* it
+was killed (`code-standards.md`: "when a sweep says killed, ask which test killed it")
+showed the kill was not the assertion the arm was written for. With the sold position still
+in `remaining`, the **count guard** fires first — two rows against one open position — so no
+equity row is written at all and the test dies on `(row,) = rows_in(...)` with a
+`ValueError`, three lines before the `positions_value` assertion. That assertion had never
+been observed failing, and in this fixture the count guard subsumes M1 completely: no
+variant of "do not drop the closed position" can reach the sum.
+
+**Why it matters.** `assert Decimal(row["positions_value"]) == KEPT_VALUE` is the line that
+states the operator's ruling about the positions value. On the sweep as first run it was a
+claim, not a check — the same shape as V8 and V12 in the spec 100 criterion sweep, arriving
+in the one place where a clean kill made it invisible.
+
+**Fix.** Arm **M1b**, which isolates the sum: `remaining` is still computed and still
+compared with the store's count, and only the summation iterates over every published row
+(`for row in remaining:` → `for row in self._rows(marked, POSITIONS_FIELD):`). KILLED,
+`2 failed, 56 passed in 3.26s` (`logs/verify/c114-sweep-m1b.log`), and the killing line is
+the intended one, verbatim:
+
+> `AssertionError: the sold position's mark is still in the positions value, so the row
+> values a position the account no longer holds` · `assert Decimal('707.00') ==
+> Decimal('336.00')`
+
+Engine 19 hash `6d0c226f921f…` before and after. M1 stays in the table as a checked kill by
+the count guard; M1b is what proves the sum.
+
+**The control, asked the whole suite.** A mutation that survives a subset has not survived.
+C0 was re-run against `tests/` less A's rehearsal: **`3271 passed, 2 skipped, 3 warnings in
+1887.83s`** (`logs/verify/c114-sweep-wide.log`), so it is an equivalent mutant rather than a
+hole — and, since the control changes nothing observable, that run is also the statement
+that the whole tree less spec 116's file is green.
+
+### FINDING for the lead: removing `EquitySnapshotRow.cash_source`'s default is a 202-test, 8-file change
+
+**Agent:** C (interface and models) · **Task:** spec 114, step 5 · **Date:** 2026-09-17
+
+**The question.** B recommends, and the lead endorses, removing the model default now that
+engine 19 writes `cash_source` on every row, so that a writer who forgets it fails loudly.
+`clients/store/contracts.py` is B's file; C was asked to check what it would break, not to
+make the change. Checked by byte copy —
+`    cash_source: CashSource = CashSource.CYCLE_START` → `    cash_source: CashSource` —
+restored with sha256 compared in the same statement (`f56374631d68` before and after,
+`logs/verify/c114-cash-source-default.log`).
+
+**The precondition holds.** Nothing in `src/` or `scripts/` relies on the default: engine 19
+passes the field on both branches, and `seed.py` already sets it explicitly with a comment
+saying why. `mypy --strict src/ scripts/` is clean without the default — pydantic's
+requiredness is a runtime matter, so the type checker says nothing either way.
+
+**What breaks is the fixtures.** `37 failed, 2644 passed, 2 skipped, 167 errors in 998.28s`
+over `tests/` less `tests/verify` and less A's rehearsal: **202 tests across 7 files**, plus
+`tests/engines/test_trade_chain_rehearsal.py`, which builds two such rows and is excluded
+only because spec 116 has it red already — **8 files**, in all three lanes:
+
+| File | Lane | Why |
+|---|---|---|
+| `tests/clients/store/test_store.py` | B | 12 tests; **one of them, `test_a_row_built_without_a_cash_source_says_cycle_start`, asserts the default exists** and has to be replaced rather than fixed |
+| `tests/engines/test_risk.py` | B | a seeded equity row in a fixture; the file errors out |
+| `tests/engines/test_scout.py` | B | same |
+| `tests/engines/test_safety.py` | B | same |
+| `tests/engines/test_decision.py` | B | same |
+| `tests/engines/test_execution.py` | B | same |
+| `tests/engines/test_feature_chain_rehearsal.py` | C | same |
+| `tests/engines/test_trade_chain_rehearsal.py` | A | two constructions; already red on spec 116 |
+
+Most of the 202 are one fixture per file taking the whole file down with it, so the edit is
+small and repeated — one keyword argument in eight places — but it lands in three lanes at
+once, which makes it a lead task under ownership rule 6 rather than a teammate's.
+
+**C's view, offered not taken.** Worth doing, and cheaper now than later: every one of those
+fixtures currently asserts nothing about `cash_source` while silently receiving
+`cycle_start`, which is exactly the "a model's own default supplied the value the test was
+asserting" trap this phase already recorded once. The one thing to decide rather than
+mechanise is B's `test_a_row_built_without_a_cash_source_says_cycle_start`: it is a test of
+the default, so removing the default retires it, and what should replace it is the assertion
+that a row built without one is **refused** — otherwise the change removes a check instead of
+tightening one.
+
+### Spec 114 — everything that was only in a scratchpad or only in a message, written down
+
+**Agent:** C (interface and models) · **Task:** spec 114 · **Date:** 2026-09-17
+
+Written on the operator's instruction, relayed by the lead: a scratchpad does not survive a
+session and neither does a message. Nothing below is new work — it is the reproducible part
+of work already reported, recorded so a fresh session does not have to redo it.
+
+#### A. What engine 19's change actually is, file by file
+
+- `src/acsoe/engines/memory/contracts.py` — `POSITION_VALUE_FIELD = "value"` and
+  `NET_PROCEEDS_FIELD = "net_proceeds"` added under a heading explaining that both are
+  payload facts and neither is a column, plus `POSITION_ID_FIELD` and
+  `POSITION_STATUS_FIELD` for matching engine 21's marks against engine 22's closes. All
+  four restated rather than imported (contract rule 3) and added to `__all__`.
+- `src/acsoe/engines/memory/engine.py` —
+  - two `NamedTuple`s at module level: `ClosedTrade(row, net_proceeds)` and
+    `Account(cash, positions_value, unrealised_pnl)`;
+  - `_write_positions` pops `POSITION_VALUE_FIELD` off `stamped` (the copy `_stamped`
+    already made) before `PositionRow.model_validate`;
+  - `_write_trades` reads `net_proceeds` through `decimal_field` off the published row,
+    pops it off `stamped`, and returns `list[ClosedTrade]` instead of `list[TradeRow]`;
+  - `_write_equity` gains an `exiting` parameter and splits on `if sold or closed:` into the
+    filtering branch (`_after_exit`, `CashSource.AFTER_EXIT`) and today's totals branch
+    (`CashSource.CYCLE_START`); `cash_source` is passed to `EquitySnapshotRow` on both;
+  - `_closed_position_ids(exiting)` returns the closed `position_id`s and raises on a closed
+    row that names none;
+  - `_after_exit(...)` filters, sums, and returns `(Account | None, skip reason | None)`.
+- `src/acsoe/engines/memory/README.md` — a new section, "The exit-cycle equity row", and
+  three rows added to the inputs table.
+- `tests/engines/test_memory_rows.py` — `a_position` gained a `pair` parameter (the database
+  refuses two open positions on one pair, `ux_positions_open_pair`); `a_closed_trade` now
+  carries `net_proceeds` as engine 22 does; helpers `a_marked_position`, `an_exit_tick`,
+  `a_sale`; eight new tests in a "Spec 114" section.
+- `tests/verify/test_phase6_criteria.py` — one `MUTATIONS` entry, `pre_exit_figures_restored`.
+
+Nothing else was touched. `scripts/verify.py` needed no change.
+
+#### B. The A-rehearsal blocker, and the probe that measured it
+
+Now spec 116 (A). Recorded here because C found and measured it, and because
+`probe_rehearsal.py` lived only in a scratchpad.
+
+**Two sites, both in `tests/engines/test_trade_chain_rehearsal.py`, neither fixable from
+engine 19.** `check_recorded` (around line 313) builds its *expectation* by re-validating
+engine 21's and engine 22's published rows through the store's own models, so it meets
+`extra="forbid"` on its own account:
+
+1. `positions[str(row["position_id"])] = PositionRow.model_validate({**row, **stamp, "hold_reason": hold})`
+   — raises on spec 113's `value`;
+2. `trades = {str(row["trade_id"]): TradeRow.model_validate({**row, **stamp}) ...}`
+   — raises on spec 113's `net_proceeds`;
+
+and a third site, the equity block at the end of the same function, asserts the **pre-exit**
+reading directly: `row.cash == Decimal(state["exchange"]["balances"]["USD"])`,
+`row.positions_value == Decimal(manager["positions_value"])` and
+`row.unrealised_pnl == Decimal(manager["unrealised_pnl"])` — which is exactly what the
+operator's ruling changes on an exit tick.
+
+**The probe.** Byte copy of the file, three anchors replaced, `pytest
+tests/engines/test_trade_chain_rehearsal.py -q -p no:randomly`, bytes written back and
+sha256 compared in the same statement. Result **`7 passed in 65.72s`**; file restored,
+sha256 `79cc6747dfe3` before and after; nothing left on disk. The third anchor's replacement
+computed, on a tick where `state["exit"]["positions"]` carries a closed row or
+`closed_trades` is non-empty, `cash` as the balance plus the published `net_proceeds`, and
+`value` / `unrealised` as the sums over engine 21's rows whose `position_id` is not in the
+closed set; otherwise the totals as today.
+
+**The patch is deliberately not reproduced here.** Spec 116 step 4 requires A to derive the
+expectation from `context/engine-contracts.md`'s "The exit-cycle equity row" rather than copy
+either engine 19's implementation or C's probe, because the rehearsal's value is that it is a
+*second* derivation of the same rule. What is worth keeping is the measurement: three sites,
+and `7 passed in 65.72s` is the outcome to expect.
+
+#### C. The mutation arms, so the sweep can be re-run
+
+Against `src/acsoe/engines/memory/engine.py`. Each anchor occurs exactly once and the harness
+asserts so before applying. Narrow set: `tests/engines/test_memory_rows.py` and
+`tests/engines/test_memory.py` (baseline `58 passed`), deliberately excluding
+`tests/engines/test_trade_chain_rehearsal.py`.
+
+| Arm | Anchor | Replacement |
+|---|---|---|
+| M1 | `            if str(row.get(POSITION_ID_FIELD)) not in sold` | `            if True` |
+| M1b | `        for row in remaining:` | `        for row in self._rows(marked, POSITIONS_FIELD):` |
+| M2 | `                if row.get(field) is None:` | `                if False:` |
+| M3 | `            proceeds += trade.net_proceeds` | `            proceeds += Decimal(0)` |
+| M4 | `            cash_source = CashSource.AFTER_EXIT` | `            cash_source = CashSource.CYCLE_START` |
+| M5 | `        if sold or closed:` | `        if True:` |
+| C0 control | `        positions_value = Decimal(0)` then `        unrealised = Decimal(0)` | the two lines swapped |
+
+The committed FAIL arm `pre_exit_figures_restored` uses the M5 anchor with `        if False:`
+instead, which is the opposite branch and is the pre-exit row.
+
+The `cash_source` probe's anchor, against `src/acsoe/clients/store/contracts.py` (B's file,
+restored by hash `f56374631d68`): `    cash_source: CashSource = CashSource.CYCLE_START`
+replaced by `    cash_source: CashSource`.
+
+#### D. How the verbatim criterion verdicts were obtained
+
+Not through pytest, which does not print them. Load `scripts/verify.py` by path with
+`importlib.util.spec_from_file_location`, with the repository root on `sys.path`, then
+`{c.name: c for c in verify.criteria_for(6, live=False)[0]}` and
+`verify.run_criterion(criterion, verify.VerifyContext(root=ROOT))`. The `Outcome` carries
+`.result` and `.message`. Output at `logs/verify/c114-criterion-messages.log`.
+
+#### E. Log files, all under `logs/verify/` and all on disk
+
+`c114-phase6-criteria-1.log` (93 passed in 438.76s) · `c114-criterion-messages.log` (the five
+verdicts verbatim) · `c114-sweep-narrow.log` (M1-M5, C0) · `c114-sweep-m1b.log` (M1b and its
+killing line) · `c114-sweep-wide.log` (M1 diagnostic, and C0 against the whole suite:
+3271 passed, 2 skipped in 1887.83s) · `c114-cash-source-default.log` (37 failed, 167 errors,
+202 tests, 7 files + A's) · `c114-narrow-final.log` (5 failed, 445 passed) · `c114-ruff.log` ·
+`c114-mypy.log`.

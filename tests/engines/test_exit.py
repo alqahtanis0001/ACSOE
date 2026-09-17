@@ -62,6 +62,7 @@ from acsoe.core.contracts import EngineStatus
 from acsoe.engines.exit.contracts import (
     CLOSED_TRADES_FIELD,
     FALLBACK_ASSET_PAIRS_RETAINED,
+    NET_PROCEEDS_FIELD,
     ORDERS_FIELD,
     POSITIONS_CLOSED_FIELD,
     POSITIONS_FIELD,
@@ -866,6 +867,96 @@ def test_the_trade_row_is_recomputed_from_its_sources_and_not_read_back(
     assert Decimal(trade["realised_pnl_quote"]) == expected
     assert trade["exit_userref"] == exit_userref_for("pos-1")
     assert trade["entry_userref"] == USERREF
+
+
+def test_the_net_proceeds_are_the_rows_own_qty_times_exit_price_less_its_exit_fee(
+    exit_engine: ExitEngine,
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+) -> None:
+    """Spec 113: the cash the sale put into the account, from the row's own fields.
+
+    Checked two ways. Recomputed from the row's own `qty`, `exit_price` and `exit_fee`,
+    so the figure agrees with what the store will hold. Recomputed from the fixture's
+    inputs, so the row's fields are the sale's. The exit fee is not zero (tier 3 taker
+    on 999.90), and the entry fee and entry price differ from it, so a figure that
+    dropped the fee, or took the entry side's, fails.
+    """
+    holding_position(context, store)
+    state = managed(
+        manager,
+        context,
+        build_state(
+            context, close_intent=True, previous_now=context.now - timedelta(seconds=60)
+        ),
+    )
+
+    (trade,) = exit_engine.process(context, state).data[CLOSED_TRADES_FIELD]
+
+    net = Decimal(trade[NET_PROCEEDS_FIELD])
+    assert isinstance(trade[NET_PROCEEDS_FIELD], str), "money crosses state as a string"
+    assert net == (
+        Decimal(trade["qty"]) * Decimal(trade["exit_price"]) - Decimal(trade["exit_fee"])
+    )
+    proceeds = Decimal("10") * BID
+    exit_fee = proceeds * Decimal(TAKER)
+    assert exit_fee > 0
+    assert net == proceeds - exit_fee
+    assert net != proceeds - exit_fee - ENTRY_FEE, "the entry fee was paid at entry"
+
+
+def test_the_net_proceeds_read_neither_engine_twenty_ones_valuation_nor_the_balance(
+    exit_engine: ExitEngine,
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+) -> None:
+    """Spec 113's scope limit, measured: engine 22 reads neither payload for this.
+
+    The same sale is run twice. The second time, engine 21's totals and per-row marks
+    are replaced with figures no market produced, and engine 1's balances are taken
+    away. The net proceeds must not move. A liquidation is used because engine 22 then
+    reads nothing from engine 21 at all, so the two runs differ only in the payloads
+    under test.
+    """
+    holding_position(context, store)
+    state = managed(
+        manager,
+        context,
+        build_state(
+            context, close_intent=True, previous_now=context.now - timedelta(seconds=60)
+        ),
+    )
+    published = exit_engine.process(context, state).data
+    (first,) = published[CLOSED_TRADES_FIELD]
+    # Engine 19's record of the exit order, written by hand as the run-twice test does,
+    # so the second run finds the sale already placed and reports it again rather than
+    # being refused a second placement under the same `userref`.
+    (placed,) = published[ORDERS_FIELD]
+    store.write_order(
+        OrderRow.model_validate(
+            dict(placed, run_id="test-run", cycle_id=1, updated_at=to_micros(context.now))
+        )
+    )
+
+    tampered = dict(state)
+    tampered["position_manager"] = {
+        **state["position_manager"],
+        "positions_value": "123456.78",
+        "unrealised_pnl": "-9999.00",
+        "positions": [
+            {**row, "last_price": "1.00", "value": "10.00"}
+            for row in state["position_manager"]["positions"]
+        ],
+    }
+    tampered["exchange"] = {
+        key: value for key, value in state["exchange"].items() if key != "balances"
+    }
+    (second,) = exit_engine.process(context, tampered).data[CLOSED_TRADES_FIELD]
+
+    assert "balances" in state["exchange"], "the first run had a balance to ignore"
+    assert second[NET_PROCEEDS_FIELD] == first[NET_PROCEEDS_FIELD]
 
 
 def test_the_fx_rates_are_one_because_the_quote_is_the_reporting_currency(

@@ -72,6 +72,7 @@ from tests.harness.market_script import Bar, ScriptedMarket
 from acsoe.clients.paper.broker import PaperBroker
 from acsoe.clients.store.client import StoreClient
 from acsoe.clients.store.contracts import (
+    CashSource,
     CommandName,
     CommandRow,
     CommandSource,
@@ -98,6 +99,7 @@ from acsoe.engines.execution.contracts import (
 )
 from acsoe.engines.execution.engine import ExecutionEngine
 from acsoe.engines.exit.contracts import (
+    NET_PROCEEDS_FIELD,
     REASON_DATA_GUARD_BLOCKED,
     REASON_EXITS_PLACED,
     REASON_NOTHING_TO_EXIT,
@@ -110,7 +112,11 @@ from acsoe.engines.market_data_recorder.engine import MarketDataRecorderEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
 from acsoe.engines.memory.engine import MemoryEngine
 from acsoe.engines.order_book.engine import OrderBookEngine
-from acsoe.engines.position_manager.contracts import HOLD_DATA_GUARD_BLOCKED, position_id_for
+from acsoe.engines.position_manager.contracts import (
+    HOLD_DATA_GUARD_BLOCKED,
+    POSITION_VALUE_FIELD,
+    position_id_for,
+)
 from acsoe.engines.position_manager.engine import PositionManagerEngine
 from acsoe.engines.prediction.engine import PredictionEngine
 from acsoe.engines.regime.engine import RegimeEngine
@@ -310,6 +316,86 @@ def published(state: dict[str, Any], keys: tuple[str, ...], field_name: str) -> 
     return rows
 
 
+def without(row: dict[str, Any], field_name: str) -> dict[str, Any]:
+    """A published row with one **payload-only** field dropped, the original untouched.
+
+    `_Row` is `extra="forbid"`, so a field that is not a column cannot be validated
+    through the store's model. Two are not: engine 21's per-position `value` and engine
+    22's per-trade `net_proceeds` (spec 113). Both are facts engine 19 reads off the
+    payload, and the store keeps what each is recomputable from — so dropping them here
+    is not a weakened comparison, it is the column set the table actually has. They are
+    checked instead where they matter, in :func:`ruled_equity`.
+    """
+    return {key: value for key, value in row.items() if key != field_name}
+
+
+def ruled_equity(
+    state: dict[str, Any],
+) -> tuple[Decimal, Decimal, Decimal, CashSource] | None:
+    """`(cash, positions_value, unrealised_pnl, cash_source)` the equity row must carry.
+
+    **A second derivation of the operator's exit-cycle ruling of 2026-09-17**, from the
+    rule as `context/engine-contracts.md` states it and from what engines 1, 21 and 22
+    published — never from engine 19, which is the thing under test. `None` means the
+    ruling licenses no row at all this tick, and the caller then requires engine 19 to
+    have skipped.
+
+    The ruling, restated: an exit tick's row describes the account **after** the sales.
+    So cash is engine 1's start-of-tick balance plus the `net_proceeds` of every trade
+    engine 22 published, labelled `after_exit`; and the two position totals are the sums
+    over the positions engine 21 marked **less every one engine 22 carries as closed**.
+    On any other tick the row is engine 21's own totals over engine 1's balance, labelled
+    `cycle_start`.
+
+    Three points where this deliberately does not follow engine 19's shape:
+
+    * Whether a row is licensed at all is decided here from the **remaining marked
+      rows**, not from engine 21's `positions_value`. On an exit tick those differ: a
+      position that could not be marked makes engine 21 withhold both totals, yet if
+      that position is one engine 22 just sold, every position that remains is marked
+      and the ruling's sum exists. An engine 19 that still gated on the absent total
+      would write no row, and this function says one was due.
+    * The sums are taken over the per-row `value` and `unrealised_pnl` fields, which are
+      not what engine 21 totalled them from, so a row that disagrees with its own total
+      is visible from here.
+    * `cash_source` is derived from the closed set rather than read back, so a row
+      labelled `cycle_start` while carrying proceeds fails on the label as well as the
+      figure.
+    """
+    balances = state.get("exchange", {}).get("balances")
+    if not isinstance(balances, dict) or "USD" not in balances:
+        return None
+    cash = Decimal(str(balances["USD"]))
+
+    closed = {
+        str(row["position_id"])
+        for _, row in published(state, ("exit",), "positions")
+        if str(row["status"]) == "closed"
+    }
+    marked = [row for _, row in published(state, ("position_manager",), "positions")]
+
+    if not closed:
+        manager = state.get("position_manager") or {}
+        total, unrealised = manager.get("positions_value"), manager.get("unrealised_pnl")
+        if total is None or unrealised is None:
+            return None
+        return cash, Decimal(str(total)), Decimal(str(unrealised)), CashSource.CYCLE_START
+
+    remaining = [row for row in marked if str(row["position_id"]) not in closed]
+    if any(POSITION_VALUE_FIELD not in row for row in remaining):
+        return None
+    proceeds = sum(
+        (
+            Decimal(str(row[NET_PROCEEDS_FIELD]))
+            for _, row in published(state, ("exit",), "closed_trades")
+        ),
+        start=Decimal(0),
+    )
+    value = sum((Decimal(str(row[POSITION_VALUE_FIELD])) for row in remaining), start=Decimal(0))
+    unrealised = sum((Decimal(str(row["unrealised_pnl"])) for row in remaining), start=Decimal(0))
+    return cash + proceeds, value, unrealised, CashSource.AFTER_EXIT
+
+
 def check_recorded(
     state: dict[str, Any], before: Tables, after: Tables, *, run_id: str, ts: int
 ) -> None:
@@ -338,10 +424,10 @@ def check_recorded(
     for publisher, row in published(state, ("position_manager", "exit"), "positions"):
         hold = state[publisher].get("hold_reason")
         positions[str(row["position_id"])] = PositionRow.model_validate(
-            {**row, **stamp, "hold_reason": hold}
+            {**without(row, POSITION_VALUE_FIELD), **stamp, "hold_reason": hold}
         )
     trades = {
-        str(row["trade_id"]): TradeRow.model_validate({**row, **stamp})
+        str(row["trade_id"]): TradeRow.model_validate({**without(row, NET_PROCEEDS_FIELD), **stamp})
         for _, row in published(state, ("exit",), "closed_trades")
     }
 
@@ -365,19 +451,26 @@ def check_recorded(
 
     new = after.equity[len(before.equity) :]
     assert after.equity[: len(before.equity)] == before.equity, "an equity row was rewritten"
-    if state["memory"]["equity_skipped_reason"] is not None:
-        assert new == (), state["memory"]["equity_skipped_reason"]
+    ruled = ruled_equity(state)
+    skipped = state["memory"]["equity_skipped_reason"]
+    if ruled is None:
+        assert skipped is not None, (
+            "nothing published this tick licenses an equity row under the exit-cycle "
+            "ruling, so engine 19 had to skip it"
+        )
+    if skipped is not None:
+        assert new == (), skipped
         return
+    assert ruled is not None
+    cash, value, unrealised, cash_source = ruled
     (row,) = new
-    manager = state["position_manager"]
-    cash = Decimal(state["exchange"]["balances"]["USD"])
-    value = Decimal(manager["positions_value"])
     previous = before.equity[-1] if before.equity else None
     realised = sum((trade.realised_pnl for trade in trades.values()), start=Decimal(0))
     assert (row.run_id, row.cycle_id, row.ts) == (run_id, state["cycle_id"], ts)
-    assert row.cash == cash
-    assert row.positions_value == value
-    assert row.unrealised_pnl == Decimal(manager["unrealised_pnl"])
+    assert row.cash == cash, "the row's cash is not the account the ruling describes"
+    assert row.cash_source == cash_source, "the row is labelled for the wrong instant"
+    assert row.positions_value == value, "positions engine 22 closed are still valued"
+    assert row.unrealised_pnl == unrealised
     assert row.equity == cash + value
     assert row.peak_equity == (
         row.equity if previous is None else max(previous.peak_equity, row.equity)

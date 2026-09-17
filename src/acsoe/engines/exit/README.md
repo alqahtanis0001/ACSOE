@@ -146,6 +146,14 @@ and engine 11 refuses any pair whose quote is not the reporting currency today
 (`no_fx_rate`), so a position reaching here with a foreign quote is the chain
 contradicting itself — not a case to price at a rate nobody fetched.
 
+`net_proceeds = qty × exit_price − exit_fee` (spec 113) is the cash the sale put into
+the account, computed from the same `qty`, `exit_price` and `exit_fee` the row carries.
+On a tick where this engine closed positions, engine 19 adds it to engine 1's
+start-of-tick balance for the equity row (spec 114). It reads neither engine 21's
+valuation nor engine 1's balance: the operator withdrew a design in which this engine
+subtracted engine 21's marks, because that tied a fact about a sale to how another
+engine values positions. It is a payload field, not a `trades` column.
+
 ## A partial failure is reported, never smoothed
 
 One position that cannot be exited does not stop the others: on a liquidation, flat on

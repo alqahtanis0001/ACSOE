@@ -25,7 +25,7 @@ new payload keys (`PositionRow` and `TradeRow` are `extra="forbid"`): 5 in
 Records: this file and `docs/build-log/phase-6/c-interface.md`. Logs under `logs/verify/c114-*`;
 scratch under the session scratchpad.
 
-#### 114 — IN PROGRESS
+#### 114 — DONE, not committed; final report sent to the lead
 
 **Engine 19 accepts the two payload keys and builds the exit-cycle row.** `value` comes off the
 position row and `net_proceeds` off the trade row before the stored row is validated; neither
@@ -48,7 +48,55 @@ block): `7 passed in 65.72s`, file restored, sha256 `79cc6747dfe3` before and af
 on disk. **A's file, not changed by me.** The patch text is in the session scratchpad at
 `probe_rehearsal.py`.
 
-**FINDING for the lead, on B's `cash_source` default** — see the final report.
+**All five criteria PASS on the real tree** (`logs/verify/c114-criterion-messages.log`,
+verbatim in the build log): `paper_trade_round_trip_target`, `_stop`, `_timeout`,
+`triggered_stop_holds_on_data_guard_block` and
+`equity_row_never_values_positions_it_does_not_hold`. The stop leg, which read equity 4945.02
+with 0 open positions beside a positions value of 3281.10 against a true 4938.79, now
+reconciles to the digit with no tolerance.
+
+**The FAIL arm is committed**: `pre_exit_figures_restored` in `MUTATIONS` forces the ordinary
+branch in the copied tree, which is exactly the pre-exit row; killed by
+`test_each_criterion_fails_against_its_named_wrong_implementation[pre_exit_figures_restored]`.
+
+**Mutation sweep** (`logs/verify/c114-sweep-narrow.log`, `-m1b.log`, `-wide.log`): M1 to M5 all
+killed, control C0 survived narrow **and the whole suite** (`3271 passed, 2 skipped in
+1887.83s`, A's rehearsal excluded). **M1's kill came from the count guard rather than from the
+positions-value assertion, so M1b was added to isolate the sum** — the assertion that states
+the ruling had never been observed failing. Build log has the table and the verbatim line.
+
+**FINDING for the lead — removing B's `cash_source` default is a 202-test, 8-file change in
+three lanes.** Probed by byte copy, restored by hash (`f56374631d68`). Nothing in `src/` or
+`scripts/` relies on the default and `mypy --strict` stays clean; the breakage is fixtures,
+including B's `test_a_row_built_without_a_cash_source_says_cycle_start`, which asserts the
+default exists and would have to be replaced by a test that the row is refused. Lead task
+under ownership rule 6. Full table in the build log.
+
+**Runs.** `tests/verify/test_phase6_criteria.py` + `test_runner.py`: `93 passed in 438.76s`
+(`logs/verify/c114-phase6-criteria-1.log`). Narrow final over engines, store and db:
+`5 failed, 445 passed in 142.35s` (`logs/verify/c114-narrow-final.log`) — the five are exactly
+A's rehearsal, spec 116. `ruff check src/ tests/ scripts/` and `mypy --strict src/ scripts/`
+clean (`c114-ruff.log`, `c114-mypy.log`).
+
+**Nothing is running and no mutant is on disk.** `engines/memory/engine.py` `6d0c226f921f…`,
+`clients/store/contracts.py` `f56374631d68…`, `tests/engines/test_trade_chain_rehearsal.py`
+`79cc6747dfe3…`, `scripts/verify.py` `c73034feae94…` (unchanged by this task),
+`bootstrap.py` `3b55c1e50b3b…`, `core/orchestrator.py` `52abd51c32e0…`.
+
+CRLF at hand-off: every file I wrote is 0 CRLF, 0 NUL.
+
+**Records flushed 2026-09-17, on the operator's instruction via the lead.** Everything that
+existed only in a scratchpad or only in a message to the lead is now in the build log, under
+"everything that was only in a scratchpad or only in a message, written down": (A) what
+engine 19's change is, file by file, including the two `NamedTuple`s, the two `pop` sites and
+the `_closed_position_ids` / `_after_exit` split; (B) the A-rehearsal blocker — the two
+`extra="forbid"` sites in `check_recorded` and the third site, its equity block asserting the
+pre-exit reading — with the probe's method, its `7 passed in 65.72s`, and the file's sha256
+`79cc6747dfe3` before and after (the patch body is deliberately not reproduced: spec 116 step
+4 requires A to derive it independently); (C) every mutation anchor and replacement, so the
+sweep can be re-run from the log alone; (D) how the verbatim criterion verdicts were obtained,
+since pytest does not print them; (E) the nine log files. The scratchpad holds nothing that
+matters any more.
 
 ### CLAIM 2026-09-17 — spec 107, then the spec 100 criteria bodies (Agent C, Interface and models, Opus 5 1M)
 

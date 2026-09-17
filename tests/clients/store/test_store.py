@@ -23,6 +23,7 @@ from acsoe.clients.store.client import StoreClient, StoreError, money_to_text
 from acsoe.clients.store.contracts import (
     BlockRecordRow,
     BlockStatus,
+    CashSource,
     CommandName,
     CommandRow,
     CommandSource,
@@ -295,6 +296,51 @@ def test_latest_equity_snapshot_is_the_newest_by_ts(store: StoreClient) -> None:
 
 def test_latest_equity_snapshot_is_none_on_an_empty_database(store: StoreClient) -> None:
     assert store.latest_equity_snapshot() is None
+
+
+@pytest.mark.parametrize("source", list(CashSource), ids=str)
+def test_the_cash_source_is_written_and_read_back_as_given(
+    store: StoreClient, source: CashSource
+) -> None:
+    """Spec 113. Both values survive the round trip through the column. The stored text
+    is asserted as well as the model, so a writer that dropped the field and let the
+    database default fill it would fail the `after_exit` case."""
+    store.write_equity_snapshot(
+        make_equity(ts=1_000, equity="1000.00", peak="1000.00").model_copy(
+            update={"cash_source": source}
+        )
+    )
+
+    stored = store.connection.execute(
+        "SELECT cash_source FROM equity_snapshots"
+    ).fetchone()["cash_source"]
+    row = store.latest_equity_snapshot()
+
+    assert stored == source.value
+    assert row is not None
+    assert row.cash_source is source
+    assert [r.cash_source for r in store.equity_series()] == [source]
+
+
+def test_a_row_built_without_a_cash_source_says_cycle_start() -> None:
+    """The model default, and it is deliberate for now: engine 19 builds the row by
+    keyword and does not pass the field until spec 114, and every row it writes today
+    really is start-of-tick cash. The docstring on `EquitySnapshotRow` says when the
+    default goes."""
+    assert make_equity(ts=1, equity="1.00", peak="1.00").cash_source is CashSource.CYCLE_START
+    assert [member.value for member in CashSource] == ["cycle_start", "after_exit"]
+
+
+def test_a_cash_source_outside_the_two_is_refused_by_the_model() -> None:
+    """Matched on the constraint, not on the field name. An `extra="forbid"` refusal
+    would name the field as well, so matching on the name alone could not fail."""
+    with pytest.raises(ValidationError, match="Input should be 'cycle_start' or 'after_exit'"):
+        EquitySnapshotRow.model_validate(
+            {
+                **make_equity(ts=1, equity="1.00", peak="1.00").model_dump(),
+                "cash_source": "after_entry",
+            }
+        )
 
 
 def test_recent_closed_trades_are_ordered_by_closed_at(store: StoreClient) -> None:

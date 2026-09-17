@@ -59,6 +59,7 @@ from acsoe.clients.store.client import DATA_GUARD_ENGINE, StoreClient
 from acsoe.clients.store.contracts import (
     BlockRecordRow,
     BlockStatus,
+    CashSource,
     CommandName,
     CommandRow,
     CommandSource,
@@ -854,6 +855,10 @@ class _SeedBuilder:
                     unrealised_pnl=unrealised,
                     realised_pnl_cum=realised_cum,
                     open_position_count=open_count,
+                    # Every seeded row is written in the ordinary-tick shape (spec 113).
+                    # Set explicitly rather than left to the model's default, so the
+                    # fixture says so itself.
+                    cash_source=CashSource.CYCLE_START,
                     updated_at=moment,
                 )
             )

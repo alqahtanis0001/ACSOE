@@ -1,0 +1,58 @@
+-- 0005_equity_cash_source.sql — the operator's ruling of 2026-09-17 on Q-C1 (spec 113).
+--
+-- Forward-only and additive: one column on `equity_snapshots`. No existing column or
+-- table is altered, nothing is dropped, and no table or index is added, so the
+-- documented table set of `architecture-context.md`, `EXPECTED_TABLES` and
+-- `EXPECTED_INDEXES` are unchanged.
+--
+-- WHAT IT RECORDS
+--
+--   Where the row's `cash` came from.
+--
+--   'cycle_start' means engine 1's balance as fetched at the start of the tick. That
+--   is the whole cash figure on any tick where engine 22 sold nothing.
+--
+--   'after_exit' means that balance plus the `net_proceeds` of every sale engine 22
+--   made on the tick. Engine 19 builds it by filtering and summing (spec 114).
+--
+-- WHY THE ROW HAS TO SAY SO
+--
+--   C's spec 100 criteria found the exit tick's row mixing three moments: cash from the
+--   start of the tick, positions value from before the sale, and the open-position count
+--   from after it. The ruled fix has engine 19 describe the account after the sale on
+--   that tick. The row then means something different on exit ticks from what it means
+--   on every other tick. A reader of the curve, such as the Phase 7 attribution, the
+--   console or a criterion, needs to know which meaning a row has without re-deriving it
+--   from `trades`.
+--
+-- WHY A CLOSED SET, WHEN 0003 REFUSED ONE FOR `hold_reason`
+--
+--   0003 refused to enumerate hold reasons because engine 21 may add one, the console
+--   maps them in `REASON_PROSE`, and a CHECK would be a third copy that only a migration
+--   can correct. Here the two values are the complete answer to a yes-or-no question:
+--   did this tick's cash include this tick's sales? A third value would be a new design,
+--   and a new design should need a migration. `CashSource` in
+--   `clients/store/contracts.py` is the Python copy of the same two values.
+--
+-- WHY `NOT NULL DEFAULT 'cycle_start'`
+--
+--   SQLite's `ALTER TABLE ... ADD COLUMN ... NOT NULL` needs a non-null default, and
+--   the default is also the backfill. It is the true label for every existing row:
+--   before this migration engine 19 always took cash from engine 1's start-of-tick
+--   balance, the exit tick included. Those exit-tick rows are the ones the finding
+--   showed to be wrong, and 'cycle_start' is exactly what they were built from, so the
+--   label describes them honestly.
+--
+--   A nullable column was rejected. NULL would be a third answer meaning "not recorded",
+--   and the first of those rows would render the same as an honest 'cycle_start' in
+--   every query that forgets to handle it.
+--
+--   Rebuilding the table to get NOT NULL with no default was rejected too. That is the
+--   twelve-step copy, drop and rename, and it must recreate
+--   `ux_equity_snapshots_tick`, the index that has already caught two orchestrators
+--   sharing one `run_id` (`bootstrap.py`). It would also buy nothing: every write goes through
+--   `EquitySnapshotRow`, whose `model_dump()` always carries the column, so the
+--   database default is reached only by hand-written SQL.
+
+ALTER TABLE equity_snapshots ADD COLUMN cash_source TEXT NOT NULL DEFAULT 'cycle_start'
+    CHECK (cash_source IN ('cycle_start', 'after_exit'));

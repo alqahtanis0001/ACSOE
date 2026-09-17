@@ -44,10 +44,13 @@ from acsoe.engines.memory.contracts import (
     EXIT_KEY,
     GUARD_BLOCKERS_KEY,
     HOLD_REASON_FIELD,
+    NET_PROCEEDS_FIELD,
     ORDERS_FIELD,
     POSITION_MANAGER_KEY,
+    POSITION_VALUE_FIELD,
     POSITIONS_FIELD,
     POSITIONS_VALUE_FIELD,
+    UNREALISED_PNL_FIELD,
     MissingInputError,
 )
 from acsoe.engines.memory.engine import MemoryEngine
@@ -101,15 +104,22 @@ def rows_in(db_path: Path, table: str) -> list[dict[str, Any]]:
         conn.close()
 
 
-def a_position(fixed_now: Any, position_id: str = "pos-1") -> dict[str, Any]:
-    """One open position, as engine 21 will publish it, through the real contract."""
+def a_position(
+    fixed_now: Any, position_id: str = "pos-1", pair: str = "AAA/USD"
+) -> dict[str, Any]:
+    """One open position, as engine 21 will publish it, through the real contract.
+
+    `pair` is a parameter because `ux_positions_open_pair` enforces invariant 6's one
+    open position per pair: a two-position tick that reuses one pair cannot be stored at
+    all, which is the database refusing a fixture the system could never produce.
+    """
     stamp = to_micros(fixed_now)
     return PositionRow(
         position_id=position_id,
         run_id="whatever-the-publisher-said",
         cycle_id=999,
-        pair="AAA/USD",
-        base="AAA",
+        pair=pair,
+        base=pair.split("/")[0],
         quote="USD",
         status=PositionStatus.OPEN,
         qty=Decimal("3.5"),
@@ -143,8 +153,17 @@ def a_resting_entry(fixed_now: Any, userref: int = 4242) -> dict[str, Any]:
 
 
 def a_closed_trade(fixed_now: Any, trade_id: str, pnl: str) -> dict[str, Any]:
+    """One closed round trip, as engine 22 publishes it — `net_proceeds` included.
+
+    Spec 113 puts `qty * exit_price - exit_fee` on every `closed_trades` row, and engine
+    19 builds the exit tick's cash from it. It is **not** a `trades` column, so it is
+    added to the dumped row rather than passed to `TradeRow`, exactly as engine 22 does:
+    a fixture built from the row model alone would be a payload the real publisher never
+    sends, and the test would be green against an engine 19 that cannot read one.
+    """
+    proceeds = Decimal("3.5") * Decimal("101.00") - Decimal("0.35")
     stamp = to_micros(fixed_now)
-    return TradeRow(
+    return {**TradeRow(
         trade_id=trade_id,
         position_id="pos-1",
         run_id="whatever-the-publisher-said",
@@ -167,7 +186,7 @@ def a_closed_trade(fixed_now: Any, trade_id: str, pnl: str) -> dict[str, Any]:
         fx_rate_entry=Decimal("1"),
         fx_rate_exit=Decimal("1"),
         updated_at=stamp,
-    ).model_dump(mode="json")
+    ).model_dump(mode="json"), NET_PROCEEDS_FIELD: format(proceeds, "f")}
 
 
 def a_rejection(pair: str = "AAA/USD") -> dict[str, Any]:
@@ -1027,6 +1046,472 @@ def test_an_open_position_with_a_value_but_no_unrealised_pnl_also_skips(
         ),
     )
     assert rows_in(migrated_db, "equity_snapshots") == []
+
+
+# --------------------------------------------------------------------------- #
+# Spec 114 — the exit-cycle equity row, by filtering and summing
+# --------------------------------------------------------------------------- #
+#
+# Operator ruling 2026-09-17 on Q-C1. On a tick where engine 22 closed positions the row
+# describes the account *after* those sales: engine 21's rows minus every `position_id`
+# engine 22 closed, summed; engine 1's start-of-tick cash plus engine 22's `net_proceeds`;
+# `cash_source = 'after_exit'`. On every other tick, the totals as before.
+#
+# The fixture below is built so that every figure of the post-exit row differs from every
+# figure of the pre-exit row it replaces. That is deliberate and it is the whole point: the
+# defect this spec fixes produced a row that looked entirely reasonable, and a fixture
+# where the two readings coincide is a test that cannot tell them apart.
+#
+#   engine 1        cash 500.00
+#   engine 21       pos-1 marked at 106.00 -> value 371.00, unrealised  21.00
+#                   pos-2 marked at  96.00 -> value 336.00, unrealised -14.00
+#                   totals (before the sale) positions_value 707.00, unrealised_pnl 7.00
+#   engine 22       closes pos-1, net_proceeds 353.15
+#
+#   pre-exit  (the defect):  cash 500.00, positions 707.00, equity 1207.00, 0 open
+#   post-exit (the ruling):  cash 853.15, positions 336.00, equity 1189.15, 1 open
+
+SOLD_VALUE = Decimal("371.00")
+SOLD_PNL = Decimal("21.00")
+KEPT_VALUE = Decimal("336.00")
+KEPT_PNL = Decimal("-14.00")
+PRE_EXIT_VALUE = SOLD_VALUE + KEPT_VALUE
+PRE_EXIT_PNL = SOLD_PNL + KEPT_PNL
+NET_PROCEEDS = Decimal("353.15")
+CASH = Decimal("500.00")
+
+
+def a_marked_position(
+    fixed_now: Any,
+    position_id: str,
+    *,
+    pair: str = "AAA/USD",
+    last_price: str,
+    value: str,
+    unrealised_pnl: str,
+) -> dict[str, Any]:
+    """One open position as engine 21 publishes it once marked (specs 106 and 113).
+
+    `value` rides on the payload and is **not** a `positions` column, so it is added to
+    the dumped row rather than passed to `PositionRow` — which could not accept it, since
+    `_Row` is `extra="forbid"`. That is exactly the shape engine 19 must cope with, and a
+    fixture built from the row model alone would be a payload engine 21 never sends.
+    """
+    row = dict(a_position(fixed_now, position_id, pair))
+    row["last_price"] = last_price
+    row[UNREALISED_PNL_FIELD] = unrealised_pnl
+    row[POSITION_VALUE_FIELD] = value
+    return row
+
+
+def an_exit_tick(
+    fixed_now: Any,
+    *,
+    marked: list[dict[str, Any]],
+    sold: list[str],
+    trades: list[dict[str, Any]] | None = None,
+    totals: bool = True,
+) -> dict[str, Any]:
+    """One tick's `state` for engines 1, 21 and 22, on a tick where engine 22 sold.
+
+    `totals` keeps engine 21's **pre-exit** `positions_value` and `unrealised_pnl` on the
+    payload. They are present on the real thing and engine 19 must not use them here, so
+    leaving them out would make the exit branch indistinguishable from the ordinary one.
+    """
+    manager: dict[str, Any] = {POSITIONS_FIELD: marked}
+    if totals:
+        manager[POSITIONS_VALUE_FIELD] = format(PRE_EXIT_VALUE, "f")
+        manager[UNREALISED_PNL_FIELD] = format(PRE_EXIT_PNL, "f")
+    return {
+        **balances(format(CASH, "f")),
+        POSITION_MANAGER_KEY: manager,
+        EXIT_KEY: {
+            POSITIONS_FIELD: [a_closed_position(fixed_now, position_id) for position_id in sold],
+            CLOSED_TRADES_FIELD: trades if trades is not None else [],
+        },
+    }
+
+
+def a_sale(fixed_now: Any, *, net_proceeds: str | None = None) -> dict[str, Any]:
+    """The `closed_trades` row for pos-1, with `net_proceeds` unless it is suppressed."""
+    trade = dict(a_closed_trade(fixed_now, "t-1", "12.50"))
+    if net_proceeds is None:
+        trade.pop(NET_PROCEEDS_FIELD)
+    else:
+        trade[NET_PROCEEDS_FIELD] = net_proceeds
+    return trade
+
+
+def test_the_exit_ticks_row_is_the_account_after_the_sale(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """The operator's ruling, whole, on the tick it was written for.
+
+    Every assertion below names a figure that the pre-exit row also carried a value for,
+    and a different one. Engine 21's totals are on the payload and are the numbers a row
+    built the old way would hold, so a branch that reads them shows up here rather than
+    in a later criterion run.
+    """
+    result = MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **an_exit_tick(
+                fixed_now,
+                marked=[
+                    a_marked_position(
+                        fixed_now,
+                        "pos-1",
+                        last_price="106.00",
+                        value=format(SOLD_VALUE, "f"),
+                        unrealised_pnl=format(SOLD_PNL, "f"),
+                    ),
+                    a_marked_position(
+                        fixed_now,
+                        "pos-2",
+                        pair="BBB/USD",
+                        last_price="96.00",
+                        value=format(KEPT_VALUE, "f"),
+                        unrealised_pnl=format(KEPT_PNL, "f"),
+                    ),
+                ],
+                sold=["pos-1"],
+                trades=[a_sale(fixed_now, net_proceeds=format(NET_PROCEEDS, "f"))],
+            ),
+        ),
+    )
+
+    (row,) = rows_in(migrated_db, "equity_snapshots")
+    assert Decimal(row["cash"]) == CASH + NET_PROCEEDS, (
+        "the exit tick's cash is engine 1's start-of-tick balance plus what the sale paid "
+        "in; the balance alone is the account before a sale that already happened"
+    )
+    assert Decimal(row["positions_value"]) == KEPT_VALUE, (
+        "the sold position's mark is still in the positions value, so the row values a "
+        "position the account no longer holds"
+    )
+    assert Decimal(row["unrealised_pnl"]) == KEPT_PNL
+    assert Decimal(row["equity"]) == CASH + NET_PROCEEDS + KEPT_VALUE
+    assert row["open_position_count"] == 1
+    assert row["cash_source"] == "after_exit", (
+        "the row's cash includes this tick's sales and says it does not, so no reader can "
+        "tell it from an ordinary row and the difference is the proceeds"
+    )
+    assert result.data["equity_skipped_reason"] is None
+    assert Decimal(str(result.data["equity"])) == CASH + NET_PROCEEDS + KEPT_VALUE
+
+
+def test_a_remaining_position_with_no_value_writes_no_equity_row(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """The partial mark — the operator's first concern, and the defect that looks like a
+    working row.
+
+    One position is sold, one remains, and the remaining one could not be marked. Summing
+    only the rows that carry a `value` gives the account minus that position: a complete,
+    plausible row that is short by a whole holding, and engine 17 reads the drawdown from
+    exactly this series. An absent total already produces no row on an ordinary tick;
+    filtering must not become a way around it.
+
+    The witness is the second assertion. `SOLD_VALUE` alone is what the silently-short
+    row would carry, so a row at that figure is the defect rather than an accident, and
+    this test fails on it rather than on the count of rows.
+    """
+    result = MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **an_exit_tick(
+                fixed_now,
+                marked=[
+                    a_marked_position(
+                        fixed_now,
+                        "pos-1",
+                        last_price="106.00",
+                        value=format(SOLD_VALUE, "f"),
+                        unrealised_pnl=format(SOLD_PNL, "f"),
+                    ),
+                    # pos-3 remains open and engine 21 could not mark it: no `last_price`,
+                    # so no `value` and no `unrealised_pnl`. Engine 21 omits its totals for
+                    # the same reason, and they are omitted here.
+                    a_position(fixed_now, "pos-3", "CCC/USD"),
+                ],
+                sold=["pos-1"],
+                trades=[a_sale(fixed_now, net_proceeds=format(NET_PROCEEDS, "f"))],
+                totals=False,
+            ),
+        ),
+    )
+
+    rows = rows_in(migrated_db, "equity_snapshots")
+    assert rows == [], (
+        "an equity row was written on a tick where a position the account still holds "
+        "could not be marked, so the row is the account minus that position"
+    )
+    assert not any(Decimal(row["positions_value"]) == SOLD_VALUE for row in rows), (
+        "the row values only the positions that happened to be marked, which is the "
+        "silently-short row this test exists to forbid"
+    )
+    reason = result.data["equity_skipped_reason"]
+    assert reason is not None and POSITION_VALUE_FIELD in reason, reason
+    assert "pos-3" in reason, reason
+    assert len(rows_in(migrated_db, "positions")) == 2, (
+        "the positions themselves must still be recorded; the skip is the equity row alone"
+    )
+
+
+def test_a_closed_position_with_no_mark_is_dropped_and_does_not_block_the_row(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """The other half of the partial-mark rule, without which the fix is satisfied by an
+    engine that skips whenever anything is unmarked.
+
+    A position engine 22 sold is dropped before anything is summed, so whether engine 21
+    managed to mark it is irrelevant — and it is precisely the position most likely to be
+    unmarked, since the tick that sells it is the tick its quote went missing. Skipping
+    the row for it would mean a liquidation during a data outage wrote no equity at all.
+    """
+    result = MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **an_exit_tick(
+                fixed_now,
+                marked=[
+                    a_position(fixed_now, "pos-1"),
+                    a_marked_position(
+                        fixed_now,
+                        "pos-2",
+                        pair="BBB/USD",
+                        last_price="96.00",
+                        value=format(KEPT_VALUE, "f"),
+                        unrealised_pnl=format(KEPT_PNL, "f"),
+                    ),
+                ],
+                sold=["pos-1"],
+                trades=[a_sale(fixed_now, net_proceeds=format(NET_PROCEEDS, "f"))],
+                totals=False,
+            ),
+        ),
+    )
+
+    (row,) = rows_in(migrated_db, "equity_snapshots")
+    assert Decimal(row["positions_value"]) == KEPT_VALUE
+    assert Decimal(row["cash"]) == CASH + NET_PROCEEDS
+    assert row["cash_source"] == "after_exit"
+    assert result.data["equity_skipped_reason"] is None
+
+
+def test_engine_21s_rows_must_cover_the_positions_the_account_still_holds(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """The same hole as the partial mark, arriving through a position engine 21 never
+    published at all.
+
+    The count comes from the store *after* this tick's rows landed, so it is the number
+    of positions that survived the sale. Fewer remaining rows than that and the sum is
+    over a subset of the account, which the field-by-field check above cannot see because
+    there is no row to find a missing field on.
+    """
+    MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **an_exit_tick(
+                fixed_now,
+                marked=[
+                    a_marked_position(
+                        fixed_now,
+                        "pos-2",
+                        pair="BBB/USD",
+                        last_price="96.00",
+                        value=format(KEPT_VALUE, "f"),
+                        unrealised_pnl=format(KEPT_PNL, "f"),
+                    )
+                ],
+                sold=[],
+            ),
+        ),
+    )
+    assert [row["cycle_id"] for row in rows_in(migrated_db, "equity_snapshots")] == [1], (
+        "the ordinary first tick wrote no row, so the second tick's skip below would be "
+        "satisfied by an engine that never writes one"
+    )
+    # pos-2 is now open in the store. On the next tick engine 22 sells pos-1 - a position
+    # engine 21 published no row for - and engine 21 publishes nothing about pos-2 either.
+    result = MemoryEngine().process(
+        context_at(1),
+        tick(
+            2,
+            **an_exit_tick(
+                fixed_now,
+                marked=[],
+                sold=["pos-1"],
+                trades=[a_sale(fixed_now, net_proceeds=format(NET_PROCEEDS, "f"))],
+                totals=False,
+            ),
+        ),
+    )
+
+    assert [row["cycle_id"] for row in rows_in(migrated_db, "equity_snapshots")] == [1], (
+        "the second tick wrote an equity row summing no positions while the account still "
+        "holds one, which is a drawdown of the whole holding"
+    )
+    reason = result.data["equity_skipped_reason"]
+    assert reason is not None and "do not cover the account" in reason, reason
+
+
+def test_a_closed_trade_with_no_net_proceeds_writes_no_equity_row(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """A sale whose proceeds are absent is not a sale that paid nothing.
+
+    `decimal_field` would return `Decimal(0)` for the absent field, and the row would then
+    report an account that sold a position and received no cash for it — a realised loss
+    of the whole notional, in the series the drawdown breaker reads. The same
+    absent-is-not-zero rule that governs the rest of this file.
+    """
+    result = MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **an_exit_tick(
+                fixed_now,
+                marked=[
+                    a_marked_position(
+                        fixed_now,
+                        "pos-1",
+                        last_price="106.00",
+                        value=format(SOLD_VALUE, "f"),
+                        unrealised_pnl=format(SOLD_PNL, "f"),
+                    )
+                ],
+                sold=["pos-1"],
+                trades=[a_sale(fixed_now, net_proceeds=None)],
+                totals=False,
+            ),
+        ),
+    )
+
+    assert rows_in(migrated_db, "equity_snapshots") == []
+    reason = result.data["equity_skipped_reason"]
+    assert reason is not None and NET_PROCEEDS_FIELD in reason, reason
+    assert len(rows_in(migrated_db, "trades")) == 1, (
+        "the trade itself must still be recorded; the skip is the equity row alone"
+    )
+
+
+def test_an_ordinary_tick_still_reads_engine_21s_totals_and_says_cycle_start(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """The branch that must not move, and the label that tells the two apart.
+
+    Engine 21's rows carry a `value` on every tick, not only exit ticks. If engine 19 took
+    the exit branch whenever a `value` was published it would stop reading the totals
+    altogether, and spec 113's sum test — the only thing keeping the two paths from
+    drifting — would have nothing left to guard. So the totals here disagree with the row,
+    and this test names which one the ordinary tick uses.
+    """
+    row_value = Decimal("336.00")
+    total = Decimal("707.00")
+    assert row_value != total, "the fixture cannot tell the two paths apart"
+    result = MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **balances(format(CASH, "f")),
+            **{
+                POSITION_MANAGER_KEY: {
+                    POSITIONS_FIELD: [
+                        a_marked_position(
+                            fixed_now,
+                            "pos-2",
+                            pair="BBB/USD",
+                            last_price="96.00",
+                            value=format(row_value, "f"),
+                            unrealised_pnl=format(KEPT_PNL, "f"),
+                        )
+                    ],
+                    POSITIONS_VALUE_FIELD: format(total, "f"),
+                    UNREALISED_PNL_FIELD: format(PRE_EXIT_PNL, "f"),
+                }
+            },
+        ),
+    )
+
+    (row,) = rows_in(migrated_db, "equity_snapshots")
+    assert Decimal(row["positions_value"]) == total
+    assert Decimal(row["unrealised_pnl"]) == PRE_EXIT_PNL
+    assert Decimal(row["cash"]) == CASH
+    assert row["cash_source"] == "cycle_start"
+    assert result.data["equity_skipped_reason"] is None
+
+
+def test_the_two_payload_facts_are_not_stored_as_columns(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """Engine 19 accepts `value` and `net_proceeds` and stores neither.
+
+    Between specs 113 and 114 this raised — `_Row` is `extra="forbid"` — and contract
+    rule 7 turned the raise into an `ERROR`, so the whole tick went unrecorded: no
+    positions, no orders, no trades, no block record and no equity row. The point of this
+    test is the pair of facts: the rows reach the store, and the store gained no column
+    for either figure. Both are recomputable from columns it already keeps.
+    """
+    MemoryEngine().process(
+        context_at(0),
+        tick(
+            1,
+            **an_exit_tick(
+                fixed_now,
+                marked=[
+                    a_marked_position(
+                        fixed_now,
+                        "pos-1",
+                        last_price="106.00",
+                        value=format(SOLD_VALUE, "f"),
+                        unrealised_pnl=format(SOLD_PNL, "f"),
+                    )
+                ],
+                sold=["pos-1"],
+                trades=[a_sale(fixed_now, net_proceeds=format(NET_PROCEEDS, "f"))],
+                totals=False,
+            ),
+        ),
+    )
+
+    (position,) = rows_in(migrated_db, "positions")
+    (trade,) = rows_in(migrated_db, "trades")
+    assert POSITION_VALUE_FIELD not in position, position
+    assert NET_PROCEEDS_FIELD not in trade, trade
+    assert position["status"] == PositionStatus.CLOSED.value
+    assert Decimal(trade["qty"]) * Decimal(trade["exit_price"]) - Decimal(
+        trade["exit_fee"]
+    ) == NET_PROCEEDS, (
+        "the stored columns no longer recompute the net proceeds engine 22 published, so "
+        "the figure engine 19 used is not a fact about the sale the store recorded"
+    )
+
+
+def test_a_closed_position_named_by_nothing_raises_rather_than_being_skipped(
+    context_at: Any, fixed_now: Any
+) -> None:
+    """A closed row with no `position_id` cannot be dropped from engine 21's valuation.
+
+    Skipping it silently is the one wrong answer: the sold position's mark stays in the
+    sum, the row values a holding the account no longer has, and the tick looks clean.
+    """
+    broken = dict(a_closed_position(fixed_now, "pos-1"))
+    broken["position_id"] = ""
+    with pytest.raises(MissingInputError, match="position_id"):
+        MemoryEngine().process(
+            context_at(0),
+            tick(
+                1,
+                **balances(format(CASH, "f")),
+                **{EXIT_KEY: {POSITIONS_FIELD: [broken]}},
+            ),
+        )
 
 
 # --------------------------------------------------------------------------- #

@@ -132,9 +132,10 @@ def test_fresh_database_migrates_from_empty(tmp_path: Path) -> None:
     silently skipped, applied twice, or applied out of order still fails.
     """
     expected = list(range(1, len(_migration_files()) + 1))
-    assert len(expected) >= 4, (
-        "0002 is spec 31's, 0003 is the hold-reason ruling's and 0004 is the "
-        "base-rate-Brier ruling's; a shorter list means one went missing"
+    assert len(expected) >= 5, (
+        "0002 is spec 31's, 0003 is the hold-reason ruling's, 0004 is the "
+        "base-rate-Brier ruling's and 0005 is the equity cash-source ruling's; a "
+        "shorter list means one went missing"
     )
     db_path = tmp_path / "fresh.sqlite"
     assert not db_path.exists()
@@ -733,3 +734,116 @@ def test_0004_did_not_disturb_the_existing_leaderboard_contract(migrated_db: Pat
     finally:
         close_connection(conn)
     assert (row["net_pnl"], row["base_rate_brier"]) == ("10.00", 0.25)
+
+
+# --------------------------------------------------------------------------- #
+# 0005 - `equity_snapshots.cash_source` (operator ruling 2026-09-17, spec 113)
+#
+# Where a row's cash came from: engine 1's start-of-tick balance, or that balance
+# plus the net proceeds of this tick's exits. Two values, and nothing else.
+# --------------------------------------------------------------------------- #
+
+_EQUITY_INSERT_WITH_SOURCE = (
+    "INSERT INTO equity_snapshots (cycle_id, run_id, ts, currency, equity, "
+    "peak_equity, cash, positions_value, unrealised_pnl, realised_pnl_cum, "
+    "open_position_count, cash_source, updated_at) VALUES "
+    "(?, 'run-a', ?, 'USD', '100.00', '100.00', '100.00', '0.00', '0.00', '0.00', 0, ?, 1)"
+)
+
+
+@pytest.mark.parametrize("source", ["cycle_start", "after_exit"])
+def test_both_cash_sources_are_accepted(migrated_db: Path, source: str) -> None:
+    conn = open_connection(migrated_db)
+    try:
+        conn.execute(_EQUITY_INSERT_WITH_SOURCE, (1, 1_000, source))
+        stored = conn.execute("SELECT cash_source FROM equity_snapshots").fetchone()
+    finally:
+        close_connection(conn)
+    assert stored["cash_source"] == source
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["", "CYCLE_START", "after_entry", "cycle_start ", None],
+    ids=["blank", "upper case", "a third value", "trailing space", "null"],
+)
+def test_any_other_cash_source_is_refused_by_the_database(
+    migrated_db: Path, source: str | None
+) -> None:
+    """The CHECK is a closed set, compared exactly, and the column is NOT NULL. The
+    model refuses the same values; this proves the database does too, for a writer that
+    goes around the model."""
+    conn = open_connection(migrated_db)
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match=r"CHECK constraint failed|NOT NULL"):
+            conn.execute(_EQUITY_INSERT_WITH_SOURCE, (1, 1_000, source))
+    finally:
+        close_connection(conn)
+
+
+def test_existing_equity_rows_are_backfilled_as_cycle_start(tmp_path: Path) -> None:
+    """Rows written under 0004 read `cycle_start` once 0005 is applied.
+
+    That is the true label for them: before 0005 engine 19 always took cash from engine
+    1's start-of-tick balance, the exit tick included. The migrations are applied in two
+    steps, from a copy of the real directory, so the rows exist before the column does.
+    """
+    real = sorted(default_migrations_dir().glob("*.sql"))
+    assert real[4].name == "0005_equity_cash_source.sql", [path.name for path in real]
+    staged = tmp_path / "migrations"
+    staged.mkdir()
+    for path in real[:4]:
+        (staged / path.name).write_bytes(path.read_bytes())
+    db_path = tmp_path / "db.sqlite"
+    assert apply_migrations(db_path, migrations_dir=staged) == [1, 2, 3, 4]
+
+    conn = open_connection(db_path)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(equity_snapshots)")}
+        assert "cash_source" not in columns, "the rows below must predate the column"
+        for cycle_id in (1, 2):
+            conn.execute(
+                "INSERT INTO equity_snapshots (cycle_id, run_id, ts, currency, equity, "
+                "peak_equity, cash, positions_value, unrealised_pnl, realised_pnl_cum, "
+                "open_position_count, updated_at) VALUES "
+                "(?, 'run-a', ?, 'USD', '100.00', '100.00', '100.00', '0.00', '0.00', "
+                "'0.00', 0, 1)",
+                (cycle_id, cycle_id * 1_000),
+            )
+    finally:
+        close_connection(conn)
+
+    (staged / real[4].name).write_bytes(real[4].read_bytes())
+    assert apply_migrations(db_path, migrations_dir=staged) == [5]
+
+    conn = open_connection(db_path)
+    try:
+        backfilled = [
+            row["cash_source"]
+            for row in conn.execute("SELECT cash_source FROM equity_snapshots ORDER BY ts")
+        ]
+        (money,) = conn.execute(
+            "SELECT equity, cash FROM equity_snapshots WHERE cycle_id = 1"
+        ).fetchall()
+    finally:
+        close_connection(conn)
+    assert backfilled == ["cycle_start", "cycle_start"]
+    assert (money["equity"], money["cash"]) == ("100.00", "100.00"), "0005 touched no money"
+
+
+def test_0005_did_not_disturb_the_existing_equity_contract(migrated_db: Path) -> None:
+    """0005 is additive. The one-row-per-tick index still fires beside a written
+    `cash_source`, and the column is not a money column."""
+    conn = open_connection(migrated_db)
+    try:
+        conn.execute(_EQUITY_INSERT_WITH_SOURCE, (1, 1_000, "after_exit"))
+        with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+            conn.execute(_EQUITY_INSERT_WITH_SOURCE, (1, 2_000, "cycle_start"))
+        declared = {
+            column[1]: column[2]
+            for column in conn.execute("PRAGMA table_info(equity_snapshots)")
+        }
+    finally:
+        close_connection(conn)
+    assert declared["cash_source"] == "TEXT"
+    assert ("equity_snapshots", "cash_source") not in EXPECTED_MONEY_COLUMNS

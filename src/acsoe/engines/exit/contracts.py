@@ -58,6 +58,7 @@ __all__ = [
     "EXCHANGE_PAIR_RULES_KEY",
     "FALLBACK_ASSET_PAIRS_RETAINED",
     "LOT_DECIMALS_FIELD",
+    "NET_PROCEEDS_FIELD",
     "ORDERS_FIELD",
     "PAIR_RULES_PAIRS_KEY",
     "POSITIONS_CLOSED_FIELD",
@@ -130,6 +131,21 @@ CLOSED_TRADES_FIELD: Final = "closed_trades"
 
 #: Half of the kill switch's completion signal. See the module docstring.
 POSITIONS_CLOSED_FIELD: Final = "positions_closed"
+
+#: On every `closed_trades` row: `qty * exit_price - exit_fee`, as an exact decimal
+#: string, computed from the `qty`, `exit_price` and `exit_fee` the same row carries.
+#: The cash the sale put into the account. Engine 19 adds it to engine 1's start-of-tick
+#: balance to build the exit tick's equity row (spec 114).
+#:
+#: **A fact about a sale this engine executed, and nothing else** (operator ruling
+#: 2026-09-17). It reads neither engine 21's valuation nor engine 1's balance. The
+#: withdrawn first design had this engine subtract engine 21's marks, which tied it to a
+#: valuation method it does not own. That result would have changed silently whenever
+#: engine 21's method did.
+#:
+#: It is not a `trades` column. Engine 19 reads it off the payload, and the store keeps
+#: `qty`, `exit_price` and `exit_fee`, from which it can always be recomputed.
+NET_PROCEEDS_FIELD: Final = "net_proceeds"
 
 # --------------------------------------------------------------------------- #
 # The one fallback, and the one this engine deliberately does not have

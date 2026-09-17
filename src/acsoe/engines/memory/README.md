@@ -47,8 +47,9 @@ contract rule 3 forbids importing another engine to find out what a key is calle
 | `state["exchange"]["balances"]` | 1 `exchange` (A) | cash, and therefore whether an equity row can be written at all |
 | `state["position_manager"]` | 21 (B), Phase 6 | positions, resting orders, position value, `hold_reason` |
 | `state["execution"]["orders"]` | 18 (B), Phase 6 | the entry order it placed, on the **opportunity** chain, same tick |
-| `state["exit"]["closed_trades"]` | 22 (B), Phase 6 | one `trades` row per closed round trip |
-| `state["exit"]["orders"]`, `["positions"]` | 22 (B), Phase 6 | the exit orders it placed and the positions it closed |
+| `state["exit"]["closed_trades"]` | 22 (B), Phase 6 | one `trades` row per closed round trip; each row's `net_proceeds` is the exit tick's cash |
+| `state["exit"]["orders"]`, `["positions"]` | 22 (B), Phase 6 | the exit orders it placed and the positions it closed — the `position_id`s dropped from engine 21's valuation |
+| `state["position_manager"]["positions"][*]["value"]` | 21 (B), Phase 6 | per-row `qty × last_price`, summed over the positions that remain open on an exit tick |
 
 ## An opportunity-chain engine that errored
 
@@ -117,6 +118,58 @@ this tick's positions have landed: with nothing open, an absent mark is not a mi
 mark and the row stands on cash alone. The skip names itself in
 `equity_skipped_reason`, because a silent gap in the equity curve is indistinguishable
 from a silent bug.
+
+## The exit-cycle equity row
+
+Operator ruling 2026-09-17 on C's Q-C1; specs 113 (B) and 114 (C). **On a tick where
+engine 22 closed positions the equity row describes the account *after* those sales**, and
+engine 19 builds it by filtering and summing facts other engines published, doing no
+arithmetic on account figures of its own:
+
+- **positions value and unrealised PnL** — engine 21's position rows, minus every
+  `position_id` that appears in `state["exit"]["positions"]` as closed, summing the
+  remaining rows' `value` and `unrealised_pnl`;
+- **cash** — engine 1's start-of-tick balance in the reporting currency, plus the
+  `net_proceeds` of every row in `state["exit"]["closed_trades"]`;
+- **`cash_source = 'after_exit'`**. On every other tick the row is built from engine 1's
+  balance and engine 21's totals exactly as before, and says `'cycle_start'`.
+
+Before the ruling the exit tick's row mixed three moments that never coexisted: cash from
+engine 1 at the start of the tick, positions value from engine 21 before the sale, and the
+open-position count from the store after it. On C's stop leg it read equity 4945.02 with 0
+open positions beside a positions value of 3281.10, against a true 4938.79, and on the
+target leg it moved `peak_equity` to a figure the account never held. The criterion
+`equity_row_never_values_positions_it_does_not_hold` is the observable form of it.
+
+**No engine reads another engine's valuation method.** An earlier design had engine 22
+subtract engine 21's marks and was withdrawn for exactly that coupling: engine 22's figure
+would have changed silently whenever engine 21's method did. `value` and `net_proceeds`
+are each a fact about something their publisher did.
+
+**`value` and `net_proceeds` are payload facts, not columns.** `_Row` is `extra="forbid"`,
+so engine 19 takes each off its own copy of the row before validating the stored row.
+Between specs 113 and 114 it did not, the validation raised, contract rule 7 turned that
+into an `ERROR`, and **the whole tick went unrecorded** — positions, orders, trades, block
+records and equity alike. Neither figure became a column, because the store can always
+recompute both from columns it already keeps.
+
+**Three things make the exit tick write no row**, and each is the fail-closed reading of a
+hole that would otherwise look like a complete row:
+
+- **a remaining position with no `value` or `unrealised_pnl`** — the operator's first
+  concern. Summing only the rows that carry a mark gives the account minus one holding: a
+  plausible row that is short by a whole position. An absent *total* does this already on
+  an ordinary tick and filtering must not become a way around it. A **closed** position
+  with no mark is dropped and blocks nothing, which matters because the tick that sells a
+  position is the tick its quote is most likely to be missing;
+- **engine 21's remaining rows not covering what the account still holds**, counted from
+  the store after this tick's rows landed — the same hole arriving through a position
+  engine 21 never published;
+- **a closed trade with no `net_proceeds`** — a sale whose proceeds are absent is not a
+  sale that paid nothing.
+
+If engine 22 closed positions but engine 1 published no balance — the outage liquidation —
+there is no row, exactly as on any other tick with no balance.
 
 **`positions.hold_reason` is written on every position engine 21 marked, and set to
 `None` on every tick that did not hold.** The clearing is the load-bearing half:

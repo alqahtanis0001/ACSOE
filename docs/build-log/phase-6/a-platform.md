@@ -1368,3 +1368,104 @@ compared in the same statement:
 **Runs on the restored tree.** The file: `7 passed in 69.75s`
 (`logs/verify/a87-after103-file.log`). `tests/clients/paper/`: `77 passed in 17.60s`
 (`logs/verify/a87-after103-paper.log`). No full gate was run; the lead runs it.
+
+### The rehearsal's equity expectation described a moment the ruling abolished
+
+**Agent:** A - **Task:** spec 116 - **Date:** 2026-09-17
+
+**What happened.** After specs 113 and 114 landed, five of the seven scenarios in
+`tests/engines/test_trade_chain_rehearsal.py` went red, all inside `check_recorded`.
+Two separate causes, neither of them in engine 19.
+
+**Why.** The first is mechanical. `check_recorded` builds its *expectation* by feeding
+engine 21's and engine 22's published rows back through `PositionRow` and `TradeRow`,
+whose `_Row` base is `extra="forbid"`. Spec 113 added `value` to a marked position row
+and `net_proceeds` to a closed-trade row. Both are payload facts that engine 19 reads
+and neither is a column - the store keeps `qty` and `last_price`, and `qty`,
+`exit_price` and `exit_fee`, from which each is recomputable - so the models rightly
+refuse them, and the expectation raised before a single comparison was made.
+
+The second is substantive, and it is the one worth recording. The equity block asserted
+`row.cash == state["exchange"]["balances"]["USD"]` and
+`row.positions_value == state["position_manager"]["positions_value"]`. On a tick where
+engine 22 sold, those two figures come from different instants: engine 1's balance is
+from the top of the tick, before the sale, and engine 21's valuation is from before it
+too, while the store's position count is from after. That is precisely the three-moment
+row the operator's ruling of 2026-09-17 abolished. So the rehearsal was not merely out of
+date - it was asserting, as the expected account, the composite the ruling exists to
+forbid. Left as it was it would have failed a correct engine 19 forever, and a rehearsal
+that disagrees with the contract is worse than no rehearsal.
+
+**Fix.** Two changes, both in `check_recorded` and its helpers.
+
+`without(row, field)` drops one payload-only field before the row model sees it, leaving
+the published dict untouched. It is used for `POSITION_VALUE_FIELD` and
+`NET_PROCEEDS_FIELD`, both imported from their owning engine's contracts rather than
+spelled as strings, so a rename breaks the import instead of silently re-arming the bug.
+Nothing is weakened by the drop: the two fields are then checked where they actually
+matter, in the equity derivation.
+
+`ruled_equity(state)` returns `(cash, positions_value, unrealised_pnl, cash_source)` or
+`None`, and the equity block asserts against it. `None` means the ruling licenses no row,
+and the caller then requires `equity_skipped_reason` to be set - so "engine 19 skipped"
+is no longer an unconditional early exit from the check.
+
+**How it was kept independent of engine 19.** The rehearsal's worth is that it is a
+*second* derivation, so this mattered more than the code. `ruled_equity` was written from
+`context/engine-contracts.md` - the ruling paragraph and the two cross-chain rows for
+`net_proceeds` and `value` - and from the payload builders that produce those facts:
+engine 21's `_mark` and engine 22's `_trade_row` and `_closed_position_row`, which are the
+*sources*, not the consumer. `src/acsoe/engines/memory/engine.py` was not opened until the
+file was green and the mutation arm needed an anchor, and C's `scratchpad/probe_rehearsal.py`
+and C's build-log entry quoting it were not read at all. Three places where the derivation
+deliberately does not take engine 19's shape, each one a way for the two to disagree:
+
+1. **Whether a row is due** is decided from the marked rows that *remain*, not from engine
+   21's `positions_value`. On an exit tick the two differ: an unmarkable position makes
+   engine 21 withhold both totals, but if that position is one engine 22 just sold, every
+   remaining position is marked and the ruling's sum exists. An engine 19 still gated on
+   the absent total would write nothing, and the rehearsal would say a row was due.
+2. **The sums are taken over the per-row `value` and `unrealised_pnl`**, which is not where
+   engine 21's totals come from - it accumulates them beside the rows, deliberately, so
+   that a comparison is of two computations. A row disagreeing with its own total is
+   therefore visible from here.
+3. **`cash_source` is derived** from the closed set, not read back off the row, so a
+   correct figure under a wrong label fails on the label.
+
+**Proof it can fail.** Two arms, in a **copied tree** under the scratchpad, never in the
+working tree: `PYTHONDONTWRITEBYTECODE=1`, `sys.executable`, `PYTHONPATH` pointed at the
+copy's `src` with `acsoe.__file__` asserted to resolve inside the copy (the editable
+install's `.pth` names the working tree, so without that check the mutation would have
+tested nothing), each anchor asserted to occur exactly once, engine 19 confirmed 0 CRLF /
+796 LF, the restore in a `finally` with the sha256 compared in the same statement, and the
+copy deleted at the end. Log: `logs/verify/a116-mutation-e19.log`.
+
+- **A1, the arm spec 116 asks for.** `if sold or closed:` becomes `if False:`, so engine 19
+  ignores engine 22's facts and writes the pre-exit row again. Mutant
+  `56593fc6...0a566e66`. **KILLED, `4 failed, 3 passed in 75.06s`.** The killing assertion
+  is the equity row's cash in `check_recorded`:
+  `AssertionError: the row's cash is not the account the ruling describes`,
+  `assert Decimal('1663.9201177597499') == Decimal('4924.372253541980864')` - the pre-exit
+  cash against the cash after the sale, on a row whose repr shows `open_position_count=0`
+  beside `cash_source=CashSource.CYCLE_START`, which is the three-moment row exactly.
+- **A2, the label alone.** `cash_source = CashSource.AFTER_EXIT` becomes
+  `CashSource.CYCLE_START`, so the arithmetic is right and only the label is wrong. Mutant
+  `8a331c9e...9947ab0d`. **KILLED, `4 failed, 3 passed in 70.26s`**, on
+  `AssertionError: the row is labelled for the wrong instant`. This arm exists because A1
+  is killed by the cash assertion *in front of* the label assertion, which leaves the label
+  assertion unwitnessed; A2 witnesses it.
+
+The three survivors under both arms are the three scenarios with no exit tick - the
+cancelled entry, the restarted process, and the watched position - which is the correct
+survival, not a gap.
+
+**Consequence.** No assertion was weakened and no engine was touched. `4 failed` rather
+than `1 failed` is because `check_recorded` runs after **every** tick in four scenarios
+that each reach an exit, so one defect in engine 19 is caught four times over.
+
+**Runs.** The file on the restored working tree: `7 passed in 66.79s`
+(`logs/verify/a116-file.log`). `ruff check src/ tests/ scripts/` all clean;
+`mypy --strict src/ scripts/` `Success: no issues found in 153 source files`. The
+rehearsal file is `a907322197de...4e02267f9c` and engine 19 is
+`6d0c226f92...4ef0831fa7`, both confirmed unchanged after the mutation run. No full gate
+was run; the lead runs it.

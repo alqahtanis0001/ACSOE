@@ -9,6 +9,7 @@ from acsoe.clients.store.connection import close_connection, open_connection
 from acsoe.clients.store.contracts import (
     BlockRecordRow,
     BlockStatus,
+    CashSource,
     CommandName,
     CommandRow,
     CommandSource,
@@ -54,6 +55,7 @@ __all__ = [
     "TIMESTAMP_TYPE",
     "BlockRecordRow",
     "BlockStatus",
+    "CashSource",
     "CommandName",
     "CommandRow",
     "CommandSource",

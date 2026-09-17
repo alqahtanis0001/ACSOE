@@ -8,14 +8,12 @@ Three observations per criterion, and the order they arrive in is the phase's or
 * **PASS** against the subject as it actually is.
 * **FAIL**, deliberately induced against a *plausible* wrong implementation.
 
-**Where this file is honestly incomplete, stated rather than implied.** On the tree it
-was written against, **every one of the nine is PENDING**: engines 16, 18 and 22 are B's
-and unbuilt, engines 9 and 14 are `C-models`'s and unbuilt, and neither committed fixture
-has been cut. So every criterion here carries the PENDING observation plus an assertion
-that its PENDING **names the engine or fixture that owes it and the spec that owns it** —
-a PENDING line that does not say what to build makes the owning agent come and read
-`scripts/verify.py`. Their PASS and FAIL halves are observed as those subjects land,
-which is the sequencing every phase since Phase 1 has used.
+**Where it stands.** The nine were written while every subject was unbuilt and reported
+PENDING, naming the engine or fixture that owed each. Since spec 82 registered the Phase 6
+engines and spec 100's bodies landed, eight drive the registered chain to a verdict and
+`console_shows_position_live` stays PENDING on spec 101. Each is observed three ways here:
+PENDING on `unbuilt_tree`, its verdict on the real tree (`REAL_TREE`), and FAIL under a
+named mutation of the thing it judges, made in a copied tree (`MUTATIONS`).
 
 Two branches that *can* be driven to a verdict today are driven to one here, because a
 branch nobody has executed is a comment: the fixture that exists and is **empty** (FAIL,
@@ -39,6 +37,7 @@ import shutil
 from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -64,14 +63,15 @@ PHASE6_CRITERIA = (
     "adaptive_router_weights_on_fixture",
 )
 
-#: Spec 105's criterion, registered after spec 100's nine. Kept out of `PHASE6_CRITERIA`
-#: on purpose: those nine are PENDING on the real tree and the tests parametrised over
-#: them say so, while this one runs to a verdict today. Its own tests are at the end of
-#: this file.
+#: Spec 105's criterion, registered after spec 100's nine. Kept out of `PHASE6_CRITERIA`,
+#: whose tests are about spec 100's clauses; its own tests are near the end of this file.
 EQUITY_ACROSS_FILL = "paper_equity_continuous_across_fill"
 
-#: The seven that drive a trade through the gates and must therefore name their fee
-#: regime in their own message. Ruling 8 of the Phase 6 task list.
+#: The operator's criterion of 2026-09-17, registered last. Its FAIL is today's code.
+EQUITY_ROWS = "equity_row_never_values_positions_it_does_not_hold"
+
+#: The seven that drive a trade through the gates. Ruling 8 of the Phase 6 task list:
+#: each names its fee regime in its own message.
 TRADE_DRIVING = (
     "paper_trade_round_trip_target",
     "paper_trade_round_trip_stop",
@@ -82,40 +82,31 @@ TRADE_DRIVING = (
     "console_shows_position_live",
 )
 
-#: The two that do not, and deliberately name no tier. Engine 9 walks a recorded book
-#: and engine 14 weighs recorded leaderboard rows; the fee schedule enters neither, and
-#: a criterion that claimed a fee regime it had not applied would be the same wrong
-#: claim as one that omitted a regime it had.
+#: The two that drive the chain only far enough to reach their engine. They name tier 3
+#: too, because the chain they drive runs at tier 3 (engine 14 sits after the cost gate
+#: and can be reached at no other tier), and they say the thing they judge reads no fee.
 NOT_TRADE_DRIVING = (
     "order_book_slippage_on_recorded_book",
     "adaptive_router_weights_on_fixture",
 )
 
-#: Each awaited subject, and the string its PENDING line must carry. The engine number
-#: and the owning spec, because the reader of a PENDING is usually the agent who has to
-#: act on it.
+#: What each criterion reports on the real registered tree, and a fragment its message
+#: must carry.
 #:
-#: **This mapping moves as the phase is built, and has moved twice on its first day.**
-#: It named engine 16 `decision` for five of the nine when it was written; B landed
-#: engine 16 that afternoon and the entries moved to engine 18 `execution`; B landed
-#: engine 18 an hour later and they moved to engine 22 `exit`. Each move was a red test
-#: and a deliberate edit, which is the intended behaviour and not friction: without it a
-#: criterion can keep reporting PENDING for a reason that stopped being true, and a gate
-#: cannot tell that state apart from progress.
-#:
-#: `unfilled_entry_cancels_without_chasing` has run out of other people's work to wait
-#: for — engines 16, 18 and 21 and the paper broker all exist — so it now names **C** and
-#: spec 100. That is the entry to watch: it is the one this session owes.
-AWAITED: dict[str, tuple[str, ...]] = {
-    "paper_trade_round_trip_target": ("engine 22 `exit`", "spec 93"),
-    "paper_trade_round_trip_stop": ("engine 22 `exit`", "spec 93"),
-    "paper_trade_round_trip_timeout": ("engine 22 `exit`", "spec 93"),
-    "unfilled_entry_cancels_without_chasing": ("C, spec 100", "unfilled-entry driver"),
-    "triggered_stop_holds_on_data_guard_block": ("engine 22 `exit`", "spec 93"),
-    "escalation_completes_during_outage": ("engine 22 `exit`", "spec 93"),
-    "console_shows_position_live": ("engine 22 `exit`", "spec 93"),
-    "order_book_slippage_on_recorded_book": ("engine 9 `order_book`", "spec 96"),
-    "adaptive_router_weights_on_fixture": ("engine 14 `adaptive_router`", "spec 97"),
+#: **This replaced `AWAITED`** when spec 100's bodies landed. `AWAITED` named the engine
+#: each PENDING was waiting for, and it moved three times as engines 16, 18 and 22 landed.
+#: Each move was a red test and a deliberate edit. Moving from PENDING to a verdict is the
+#: last move, and it is made the same way.
+REAL_TREE: dict[str, tuple[str, str]] = {
+    "paper_trade_round_trip_target": ("PASS", "it exited at the target"),
+    "paper_trade_round_trip_stop": ("PASS", "it exited at the stop"),
+    "paper_trade_round_trip_timeout": ("PASS", "it exited at the timeout"),
+    "unfilled_entry_cancels_without_chasing": ("PASS", "and not before"),
+    "triggered_stop_holds_on_data_guard_block": ("PASS", "placed no exit"),
+    "escalation_completes_during_outage": ("PASS", "can never find one"),
+    "console_shows_position_live": ("PENDING", "(C, spec 101)"),
+    "order_book_slippage_on_recorded_book": ("PASS", "equals engine 9's payload exactly"),
+    "adaptive_router_weights_on_fixture": ("PASS", "a property of the fixture"),
 }
 
 _NO_PYCACHE = shutil.ignore_patterns("__pycache__", "*.pyc")
@@ -161,6 +152,7 @@ def test_all_nine_criteria_are_registered_for_phase_6(verify_module: ModuleType)
     assert [name for name in registered if name not in every_phase] == [
         *PHASE6_CRITERIA,
         EQUITY_ACROSS_FILL,
+        EQUITY_ROWS,
     ]
 
 
@@ -208,63 +200,69 @@ def test_pending_on_a_tree_with_nothing_built(
     assert _ABSENT_ENGINE.match(outcome.message), f"{name}: {outcome.message}"
 
 
-@pytest.mark.parametrize("name", PHASE6_CRITERIA)
-def test_pending_on_the_real_tree_names_the_subject_and_the_spec(
-    verify_module: ModuleType, repo_root: Path, name: str
-) -> None:
-    """The PENDING that the team actually reads, and what it must contain.
+@pytest.fixture(scope="module")
+def real_tree_outcomes(verify_module: ModuleType, repo_root: Path) -> dict[str, Any]:
+    """Every Phase 6 criterion, run once on the real repository for this module.
 
-    This runs against the **real repository**, which is the state the gate reports on
-    today: engines 9, 14, 16, 18 and 22 are unbuilt and both fixtures are uncut. A
-    PENDING that said only "not done" would make the owning agent come and read
-    `scripts/verify.py` to find out what to build, so each one names the engine by
-    number and the spec that owes it.
-
-    **This test is expected to change as subjects land**, and that is the point of
-    `AWAITED`: when B lands engine 16 the first four move on to naming engine 18, this
-    goes red, and the entry is updated deliberately rather than the criterion quietly
-    reporting PENDING for a reason that stopped being true.
+    Each one drives the registered chain, so running it again for every assertion would
+    multiply the suite's largest cost for nothing. The outcome is a value, and every test
+    below reads it.
     """
-    outcome = run(verify_module, name, repo_root)
-    assert_pending(outcome, verify_module)
-    for fragment in AWAITED[name]:
-        assert fragment in outcome.message, (fragment, outcome.message)
+    return {
+        name: run(verify_module, name, repo_root)
+        for name in (*PHASE6_CRITERIA, EQUITY_ACROSS_FILL, EQUITY_ROWS)
+    }
 
 
-@pytest.mark.parametrize("name", TRADE_DRIVING)
-def test_every_trade_driving_criterion_names_fee_tier_3_in_its_own_message(
-    verify_module: ModuleType, repo_root: Path, name: str
+@pytest.mark.parametrize("name", PHASE6_CRITERIA)
+def test_the_real_tree_verdict_and_what_it_says(
+    verify_module: ModuleType, real_tree_outcomes: dict[str, Any], name: str
+) -> None:
+    """The verdict the gate reports on the registered tree, and what the line says.
+
+    Eight PASS. A PASS line has to say what was shown, because the operator reads it;
+    the fragment pins the claim each one exists to make. The console criterion is
+    PENDING and names spec 101, which owes it. A message that says `criterion raised` is
+    a stack trace and judged nothing.
+    """
+    outcome = real_tree_outcomes[name]
+    result, fragment = REAL_TREE[name]
+    assert outcome.result is getattr(verify_module.Result, result), outcome
+    assert "criterion raised" not in outcome.message, outcome.message
+    assert fragment in outcome.message, (fragment, outcome.message)
+
+
+@pytest.mark.parametrize("name", PHASE6_CRITERIA)
+def test_every_phase_6_criterion_names_fee_tier_3_in_its_own_message(
+    real_tree_outcomes: dict[str, Any], name: str
 ) -> None:
     """Ruling 8, checked on the text the operator actually sees.
 
-    At tier 1 the cost gate is unreachable by construction — the bar is 2.5x friction,
+    At tier 1 the cost gate is unreachable by construction. The bar is 2.5x friction,
     tier-1 reference friction is about 1.25% round trip, and 3.125% is above the 3.0%
-    target barrier — so *nothing* clears and a verdict from that regime says nothing
-    about the engines. A criterion that did not name its regime would let a reader take
-    a no-trade result for a tested one.
-
-    Asserted on the PENDING as well as on the eventual PASS and FAIL, deliberately: the
-    line is there to tell B which regime they are being built against, and it is most
-    useful before the engine exists.
+    target barrier, so nothing clears and a verdict from that regime says nothing about
+    the engines. All nine drive the registered chain at tier 3 (or will, for the
+    console), so all nine say so.
     """
-    outcome = run(verify_module, name, repo_root)
-    assert "tier 3" in outcome.message, outcome.message
-    assert "no-trade regime" in outcome.message, outcome.message
+    message = real_tree_outcomes[name].message
+    assert "tier 3" in message, message
+    assert "no-trade regime" in message, message
 
 
 @pytest.mark.parametrize("name", NOT_TRADE_DRIVING)
-def test_the_two_criteria_that_drive_no_trade_claim_no_fee_regime(
-    verify_module: ModuleType, repo_root: Path, name: str
+def test_the_two_that_trade_nothing_say_their_subject_reads_no_fee(
+    real_tree_outcomes: dict[str, Any], name: str
 ) -> None:
-    """The other half of ruling 8, and it is not decorative.
+    """The other half of ruling 8. These two drive the chain at tier 3 only to reach
+    their engine, and the message says so. A reader must not take the weights or the
+    walk for something the fee schedule decided.
 
-    Engine 9 walks a recorded book and engine 14 weighs recorded rows. Neither touches
-    the fee schedule, so a message claiming "at fee tier 3" would be describing a
-    condition the criterion never applied — the same class of untrue statement as
-    omitting a regime that *was* applied, pointed the other way.
+    This replaced `test_the_two_criteria_that_drive_no_trade_claim_no_fee_regime`. That
+    test was right while these criteria applied no tier. Once they drive the chain at
+    tier 3, a message that hid the tier would be the untrue statement.
     """
-    outcome = run(verify_module, name, repo_root)
-    assert "tier 3" not in outcome.message, outcome.message
+    message = real_tree_outcomes[name].message
+    assert "driven through the registered engines so that it reaches engine" in message, message
 
 
 def test_no_criterion_reads_the_repositorys_data_models_or_logs(
@@ -427,19 +425,27 @@ def test_an_engine_module_that_declares_no_engine_class_is_named_as_such(
     assert "number = 14" in outcome.message, outcome.message
 
 
+@pytest.mark.parametrize("name", TRADE_DRIVING)
 def test_the_tier_sentence_is_pending_rather_than_wrong_when_the_harness_is_absent(
-    verify_module: ModuleType, bare_tree: Path
+    verify_module: ModuleType, phase6_tree: Path, name: str
 ) -> None:
     """A criterion that cannot read the named tiers must not invent one.
 
     The sentence lives in `tests/harness/fake_kraken.py` beside the profile it
     describes, so the tier a criterion reports and the tier it applied come from one
-    file. On a tree with no harness the right answer is PENDING — never a message that
-    claims a regime nothing set up.
+    file. Here the copied tree has every engine and **no harness**: its own `tests`
+    package shadows the repository's, so `tests.harness` cannot be imported. The answer
+    must be PENDING naming the harness, and the message may say only which regime it
+    *will* run in, not that it ran in one.
+
+    Until spec 100's bodies this test took `bare_tree`, called `_tier_sentence` in the
+    real repository, and never observed the PENDING its name promised.
     """
-    sentence, problem = verify_module._tier_sentence(3)
-    del sentence, bare_tree  # the real harness is importable here; the branch below is not
-    assert problem is None, "the harness is present in this repository, so this is the PASS side"
+    shutil.rmtree(phase6_tree / "tests" / "harness")
+    outcome = run(verify_module, name, phase6_tree)
+    assert_pending(outcome, verify_module)
+    assert "tests.harness.fake_kraken" in outcome.message, outcome.message
+    assert "run at fee tier 3" in outcome.message, outcome.message
     with pytest.raises(ValueError, match="no sentence for tier 2"):
         verify_module._tier_sentence(2)
 
@@ -612,7 +618,7 @@ def test_equity_across_fill_is_pending_without_the_paper_broker(
 
 
 def test_equity_across_fill_passes_on_the_real_tree(
-    verify_module: ModuleType, repo_root: Path
+    verify_module: ModuleType, real_tree_outcomes: dict[str, Any]
 ) -> None:
     """The real chain places, fills and records an entry, and equity moves by the fee.
 
@@ -622,7 +628,7 @@ def test_equity_across_fill_passes_on_the_real_tree(
     The equity row therefore moves by exactly minus the fee, which is asserted, so a
     criterion whose bound had drifted wide would not pass this test by being loose.
     """
-    outcome = run(verify_module, EQUITY_ACROSS_FILL, repo_root)
+    outcome = real_tree_outcomes[EQUITY_ACROSS_FILL]
     assert outcome.result is verify_module.Result.PASS, outcome
     moved, bound, fee = moved_and_bound(outcome)
     assert fee > 0, outcome.message
@@ -703,7 +709,7 @@ MEMORY_SKIPS_ENTRY_TICK = (
 def test_equity_across_fill_fails_when_the_entry_tick_wrote_no_equity_row(
     verify_module: ModuleType, phase6_tree: Path
 ) -> None:
-    """"The tick before" means the entry tick, not the last row that happens to exist.
+    """Here "the tick before" means the entry tick, not the last row that exists.
 
     Engine 19 is made, in the copy, to write no equity row on the tick engine 18 ran.
     The last row before the fill is then the quiet tick's, which holds the same cash and
@@ -723,3 +729,314 @@ def test_equity_across_fill_fails_when_the_entry_tick_wrote_no_equity_row(
     assert "criterion raised" not in message, message
     assert "so the entry tick wrote none" in message, message
     assert_names_tier_3(outcome)
+
+
+# --------------------------------------------------------------------------- #
+# Spec 100 — each criterion observed to FAIL against a named wrong implementation
+# --------------------------------------------------------------------------- #
+#
+# Every break is made in the **copied** tree and never in the real file, because this
+# file runs inside `toolchain_green` and other pytest runs share the checkout. The real
+# file is hashed on both sides. Each anchor must occur exactly once, or the break would
+# land on whichever occurrence came first and the test would prove nothing about the one
+# it names.
+
+_E = "src/acsoe/engines/"
+
+#: `(criterion, file, anchor, replacement, fragment the FAIL must carry)`, by name.
+MUTATIONS: dict[str, tuple[str, str, bytes, bytes, str]] = {
+    # Engine 21 never decides the target barrier.
+    "target_never_triggers": (
+        "paper_trade_round_trip_target",
+        _E + "position_manager/engine.py",
+        b"                elif high is not None and _money(high) >= target_price:\n",
+        b"                elif False:\n",
+        "engine 21 triggered [] on the exit tick",
+    ),
+    # Engine 21 holds on a tick nothing blocked, so a touched stop is never taken.
+    "held_with_no_block": (
+        "paper_trade_round_trip_stop",
+        _E + "position_manager/engine.py",
+        b"        return state.get(TRADING_BLOCKED_BY_KEY) == DATA_GUARD_NAME\n",
+        b"        return True\n",
+        "and held for 'data_guard_blocked'",
+    ),
+    # The timeout compared strictly, so the tick that lands on it does not fire.
+    "timeout_compared_strictly": (
+        "paper_trade_round_trip_timeout",
+        _E + "position_manager/engine.py",
+        b'            if barrier is None and now >= int(row["timeout_at"]):\n',
+        b'            if barrier is None and now > int(row["timeout_at"]):\n',
+        "engine 21 triggered [] on the exit tick",
+    ),
+    # Engine 22 leaves the exit fee out of the realised PnL.
+    "realised_without_exit_fee": (
+        "paper_trade_round_trip_stop",
+        _E + "exit/engine.py",
+        b"        realised = proceeds - cost_basis - entry_fee - exit_fee\n",
+        b"        realised = proceeds - cost_basis - entry_fee\n",
+        "the trade (outcome, qty, entry, exit, entry fee, exit fee, realised",
+    ),
+    # Engine 21 re-places the cancelled entry at the bid: a chase.
+    "cancelled_entry_replaced": (
+        "unfilled_entry_cancels_without_chasing",
+        _E + "position_manager/engine.py",
+        b"                    cancels.append(self._cancelled_row(entry, cancelled, now))\n",
+        (
+            b"                    cancels.append(self._cancelled_row(entry, cancelled, now))\n"
+            b"                    from acsoe.clients.kraken.contracts import OrderRequest as _Rq\n"
+            b"                    from acsoe.clients.kraken.contracts import OrderSide as _Sd\n"
+            b"                    from acsoe.clients.kraken.contracts import OrderType as _Tp\n"
+            b"                    run_blocking(kraken.add_order(_Rq(pair=str(entry.pair), "
+            b"side=_Sd.BUY, order_type=_Tp.LIMIT, qty=_money(entry.qty), "
+            b"limit_price=_money(entry.limit_price), post_only=True, "
+            b"userref=int(entry.userref) + 1)))\n"
+        ),
+        "any second order is a chase",
+    ),
+    # Engine 21 no longer holds on a data_guard block.
+    "hold_removed_from_21": (
+        "triggered_stop_holds_on_data_guard_block",
+        _E + "position_manager/engine.py",
+        b"        return state.get(TRADING_BLOCKED_BY_KEY) == DATA_GUARD_NAME\n",
+        b"        return False\n",
+        "on a tick data_guard blocked",
+    ),
+    # Engine 22 reads a liquidation as an ordinary tick, so the held position stays held.
+    "liquidation_held_by_22": (
+        "triggered_stop_holds_on_data_guard_block",
+        _E + "exit/engine.py",
+        b"        return system.get(CLOSE_INTENT_FIELD) is True\n",
+        b"        return False\n",
+        "with close_intent set the held position was not sold",
+    ),
+    # Engine 22 reads this tick's pair rules only, never the retained ones.
+    "liquidation_needs_fresh_pair_rules": (
+        "escalation_completes_during_outage",
+        _E + "exit/engine.py",
+        b"        if not close_intent:\n",
+        b"        if True:\n",
+        "the liquidation did not complete during the outage",
+    ),
+    # Engine 17 escalates on the limit itself, one blocked tick early.
+    "safety_escalates_a_tick_early": (
+        "escalation_completes_during_outage",
+        _E + "safety/engine.py",
+        b"        if readings.consecutive_data_blocks > thresholds.max_consecutive_data_blocks:\n",
+        b"        if readings.consecutive_data_blocks >= thresholds.max_consecutive_data_blocks:\n",
+        "engine 17 escalated after 15 blocked ticks",
+    ),
+    # Engine 21 cancels on elapsed time only; close_intent does not cancel an entry.
+    "cancel_on_window_only": (
+        "escalation_completes_during_outage",
+        _E + "position_manager/engine.py",
+        b"            if close_intent or expired:\n",
+        b"            if expired:\n",
+        "into a 300s window engine 21 published []",
+    ),
+    # Engine 9 walks the ask side.
+    "walks_the_ask_side": (
+        "order_book_slippage_on_recorded_book",
+        _E + "order_book/engine.py",
+        b"        walk = walk_the_bid_side(book.bids, basis_notional)\n",
+        b"        walk = walk_the_bid_side(book.asks, basis_notional)\n",
+        "disagrees with the walk recomputed",
+    ),
+    # A gate dropped from the registered chain. `bootstrap.py` is the lead's; the break is
+    # in the copy. Judged against the chain alone, a missing gate is invisible (sweep arm
+    # V1 survived until the criterion compared the chain with the registry table).
+    "gate_unregistered": (
+        "paper_trade_round_trip_target",
+        "src/acsoe/bootstrap.py",
+        b"    SkepticEngine(),\n",
+        b"",
+        "are not the registry table's gates",
+    ),
+    # The orchestrator runs the opportunity chain with its gates left out. `core/` is the
+    # lead's; the break is in the copy. With the real orchestrator a registered gate that
+    # did not run cannot sit before an engine that did, so the "every registered gate ran"
+    # check had nothing to object to until this arm (sweep arm V1 survived two rounds).
+    "orchestrator_skips_the_gates": (
+        "paper_trade_round_trip_target",
+        "src/acsoe/core/orchestrator.py",
+        b"        for engine in self._chains.opportunity:\n",
+        b"        for engine in [e for e in self._chains.opportunity if not e.is_gate]:\n",
+        "did not run every registered gate",
+    ),
+    # Engine 21 marks an open position at the ask. The watch compares the stored mark with
+    # the pinned bid (sweep arm V13 survived until this arm existed).
+    "marked_at_the_ask": (
+        "paper_trade_round_trip_stop",
+        _E + "position_manager/engine.py",
+        b"        bid = _money(quote[QUOTE_BID_FIELD])\n",
+        b'        bid = _money(quote["ask"])\n',
+        "the stored mark at",
+    ),
+    # Engine 9 measures slippage against its own fill rather than the best bid. The walk
+    # touches the same levels, so a criterion comparing only the level count passes it
+    # (sweep arm V8 survived until this arm and the next existed).
+    "slippage_against_the_fill": (
+        "order_book_slippage_on_recorded_book",
+        _E + "order_book/contracts.py",
+        b"        return (self.best_bid - self.fill_price) / self.best_bid\n",
+        b"        return (self.best_bid - self.fill_price) / self.fill_price\n",
+        "'estimated_slippage_pct': (",
+    ),
+    # Engine 9 prices the partly taken last level at the top bid: same levels, wrong fill.
+    "partial_level_priced_at_the_top": (
+        "order_book_slippage_on_recorded_book",
+        _E + "order_book/contracts.py",
+        b"            base_filled += remaining / price\n",
+        b"            base_filled += remaining / bids[0][0]\n",
+        "'fill_price': (",
+    ),
+    # Engine 9's walk skips the best level.
+    "walk_off_by_a_level": (
+        "order_book_slippage_on_recorded_book",
+        _E + "order_book/contracts.py",
+        b"    for price, quantity in bids:\n",
+        b"    for price, quantity in bids[1:]:\n",
+        "disagrees with the walk recomputed",
+    ),
+    # Engine 14 lets a model worse than its base rate take negative weight.
+    "skill_not_clipped": (
+        "adaptive_router_weights_on_fixture",
+        _E + "adaptive_router/engine.py",
+        b"    return max(0.0, 1.0 - brier / base_rate)\n",
+        b"    return 1.0 - brier / base_rate\n",
+        "recomputed from leaderboard_sample.json",
+    ),
+    # Engine 19 ignores engine 22's facts and writes the pre-exit figures, which is the
+    # defect the operator ruled on: the exit tick's cash is engine 1's start-of-tick
+    # balance and its positions value is engine 21's total from before the sale, while
+    # the position count is read from the store after it. The criterion was written and
+    # observed FAIL against exactly this code before spec 114; this arm is that
+    # observation, kept.
+    "pre_exit_figures_restored": (
+        "equity_row_never_values_positions_it_does_not_hold",
+        _E + "memory/engine.py",
+        b"        if sold or closed:\n",
+        b"        if False:\n",
+        "value positions the account does not hold",
+    ),
+    # Engine 14 keeps the older of two rows for one (version, fold).
+    "older_duplicate_kept": (
+        "adaptive_router_weights_on_fixture",
+        _E + "adaptive_router/engine.py",
+        b"        if held is None or _stamp(row) >= _stamp(held):\n",
+        b"        if held is None:\n",
+        "recomputed from leaderboard_sample.json",
+    ),
+}
+
+
+@pytest.mark.parametrize("mutation", sorted(MUTATIONS))
+def test_each_criterion_fails_against_its_named_wrong_implementation(
+    verify_module: ModuleType, phase6_tree: Path, repo_root: Path, mutation: str
+) -> None:
+    """Break the thing a criterion judges, in the copy, and watch the criterion say so.
+
+    The FAIL must be the criterion's own verdict about the broken behaviour, identified
+    by a fragment of its message, and never `criterion raised`. A criterion that fails
+    only because the chain stopped earlier than the mutation proves nothing about the
+    mutation. The fragments are chosen so that cannot pass.
+    """
+    name, relative, anchor, replacement, fragment = MUTATIONS[mutation]
+    real = repo_root / relative
+    real_before = hashlib.sha256(real.read_bytes()).hexdigest()
+    target = phase6_tree / relative
+    source = target.read_bytes()
+    assert source.count(anchor) == 1, f"{mutation}: the anchor moved; the break would not apply"
+    target.write_bytes(source.replace(anchor, replacement))
+
+    outcome = run(verify_module, name, phase6_tree)
+
+    assert hashlib.sha256(real.read_bytes()).hexdigest() == real_before
+    assert_fail(outcome, verify_module)
+    assert "criterion raised" not in outcome.message, outcome.message
+    assert fragment in outcome.message, (fragment, outcome.message)
+    assert_names_tier_3(outcome)
+
+
+# --------------------------------------------------------------------------- #
+# equity_row_never_values_positions_it_does_not_hold — operator ruling 2026-09-17
+# --------------------------------------------------------------------------- #
+#
+# Written and observed FAIL on the code as it stood (the exit tick's row valued the sold
+# position and counted none open); the FAIL message is quoted in the build log. The fix
+# is B's spec 113 and C's spec 114. Until both land, the real-tree test below is red,
+# and deliberately so: it states what the operator ruled must be true.
+
+
+def test_equity_rows_is_pending_on_a_tree_with_nothing_built(
+    verify_module: ModuleType, unbuilt_tree: Path
+) -> None:
+    outcome = run(verify_module, EQUITY_ROWS, unbuilt_tree)
+    assert_pending(outcome, verify_module)
+    assert _ABSENT_ENGINE.match(outcome.message), outcome.message
+    assert_names_tier_3(outcome)
+
+
+def test_equity_rows_passes_on_the_real_tree(
+    verify_module: ModuleType, real_tree_outcomes: dict[str, Any]
+) -> None:
+    """Every row of a real round trip either holds a position or values none.
+
+    Red until specs 113 and 114: today the exit tick's row counts no open position and
+    still carries the sold position's value.
+    """
+    outcome = real_tree_outcomes[EQUITY_ROWS]
+    assert outcome.result is verify_module.Result.PASS, outcome
+    assert "carry a positions_value of zero whenever they count no open position" in outcome.message
+    assert_names_tier_3(outcome)
+
+
+# --------------------------------------------------------------------------- #
+# What the criteria looked at, not only what they said — sweep arm V12
+# --------------------------------------------------------------------------- #
+
+#: A training-only break: every barrier touch is labelled `stop`, so the trained predictor
+#: never learns a target and calls no BUY. The engines never import `research/`, so only a
+#: subject trained from this tree carries it. Anchored without its line ending because
+#: `research/labelling.py` is CRLF in the working tree.
+LABELLING_ANCHOR = b"label = LABEL_STOP if (hit_stop or ambiguous) else LABEL_TARGET"
+LABELLING_ALWAYS_STOP = b"label = LABEL_STOP"
+
+
+def test_a_tree_whose_training_differs_is_judged_on_its_own_subject(
+    verify_module: ModuleType,
+    phase6_tree: Path,
+    repo_root: Path,
+    real_tree_outcomes: dict[str, Any],
+) -> None:
+    """The trained subject a criterion drives is the one its own tree's training yields.
+
+    The subject is cached by a digest of what training reads, so every copied tree of an
+    engine mutation reuses one training run. Sweep arm V12 replaced that digest with a
+    constant, and every test stayed green: they checked what the criteria *said*, and a
+    criterion driving the wrong subject says the same things. This test checks what the
+    criterion *looked at*. The real tree's subject is already cached (the module fixture).
+    This tree's training labels every touch `stop`, so its walk-forward has no BUY row to
+    fit a skeptic on, and the subject builder refuses the run, naming its latest fold. Only
+    a criterion that trained this tree's subject can report that. One handed the cached
+    real subject reports PASS.
+    """
+    assert real_tree_outcomes["adaptive_router_weights_on_fixture"].result is (
+        verify_module.Result.PASS
+    )
+    labelling = phase6_tree / "src" / "acsoe" / "research" / "labelling.py"
+    source = labelling.read_bytes()
+    assert source.count(LABELLING_ANCHOR) == 1, "the anchor moved; the break would not apply"
+    labelling.write_bytes(source.replace(LABELLING_ANCHOR, LABELLING_ALWAYS_STOP))
+    real = repo_root / "src" / "acsoe" / "research" / "labelling.py"
+    real_before = hashlib.sha256(real.read_bytes()).hexdigest()
+
+    copy_key = verify_module._fill_subject_key(verify_module.VerifyContext(root=phase6_tree))
+    real_key = verify_module._fill_subject_key(verify_module.VerifyContext(root=repo_root))
+    outcome = run(verify_module, "adaptive_router_weights_on_fixture", phase6_tree)
+
+    assert hashlib.sha256(real.read_bytes()).hexdigest() == real_before
+    assert copy_key != real_key
+    assert_fail(outcome, verify_module)
+    assert "criterion raised" not in outcome.message, outcome.message
+    assert "fitted no skeptic.txt" in outcome.message, outcome.message

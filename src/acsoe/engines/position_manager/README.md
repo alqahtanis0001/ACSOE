@@ -136,6 +136,16 @@ totals use, so the stored position and the equity row describe one valuation. It
 re-marked at the bid until the next tick. Spec 106: before it, the row carried neither and
 engine 19 stored both NULL while the totals valued the position at cost.
 
+**Every row with a `last_price` also carries `value = qty × last_price`, and a row without
+one carries no `value`** (spec 113). Absent means the position could not be valued. It
+never means zero, and it is never the position's cost. On a tick where engine 22 closed
+positions, engine 19 drops the closed rows and sums `value` over the rest (spec 114). On
+every other tick it reads the totals. The row values are computed beside the totals,
+not from them, and a test checks that they sum exactly to `positions_value` whenever
+the total is present. That test is what keeps engine 19's two paths in agreement, and
+it has been shown to fail when they disagree. `value` is a payload field, not a
+`positions` column.
+
 **`hold_reason` is null rather than omitted** on a tick that did not hold. Null is the
 answer there; an omission is indistinguishable from an engine that never ran.
 

@@ -110,6 +110,7 @@ from acsoe.engines.position_manager.contracts import (
     MARKET_SENSOR_KEY,
     PAIR_RULES_PAIRS_KEY,
     POSITION_ID_FIELD,
+    POSITION_VALUE_FIELD,
     QUOTE_BID_FIELD,
     QUOTES_FIELD,
     REASON_POSITION_UNRECORDABLE,
@@ -517,6 +518,12 @@ class PositionManagerEngine(BaseEngine):
         position and the equity row engine 19 writes from these totals describe one
         valuation. Before spec 106 the row carried neither, and engine 19 stored both NULL
         on the one tick where the valuation was not in doubt.
+
+        **Each marked row also carries its `value`** (spec 113): `qty * last_price`, on
+        exactly the rows that carry `last_price`. On a tick where engine 22 closed
+        positions, engine 19 sums it over the rows that remain open. Each row value is
+        written beside the matching `value +=` line and is not derived from it, so the
+        test that the rows sum to the total compares two computations.
         """
         marked: list[tuple[Any, dict[str, Any]]] = []
         value = Decimal(0)
@@ -545,6 +552,7 @@ class PositionManagerEngine(BaseEngine):
             else:
                 row["last_price"] = format(bid, "f")
                 row["unrealised_pnl"] = format(position.qty * (bid - position.entry_price), "f")
+                row[POSITION_VALUE_FIELD] = format(position.qty * bid, "f")
                 value += position.qty * bid
                 unrealised += position.qty * (bid - position.entry_price)
             marked.append((position, row))
@@ -556,6 +564,7 @@ class PositionManagerEngine(BaseEngine):
             pnl = qty * (mark - entry_price)
             position_row["last_price"] = format(mark, "f")
             position_row["unrealised_pnl"] = format(pnl, "f")
+            position_row[POSITION_VALUE_FIELD] = format(qty * mark, "f")
             value += qty * mark
             unrealised += pnl
             marked.append((_FilledPosition(position_row), position_row))

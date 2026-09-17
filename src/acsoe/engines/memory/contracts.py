@@ -42,10 +42,14 @@ __all__ = [
     "EXIT_KEY",
     "GUARD_BLOCKERS_KEY",
     "HOLD_REASON_FIELD",
+    "NET_PROCEEDS_FIELD",
     "ORDERS_FIELD",
     "POSITIONS_FIELD",
     "POSITIONS_VALUE_FIELD",
+    "POSITION_ID_FIELD",
     "POSITION_MANAGER_KEY",
+    "POSITION_STATUS_FIELD",
+    "POSITION_VALUE_FIELD",
     "REASON_CODE_FIELD",
     "REASON_ENGINE_ERRORED",
     "SCOUT_KEY",
@@ -120,6 +124,11 @@ POSITIONS_VALUE_FIELD: Final = "positions_value"
 UNREALISED_PNL_FIELD: Final = "unrealised_pnl"
 HOLD_REASON_FIELD: Final = "hold_reason"
 
+#: On a position row, and on a closed position row engine 22 publishes. Read here to
+#: match engine 21's marks against the positions engine 22 closed on the same tick.
+POSITION_ID_FIELD: Final = "position_id"
+POSITION_STATUS_FIELD: Final = "status"
+
 #: Engine 18 `execution` (B), Phase 6, spec 98. The entry order it placed — or the
 #: rejection row for one the exchange refused — on the **opportunity** chain, the same
 #: tick. Engine 19 is the single writer of relational rows, so an order engine 18
@@ -139,6 +148,39 @@ EXECUTION_KEY: Final = "execution"
 #: is what separates them, and it is load-bearing: see `WRITTEN_TABLES` below.
 EXIT_KEY: Final = "exit"
 CLOSED_TRADES_FIELD: Final = "closed_trades"
+
+# --------------------------------------------------------------------------- #
+# The two payload facts that are not columns — spec 113, read by spec 114
+# --------------------------------------------------------------------------- #
+#
+# Both arrive on rows engine 19 also stores, and **neither is a column**. `_Row` in
+# `clients/store/contracts.py` is `extra="forbid"`, so engine 19 takes each off its own
+# copy of the row before validating the stored row. Getting that wrong is not a small
+# mistake: the validation error is converted by contract rule 7 into an `ERROR` result,
+# and the whole tick — positions, orders, trades, block records, equity — is recorded
+# nowhere. That is what the tree did for 26 tests between specs 113 and 114.
+#
+# They are payload facts rather than columns because the store can always recompute
+# them: `net_proceeds` from the trade's own `qty`, `exit_price` and `exit_fee`, and
+# `value` from the position's `qty` and `last_price`. A column would be a second copy of
+# a number already stored, free to disagree with it.
+
+#: Engine 21 `position_manager` (B), spec 113. Per marked position row: `qty *
+#: last_price` as an exact decimal string, **present exactly when `last_price` is**. On a
+#: tick where engine 22 closed positions, engine 19 sums it over the rows that remain
+#: open rather than reading `POSITIONS_VALUE_FIELD`, which was computed before the sale.
+#:
+#: **A remaining position without one means no equity row** (operator ruling 2026-09-17),
+#: exactly as an absent `POSITIONS_VALUE_FIELD` does on an ordinary tick and for the same
+#: reason: a partial sum is the account minus one position, which is a drawdown that did
+#: not happen. A *closed* position without one is dropped anyway and blocks nothing.
+POSITION_VALUE_FIELD: Final = "value"
+
+#: Engine 22 `exit` (B), spec 113. Per closed trade row: `qty * exit_price - exit_fee` as
+#: an exact decimal string — the cash that sale put into the account, and a fact about a
+#: sale engine 22 executed rather than a figure about anyone else's position. Engine 19
+#: adds it to engine 1's start-of-tick balance to build the exit tick's cash.
+NET_PROCEEDS_FIELD: Final = "net_proceeds"
 
 #: The economics a rejection carries, as ``(rejections column, publisher's field)``.
 #: Harvested from whichever engine blocked, **where it published them** — engine 10

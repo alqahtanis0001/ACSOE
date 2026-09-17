@@ -110,6 +110,7 @@ from acsoe.engines.exit.contracts import (
     EXCHANGE_PAIR_RULES_KEY,
     FALLBACK_ASSET_PAIRS_RETAINED,
     LOT_DECIMALS_FIELD,
+    NET_PROCEEDS_FIELD,
     PAIR_RULES_PAIRS_KEY,
     POSITION_ID_FIELD,
     POSITION_MANAGER_KEY,
@@ -642,6 +643,11 @@ class ExitEngine(BaseEngine):
         reporting currency today (`no_fx_rate`), so a position that reaches here with a
         foreign quote is the chain contradicting itself — not a case to price at a rate
         nobody fetched.
+
+        **`net_proceeds` is the sale's own arithmetic** (spec 113): the `proceeds` below
+        minus the `exit_fee` below, the same two numbers the row reports. It reads neither
+        engine 21's valuation nor engine 1's balance, so engine 19's exit-tick cash cannot
+        change because either of them changed how it works.
         """
         reporting = _config_str(context, REPORTING_CURRENCY_KEY)
         quote = str(position.quote)
@@ -669,6 +675,7 @@ class ExitEngine(BaseEngine):
             "exit_price": format(exit_price, "f"),
             "entry_fee": format(entry_fee, "f"),
             "exit_fee": format(exit_fee, "f"),
+            NET_PROCEEDS_FIELD: format(proceeds - exit_fee, "f"),
             "entry_userref": position.entry_userref,
             "exit_userref": exit_userref,
             "opened_at": int(position.opened_at),

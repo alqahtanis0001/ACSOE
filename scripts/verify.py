@@ -27,6 +27,7 @@ import asyncio
 import contextlib
 import copy
 import gc
+import hashlib
 import importlib
 import importlib.util
 import inspect
@@ -43,7 +44,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
 from types import ModuleType
@@ -11159,258 +11160,6 @@ def _subject_buy_rows(subject: TradeSubjectModel, polars: ModuleType) -> Any:
     )
 
 
-# --- paper_trade_round_trip_target / _stop / _timeout ----------------------- #
-
-
-def _round_trip(ctx: VerifyContext, leg: str) -> Outcome:
-    """One paper round trip that ends at the named barrier, reconciled to the cent.
-
-    The three criteria differ only in which barrier the scripted market reaches, and
-    they are one function because the reconciliation is the assertion in all three:
-    every row engine 19 wrote is read back and compared against the trade the paper
-    broker actually filled - entry, exit, fees and realised PnL, exactly, with no
-    tolerance. A tolerance on money is a defect waiting for a rounding bug to hide in.
-
-    Why all three rather than one. `target` and `stop` differ by which barrier the
-    scripted trades touch first, and the operator's ruling of 2026-09-16 says both in
-    one tick resolves to `stop`; `timeout` never touches either and is the path where
-    nothing triggers the exit except elapsed bars, which is the only one of the three
-    that can be broken by a clock and stay green on the other two.
-    """
-    with root_import_path(ctx.root):
-        tier, problem = _tier_sentence(3)
-        if tier is None:
-            return _awaiting(problem, "at fee tier 3", leg)
-        return _awaiting(_trade_chain_subject(), tier, leg)
-
-
-def check_paper_trade_round_trip_target(ctx: VerifyContext) -> Outcome:
-    """A candidate becomes a filled position that exits at the target, recorded exactly.
-
-    The whole phase in one line: post-only entry, simulated fill, minute-by-minute
-    watch, the exit, and every row engine 19 wrote reconciled against the trade.
-    """
-    return _round_trip(ctx, "target")
-
-
-def check_paper_trade_round_trip_stop(ctx: VerifyContext) -> Outcome:
-    """The same round trip ending at the stop.
-
-    Separately registered because the stop is the leg that protects the account, and a
-    chain that can only be shown to take profit has been shown the easy half.
-    """
-    return _round_trip(ctx, "stop")
-
-
-def check_paper_trade_round_trip_timeout(ctx: VerifyContext) -> Outcome:
-    """The same round trip ending at the timeout, with neither barrier touched.
-
-    The path no price movement triggers, so it is the one a broken bar count leaves
-    open forever while the other two stay green.
-    """
-    return _round_trip(ctx, "timeout")
-
-
-# --- unfilled_entry_cancels_without_chasing --------------------------------- #
-
-
-def check_unfilled_entry_cancels_without_chasing(ctx: VerifyContext) -> Outcome:
-    """A post-only entry that never fills is cancelled, and nothing chases the price.
-
-    Three claims, and the second is the one invariant 7 turns on. The order is
-    cancelled at `trading.entry_unfilled_window_s`; **no market order is ever
-    constructed** - not sent, constructed, because a market order that exists in memory
-    is one branch away from being sent; and no second entry is placed on the pair,
-    which is the difference between giving up on a fill and chasing one.
-
-    The named wrong implementation is an engine 18 that re-places at the new best bid
-    when the window expires. It looks like diligence and it is exactly the taker
-    behaviour invariant 7 forbids.
-    """
-    with root_import_path(ctx.root):
-        tier, problem = _tier_sentence(3)
-        if tier is None:
-            return _awaiting(problem, "at fee tier 3")
-        problem = _phase6_engines("decision", "execution", "position_manager")
-        if problem is None:
-            problem = _paper_broker_module()
-        if problem is None:
-            problem = pending(
-                "every subject exists; the unfilled-entry driver of spec 100 is not "
-                "written yet (C, spec 100) - " + TRADE_CHAIN_CONTRACT
-            )
-        return _awaiting(problem, tier)
-
-
-# --- triggered_stop_holds_on_data_guard_block ------------------------------- #
-
-
-def check_triggered_stop_holds_on_data_guard_block(ctx: VerifyContext) -> Outcome:
-    """A stop that triggers on a tick the guard rejected places no exit, and says why.
-
-    `engine-contracts.md`: when `state["trading_blocked_by"] == "data_guard"` the manage
-    chain still runs and engines 21 and 22 place **no** exit, because a barrier computed
-    from exactly the data the guard refused is a fabricated trigger. Engine 21 publishes
-    `hold_reason` and engine 19 records it.
-
-    And the other half in the same criterion, because the hold is only correct if it is
-    also bounded: the **same** position with `close_intent` set does exit. A hold that
-    survives a liquidation is invariant 14 broken, and a criterion that only checked the
-    hold would call that a pass.
-
-    The named wrong implementation is the hold removed from engine 21 - the mutation
-    this criterion is proved against - and the subtler one is reading "the manage chain
-    holds" as "engine 21 does nothing", which leaves a live post-only buy on the book
-    through the outage.
-    """
-    with root_import_path(ctx.root):
-        tier, problem = _tier_sentence(3)
-        if tier is None:
-            return _awaiting(problem, "at fee tier 3")
-        problem = _phase6_engines("position_manager", "exit", "memory")
-        if problem is None:
-            problem = pending(
-                "every subject exists; the held-stop driver of spec 100 is not written "
-                "yet (C, spec 100) - " + TRADE_CHAIN_CONTRACT
-            )
-        return _awaiting(problem, tier)
-
-
-# --- escalation_completes_during_outage ------------------------------------- #
-
-
-def check_escalation_completes_during_outage(ctx: VerifyContext) -> Outcome:
-    """The kill switch finishes while the outage that fired it is still happening.
-
-    Engine 17 escalates after `safety.max_consecutive_data_blocks`; engine 21 cancels
-    every resting entry and engine 22 closes every position **while `data_guard` is
-    still blocking and the balance fetch is still failing**; the orchestrator clears
-    `close_intent` and marks the command consumed; and every tolerated fallback is
-    recorded on the trade.
-
-    This is invariant 14, and it is the one place in the system where a fetch failure
-    does **not** block. The named wrong implementation is a liquidation that reads
-    fresh balances only: that is the correct behaviour everywhere else in the system,
-    which is why it is the mistake that gets made, and it stalls the kill switch at
-    precisely the moment the exchange is unreachable.
-
-    `safety_escalates_on_sustained_outage` in Phase 3 already proves engine 17 *emits*
-    the row from the seed. This proves the manage chain *completes* on it, which is a
-    different claim: Phase 3 had no engine 21 and no engine 22 to complete anything.
-    """
-    with root_import_path(ctx.root):
-        tier, problem = _tier_sentence(3)
-        if tier is None:
-            return _awaiting(problem, "at fee tier 3")
-        problem = _phase6_engines("position_manager", "exit", "memory")
-        if problem is None:
-            problem = _paper_broker_module()
-        if problem is None:
-            problem = pending(
-                "every subject exists; the liquidation-during-outage driver of spec 100 "
-                "is not written yet (C, spec 100) - " + TRADE_CHAIN_CONTRACT
-            )
-        return _awaiting(problem, tier)
-
-
-# --- console_shows_position_live -------------------------------------------- #
-
-
-def check_console_shows_position_live(ctx: VerifyContext) -> Outcome:
-    """The console renders a position a real daemon opened, and the mark moves.
-
-    Spec 101's subject. Phase 1 proved the region renders against **seeded** rows,
-    which is a different claim: a seeded row is written by the seed generator to the
-    shape the console expects, and a position written by engine 19 out of engine 21's
-    payload is written to the shape engine 21 publishes. The two agreeing is the thing
-    being checked.
-
-    The mutation it is proved against is the reader serving the previous tick's mark -
-    a stale figure that looks exactly like a correct one, on a screen whose entire job
-    is to say what is true now.
-    """
-    with root_import_path(ctx.root):
-        tier, problem = _tier_sentence(3)
-        if tier is None:
-            return _awaiting(problem, "at fee tier 3")
-        problem = _phase6_engines("position_manager", "memory")
-        if problem is None:
-            problem = _trade_chain_subject()
-        return _awaiting(problem, tier)
-
-
-# --- order_book_slippage_on_recorded_book ----------------------------------- #
-
-
-def check_order_book_slippage_on_recorded_book(ctx: VerifyContext) -> Outcome:
-    """Engine 9's slippage estimate matches a walk this criterion recomputes.
-
-    **Recomputed from the fixture, never a number this file stores.** A stored expected
-    value is a second implementation of the walk, written by the same person, at the
-    same time, from the same misunderstanding - and it agrees with the engine for
-    exactly as long as both are wrong in the same way. The Phase 5 closing finding is
-    the same shape: what killed a calibrator fitted on the test window was recomputing
-    the expected rows from the public splitter.
-
-    Thin book and deep book, because a walk that consumes one level and a walk that
-    consumes several are different code paths and the thin one is where the money is.
-
-    Two properties beyond the number. Engine 9 **never blocks** - it is not a gate, it
-    publishes an estimate and engine 10 decides - and it estimates at the whole quote
-    balance as an upper bound, which is the lead's decision of 2026-09-16. The named
-    wrong implementation is walking the **ask** side for a sell or the bid for a buy: it
-    produces a plausible number with the wrong sign of error, and nothing downstream can
-    tell.
-
-    This criterion drives no trade, so it names no fee tier: the walk is arithmetic over
-    a recorded book and the fee schedule does not enter it. Claiming a regime it never
-    applied would be the same untrue statement as omitting one it had.
-    """
-    with root_import_path(ctx.root):
-        _, problem = _phase6_engine_class("order_book")
-        if problem is not None:
-            return problem
-        problem = _phase6_fixture(ctx, "book_sample.jsonl")
-        if problem is not None:
-            return problem
-        return pending(
-            "engine 9 and its fixture both exist; the recomputed walk of spec 100 is "
-            "not written yet (C, spec 100)"
-        )
-
-
-# --- adaptive_router_weights_on_fixture ------------------------------------- #
-
-
-def check_adaptive_router_weights_on_fixture(ctx: VerifyContext) -> Outcome:
-    """Engine 14's weights are recomputed from the leaderboard rows, not read back.
-
-    The same rule as the criterion above and for the same reason: the weights are
-    derived from `leaderboard_sample.json` by this criterion and compared against the
-    engine's, so an engine that reported its own input back would be caught.
-
-    The fixture carries **at least two models**, because a router cannot be shown to
-    move weight between one, and every weights-move assertion names the fixture as its
-    subject - "the router prefers the model with the better out-of-sample Brier *on this
-    fixture*" is a true sentence, and "the router prefers better models" is a claim
-    about a population nobody sampled.
-
-    Engine 14 is not a gate and cannot refuse a trade, so this criterion drives none and
-    names no fee tier.
-    """
-    with root_import_path(ctx.root):
-        _, problem = _phase6_engine_class("adaptive_router")
-        if problem is not None:
-            return problem
-        problem = _phase6_fixture(ctx, "leaderboard_sample.json")
-        if problem is not None:
-            return problem
-        return pending(
-            "engine 14 and its fixture both exist; the recomputed weights of spec 100 "
-            "are not written yet (C, spec 100)"
-        )
-
-
 # --- paper_equity_continuous_across_fill, spec 105 ------------------------- #
 #
 # Operator ruling 2026-09-16: "a criterion, not just a fix". A's spec 87 rehearsal found
@@ -11428,11 +11177,10 @@ def check_adaptive_router_weights_on_fixture(ctx: VerifyContext) -> Outcome:
 # wrote on the same tick. Nothing here is a constant, and a tolerance that were one would
 # be a tolerance nobody could defend the day the fixture moved.
 #
-# **The chains are built by hand, in registry order, because spec 82 has not registered
-# them.** The operator wants PASS and FAIL observable now rather than a PENDING that waits
-# on registration. Once spec 82 lands, this criterion should read the registered chains
-# from `bootstrap.py` instead. Until then the order is the one in `engine-contracts.md`, and
-# every engine is the real class.
+# **The chains are the registered ones, `acsoe.bootstrap.build_chains()`.** They were built
+# by hand in registry order until spec 82 registered the Phase 6 engines, and spec 100's
+# bodies switched this criterion over (lead decision D6): a criterion that builds its own
+# chains can pass while the registry is wrong.
 #
 # **The subject is A's spec 87 rehearsal, reproduced.** It uses the constructed
 # deterministic series (`_constructed_candles` is the same formula as
@@ -11464,40 +11212,6 @@ FILL_SUBJECT_FLAT_BARS: Final = 4
 #: The quoted spread above the best bid. The stream quote and the REST book are pinned to
 #: the same prices, because engine 18 and the broker read different ones.
 FILL_SUBJECT_SPREAD: Final = Decimal("0.010")
-
-#: Every engine the subject runs, in registry order within each chain. The (module,
-#: class) pairs are imported rather than listed as objects, so a missing engine is a
-#: PENDING that names it rather than an `ImportError` at the top of this file.
-FILL_SUBJECT_CHAINS: Final[dict[str, tuple[tuple[str, str], ...]]] = {
-    "guard": (
-        ("exchange", "ExchangeEngine"),
-        ("market_data_recorder", "MarketDataRecorderEngine"),
-        ("market_sensor", "MarketSensorEngine"),
-        ("data_guard", "DataGuardEngine"),
-        ("safety", "SafetyEngine"),
-    ),
-    "opportunity": (
-        ("feature", "FeatureEngine"),
-        ("macro_context", "MacroContextEngine"),
-        ("scout", "ScoutEngine"),
-        ("regime", "RegimeEngine"),
-        ("anomaly", "AnomalyEngine"),
-        ("prediction", "PredictionEngine"),
-        ("order_book", "OrderBookEngine"),
-        ("cost", "CostEngine"),
-        ("risk", "RiskEngine"),
-        ("adaptive_router", "AdaptiveRouterEngine"),
-        ("skeptic", "SkepticEngine"),
-        ("decision", "DecisionEngine"),
-        ("execution", "ExecutionEngine"),
-    ),
-    "manage": (
-        ("position_manager", "PositionManagerEngine"),
-        ("exit", "ExitEngine"),
-        ("memory", "MemoryEngine"),
-    ),
-}
-
 
 def _symbol(module_name: str, attr: str | None) -> tuple[Any, Outcome | None]:
     """One named symbol, or the module itself when `attr` is None, or the PENDING (or
@@ -11531,9 +11245,52 @@ _FILL_SUBJECTS: dict[str, FillSubjectModel] = {}
 _FILL_SUBJECT_DIRS: list[Any] = []
 
 
+#: What the trained subject is a function of, relative to a tree's root. The trainer, the
+#: labeller, the walk-forward, the feature and DI arithmetic, the core types they import,
+#: the config loader, the committed config and the harness that reads it. Nothing else in
+#: a tree can change the artefacts.
+FILL_SUBJECT_INPUTS: Final[tuple[str, ...]] = (
+    "src/acsoe/research",
+    "src/acsoe/modelling",
+    "src/acsoe/core",
+    "src/acsoe/platform",
+    "config/default.yaml",
+    "tests/harness/doubles.py",
+)
+
+
+def _fill_subject_key(ctx: VerifyContext) -> str:
+    """The cache key for a tree's trained subject: a digest of what training reads.
+
+    **Keyed by content, not by root** (spec 100 step 6). The mutation tests point these
+    criteria at copied trees, one per test, and a root key retrains the same subject in
+    every one of them, about half a minute each. A mutation of an engine does not change
+    the artefacts, and a mutation of anything training reads changes this digest and
+    retrains. A tree with none of these files falls back to its root, so nothing is shared
+    with a tree the digest cannot describe.
+    """
+    digest = hashlib.sha256()
+    found = False
+    for relative in FILL_SUBJECT_INPUTS:
+        path = ctx.root / relative
+        files = sorted(path.rglob("*.py")) if path.is_dir() else [path] if path.is_file() else []
+        for file in files:
+            if "__pycache__" in file.parts:
+                continue
+            found = True
+            digest.update(file.relative_to(ctx.root).as_posix().encode("utf-8") + b"\0")
+            digest.update(file.read_bytes() + b"\0")
+    return digest.hexdigest() if found else "root:" + str(ctx.root)
+
+
 def _fill_subject_model(ctx: VerifyContext) -> tuple[FillSubjectModel | None, Outcome | None]:
-    """A's rehearsal subject, trained once per repository root per process."""
-    key = str(ctx.root)
+    """A's rehearsal subject, trained once per distinct training input per process.
+
+    Shared read-only across criteria and across trees whose training inputs are
+    byte-identical; the database, the broker and the store are built fresh for every
+    drive and never cached.
+    """
+    key = _fill_subject_key(ctx)
     cached = _FILL_SUBJECTS.get(key)
     if cached is not None:
         return cached, None
@@ -11572,52 +11329,9 @@ def _fill_subject_model(ctx: VerifyContext) -> tuple[FillSubjectModel | None, Ou
     return subject, None
 
 
-def _fill_subject_tools() -> tuple[dict[str, Any] | None, Outcome | None]:
-    """Every class and function the drive needs, or the first thing that is missing.
-
-    Phase 6's own engines are checked first through `_phase6_engines`, so a missing one is
-    reported by number and owning spec. Everything is imported inside the caller's
-    `root_import_path`, so a fabricated tree is judged on its own code.
-    """
-    problem = _phase6_engines(
-        "order_book", "adaptive_router", "decision", "execution", "position_manager",
-        "exit", "memory",
-    )
-    if problem is None:
-        problem = _paper_broker_module()
-    if problem is not None:
-        return None, problem
-    tools: dict[str, Any] = {}
-    wanted: list[tuple[str, str, str | None]] = [
-        ("broker", "acsoe.clients.paper.broker", "PaperBroker"),
-        ("store", "acsoe.clients.store.client", "StoreClient"),
-        ("migrate", "acsoe.clients.store.migrations", "apply_migrations"),
-        ("contracts", "acsoe.clients.store.contracts", None),
-        ("chains", "acsoe.core.contracts", "Chains"),
-        ("orchestrator", "acsoe.core.orchestrator", "Orchestrator"),
-        ("doubles", "tests.harness.doubles", None),
-        ("fake_kraken", "tests.harness.fake_kraken", None),
-        ("market_script", "tests.harness.market_script", None),
-    ]
-    for label, module_name, attr in wanted:
-        value, problem = _symbol(module_name, attr)
-        if value is None:
-            return None, problem
-        tools[label] = value
-    for chain, engines in FILL_SUBJECT_CHAINS.items():
-        built: list[Any] = []
-        for engine, class_name in engines:
-            cls, problem = _symbol(f"acsoe.engines.{engine}.engine", class_name)
-            if cls is None:
-                return None, problem
-            built.append(cls)
-        tools[chain] = built
-    return tools, None
-
-
 def _equity_across_fill(subject: FillSubjectModel, tier: str) -> Outcome:
     """Drive a real entry to a real fill, then judge the two equity rows around it."""
-    tools, problem = _fill_subject_tools()
+    tools, problem = _drive_tools()
     if tools is None:
         return _awaiting(problem, tier)
     polars, problem = _polars()
@@ -11719,11 +11433,7 @@ def _judge_fill(
         clients=tools["doubles"].FakeClients(
             kraken=broker, store=store, recorder=fake_kraken.FakeRecorder()
         ),
-        chains=tools["chains"](
-            guard=[cls() for cls in tools["guard"]],
-            opportunity=[cls() for cls in tools["opportunity"]],
-            manage=[cls() for cls in tools["manage"]],
-        ),
+        chains=tools["build_chains"](),
         run_id="verify-phase-6-fill",
     )
 
@@ -11862,9 +11572,7 @@ def check_paper_equity_continuous_across_fill(ctx: VerifyContext) -> Outcome:
     the fee plus the quantity times the gap between mark and fill price, and never a
     constant.
 
-    The chains are assembled here in registry order because spec 82 has not registered
-    them. When it does, this criterion should read the registered chains from
-    `bootstrap.py` instead.
+    The chains are the registered ones, from `acsoe.bootstrap.build_chains()`.
 
     The named wrong implementation is the pre-spec-103 broker, whose balance leaves out a
     fill that engine 19 has not recorded yet. On the fill tick the cash is then unspent
@@ -11874,13 +11582,1830 @@ def check_paper_equity_continuous_across_fill(ctx: VerifyContext) -> Outcome:
         tier, problem = _tier_sentence(3)
         if tier is None:
             return _awaiting(problem, "at fee tier 3")
-        _, problem = _fill_subject_tools()
+        _, problem = _drive_tools()
         if problem is not None:
             return _awaiting(problem, tier)
         subject, problem = _fill_subject_model(ctx)
         if subject is None:
             return _awaiting(problem, tier)
         return _equity_across_fill(subject, tier)
+
+
+# --- the registered chain, driven: spec 100 -------------------------------- #
+#
+# Every criterion below that needs the chain to run drives the **registered** chains,
+# `acsoe.bootstrap.build_chains()`, through the real `Orchestrator`, against a real
+# `StoreClient` in a temporary directory, B's `PaperBroker` wrapping the scripted market
+# at fee tier 3, and the trained subject `_fill_subject_model` builds once. That subject
+# is A's spec 87 rehearsal window, on which the real chain was measured approving a BUY;
+# the planted-market subject above (`_trade_subject_model`) is kept for its own test and
+# is not what the round trips run on, because the fill subject is the one whose
+# entry tick has been measured end to end.
+#
+# **Nothing here builds an engine's payload.** The market, the book, the leaderboard rows
+# and the commands the operator writes are the subject; every `state` key is published by
+# the engine that owns it.
+
+#: Flat bars planted after the subject window. More than `barriers.timeout_bars` (48), so
+#: the timeout leg has candles behind every tick and engine 4 never sees a missing one.
+DRIVE_FLAT_BARS: Final = 80
+
+#: The universe the scripted market streams for a trade. BTC and ETH are the two macro
+#: assets the committed config names; engine 7 ranks alphabetically, so BTC/USD is traded.
+DRIVE_PAIRS: Final[tuple[str, ...]] = FILL_SUBJECT_PAIRS
+
+#: The recorded book's two pairs: ADA/USD is the thin one, BTC/USD the deep one. The thin
+#: run streams ADA first so engine 7 chooses it; the deep run streams the usual universe.
+BOOK_THIN_PAIR: Final = "ADA/USD"
+BOOK_DEEP_PAIR: Final = "BTC/USD"
+BOOK_THIN_UNIVERSE: Final[tuple[str, ...]] = ("ADA/USD", "BTC/USD", "ETH/USD")
+
+#: The fake exchange's rules for ADA/USD, which `tests/fixtures/kraken/asset_pairs.json`
+#: does not carry. Invented exchange data for the fake, the same values
+#: `tests/engines/test_order_book.py` gives it; engine 9 reads only `quote` from them.
+BOOK_THIN_PAIR_RULE: Final[dict[str, Any]] = {
+    "base": "ADA",
+    "quote": "USD",
+    "ordermin": "5",
+    "costmin": "1.00",
+    "tick_size": "0.000001",
+    "lot_decimals": 8,
+    "pair_decimals": 6,
+}
+
+#: How far past a barrier the planted touch prints, and where the book is then pinned.
+#: Subject data: what the market did. The exit price is read back from the book the
+#: criterion pinned and recomputed, never assumed.
+TOUCH_PAST: Final = Decimal("0.05")
+
+#: Quiet minutes watched between the fill and the barrier.
+WATCH_MINUTES: Final = 3
+
+#: The level size every pinned book carries. Larger than any position the subject opens,
+#: so a taker sell is one level; the walk is still recomputed rather than assumed.
+PINNED_LEVEL_QTY: Final = "1000"
+
+
+class RecordingBroker:
+    """B's paper broker, with every order request and cancel it was handed written down.
+
+    Transparent: every attribute that is not one of the two recorded calls is the
+    broker's own, so engines 18, 21 and 22 see exactly the object the daemon gives them.
+    It exists because "no market order is ever placed" and "the entry was not
+    re-placed" are claims about what reached the exchange, and in paper mode the broker
+    **is** the exchange: a replacement placed and then resolved inside one tick leaves no
+    row behind for engine 19 to write.
+
+    What it cannot see is an order an engine built and never handed over. Nothing can,
+    short of replacing the contract class, and that would be fabricating the contract.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.requests: list[Any] = []
+        self.cancels: list[int] = []
+
+    async def add_order(self, request: Any) -> Any:
+        self.requests.append(request)
+        return await self._inner.add_order(request)
+
+    async def cancel_order(self, userref: int) -> Any:
+        self.cancels.append(int(userref))
+        return await self._inner.cancel_order(userref)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+def _drive_tools() -> tuple[dict[str, Any] | None, Outcome | None]:
+    """Every symbol a drive needs, or the first thing that is missing.
+
+    Phase 6's own engines first, through `_phase6_engines`, so a missing one is named by
+    number and owning spec; then the broker; then the rest. Imported inside the caller's
+    `root_import_path`, so a fabricated tree is judged on its own code. The chains come
+    from `acsoe.bootstrap.build_chains`, which is the registry the daemon runs.
+    """
+    problem = _phase6_engines(
+        "order_book", "adaptive_router", "decision", "execution", "position_manager",
+        "exit", "memory",
+    )
+    if problem is None:
+        problem = _paper_broker_module()
+    if problem is not None:
+        return None, problem
+    tools: dict[str, Any] = {}
+    wanted: list[tuple[str, str, str | None]] = [
+        ("broker", "acsoe.clients.paper.broker", "PaperBroker"),
+        ("store", "acsoe.clients.store.client", "StoreClient"),
+        ("migrate", "acsoe.clients.store.migrations", "apply_migrations"),
+        ("contracts", "acsoe.clients.store.contracts", None),
+        ("orchestrator", "acsoe.core.orchestrator", "Orchestrator"),
+        ("build_chains", "acsoe.bootstrap", "build_chains"),
+        ("run_blocking", "acsoe.platform.aio", "run_blocking"),
+        ("manager", "acsoe.engines.position_manager.contracts", None),
+        ("exit", "acsoe.engines.exit.contracts", None),
+        ("guard", "acsoe.engines.data_guard.contracts", None),
+        ("doubles", "tests.harness.doubles", None),
+        ("fake_kraken", "tests.harness.fake_kraken", None),
+        ("market_script", "tests.harness.market_script", None),
+    ]
+    for label, module_name, attr in wanted:
+        value, problem = _symbol(module_name, attr)
+        if value is None:
+            return None, problem
+        tools[label] = value
+    return tools, None
+
+
+class DriveError(Exception):
+    """A drive step found the chain not doing what the criterion requires.
+
+    Raised by the step helpers and turned into a FAIL by the criterion, with the tier
+    sentence appended. Not `AssertionError`, which `python -O` strips, and not a bare
+    `Exception`, so a defect in this file still arrives as `criterion raised`.
+    """
+
+
+@dataclass
+class Drive:
+    """One scripted market, one store, one broker and one orchestrator, ticked by hand.
+
+    Built by :func:`_driven`, which owns the temporary directory and closes the store.
+    """
+
+    tools: dict[str, Any]
+    config: Any
+    clock: Any
+    market: Any
+    store: Any
+    broker: RecordingBroker
+    orchestrator: Any
+    chains: Any
+    pairs: tuple[str, ...]
+    last_bar_ts: int
+    bid: Decimal
+    interval_s: int
+    tick_s: int
+    commands: int = 0
+
+    @property
+    def entry_at(self) -> int:
+        """One second into the first bar after the window: the tick on which it closed."""
+        return self.last_bar_ts + self.interval_s + 1
+
+    def tick(self, at: int) -> dict[str, Any]:
+        """One real orchestrator tick at `at` (epoch seconds), and its finished `state`.
+
+        `state["system"]` is the orchestrator's own dict and step 4 may already have
+        cleared `close_intent` in it, so the copy returned here is what the tick ended
+        with, not what the engines saw.
+        """
+        self.clock.set(datetime.fromtimestamp(at, tz=UTC))
+        state = dict(self.orchestrator.tick())
+        state["system"] = dict(state["system"])
+        return state
+
+    def pin(self, bid: Decimal, *, pairs: Sequence[str] | None = None) -> None:
+        """Pin the stream quote **and** the REST book of `pairs` to one market.
+
+        Engines 3 and 18 read the stream; engine 9 and the broker read the book. Moving
+        one without the other would be scripting two markets.
+        """
+        ask = bid + FILL_SUBJECT_SPREAD
+        for pair in pairs or self.pairs:
+            self.market.set_quote(pair, bid=str(bid), ask=str(ask))
+            self.market.set_order_book(
+                pair,
+                bids=[(str(bid), PINNED_LEVEL_QTY)],
+                asks=[(str(ask), PINNED_LEVEL_QTY)],
+            )
+
+    def cross(self, pair: str, *, quoted: Decimal, book_bid: Decimal) -> None:
+        """A crossed stream quote on `pair`, which engine 4 blocks on as a negative
+        spread, and a sound REST book at `book_bid` for anything that has to sell."""
+        self.market.set_quote(pair, bid=str(quoted), ask=str(quoted - FILL_SUBJECT_SPREAD))
+        self.market.set_order_book(
+            pair,
+            bids=[(str(book_bid), PINNED_LEVEL_QTY)],
+            asks=[(str(book_bid + FILL_SUBJECT_SPREAD), PINNED_LEVEL_QTY)],
+        )
+
+    def command(self, name: str) -> None:
+        """A command row, the way the console writes one."""
+        contracts = self.tools["contracts"]
+        self.commands += 1
+        self.store.append_command(
+            contracts.CommandRow(
+                command=name,
+                source=contracts.CommandSource.CONSOLE,
+                reason="verify.py spec 100",
+                created_at=self.commands,
+                updated_at=self.commands,
+            )
+        )
+
+    def open_orders(self) -> tuple[Any, ...]:
+        return tuple(self.tools["run_blocking"](self.broker.open_orders()))
+
+    def gates(self) -> list[str]:
+        """Every registered gate in the guard and opportunity chains, in chain order."""
+        return [
+            str(engine.name)
+            for chain in (self.chains.guard, self.chains.opportunity)
+            for engine in chain
+            if getattr(engine, "is_gate", False) is True
+        ]
+
+    def command_rows(self) -> list[dict[str, Any]]:
+        """Every `commands` row. Identifier and timestamp columns only, no money."""
+        cursor = self.store.connection.execute(
+            "SELECT id, command, source, created_at, claimed_at, consumed_at "
+            "FROM commands ORDER BY id"
+        )
+        names = ("id", "command", "source", "created_at", "claimed_at", "consumed_at")
+        return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+
+    def orders_with_intent(self, intent: str) -> list[Any]:
+        """Every stored order with this intent, read through the store's own model."""
+        userrefs = [
+            int(row[0])
+            for row in self.store.connection.execute(
+                "SELECT userref FROM orders WHERE intent = ? ORDER BY userref", (intent,)
+            ).fetchall()
+        ]
+        return [self.store.order_by_userref(userref) for userref in userrefs]
+
+    def position_ids(self) -> list[str]:
+        return [
+            str(row[0])
+            for row in self.store.connection.execute(
+                "SELECT position_id FROM positions ORDER BY position_id"
+            ).fetchall()
+        ]
+
+    def run_equity(self) -> list[Any]:
+        run_id = self.orchestrator.run_id
+        return [row for row in self.store.equity_series() if row.run_id == run_id]
+
+
+def _micros(at: int) -> int:
+    return at * 1_000_000
+
+
+def _config_decimal(config: Any, key: str) -> Decimal:
+    """A configured number as an exact `Decimal`; `repr` for a float, as the engines do."""
+    value = config.get(key)
+    return Decimal(repr(value) if isinstance(value, float) else str(value))
+
+
+def _drive_config(tools: dict[str, Any], subject: FillSubjectModel) -> Any:
+    """The committed config with the trained run named, and nothing else changed."""
+    doubles = tools["doubles"]
+    data = doubles.load_default_config().as_dict()
+    for field in ("prediction_run_id", "anomaly_run_id", "skeptic_run_id"):
+        data["models"][field] = subject.run_id
+    return doubles.MappingConfig(data)
+
+
+@contextlib.contextmanager
+def _driven(
+    tools: dict[str, Any],
+    subject: FillSubjectModel,
+    polars: Any,
+    *,
+    pairs: tuple[str, ...] = DRIVE_PAIRS,
+    before_start: Callable[[Any, Any], None] | None = None,
+) -> Iterator[Drive]:
+    """The subject window planted, the account opened, the system activated.
+
+    `before_start(market, store)` lets a criterion add subject data (a pair rule, a
+    recorded book, leaderboard rows) before the first tick. No tick is run here.
+    """
+    doubles, fake_kraken, market_script = (
+        tools["doubles"], tools["fake_kraken"], tools["market_script"]
+    )
+    config = _drive_config(tools, subject)
+    interval_s = int(config.get(KEY_DECISION_BAR_S))
+    tick_s = int(config.get("timeframes.loop_tick_s"))
+    bar_cls = market_script.Bar
+    rows = _constructed_candles(
+        polars, pair=CONSTRUCTED_PAIRS[0], interval_s=interval_s
+    ).to_dicts()
+    end = len(rows) - FILL_SUBJECT_WINDOW_END
+    window = [
+        bar_cls(
+            ts=int(row["ts"]),
+            open=Decimal(str(row["open"])),
+            high=Decimal(str(row["high"])),
+            low=Decimal(str(row["low"])),
+            close=Decimal(str(row["close"])),
+            volume=Decimal(str(row["volume"])),
+            trades=int(row["trades"]),
+        )
+        for row in rows[end - FILL_SUBJECT_WINDOW_BARS : end]
+    ]
+    last = window[-1].ts
+    clock = doubles.FixedClock(datetime.fromtimestamp(last, tz=UTC))
+    market = market_script.ScriptedMarket(
+        clock=clock, interval_s=interval_s, published_bars=200, pairs=pairs
+    )
+    profile = market.use_fee_tier(3)
+    if profile.tier != 3:
+        raise DriveError(f"the harness applied fee tier {profile.tier} when asked for 3")
+    bid = window[-1].close.quantize(Decimal("0.001"))
+    flat = [
+        bar_cls.flat(last + interval_s * k, str(bid), trades=17 + (k * 7) % 23)
+        for k in range(1, DRIVE_FLAT_BARS + 1)
+    ]
+    for pair in pairs:
+        market.plant(pair, window)
+        market.plant(pair, flat)
+
+    holder = tempfile.TemporaryDirectory(prefix="acsoe-drive-", ignore_cleanup_errors=True)
+    try:
+        db = Path(holder.name) / "acsoe.sqlite"
+        tools["migrate"](db)
+        store = tools["store"](db, models_dir=subject.models_dir)
+        try:
+            broker = RecordingBroker(
+                tools["broker"](market, store=store, config=config, clock=clock)
+            )
+            chains = tools["build_chains"]()
+            orchestrator = tools["orchestrator"](
+                config=config,
+                clock=clock,
+                clients=doubles.FakeClients(
+                    kraken=broker, store=store, recorder=fake_kraken.FakeRecorder()
+                ),
+                chains=chains,
+                run_id="verify-phase-6-drive",
+            )
+            drive = Drive(
+                tools=tools, config=config, clock=clock, market=market, store=store,
+                broker=broker, orchestrator=orchestrator, chains=chains, pairs=pairs,
+                last_bar_ts=last, bid=bid, interval_s=interval_s, tick_s=tick_s,
+            )
+            drive.pin(bid)
+            if before_start is not None:
+                before_start(market, store)
+            drive.command(str(tools["contracts"].CommandName.ACTIVATE.value))
+            yield drive
+        finally:
+            store.close()
+    finally:
+        holder.cleanup()
+
+
+def _warm_up(drive: Drive) -> dict[str, Any]:
+    """One quiet tick before the bar closes. It writes the first equity row, which engine
+    11 sizes against; without it the entry tick is refused, correctly."""
+    state = drive.tick(drive.entry_at - drive.tick_s)
+    if "trading_blocked_by" in state:
+        raise DriveError(
+            f"the quiet tick before the entry was blocked by {state['trading_blocked_by']}: "
+            f"{state.get('block_reason')}"
+        )
+    return state
+
+
+@dataclass(frozen=True)
+class Entry:
+    """What the entry tick placed, with the limit recomputed from the published bid."""
+
+    userref: int
+    pair: str
+    qty: Decimal
+    limit: Decimal
+    placed_at: int
+    maker: Decimal
+    taker: Decimal
+    gates: tuple[str, ...]
+
+
+def _entry(drive: Drive, *, pair: str | None = None) -> tuple[Entry, dict[str, Any]]:
+    """Tick at the bar close: every registered gate runs and passes, and engine 18
+    places one post-only buy at the best bid rounded down onto the pair's grid."""
+    gates = drive.gates()
+    table = list(drive.tools["table_gates"])
+    if sorted(gates) != table:
+        raise DriveError(
+            f"the registered gates {sorted(gates)} are not the registry table's gates "
+            f"{table} (context/engine-contracts.md), so a trade here would skip a gate"
+        )
+    state = drive.tick(drive.entry_at)
+    if "trading_blocked_by" in state:
+        raise DriveError(
+            f"the entry tick was blocked by {state['trading_blocked_by']}: "
+            f"{state.get('block_reason')}. A's spec 87 probe placed an entry on this window"
+        )
+    unrun = [gate for gate in gates if gate not in state]
+    if not gates or unrun:
+        raise DriveError(
+            f"the entry tick did not run every registered gate: {unrun or 'none registered'}"
+        )
+    tier = (state.get("exchange") or {}).get("fee_tier") or {}
+    if tier.get("tier") != 3:
+        raise DriveError(f"engine 1 published fee tier {tier.get('tier')!r}, not 3")
+    execution = state.get("execution") or {}
+    if execution.get("placed") is not True:
+        raise DriveError(
+            "engine 18 placed nothing on a tick every gate passed: "
+            f"{execution.get('reason_code')!r}"
+        )
+    orders = execution.get("orders") or []
+    if len(orders) != 1:
+        raise DriveError(f"engine 18 published {len(orders)} order rows, not one")
+    row = orders[0]
+    traded = str(execution.get("pair"))
+    if pair is not None and traded != pair:
+        raise DriveError(f"engine 7 chose {traded}, and this drive needs {pair}")
+    shape = tuple(
+        row.get(key) for key in ("side", "intent", "order_type", "oflags", "status")
+    )
+    if shape != ("buy", "entry", "limit", "post", "resting"):
+        raise DriveError(f"the entry is not a resting post-only limit buy: {shape}")
+    rules = state["exchange"]["pair_rules"]["pairs"][traded]
+    grid = Decimal(1).scaleb(-int(rules["pair_decimals"]))
+    quote = state["market_sensor"]["quotes"][traded]
+    limit = Decimal(str(quote["bid"])).quantize(grid, rounding=ROUND_DOWN)
+    if Decimal(str(row["limit_price"])) != limit:
+        raise DriveError(
+            f"the entry's limit is {row['limit_price']}, not the best bid {quote['bid']} "
+            f"rounded down to {grid}: {limit}"
+        )
+    return (
+        Entry(
+            userref=int(execution["userref"]),
+            pair=traded,
+            qty=Decimal(str(row["qty"])),
+            limit=limit,
+            placed_at=int(row["placed_at"]),
+            maker=Decimal(str(tier["maker_fee_pct"])),
+            taker=Decimal(str(tier["taker_fee_pct"])),
+            gates=tuple(gates),
+        ),
+        state,
+    )
+
+
+@dataclass(frozen=True)
+class Filled:
+    """The position a fill opened, its barriers recomputed from the config."""
+
+    position_id: str
+    filled_at: int
+    stop: Decimal
+    target: Decimal
+    timeout_at: int
+
+
+def _fill(drive: Drive, entry: Entry) -> tuple[Filled, dict[str, Any]]:
+    """A trade strictly below the limit, then the next tick: the fill is recorded."""
+    drive.market.plant_trade(
+        entry.pair,
+        at=datetime.fromtimestamp(drive.entry_at + drive.tick_s // 2, tz=UTC),
+        price=str(entry.limit * Decimal("0.999")),
+    )
+    at = drive.entry_at + drive.tick_s
+    state = drive.tick(at)
+    if "trading_blocked_by" in state:
+        raise DriveError(f"the fill tick was blocked by {state['trading_blocked_by']}")
+    order = drive.store.order_by_userref(entry.userref)
+    if order is None or str(order.status.value) != "filled":
+        raise DriveError(
+            f"a trade below the limit did not fill entry {entry.userref}: "
+            f"{None if order is None else order.status.value!r}"
+        )
+    if order.avg_fill_price != entry.limit or order.filled_qty != entry.qty:
+        raise DriveError(
+            f"entry {entry.userref} filled {order.filled_qty} at {order.avg_fill_price}; a "
+            f"resting post-only buy fills {entry.qty} at its own limit {entry.limit}"
+        )
+    positions = drive.store.open_positions()
+    if len(positions) != 1 or positions[0].entry_userref != entry.userref:
+        raise DriveError(
+            f"the fill left {len(positions)} open position(s), not the entry's one"
+        )
+    position = positions[0]
+    config = drive.config
+    stop = entry.limit * (1 - _config_decimal(config, "barriers.stop_pct"))
+    target = entry.limit * (1 + _config_decimal(config, "barriers.target_pct"))
+    timeout_s = int(config.get("barriers.timeout_bars")) * drive.interval_s
+    stored = (position.stop_price, position.target_price, position.timeout_at, position.opened_at)
+    expected = (stop, target, _micros(at + timeout_s), _micros(at))
+    if stored != expected:
+        raise DriveError(
+            f"the stored (stop, target, timeout_at, opened_at) are {stored}; measured from "
+            f"the fill at {entry.limit} with the configured barriers they are {expected}"
+        )
+    return (
+        Filled(
+            position_id=str(position.position_id),
+            filled_at=at,
+            stop=stop,
+            target=target,
+            timeout_at=at + timeout_s,
+        ),
+        state,
+    )
+
+
+def _watch(drive: Drive, filled: Filled, *, start: int, until: int, every: int) -> int:
+    """Tick every `every` seconds from `start` up to, not including, `until`.
+
+    Every tick: no guard block, nothing triggered, and the stored position marked at the
+    pinned bid, so the watch is a fact in the store rather than a loop that ran. A bar
+    close runs the opportunity chain again and engine 11 refuses a second position on
+    the pair; that refuses a *new* trade and is not a hold. Returns the ticks run.
+    """
+    ticks = 0
+    at = start
+    while at < until:
+        state = drive.tick(at)
+        if state.get("guard_blockers"):
+            raise DriveError(
+                f"the watch was blocked at {at} by {state['guard_blockers']}"
+            )
+        manager = state.get("position_manager") or {}
+        if manager.get("triggered") or manager.get("hold_reason") is not None:
+            raise DriveError(
+                f"on flat trading at {at} engine 21 triggered {manager.get('triggered')} "
+                f"and held for {manager.get('hold_reason')!r}"
+            )
+        position = drive.store.position(filled.position_id)
+        if position is None or position.last_price != drive.bid:
+            raise DriveError(
+                f"the stored mark at {at} is "
+                f"{None if position is None else position.last_price}, not the bid {drive.bid}"
+            )
+        ticks += 1
+        at += every
+    return ticks
+
+
+def _sold_at(levels: Sequence[tuple[Decimal, Decimal]], qty: Decimal) -> Decimal:
+    """The average price a taker sell of `qty` gets from `levels`, best bid first.
+
+    Walked here from the book the criterion pinned, so the exit price the store holds
+    is compared against the market that was scripted rather than read back.
+    """
+    remaining = qty
+    proceeds = Decimal(0)
+    for price, volume in levels:
+        if remaining <= 0:
+            break
+        taken = volume if volume < remaining else remaining
+        proceeds += taken * price
+        remaining -= taken
+    if remaining > 0:
+        raise DriveError(f"the pinned book cannot absorb a sell of {qty}")
+    return proceeds / qty
+
+
+@dataclass(frozen=True)
+class Closed:
+    """A round trip recomputed from the scripted market and the published fee tier."""
+
+    exit_price: Decimal
+    exit_qty: Decimal
+    entry_fee: Decimal
+    exit_fee: Decimal
+    realised: Decimal
+
+
+def _reconcile(
+    drive: Drive,
+    entry: Entry,
+    filled: Filled,
+    *,
+    exit_at: int,
+    book_bid: Decimal,
+    outcome: str,
+    lot_decimals: int,
+    fallbacks: tuple[str, ...],
+    equity: bool,
+) -> Closed:
+    """Every row engine 19 wrote for the round trip, against a recomputation.
+
+    **Exact, to the last digit, with no tolerance.** The quantity is rounded down onto
+    the lot grid here, the exit price is walked here over the book the criterion pinned,
+    the fees are the notional times the maker and taker rates engine 1 published, and
+    the realised PnL is proceeds less cost less both fees. Each is then compared with
+    the `orders`, `positions`, `trades` and (when the balance was known) the
+    `equity_snapshots` row. A number read back from a row it is being checked against
+    proves nothing.
+    """
+    store = drive.store
+    exits = drive.tools["exit"]
+    exit_userref = int(exits.exit_userref_for(filled.position_id))
+    exit_qty = entry.qty.quantize(Decimal(1).scaleb(-lot_decimals), rounding=ROUND_DOWN)
+    exit_price = _sold_at(((book_bid, Decimal(PINNED_LEVEL_QTY)),), exit_qty)
+    entry_fee = entry.qty * entry.limit * entry.maker
+    exit_fee = exit_qty * exit_price * entry.taker
+    realised = exit_qty * exit_price - exit_qty * entry.limit - entry_fee - exit_fee
+
+    entry_row = store.order_by_userref(entry.userref)
+    if entry_row is None or entry_row.fee != entry_fee:
+        raise DriveError(
+            f"the entry's stored fee is {None if entry_row is None else entry_row.fee}, not "
+            f"{entry.qty} x {entry.limit} x maker {entry.maker} = {entry_fee}"
+        )
+    exit_row = store.order_by_userref(exit_userref)
+    if exit_row is None:
+        raise DriveError(f"no exit order {exit_userref} was recorded for {filled.position_id}")
+    got = (
+        exit_row.side.value, exit_row.intent.value, exit_row.order_type.value,
+        exit_row.status.value, exit_row.filled_qty, exit_row.avg_fill_price, exit_row.fee,
+    )
+    want = ("sell", "exit", "market", "filled", exit_qty, exit_price, exit_fee)
+    if got != want:
+        raise DriveError(
+            "the exit order (side, intent, type, status, filled, price, fee) is "
+            f"{got}; recomputed from the pinned book and taker {entry.taker} it is {want}"
+        )
+    position = store.position(filled.position_id)
+    trade_id = str(exits.trade_id_for(filled.position_id))
+    if (
+        position is None
+        or position.status.value != "closed"
+        or position.closed_at != _micros(exit_at)
+        or position.trade_id != trade_id
+    ):
+        raise DriveError(
+            f"position {filled.position_id} is stored as "
+            f"{None if position is None else (position.status.value, position.closed_at, position.trade_id)}, "
+            f"not closed at {_micros(exit_at)} under {trade_id}"
+        )
+    trades = {row.trade_id: row for row in store.recent_closed_trades(limit=1000)}
+    trade = trades.get(trade_id)
+    if trade is None:
+        raise DriveError(f"no trade {trade_id} was recorded")
+    got_trade = (
+        trade.outcome.value, trade.qty, trade.entry_price, trade.exit_price,
+        trade.entry_fee, trade.exit_fee, trade.realised_pnl, trade.entry_userref,
+        trade.exit_userref, tuple(trade.fallbacks_used),
+    )
+    want_trade = (
+        outcome, exit_qty, entry.limit, exit_price, entry_fee, exit_fee, realised,
+        entry.userref, exit_userref, fallbacks,
+    )
+    if got_trade != want_trade:
+        raise DriveError(
+            "the trade (outcome, qty, entry, exit, entry fee, exit fee, realised, entry "
+            f"userref, exit userref, fallbacks) is {got_trade}; recomputed it is {want_trade}"
+        )
+    if equity:
+        start = Decimal(str(drive.config.get("paper.starting_balances")["USD"]))
+        cash = start - entry.qty * entry.limit - entry_fee + exit_qty * exit_price - exit_fee
+        last = drive.run_equity()[-1]
+        got_equity = (
+            last.ts, last.cash, last.positions_value, last.equity,
+            last.open_position_count, last.realised_pnl_cum,
+        )
+        want_equity = (_micros(exit_at), cash, Decimal(0), cash, 0, realised)
+        if got_equity != want_equity:
+            raise DriveError(
+                "the exit tick's equity row (ts, cash, positions value, equity, open "
+                f"positions, realised to date) is {got_equity}; recomputed from the opening "
+                f"{start} it is {want_equity}"
+            )
+    requests = [
+        (r.side.value, r.order_type.value, r.post_only, int(r.userref), r.qty)
+        for r in drive.broker.requests
+    ]
+    wanted = [
+        ("buy", "limit", True, entry.userref, entry.qty),
+        ("sell", "market", False, exit_userref, exit_qty),
+    ]
+    if requests != wanted:
+        raise DriveError(
+            f"the broker was asked for {requests}; one post-only buy and one market sell "
+            f"were expected: {wanted}"
+        )
+    return Closed(
+        exit_price=exit_price,
+        exit_qty=exit_qty,
+        entry_fee=entry_fee,
+        exit_fee=exit_fee,
+        realised=realised,
+    )
+
+
+def _lot_decimals(state: dict[str, Any], pair: str) -> int:
+    return int(state["exchange"]["pair_rules"]["pairs"][pair]["lot_decimals"])
+
+
+def _drive_prelude(
+    ctx: VerifyContext, leg: str = ""
+) -> tuple[tuple[str, dict[str, Any], Any, FillSubjectModel] | None, Outcome | None]:
+    """The tier sentence, the tools, polars and the trained subject, or the PENDING.
+
+    Called inside `root_import_path`. The order is the order the PENDING lines name
+    things in: the harness, then Phase 6's engines by number, then the broker, then the
+    trained subject.
+    """
+    tier, problem = _tier_sentence(3)
+    if tier is None:
+        return None, _awaiting(problem, "at fee tier 3", leg)
+    tools, problem = _drive_tools()
+    if tools is None:
+        return None, _awaiting(problem, tier, leg)
+    polars, problem = _polars()
+    if polars is None:
+        return None, _awaiting(problem, tier, leg)
+    subject, problem = _fill_subject_model(ctx)
+    if subject is None:
+        return None, _awaiting(problem, tier, leg)
+    try:
+        registry = parse_engine_registry(ctx.root)
+    except (OSError, ValueError) as exc:
+        return None, failed(f"the engine registry table cannot be read: {exc}; {tier}")
+    # The gates the registry table declares, which `_entry` compares with the gates the
+    # registered chains hold. Judging "every registered gate ran" against the chains alone
+    # cannot see a gate that was never registered.
+    tools = {**tools, "table_gates": sorted(row.name for row in registry.values() if row.is_gate)}
+    return (tier, tools, polars, subject), None
+
+
+def _driven_verdict(
+    ctx: VerifyContext,
+    body: Callable[[str, dict[str, Any], Any, FillSubjectModel], str],
+    *,
+    leg: str = "",
+    what: str,
+) -> Outcome:
+    """Run `body` and turn its sentence into a PASS, or its `DriveError` into a FAIL.
+
+    Both carry the tier sentence, because every one of these drives ran at fee tier 3.
+    """
+    with root_import_path(ctx.root):
+        ready, problem = _drive_prelude(ctx, leg)
+        if ready is None:
+            assert problem is not None
+            return problem
+        tier, tools, polars, subject = ready
+        try:
+            return passed(body(tier, tools, polars, subject) + "; " + tier)
+        except DriveError as failure:
+            return failed(f"{what}: {failure}; {tier}")
+
+
+# --- paper_trade_round_trip_target / _stop / _timeout ----------------------- #
+
+
+@dataclass(frozen=True)
+class Exited:
+    """How a position was taken out on its barrier, and what the tick published."""
+
+    exit_at: int
+    book_bid: Decimal
+    watched: int
+    touch: str
+    state: dict[str, Any]
+
+
+def _trigger_exit(drive: Drive, entry: Entry, filled: Filled, leg: str) -> Exited:
+    """Watch the position, reach the `leg` barrier, and check engines 21 and 22 took it.
+
+    **The timeout leg is watched minute by minute for its first decision bar, then once a
+    bar**, and its exit tick lands on `timeout_at` itself. Every tick of the horizon, 720 of
+    them, cost 436 s on this machine, and this criterion runs three times in one gate (the
+    report, the real-tree test and a mutation arm), which would push `toolchain_green`'s
+    pytest toward its bound. A bar-close tick runs the whole chain, so the coarser cadence
+    still watches the position on every tick where anything could decide to act on it.
+    """
+    tick_s, bar_s = drive.tick_s, drive.interval_s
+    if leg == "timeout":
+        exit_at = filled.timeout_at
+        first_bar = filled.filled_at + bar_s
+        watched = _watch(
+            drive, filled, start=filled.filled_at + tick_s, until=first_bar, every=tick_s
+        )
+        watched += _watch(drive, filled, start=first_bar, until=exit_at, every=bar_s)
+        book_bid = drive.bid
+        touch = f"the clock reached its timeout at {exit_at} with neither barrier traded"
+        printed = None
+    else:
+        exit_at = filled.filled_at + (WATCH_MINUTES + 1) * tick_s
+        watched = _watch(
+            drive, filled, start=filled.filled_at + tick_s, until=exit_at, every=tick_s
+        )
+        barrier = filled.target if leg == "target" else filled.stop
+        printed = barrier + TOUCH_PAST if leg == "target" else barrier - TOUCH_PAST
+        book_bid = printed.quantize(Decimal("0.001"), rounding=ROUND_DOWN)
+        drive.market.plant_trade(
+            entry.pair,
+            at=datetime.fromtimestamp(exit_at - tick_s // 2, tz=UTC),
+            price=str(printed),
+        )
+        drive.pin(book_bid, pairs=(entry.pair,))
+        touch = f"a trade at {printed} crossed the {leg} {barrier} the minute before {exit_at}"
+    state = drive.tick(exit_at)
+    if state.get("guard_blockers"):
+        raise DriveError(f"the exit tick was guard-blocked: {state['guard_blockers']}")
+    manager = state.get("position_manager") or {}
+    wanted = [{"position_id": filled.position_id, "barrier": leg}]
+    if manager.get("triggered") != wanted:
+        raise DriveError(
+            f"engine 21 triggered {manager.get('triggered')} on the exit tick, not {wanted}"
+        )
+    if printed is not None:
+        traded = state["market_sensor"]["trade_ranges"].get(entry.pair) or {}
+        side = "high" if leg == "target" else "low"
+        if Decimal(str(traded.get(side))) != printed:
+            raise DriveError(
+                f"engine 3's trade range {side} is {traded.get(side)}, not the planted {printed}"
+            )
+    exiting = state.get("exit") or {}
+    if exiting.get("positions_closed") is not True:
+        raise DriveError(f"engine 22 closed nothing: {exiting.get('reason_code')!r}")
+    return Exited(exit_at=exit_at, book_bid=book_bid, watched=watched, touch=touch, state=state)
+
+
+def _round_trip_body(leg: str) -> Callable[[str, dict[str, Any], Any, FillSubjectModel], str]:
+    def body(tier: str, tools: dict[str, Any], polars: Any, subject: FillSubjectModel) -> str:
+        del tier
+        with _driven(tools, subject, polars) as drive:
+            _warm_up(drive)
+            entry, entry_state = _entry(drive)
+            filled, _ = _fill(drive, entry)
+            exited = _trigger_exit(drive, entry, filled, leg)
+            closed = _reconcile(
+                drive, entry, filled, exit_at=exited.exit_at, book_bid=exited.book_bid,
+                outcome=leg, lot_decimals=_lot_decimals(entry_state, entry.pair),
+                fallbacks=(), equity=True,
+            )
+        return (
+            f"{entry.pair} entry {entry.userref}: a post-only buy of {entry.qty} at "
+            f"{entry.limit}, placed on the bar close past all {len(entry.gates)} registered "
+            f"gates ({', '.join(entry.gates)}), filled at its limit on the next tick, "
+            f"watched for {exited.watched} ticks, then {exited.touch}; it exited at the "
+            f"{leg} when engine 22 sold {closed.exit_qty} as a taker at "
+            f"{closed.exit_price}. Entry fee {closed.entry_fee}, exit fee {closed.exit_fee} "
+            f"and realised {closed.realised} were recomputed from the pinned book and "
+            "engine 1's fee tier, and the orders, positions, trades and equity rows engine "
+            "19 wrote match them exactly"
+        )
+
+    return body
+
+
+def _round_trip(ctx: VerifyContext, leg: str) -> Outcome:
+    """One paper round trip that ends at the named barrier, reconciled to the cent.
+
+    The three criteria differ only in which barrier the scripted market reaches, and
+    they are one function because the reconciliation is the assertion in all three:
+    every row engine 19 wrote is read back and compared against the trade recomputed
+    from the market the criterion scripted - entry, exit, fees and realised PnL,
+    exactly, with no tolerance. A tolerance on money is a defect waiting for a rounding
+    bug to hide in.
+
+    Why all three rather than one. `target` and `stop` differ by which barrier the
+    scripted trades touch; `timeout` never touches either and is the path where nothing
+    triggers the exit except elapsed time, which is the only one of the three a broken
+    clock comparison can break while the other two stay green.
+    """
+    return _driven_verdict(
+        ctx, _round_trip_body(leg), leg=leg, what=f"the {leg} round trip"
+    )
+
+
+# --- unfilled_entry_cancels_without_chasing --------------------------------- #
+
+
+def _unfilled_body(tier: str, tools: dict[str, Any], polars: Any, subject: FillSubjectModel) -> str:
+    del tier
+    with _driven(tools, subject, polars) as drive:
+        _warm_up(drive)
+        entry, _ = _entry(drive)
+        window_s = int(drive.config.get("trading.entry_unfilled_window_s"))
+        next_bar = drive.last_bar_ts + 2 * drive.interval_s
+        cancelled_at: int | None = None
+        ticks = 0
+        at = drive.entry_at + drive.tick_s
+        while at < next_bar:
+            state = drive.tick(at)
+            ticks += 1
+            if state.get("guard_blockers") or "execution" in state:
+                raise DriveError(
+                    f"the tick at {at} was guard-blocked or ran the opportunity chain "
+                    "before the next bar closed"
+                )
+            rows = (state.get("position_manager") or {}).get("orders") or []
+            elapsed_us = _micros(at) - entry.placed_at
+            due = elapsed_us >= _micros(window_s)
+            if cancelled_at is None and rows and not due:
+                raise DriveError(
+                    f"engine 21 acted on the entry {elapsed_us // 1_000_000}s after placement, "
+                    f"inside its {window_s}s window: {rows}"
+                )
+            if cancelled_at is None and due:
+                shape = [(row.get("userref"), row.get("status")) for row in rows]
+                if shape != [(entry.userref, "cancelled")]:
+                    raise DriveError(
+                        f"on the first tick at its {window_s}s window engine 21 published "
+                        f"{shape}, not the entry cancelled"
+                    )
+                cancelled_at = at
+            elif cancelled_at is not None and rows:
+                raise DriveError(f"engine 21 acted again at {at}, after the cancel: {rows}")
+            at += drive.tick_s
+        if cancelled_at is None:
+            raise DriveError(
+                f"the entry was never cancelled across {ticks} ticks; its window is {window_s}s"
+            )
+        stored = drive.store.order_by_userref(entry.userref)
+        if (
+            stored is None
+            or stored.status.value != "cancelled"
+            or stored.closed_at != _micros(cancelled_at)
+            or stored.filled_qty != 0
+        ):
+            raise DriveError(
+                f"entry {entry.userref} is stored as "
+                f"{None if stored is None else (stored.status.value, stored.closed_at, stored.filled_qty)}, "
+                f"not cancelled unfilled at {_micros(cancelled_at)}"
+            )
+        requests = [
+            (r.side.value, r.order_type.value, r.post_only, int(r.userref))
+            for r in drive.broker.requests
+        ]
+        if requests != [("buy", "limit", True, entry.userref)]:
+            raise DriveError(
+                f"the broker was asked for {requests}; the entry alone was expected, and any "
+                "second order is a chase (invariant 8)"
+            )
+        if drive.broker.cancels != [entry.userref]:
+            raise DriveError(f"the broker was asked to cancel {drive.broker.cancels}")
+        open_now = drive.open_orders()
+        userrefs = [
+            int(row[0])
+            for row in drive.store.connection.execute("SELECT userref FROM orders").fetchall()
+        ]
+        if open_now or userrefs != [entry.userref] or drive.position_ids():
+            raise DriveError(
+                f"after the cancel the broker holds {len(open_now)} open order(s), the store "
+                f"{userrefs} and positions {drive.position_ids()}"
+            )
+    return (
+        f"{entry.pair} entry {entry.userref}, a post-only buy of {entry.qty} at "
+        f"{entry.limit}, rested with nothing trading below it and was cancelled "
+        f"{(_micros(cancelled_at) - entry.placed_at) // 1_000_000}s after placement, on the "
+        f"first minute tick at trading.entry_unfilled_window_s ({window_s}s) and not "
+        f"before. Across {ticks} ticks to the next bar close the broker was asked for that "
+        "one order and that one cancel and nothing else - no market order and no second "
+        "entry - and afterwards nothing is open at the broker or in the store"
+    )
+
+
+# --- triggered_stop_holds_on_data_guard_block ------------------------------- #
+
+
+def _held_stop_body(tier: str, tools: dict[str, Any], polars: Any, subject: FillSubjectModel) -> str:
+    del tier
+    manager_contracts, guard = tools["manager"], tools["guard"]
+    hold = str(manager_contracts.HOLD_DATA_GUARD_BLOCKED)
+    with _driven(tools, subject, polars) as drive:
+        _warm_up(drive)
+        entry, entry_state = _entry(drive)
+        filled, _ = _fill(drive, entry)
+        pair = entry.pair
+        held_at = filled.filled_at + drive.tick_s
+        printed = filled.stop - TOUCH_PAST
+        quoted = (filled.stop - Decimal("0.4")).quantize(Decimal("0.001"))
+        book_bid = (filled.stop - Decimal("0.7")).quantize(Decimal("0.001"))
+        drive.market.plant_trade(
+            pair, at=datetime.fromtimestamp(held_at - drive.tick_s // 2, tz=UTC), price=str(printed)
+        )
+        drive.cross(pair, quoted=quoted, book_bid=book_bid)
+        held = drive.tick(held_at)
+
+        if held.get("trading_blocked_by") != "data_guard":
+            raise DriveError(
+                f"the crossed quote did not block the tick on data_guard: "
+                f"{held.get('trading_blocked_by')!r}"
+            )
+        if (held.get("data_guard") or {}).get("reason_code") != guard.REASON_NEGATIVE_SPREAD:
+            raise DriveError(f"engine 4 blocked for {held['data_guard'].get('reason_code')!r}")
+        low = Decimal(str(held["market_sensor"]["trade_ranges"][pair]["low"]))
+        if low > filled.stop:
+            raise DriveError(f"no stop was touched (low {low}, stop {filled.stop}), so nothing was held")
+        manager = held.get("position_manager") or {}
+        if manager.get("triggered") != [] or manager.get("hold_reason") != hold:
+            raise DriveError(
+                f"engine 21 triggered {manager.get('triggered')} and published hold_reason "
+                f"{manager.get('hold_reason')!r} on a tick data_guard blocked; the hold is no "
+                f"trigger and {hold!r}"
+            )
+        exiting = held.get("exit") or {}
+        stored = drive.store.position(filled.position_id)
+        if (
+            exiting.get("orders")
+            or exiting.get("positions_closed") is not False
+            or drive.orders_with_intent("exit")
+            or any(r.side.value == "sell" for r in drive.broker.requests)
+        ):
+            raise DriveError(
+                f"an exit was placed on the held tick: engine 22 said {exiting.get('reason_code')!r}, "
+                f"the broker was asked for {[r.order_type.value for r in drive.broker.requests]}"
+            )
+        if stored is None or stored.status.value != "open" or stored.hold_reason != hold:
+            raise DriveError(
+                f"engine 19 stored the held position as "
+                f"{None if stored is None else (stored.status.value, stored.hold_reason)}, not open "
+                f"with hold_reason {hold!r}"
+            )
+
+        drive.command("close_all")
+        closed_at = held_at + drive.tick_s
+        liquidated = drive.tick(closed_at)
+        if liquidated.get("trading_blocked_by") != "data_guard":
+            raise DriveError("data_guard was no longer blocking when close_intent was applied")
+        manager = liquidated.get("position_manager") or {}
+        if manager.get("hold_reason") is not None:
+            raise DriveError(
+                f"engine 21 still held during the liquidation: {manager.get('hold_reason')!r}"
+            )
+        if (liquidated.get("exit") or {}).get("positions_closed") is not True:
+            raise DriveError(
+                f"with close_intent set the held position was not sold: "
+                f"{(liquidated.get('exit') or {}).get('reason_code')!r}"
+            )
+        closed = _reconcile(
+            drive, entry, filled, exit_at=closed_at, book_bid=book_bid, outcome="liquidation",
+            lot_decimals=_lot_decimals(entry_state, pair), fallbacks=(), equity=True,
+        )
+        after = drive.store.position(filled.position_id)
+        if after is None or after.hold_reason is not None:
+            raise DriveError("the closed position still carries a hold_reason")
+        _close_all_consumed(drive, source="console", at=closed_at)
+    return (
+        f"{pair} position {filled.position_id}: a trade at {printed} touched the stop "
+        f"{filled.stop} on a tick engine 4 blocked for a crossed quote, and engines 21 and "
+        f"22 placed no exit - no trigger, no order at the broker - with hold_reason "
+        f"{hold!r} published and stored on the position. The operator's close_all on the "
+        f"next tick, with data_guard still blocking, sold the same position as a taker at "
+        f"{closed.exit_price} (outcome liquidation, realised {closed.realised}, every row "
+        "reconciled), cleared the hold, and the orchestrator cleared close_intent and "
+        "consumed the command"
+    )
+
+
+def _close_all_consumed(drive: Drive, *, source: str, at: int) -> dict[str, Any]:
+    """The one `close_all` row from `source`, claimed or created earlier and consumed at
+    `at`, with the orchestrator frozen and `close_intent` cleared."""
+    rows = [
+        row for row in drive.command_rows()
+        if row["command"] == "close_all" and row["source"] == source
+    ]
+    system = drive.orchestrator.system
+    if len(rows) != 1 or rows[0]["consumed_at"] != _micros(at):
+        raise DriveError(
+            f"the {source} close_all rows are {rows}; one, consumed at {_micros(at)}, was expected"
+        )
+    if system.get("close_intent") is not False or system.get("mode") != "frozen":
+        raise DriveError(f"after the liquidation the orchestrator holds {system}")
+    return rows[0]
+
+
+# --- escalation_completes_during_outage ------------------------------------- #
+
+
+def _outage_held(state: dict[str, Any], guard: Any, at: int) -> str:
+    """Engine 4 is the primary blocker on a negative spread, and the balance and
+    `AssetPairs` fetches both failed. Returns engine 1's reason for the balance."""
+    if state.get("trading_blocked_by") != "data_guard" or (
+        (state.get("data_guard") or {}).get("reason_code") != guard.REASON_NEGATIVE_SPREAD
+    ):
+        raise DriveError(
+            f"at {at} the primary blocker is {state.get('trading_blocked_by')!r}, not data_guard "
+            "on the crossed quote"
+        )
+    exchange = state.get("exchange") or {}
+    failures = {row.get("call"): row.get("reason") for row in exchange.get("failed_fetches") or []}
+    if exchange.get("balances") is not None or not {"balance", "asset_pairs"} <= set(failures):
+        raise DriveError(
+            f"at {at} engine 1 published balances {exchange.get('balances')!r} and failed "
+            f"fetches {sorted(failures)}; the outage needs both balance and asset_pairs failing"
+        )
+    return str(failures["balance"])
+
+
+def _fail_the_outage(drive: Drive) -> None:
+    """The balance and `AssetPairs` calls fail at the transport, as in an outage.
+
+    In paper mode the broker never makes the real `Balance` call, so failing it changes
+    nothing on its own. The paper ledger is what fails: it cannot tell which currency a
+    fill spent without `AssetPairs`, so `balance()` raises and engine 1 records the
+    balance as a failed fetch. The fee tier keeps answering, because a liquidation that
+    cannot price its fill is not completable by design (engine 22, spec 93).
+    """
+    drive.market.fail("balance")
+    drive.market.fail("asset_pairs")
+
+
+def _escalation_positions(drive: Drive) -> str:
+    tools = drive.tools
+    guard, exits = tools["guard"], tools["exit"]
+    _warm_up(drive)
+    entry, entry_state = _entry(drive)
+    filled, _ = _fill(drive, entry)
+    limit = int(drive.config.get("safety.max_consecutive_data_blocks"))
+    book_bid = (drive.bid - Decimal("0.2")).quantize(Decimal("0.001"))
+    drive.cross(entry.pair, quoted=drive.bid, book_bid=book_bid)
+    _fail_the_outage(drive)
+    equity_rows = len(drive.run_equity())
+
+    at = filled.filled_at
+    balance_reason = ""
+    for blocked in range(1, limit + 2):
+        at += drive.tick_s
+        state = drive.tick(at)
+        balance_reason = _outage_held(state, guard, at)
+        escalations = [
+            row for row in drive.command_rows()
+            if row["command"] == "close_all" and row["source"] == "safety"
+        ]
+        if blocked <= limit and escalations:
+            raise DriveError(
+                f"engine 17 escalated after {blocked} blocked ticks; the limit is {limit} and "
+                "it escalates on the tick after it, not before"
+            )
+        if [p.position_id for p in drive.store.open_positions()] != [filled.position_id]:
+            raise DriveError(f"the position did not stay open and held at blocked tick {blocked}")
+    if len(escalations) != 1 or escalations[0]["created_at"] != _micros(at):
+        raise DriveError(
+            f"on blocked tick {limit + 1} engine 17 wrote {escalations}; one close_all at "
+            f"{_micros(at)} was expected"
+        )
+    escalated_at = at
+    at += drive.tick_s
+    state = drive.tick(at)
+    _outage_held(state, guard, at)
+    manager, exiting = state.get("position_manager") or {}, state.get("exit") or {}
+    if manager.get("hold_reason") is not None or exiting.get("positions_closed") is not True:
+        raise DriveError(
+            f"the liquidation did not complete during the outage: engine 21 held "
+            f"{manager.get('hold_reason')!r}, engine 22 said {exiting.get('reason_code')!r}"
+        )
+    if manager.get("entry_orders_cancelled") is not True:
+        raise DriveError("engine 21 did not report every entry cancelled")
+    fallback = str(exits.FALLBACK_ASSET_PAIRS_RETAINED)
+    closed = _reconcile(
+        drive, entry, filled, exit_at=at, book_bid=book_bid, outcome="liquidation",
+        lot_decimals=_lot_decimals(entry_state, entry.pair), fallbacks=(fallback,),
+        equity=False,
+    )
+    if len(drive.run_equity()) != equity_rows:
+        raise DriveError(
+            "engine 19 wrote an equity row while the balance was unknown; with no balance "
+            "there is no equity to write, and invariant 2 has no fallback"
+        )
+    _close_all_consumed(drive, source="safety", at=at)
+    if drive.open_orders():
+        raise DriveError("an order is still open at the broker after the liquidation")
+    return (
+        f"engine 4 blocked {limit + 1} consecutive minute ticks on a crossed quote while "
+        f"the balance and AssetPairs fetches failed (engine 1: {balance_reason}); engine 17 "
+        f"wrote close_all on blocked tick {limit + 1} ({escalated_at}) and not before "
+        f"(safety.max_consecutive_data_blocks {limit}); on the next tick, still blocked and "
+        f"still failing, engine 22 sold {filled.position_id} as a taker at "
+        f"{closed.exit_price} using the retained AssetPairs past its TTL "
+        f"(fallbacks_used [{fallback}], realised {closed.realised}, every row reconciled), "
+        "engine 19 wrote no equity row while the balance was unknown, and the orchestrator "
+        "cleared close_intent and consumed engine 17's command"
+    )
+
+
+def _escalation_entry(drive: Drive, *, unreachable: str) -> str:
+    guard = drive.tools["guard"]
+    _warm_up(drive)
+    entry, _ = _entry(drive)
+    window_s = int(drive.config.get("trading.entry_unfilled_window_s"))
+    at = drive.entry_at + drive.tick_s
+    elapsed_s = (_micros(at) - entry.placed_at) // 1_000_000
+    if elapsed_s >= window_s:
+        raise DriveError(
+            f"the close_all tick is {elapsed_s}s after placement, not inside the {window_s}s "
+            "window, so a cancel there could not be told from the window's"
+        )
+    drive.cross(entry.pair, quoted=drive.bid, book_bid=drive.bid)
+    _fail_the_outage(drive)
+    drive.command("close_all")
+    state = drive.tick(at)
+    _outage_held(state, guard, at)
+    manager, exiting = state.get("position_manager") or {}, state.get("exit") or {}
+    rows = [
+        (row.get("userref"), row.get("status"), row.get("closed_at"))
+        for row in manager.get("orders") or []
+    ]
+    if rows != [(entry.userref, "cancelled", _micros(at))]:
+        raise DriveError(
+            f"with close_intent set {elapsed_s}s into a {window_s}s window engine 21 "
+            f"published {rows}, not the entry cancelled at {_micros(at)}"
+        )
+    if manager.get("entry_orders_cancelled") is not True or exiting.get("positions_closed") is not True:
+        raise DriveError(
+            f"engine 21 reported entry_orders_cancelled {manager.get('entry_orders_cancelled')!r} "
+            f"and engine 22 positions_closed {exiting.get('positions_closed')!r}"
+        )
+    if drive.broker.cancels != [entry.userref]:
+        raise DriveError(f"the broker was asked to cancel {drive.broker.cancels}")
+    stored = drive.store.order_by_userref(entry.userref)
+    if stored is None or stored.status.value != "cancelled" or stored.closed_at != _micros(at):
+        raise DriveError(f"entry {entry.userref} is not stored cancelled at {_micros(at)}")
+    escalations = [row for row in drive.command_rows() if row["source"] == "safety"]
+    if escalations:
+        raise DriveError(f"engine 17 wrote {escalations}; this cancel must be the operator's")
+    _close_all_consumed(drive, source="console", at=at)
+    if drive.open_orders() or drive.position_ids():
+        raise DriveError("something is still open after the operator's close_all")
+    return (
+        f"{unreachable} - so the cancel path is proven through an operator close_all: "
+        f"entry {entry.userref}, placed {elapsed_s}s earlier and inside its {window_s}s "
+        "window, was cancelled at the broker on the close_all tick while data_guard blocked "
+        "and the same two fetches failed, engine 17 wrote nothing, and the command was "
+        "consumed on that tick"
+    )
+
+
+def _escalation_body(
+    tier: str, tools: dict[str, Any], polars: Any, subject: FillSubjectModel
+) -> str:
+    del tier
+    config = _drive_config(tools, subject)
+    window_s = int(config.get("trading.entry_unfilled_window_s"))
+    limit = int(config.get("safety.max_consecutive_data_blocks"))
+    tick_s = int(config.get("timeframes.loop_tick_s"))
+    if window_s < (limit + 1) * tick_s:
+        unreachable = (
+            "a resting entry: at the committed config a safety escalation can never find "
+            f"one, because trading.entry_unfilled_window_s ({window_s}s) is shorter than the "
+            f"{limit + 1} blocked ticks of {tick_s}s it takes to escalate, and engine 21 "
+            "cancels a stale entry during the hold"
+        )
+    else:
+        unreachable = (
+            f"a resting entry: at this config ({window_s}s window, {limit + 1} blocked ticks "
+            f"of {tick_s}s) an escalation could find one, and this criterion still proves "
+            "the cancel through the operator's close_all only"
+        )
+    with _driven(tools, subject, polars) as drive:
+        positions = _escalation_positions(drive)
+    with _driven(tools, subject, polars) as drive:
+        entries = _escalation_entry(drive, unreachable=unreachable)
+    return "Positions: " + positions + ". Resting entries: " + entries
+
+
+# --- console_shows_position_live -------------------------------------------- #
+
+#: What spec 101 adds that this criterion waits for. A proposal for C's own spec 101,
+#: written here so the PENDING says what "the console part exists" means.
+CONSOLE_LIVE_CONTRACT: Final = (
+    "expected acsoe.console.views.PositionView to carry `hold_reason` (rendered through "
+    "REASON_PROSE, spec 101 step 3), and the criterion then to drive a real position "
+    "through engines 18, 21 and 19 and read it back through the console reader"
+)
+
+
+# --- order_book_slippage_on_recorded_book ----------------------------------- #
+
+
+def _recorded_opening_books(
+    ctx: VerifyContext,
+) -> dict[str, tuple[tuple[tuple[Decimal, Decimal], ...], tuple[tuple[Decimal, Decimal], ...]]]:
+    """Each pair's opening book in `tests/fixtures/book_sample.jsonl`, rebuilt here.
+
+    Line 1 is the cutter's header. The first frame of each pair must be a `snapshot`,
+    the only absolute book Kraken v2 sends; a pair that opens on a delta has no book in
+    the file at all and is a FAIL. Read as bytes and parsed with `str()` on every number,
+    so no float exists on the way to a `Decimal`.
+    """
+    path = ctx.root / "tests" / "fixtures" / "book_sample.jsonl"
+    books: dict[str, Any] = {}
+    with path.open("rb") as handle:
+        handle.readline()
+        for raw in handle:
+            if not raw.strip():
+                continue
+            frame = json.loads(raw)
+            pair = str(frame.get("pair"))
+            if pair in books:
+                continue
+            payload = frame["payload"]
+            if payload.get("type") != "snapshot":
+                raise DriveError(
+                    f"the first {pair} frame in book_sample.jsonl is a {payload.get('type')!r}, "
+                    "so the fixture carries no absolute book for it"
+                )
+            data = payload["data"][0]
+            sides = []
+            for name, descending in (("bids", True), ("asks", False)):
+                levels = sorted(
+                    (
+                        (Decimal(str(level["price"])), Decimal(str(level["qty"])))
+                        for level in data.get(name) or []
+                        if Decimal(str(level["qty"])) != 0
+                    ),
+                    key=lambda level: level[0],
+                    reverse=descending,
+                )
+                sides.append(tuple(levels))
+            books[pair] = (sides[0], sides[1])
+    return books
+
+
+def _walk_recorded(
+    bids: Sequence[tuple[Decimal, Decimal]], basis: Decimal
+) -> tuple[Decimal, int] | None:
+    """`(fill price, levels touched)` selling `basis` of quote into `bids`, or `None`
+    when the levels cannot absorb it. The same arithmetic, in the same order, as a
+    walk of a book has to be: base bought from each level until the notional is met."""
+    remaining = basis
+    base = Decimal(0)
+    touched = 0
+    for price, quantity in bids:
+        touched += 1
+        notional = price * quantity
+        if notional >= remaining:
+            base += remaining / price
+            remaining = Decimal(0)
+            break
+        base += quantity
+        remaining -= notional
+    if remaining > 0 or base <= 0:
+        return None
+    return basis / base, touched
+
+
+def _book_levels(levels: Sequence[tuple[Decimal, Decimal]]) -> list[tuple[str, str]]:
+    return [(format(price, "f"), format(quantity, "f")) for price, quantity in levels]
+
+
+def _order_book_body(ctx: VerifyContext) -> Callable[..., str]:
+    def body(tier: str, tools: dict[str, Any], polars: Any, subject: FillSubjectModel) -> str:
+        del tier
+        books = _recorded_opening_books(ctx)
+        said: list[str] = []
+        walked: dict[str, tuple[Decimal, int]] = {}
+        for pair, universe, label in (
+            (BOOK_THIN_PAIR, BOOK_THIN_UNIVERSE, "thin"),
+            (BOOK_DEEP_PAIR, DRIVE_PAIRS, "deep"),
+        ):
+            if pair not in books:
+                raise DriveError(f"book_sample.jsonl carries no {pair} book")
+            bids, asks = books[pair]
+
+            def setup(market: Any, store: Any, pair: str = pair, bids: Any = bids, asks: Any = asks) -> None:
+                del store
+                if pair == BOOK_THIN_PAIR:
+                    market.set_pair_rule(pair, **BOOK_THIN_PAIR_RULE)
+                market.set_order_book(pair, bids=_book_levels(bids), asks=_book_levels(asks))
+
+            with _driven(tools, subject, polars, pairs=universe, before_start=setup) as drive:
+                _warm_up(drive)
+                state = drive.tick(drive.entry_at)
+                depth = int(drive.config.get("order_book.depth"))
+            scout = (state.get("scout") or {}).get("pair")
+            if scout != pair:
+                raise DriveError(f"engine 7 chose {scout!r} on the {label} run, not {pair}")
+            published = state.get("order_book")
+            if state.get("trading_blocked_by") == "order_book" or not isinstance(published, dict):
+                raise DriveError(
+                    f"engine 9 {'blocked' if isinstance(published, dict) else 'did not run'} "
+                    f"on the {label} run (primary blocker {state.get('trading_blocked_by')!r}); "
+                    "it is not a gate and must publish on every candidate tick"
+                )
+            if depth > len(bids):
+                raise DriveError(
+                    f"order_book.depth is {depth} and the recorded {pair} book holds "
+                    f"{len(bids)} bid levels, so the fixture cannot validate the walk"
+                )
+            quote = state["exchange"]["pair_rules"]["pairs"][pair]["quote"]
+            basis = Decimal(str(state["exchange"]["balances"][quote]))
+            walk = _walk_recorded(bids[:depth], basis)
+            if walk is None:
+                raise DriveError(
+                    f"the recorded {pair} book cannot absorb {basis} {quote} within {depth} "
+                    "levels, so it cannot show a walk"
+                )
+            fill, levels = walk
+            best = bids[0][0]
+            expected = {
+                "pair": pair,
+                "depth": depth,
+                "quote_currency": quote,
+                "basis_notional": basis,
+                "best_bid": best,
+                "fill_price": fill,
+                "levels_consumed": levels,
+                "estimated_slippage_pct": (best - fill) / best,
+                "reason_code": None,
+            }
+            got = {
+                key: (
+                    Decimal(str(published[key]))
+                    if isinstance(expected[key], Decimal) and published.get(key) is not None
+                    else published.get(key)
+                )
+                for key in expected
+            }
+            if got != expected:
+                wrong = {key: (got[key], expected[key]) for key in expected if got[key] != expected[key]}
+                raise DriveError(
+                    f"engine 9's {label} walk of {pair} disagrees with the walk recomputed "
+                    f"from the recorded book, as (published, recomputed): {wrong}"
+                )
+            walked[label] = ((best - fill) / best, levels)
+            said.append(
+                f"{pair} ({label}): {levels} of {depth} recorded bid levels walked to sell "
+                f"the whole {basis} {quote} balance, fill {fill} against best bid {best}, "
+                f"slippage {(best - fill) / best}"
+            )
+        if not (walked["thin"][0] > walked["deep"][0] and walked["thin"][1] > walked["deep"][1]):
+            raise DriveError(
+                f"the thin book walked {walked['thin']} and the deep one {walked['deep']}; the "
+                "fixture no longer shows depth changing slippage"
+            )
+        return (
+            "; ".join(said)
+            + ". Each was recomputed from tests/fixtures/book_sample.jsonl and equals engine "
+            "9's payload exactly, and engine 9 blocked neither candidate tick. The chain was "
+            "driven through the registered engines so that it reaches engine 9; the walk "
+            "itself reads no fee"
+        )
+
+    return body
+
+
+# --- adaptive_router_weights_on_fixture ------------------------------------- #
+
+
+def _leaderboard_fixture(ctx: VerifyContext) -> list[dict[str, Any]]:
+    data = json.loads((ctx.root / "tests" / "fixtures" / "leaderboard_sample.json").read_bytes())
+    rows = data.get("rows") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or not rows:
+        raise DriveError("leaderboard_sample.json carries no rows")
+    return rows
+
+
+def _router_weights(rows: Sequence[dict[str, Any]], model_id: str) -> tuple[dict[str, float], dict[str, int]]:
+    """The weights recomputed from the file: `(weights, scored folds per version)`.
+
+    One family only; the newest row per `(version, fold)` by `updated_at`; per fold
+    `max(0, 1 - brier / base_rate_brier)`; the unweighted mean over a version's folds;
+    normalised over versions in name order. The rule engine 14's README states.
+    """
+    latest: dict[tuple[str, str | None], dict[str, Any]] = {}
+    for row in rows:
+        if row.get("model_id") != model_id:
+            continue
+        key = (str(row["model_version"]), None if row.get("fold") is None else str(row["fold"]))
+        held = latest.get(key)
+        if held is None or int(row["updated_at"]) >= int(held["updated_at"]):
+            latest[key] = row
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for (version, _fold), row in latest.items():
+        grouped.setdefault(version, []).append(row)
+    skills: dict[str, float] = {}
+    scored: dict[str, int] = {}
+    for version, members in sorted(grouped.items()):
+        per_fold = [
+            max(0.0, 1.0 - float(row["brier"]) / float(row["base_rate_brier"]))
+            for row in members
+            if row.get("brier") is not None
+            and row.get("base_rate_brier") is not None
+            and float(row["base_rate_brier"]) > 0.0
+        ]
+        skills[version] = sum(per_fold) / len(per_fold) if per_fold else 0.0
+        scored[version] = len(per_fold)
+    total = sum(skills.values())
+    if total <= 0.0:
+        return dict.fromkeys(skills, 0.0), scored
+    return {version: skill / total for version, skill in skills.items()}, scored
+
+
+def _router_body(ctx: VerifyContext) -> Callable[..., str]:
+    def body(tier: str, tools: dict[str, Any], polars: Any, subject: FillSubjectModel) -> str:
+        del tier
+        router_contracts, problem = _symbol("acsoe.engines.adaptive_router.contracts", "MODEL_ID")
+        if router_contracts is None:
+            raise DriveError(f"engine 14 declares no model family: {problem}")
+        model_id = str(router_contracts)
+        rows = _leaderboard_fixture(ctx)
+        families = {str(row.get("model_id")) for row in rows}
+        keys = [(row.get("model_id"), row.get("model_version"), row.get("fold")) for row in rows]
+        weights, scored = _router_weights(rows, model_id)
+        witnesses = {
+            "two versions of the family": len(weights) >= 2,
+            "a second family": len(families) >= 2,
+            "a duplicated (version, fold)": len(keys) != len(set(keys)),
+            "a version with no edge": any(weight == 0.0 for weight in weights.values()),
+            "a version with several folds": any(count >= 2 for count in scored.values()),
+        }
+        missing = [name for name, present in witnesses.items() if not present]
+        if missing:
+            raise DriveError(
+                f"leaderboard_sample.json no longer carries {missing}, so the weights it "
+                "produces cannot show the rule"
+            )
+        contracts = tools["contracts"]
+
+        def setup(market: Any, store: Any) -> None:
+            del market
+            for row in rows:
+                store.write_leaderboard_entry(
+                    contracts.LeaderboardRow(
+                        model_id=row["model_id"],
+                        model_version=row["model_version"],
+                        training_run_id=row.get("training_run_id"),
+                        trained_at=row["trained_at"],
+                        fold=row.get("fold"),
+                        n_trades=row["n_trades"],
+                        win_rate=row.get("win_rate"),
+                        brier=row.get("brier"),
+                        base_rate_brier=row.get("base_rate_brier"),
+                        net_pnl=None if row.get("net_pnl") is None else Decimal(str(row["net_pnl"])),
+                        reporting_currency=row.get("reporting_currency"),
+                        promoted=bool(row.get("promoted", False)),
+                        updated_at=row["updated_at"],
+                    )
+                )
+
+        with _driven(tools, subject, polars, before_start=setup) as drive:
+            _warm_up(drive)
+            state = drive.tick(drive.entry_at)
+        published = state.get("adaptive_router")
+        if not isinstance(published, dict) or state.get("trading_blocked_by") == "adaptive_router":
+            raise DriveError(
+                f"engine 14 did not publish on the candidate tick (primary blocker "
+                f"{state.get('trading_blocked_by')!r})"
+            )
+        folds = {
+            version: (entry or {}).get("folds_scored")
+            for version, entry in ((published.get("basis") or {}).get("versions") or {}).items()
+        }
+        got = (published.get("weights"), folds, published.get("reason_code"))
+        want = (weights, scored, None)
+        if got != want:
+            raise DriveError(
+                f"engine 14 published (weights, folds scored, reason) {got}; recomputed from "
+                f"leaderboard_sample.json it is {want}"
+            )
+        return (
+            f"on tests/fixtures/leaderboard_sample.json - fabricated rows, so this is a "
+            f"property of the fixture and not of any trained model - engine 14 weighted "
+            f"{weights}, equal to the weights recomputed from the file: the mean over each "
+            "version's folds of max(0, 1 - brier / base_rate_brier), normalised, with the "
+            f"older duplicate of a (version, fold) dropped, the other family "
+            f"({sorted(families - {model_id})}) left out, and a version with no edge at "
+            "zero. The chain was driven through the registered engines so that it reaches "
+            "engine 14, which sits after the cost gate"
+        )
+
+    return body
+
+
+def check_paper_trade_round_trip_target(ctx: VerifyContext) -> Outcome:
+    """A candidate becomes a filled position that exits at the target, recorded exactly.
+
+    The whole phase in one line: post-only entry past every registered gate, simulated
+    fill, minute-by-minute watch, the exit, and every row engine 19 wrote reconciled
+    against the trade. The named wrong implementation is engine 21 never deciding the
+    target barrier.
+    """
+    return _round_trip(ctx, "target")
+
+
+def check_paper_trade_round_trip_stop(ctx: VerifyContext) -> Outcome:
+    """The same round trip ending at the stop.
+
+    Separately registered because the stop is the leg that protects the account, and a
+    chain that can only be shown to take profit has been shown the easy half. The named
+    wrong implementation is engine 21 holding on a tick nothing blocked.
+    """
+    return _round_trip(ctx, "stop")
+
+
+def check_paper_trade_round_trip_timeout(ctx: VerifyContext) -> Outcome:
+    """The same round trip ending at the timeout, with neither barrier touched.
+
+    The path no price movement triggers, so it is the one a broken clock comparison
+    leaves open forever while the other two stay green.
+    """
+    return _round_trip(ctx, "timeout")
+
+
+def check_unfilled_entry_cancels_without_chasing(ctx: VerifyContext) -> Outcome:
+    """A post-only entry that never fills is cancelled, and nothing chases the price.
+
+    Three claims. The order is cancelled on the first tick at
+    `trading.entry_unfilled_window_s` and not before; **no market order reaches the
+    broker** - in paper mode the broker is the exchange, and it is asked for exactly the
+    entry and its cancel; and no second entry is placed before the next bar closes,
+    which is the difference between giving up on a fill and chasing one.
+
+    The named wrong implementation is engine 21 re-placing the cancelled entry at the
+    new bid. It looks like diligence and it is the chase invariant 8 forbids.
+    """
+    return _driven_verdict(ctx, _unfilled_body, what="the unfilled entry")
+
+
+def check_triggered_stop_holds_on_data_guard_block(ctx: VerifyContext) -> Outcome:
+    """A stop that triggers on a tick the guard rejected places no exit, and says why.
+
+    `engine-contracts.md`: when `state["trading_blocked_by"] == "data_guard"` the manage
+    chain still runs and engines 21 and 22 place **no** exit, because a barrier computed
+    from exactly the data the guard refused is a fabricated trigger. Engine 21 publishes
+    `hold_reason` and engine 19 stores it on the position.
+
+    And the other half in the same criterion, because the hold is only correct if it is
+    also bounded: the **same** position with `close_intent` set does exit, while the guard
+    is still blocking. A hold that survives a liquidation is invariant 14 broken.
+
+    The named wrong implementations are the hold removed from engine 21, and engine 22
+    reading a liquidation as an ordinary tick.
+    """
+    return _driven_verdict(ctx, _held_stop_body, what="the held stop")
+
+
+def check_escalation_completes_during_outage(ctx: VerifyContext) -> Outcome:
+    """The kill switch finishes while the outage that fired it is still happening.
+
+    Two drives. **Positions:** engine 17 escalates on the tick after
+    `safety.max_consecutive_data_blocks` blocked ticks and not before; on the next tick,
+    with `data_guard` still blocking and the balance and `AssetPairs` fetches still
+    failing, engine 22 closes the position using the retained `AssetPairs` and records
+    that fallback on the trade, and the orchestrator clears `close_intent` and consumes
+    the command. **Resting entries:** at the committed config a safety escalation can
+    never find one (the unfilled window cancels it first), so the cancel half of the
+    kill switch is proven through an operator `close_all` issued inside the entry's
+    window, during the same outage.
+
+    This is invariant 14, and it is the one place in the system where a fetch failure
+    does **not** block. The named wrong implementations are engine 22 reading fresh pair
+    rules only - correct everywhere else, which is why it is the mistake that gets made -
+    and engine 21 cancelling on elapsed time only.
+
+    `safety_escalates_on_sustained_outage` in Phase 3 proves engine 17 *emits* the row
+    from the seed. This proves the manage chain *completes* on it.
+    """
+    return _driven_verdict(ctx, _escalation_body, what="the escalation")
+
+
+def check_console_shows_position_live(ctx: VerifyContext) -> Outcome:
+    """The console renders a position a real daemon opened, and the mark moves.
+
+    Spec 101's subject. Phase 1 proved the region renders against **seeded** rows, which
+    is a different claim: a seeded row is written by the seed generator to the shape the
+    console expects, and a position written by engine 19 out of engine 21's payload is
+    written to the shape engine 21 publishes.
+
+    **PENDING until spec 101 lands**, naming it. The console has no `hold_reason` on its
+    position view today, which is spec 101 step 3; the body that drives a position and
+    reads it back through the reader is spec 101's to write, together with its FAIL
+    proof (the reader serving the previous tick's mark).
+    """
+    with root_import_path(ctx.root):
+        tier, problem = _tier_sentence(3)
+        if tier is None:
+            return _awaiting(problem, "at fee tier 3")
+        problem = _phase6_engines("position_manager", "exit", "memory")
+        if problem is None:
+            problem = _paper_broker_module()
+        if problem is None:
+            view, missing = _symbol("acsoe.console.views", "PositionView")
+            fields = getattr(view, "model_fields", None) if view is not None else None
+            if view is None:
+                problem = missing
+            elif not isinstance(fields, dict) or "hold_reason" not in fields:
+                problem = pending(
+                    "the console's open-positions region shows no hold reason yet: "
+                    "PositionView has no `hold_reason` (C, spec 101) - " + CONSOLE_LIVE_CONTRACT
+                )
+            else:
+                problem = pending(
+                    "PositionView carries `hold_reason`; the live-position drive is spec "
+                    "101's to write (C, spec 101) - " + CONSOLE_LIVE_CONTRACT
+                )
+        return _awaiting(problem, tier)
+
+
+def check_order_book_slippage_on_recorded_book(ctx: VerifyContext) -> Outcome:
+    """Engine 9's slippage estimate matches a walk this criterion recomputes.
+
+    **Recomputed from the fixture, never a number this file stores.** The opening book
+    of each pair is rebuilt here from `tests/fixtures/book_sample.jsonl`, loaded into the
+    fake exchange, and the registered chain is driven to a candidate tick on that pair;
+    engine 9's payload is then compared field by field with the walk recomputed from the
+    same levels at the balance engine 1 published.
+
+    Thin book and deep book, because a walk that consumes one level and a walk that
+    consumes several are different code paths and the thin one is where the money is.
+    Engine 9 **never blocks** and estimates at the whole quote balance, the lead's
+    decision of 2026-09-16. The named wrong implementations are walking the ask side and
+    a walk that is off by a level.
+
+    Driven at fee tier 3 because that is the regime every drive in this section runs in;
+    the walk reads no fee, and the message says both.
+    """
+    with root_import_path(ctx.root):
+        _, problem = _phase6_engine_class("order_book")
+        if problem is not None:
+            return problem
+        problem = _phase6_fixture(ctx, "book_sample.jsonl")
+        if problem is not None:
+            return problem
+    return _driven_verdict(ctx, _order_book_body(ctx), what="engine 9 on the recorded book")
+
+
+def check_adaptive_router_weights_on_fixture(ctx: VerifyContext) -> Outcome:
+    """Engine 14's weights are recomputed from the leaderboard rows, not read back.
+
+    The fixture's rows are written into a real store, the registered chain is driven to
+    a candidate tick, and engine 14's weights are compared with weights this criterion
+    derives from `leaderboard_sample.json` itself. The fixture carries **at least two
+    models**, a second family, a duplicated `(version, fold)` and a version with no edge,
+    and the criterion refuses a fixture that has lost any of those witnesses. Every
+    sentence names the fixture as its subject: the weights are a property of these
+    fabricated rows, not of any trained model.
+
+    Engine 14 sits after engine 10 `cost`, so the chain can only reach it at fee tier 3.
+    The named wrong implementations are an unclipped skill and a duplicate row averaged
+    in or kept in place of the newer one.
+    """
+    with root_import_path(ctx.root):
+        _, problem = _phase6_engine_class("adaptive_router")
+        if problem is not None:
+            return problem
+        problem = _phase6_fixture(ctx, "leaderboard_sample.json")
+        if problem is not None:
+            return problem
+    return _driven_verdict(ctx, _router_body(ctx), what="engine 14 on the leaderboard fixture")
+
+
+# --- equity_row_never_values_positions_it_does_not_hold --------------------- #
+
+
+def _equity_rows_body(
+    tier: str, tools: dict[str, Any], polars: Any, subject: FillSubjectModel
+) -> str:
+    del tier
+    with _driven(tools, subject, polars) as drive:
+        _warm_up(drive)
+        entry, _ = _entry(drive)
+        filled, _ = _fill(drive, entry)
+        exited = _trigger_exit(drive, entry, filled, "stop")
+        drive.tick(exited.exit_at + drive.tick_s)
+        rows = drive.run_equity()
+    stamps = {row.ts for row in rows}
+    invested = [row for row in rows if row.open_position_count > 0]
+    needed = {
+        "the fill tick": _micros(filled.filled_at),
+        "the exit tick": _micros(exited.exit_at),
+        "the tick after the exit": _micros(exited.exit_at + drive.tick_s),
+    }
+    missing = [name for name, ts in needed.items() if ts not in stamps]
+    if missing or not invested:
+        raise DriveError(
+            f"the drive wrote no equity row for {missing or 'an invested tick'}, so there is "
+            "nothing to judge"
+        )
+    wrong = [
+        (row.cycle_id, row.ts, str(row.positions_value), row.open_position_count, str(row.equity))
+        for row in rows
+        if row.positions_value != 0 and row.open_position_count == 0
+    ]
+    if wrong:
+        raise DriveError(
+            f"{len(wrong)} of {len(rows)} equity rows value positions the account does not "
+            "hold, as (cycle, ts, positions_value, open_position_count, equity): "
+            f"{wrong}. A row that counts no open position and still carries a positions "
+            "value is an equity figure for an account that no longer exists, and engine 17 "
+            "reads its drawdown, and peak_equity keeps it, from exactly this series"
+        )
+    return (
+        f"all {len(rows)} equity rows of a round trip ({len(invested)} with a position open, "
+        "including the fill tick, the exit tick and the tick after it) carry a "
+        "positions_value of zero whenever they count no open position"
+    )
+
+
+def check_equity_row_never_values_positions_it_does_not_hold(ctx: VerifyContext) -> Outcome:
+    """No `equity_snapshots` row values positions it counts as not held.
+
+    Operator ruling of 2026-09-17 on C's spec 100 finding: on the tick engine 22 sold a
+    position, engine 19 wrote the pre-exit cash and engine 21's pre-exit positions value,
+    and counted no open position. The row then valued a position the account no longer
+    held, and on a target exit that figure was above the peak. This criterion is the
+    observable form of that defect, and it was written, and seen to FAIL, before the fix
+    (specs 113 and 114).
+
+    The drive is a real round trip to the stop, plus one tick after the exit. It refuses
+    to judge a drive that wrote no row on the fill tick, the exit tick or the tick after,
+    because an empty series satisfies any rule about its rows.
+    """
+    return _driven_verdict(ctx, _equity_rows_body, what="the equity rows of a round trip")
 
 
 # --------------------------------------------------------------------------- #
@@ -12170,6 +13695,15 @@ register(
     6,
     Criterion(
         "paper_equity_continuous_across_fill", check_paper_equity_continuous_across_fill
+    ),
+)
+# Operator ruling 2026-09-17 on the exit-tick equity finding (spec 100 bodies): the
+# observable form of the defect, registered and observed FAIL before specs 113 and 114.
+register(
+    6,
+    Criterion(
+        "equity_row_never_values_positions_it_does_not_hold",
+        check_equity_row_never_values_positions_it_does_not_hold,
     ),
 )
 

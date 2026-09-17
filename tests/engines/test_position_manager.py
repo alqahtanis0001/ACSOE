@@ -50,6 +50,7 @@ from acsoe.engines.position_manager.contracts import (
     HOLD_DATA_GUARD_BLOCKED,
     HOLD_REASON_FIELD,
     ORDERS_FIELD,
+    POSITION_VALUE_FIELD,
     POSITIONS_FIELD,
     POSITIONS_VALUE_FIELD,
     TRIGGERED_FIELD,
@@ -982,6 +983,177 @@ def test_a_position_with_no_quote_carries_no_last_price(
 
     assert "last_price" not in position
     assert "unrealised_pnl" not in position
+    assert POSITION_VALUE_FIELD not in position
+
+
+# --------------------------------------------------------------------------- #
+# Spec 113 — each row's `value`, and the seam between the rows and the totals
+# --------------------------------------------------------------------------- #
+
+#: A second pair with a quote of its own, so a tick can hold two marked positions at
+#: two different bids. BTC's entry (59,000) is not its bid (60,000.50), and SOL's
+#: (99.00) is not its bid (99.99), so a value taken from the entry price differs from
+#: one taken from the mark on every stored row.
+BTC = "BTC/USD"
+BTC_BID = "60000.50"
+BTC_ENTRY = Decimal("59000")
+
+
+def quoted_btc(kraken: FakeKrakenWithStream, context: Any) -> None:
+    """Give BTC/USD a book, a quote and an old print, as the fixture does for SOL."""
+    kraken.set_order_book(BTC, bids=[(BTC_BID, "5")], asks=[("60001.00", "5")])
+    kraken.quote(BTC, bid=BTC_BID, ask="60001.00", at=context.now)
+    kraken.add_trade(BTC, BTC_BID, context.now - timedelta(seconds=600))
+
+
+def btc_position(context: Any) -> PositionRow:
+    return open_position(
+        context, entry_price=BTC_ENTRY, position_id="pos-btc"
+    ).model_copy(update={"pair": BTC, "base": "BTC", "qty": Decimal("0.03125")})
+
+
+def _one_stored(context: Any, store: StoreClient, kraken: FakeKrakenWithStream) -> None:
+    store.write_position(open_position(context))
+
+
+def _two_stored(context: Any, store: StoreClient, kraken: FakeKrakenWithStream) -> None:
+    store.write_position(open_position(context))
+    quoted_btc(kraken, context)
+    store.write_position(btc_position(context))
+
+
+def _stored_and_filled(
+    context: Any, store: StoreClient, kraken: FakeKrakenWithStream
+) -> None:
+    quoted_btc(kraken, context)
+    store.write_position(btc_position(context))
+    store.write_order(resting_entry(context))
+    traded(kraken, context, ["98.00"])
+
+
+def _filled_only(context: Any, store: StoreClient, kraken: FakeKrakenWithStream) -> None:
+    store.write_order(resting_entry(context))
+    traded(kraken, context, ["98.00"])
+
+
+#: Every shape of tick on which engine 21 publishes its totals, by the rows it marks.
+MARKED_TICKS = {
+    "one stored position": (_one_stored, 1),
+    "two stored positions at two bids": (_two_stored, 2),
+    "a stored position and this tick's fill": (_stored_and_filled, 2),
+    "this tick's fill alone": (_filled_only, 1),
+}
+
+
+@pytest.mark.parametrize("tick", sorted(MARKED_TICKS))
+def test_every_marked_row_carries_its_value_recomputed_from_its_own_fields(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    tick: str,
+) -> None:
+    """`value` is `qty * last_price` of the same row, as an exact decimal string."""
+    arrange, rows = MARKED_TICKS[tick]
+    arrange(context, store, kraken)
+
+    positions = manager.process(context, build_state(context)).data[POSITIONS_FIELD]
+
+    assert len(positions) == rows
+    for row in positions:
+        assert isinstance(row[POSITION_VALUE_FIELD], str), "money crosses state as a string"
+        assert Decimal(row[POSITION_VALUE_FIELD]) == Decimal(row["qty"]) * Decimal(
+            row["last_price"]
+        ), row["position_id"]
+
+
+def test_each_row_is_valued_at_its_own_mark_and_not_its_entry(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+) -> None:
+    """Pinned to the numbers, not only to the row's own fields: a row whose `last_price`
+    and `value` were both wrong in the same way would still agree with itself."""
+    _two_stored(context, store, kraken)
+
+    positions = manager.process(context, build_state(context)).data[POSITIONS_FIELD]
+
+    values = {row["position_id"]: Decimal(row[POSITION_VALUE_FIELD]) for row in positions}
+    assert values == {
+        "pos-1": Decimal("10") * Decimal("99.99"),
+        "pos-btc": Decimal("0.03125") * Decimal(BTC_BID),
+    }
+
+
+def test_value_is_present_exactly_when_last_price_is(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+) -> None:
+    """A partial mark: SOL is quoted, BTC is not, and a SOL entry fills this tick.
+
+    BTC's row has no mark, so it has no value, **not a zero and not its cost**. Engine
+    19 must be able to tell an unvalued remaining position from one worth nothing, or a
+    partial mark becomes an equity row missing a position (spec 114's concern). The
+    totals are absent on this tick, as before, and the marked rows still carry their
+    values.
+    """
+    kraken.set_order_book(BTC, bids=[(BTC_BID, "5")], asks=[("60001.00", "5")])
+    store.write_position(btc_position(context))
+    store.write_order(resting_entry(context))
+    traded(kraken, context, ["98.00"])
+
+    data = manager.process(context, build_state(context)).data
+
+    assert POSITIONS_VALUE_FIELD not in data
+    presence = {
+        row["position_id"]: ("last_price" in row, POSITION_VALUE_FIELD in row)
+        for row in data[POSITIONS_FIELD]
+    }
+    assert presence == {
+        "pos-btc": (False, False),
+        position_id_for(USERREF): (True, True),
+    }
+
+
+@pytest.mark.parametrize("tick", sorted(MARKED_TICKS))
+def test_the_row_values_sum_exactly_to_positions_value_whenever_it_is_present(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    tick: str,
+) -> None:
+    """**The seam between engine 19's two valuation paths** (spec 113 step 6).
+
+    Engine 19 values positions from the totals on an ordinary tick, and from these rows
+    minus the closed ones on an exit tick. If the two disagree, the equity curve jumps
+    on every exit tick by the disagreement, and `peak_equity` keeps whichever side was
+    higher. This test is what keeps them together, so it must be able to fail. The
+    engine computes each row's value and the total in separate expressions, not one
+    from the other. Proven red by two mutations in the build log: row values taken from
+    the entry price while the total uses the bid, and the total missing this tick's
+    fill.
+
+    Every row must carry a value when the total is present, because the total is only
+    published when every position was marked. A sum over the rows that happen to have
+    one would pass a missing value unnoticed.
+    """
+    arrange, rows = MARKED_TICKS[tick]
+    arrange(context, store, kraken)
+
+    data = manager.process(context, build_state(context)).data
+
+    assert POSITIONS_VALUE_FIELD in data, "every position on this tick is marked"
+    assert len(data[POSITIONS_FIELD]) == rows
+    assert all(POSITION_VALUE_FIELD in row for row in data[POSITIONS_FIELD])
+    summed = sum(
+        (Decimal(row[POSITION_VALUE_FIELD]) for row in data[POSITIONS_FIELD]),
+        start=Decimal(0),
+    )
+    assert summed == Decimal(data[POSITIONS_VALUE_FIELD])
 
 
 # --------------------------------------------------------------------------- #

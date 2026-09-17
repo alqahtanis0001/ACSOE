@@ -40,14 +40,16 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
-from typing import Any
+from typing import Any, NamedTuple
 
 from acsoe.clients.store.contracts import (
     BlockRecordRow,
     BlockStatus,
+    CashSource,
     EquitySnapshotRow,
     OrderRow,
     PositionRow,
+    PositionStatus,
     RejectionRow,
     TradeRow,
     to_micros,
@@ -66,8 +68,12 @@ from acsoe.engines.memory.contracts import (
     EXIT_KEY,
     GUARD_BLOCKERS_KEY,
     HOLD_REASON_FIELD,
+    NET_PROCEEDS_FIELD,
     ORDERS_FIELD,
+    POSITION_ID_FIELD,
     POSITION_MANAGER_KEY,
+    POSITION_STATUS_FIELD,
+    POSITION_VALUE_FIELD,
     POSITIONS_FIELD,
     POSITIONS_VALUE_FIELD,
     REASON_CODE_FIELD,
@@ -82,6 +88,26 @@ from acsoe.engines.memory.contracts import (
 )
 
 KEY_REPORTING_CURRENCY = "trading.base_reporting_currency"
+
+
+class ClosedTrade(NamedTuple):
+    """One round trip engine 22 closed on this tick, and what it paid into the account.
+
+    The row is the stored one. ``net_proceeds`` is the payload fact beside it, which the
+    `trades` table has no column for, and it is ``None`` when engine 22 published none —
+    a different fact from zero, and handled as one in :meth:`MemoryEngine._after_exit`.
+    """
+
+    row: TradeRow
+    net_proceeds: Decimal | None
+
+
+class Account(NamedTuple):
+    """The three figures an `equity_snapshots` row is built from, for one tick."""
+
+    cash: Decimal
+    positions_value: Decimal
+    unrealised_pnl: Decimal
 
 
 class MemoryEngine(BaseEngine):
@@ -135,6 +161,7 @@ class MemoryEngine(BaseEngine):
             context,
             exchange,
             manager,
+            exiting,
             closed=closed,
             cycle_id=cycle_id,
             ts=ts,
@@ -384,6 +411,12 @@ class MemoryEngine(BaseEngine):
             # hour-old hold forward forever, rendering a paused manage chain over one
             # running normally. Lead ruling, 2026-09-16, condition 2.
             stamped[HOLD_REASON_FIELD] = hold
+            # `value` is spec 113's payload fact, not a `positions` column, and `_Row` is
+            # `extra="forbid"`: left on, it raises here and contract rule 7 turns that
+            # into an `ERROR` that loses the whole tick. Taken off this copy only — the
+            # caller's list still carries it, because `_write_equity` sums it. Nothing
+            # else is stripped, so the next unknown key on a stored row still raises.
+            stamped.pop(POSITION_VALUE_FIELD, None)
             store.write_position(PositionRow.model_validate(stamped))
         return len(rows)
 
@@ -413,15 +446,27 @@ class MemoryEngine(BaseEngine):
         *,
         cycle_id: int,
         ts: int,
-    ) -> list[TradeRow]:
-        """One row per closed round trip. Returns them, for the equity snapshot."""
-        closed: list[TradeRow] = []
+    ) -> list[ClosedTrade]:
+        """One row per closed round trip. Returns them, for the equity snapshot.
+
+        **`net_proceeds` comes off before the row is validated and is carried beside it.**
+        It is spec 113's payload fact and the `trades` table has no column for it, so
+        leaving it on `TradeRow.model_validate` raises and loses the tick. It is read
+        through `decimal_field`, which refuses a float: the exit tick's cash is built from
+        it, and a float that reached here has already lost precision.
+        """
+        closed: list[ClosedTrade] = []
+        where = f"{EXIT_KEY}.{CLOSED_TRADES_FIELD}"
         for row in self._rows(exiting, CLOSED_TRADES_FIELD):
-            trade = TradeRow.model_validate(
-                self._stamped(row, context, cycle_id=cycle_id, ts=ts)
+            published = row.get(NET_PROCEEDS_FIELD)
+            proceeds = (
+                None if published is None else decimal_field(row, NET_PROCEEDS_FIELD, where=where)
             )
+            stamped = self._stamped(row, context, cycle_id=cycle_id, ts=ts)
+            stamped.pop(NET_PROCEEDS_FIELD, None)
+            trade = TradeRow.model_validate(stamped)
             store.write_trade(trade)
-            closed.append(trade)
+            closed.append(ClosedTrade(row=trade, net_proceeds=proceeds))
         return closed
 
     # ------------------------------------------------------------- rejections
@@ -516,8 +561,9 @@ class MemoryEngine(BaseEngine):
         context: EngineContext,
         exchange: Mapping[str, Any] | None,
         manager: Mapping[str, Any] | None,
+        exiting: Mapping[str, Any] | None,
         *,
-        closed: Sequence[TradeRow],
+        closed: Sequence[ClosedTrade],
         cycle_id: int,
         ts: int,
     ) -> tuple[Decimal | None, Decimal | None, str | None]:
@@ -534,6 +580,16 @@ class MemoryEngine(BaseEngine):
         series; an engine that took the maximum of this tick alone reports a peak equal
         to the current equity, a drawdown of permanently zero, and a circuit breaker
         that never fires on a drawdown again.
+
+        **On a tick where engine 22 closed positions the row describes the account after
+        those sales** (operator ruling 2026-09-17), and it is built by *filtering and
+        summing* facts the other engines published — see :meth:`_after_exit`. Engine 1's
+        balance is from the start of the tick, engine 21's totals are from before the
+        sale, and the store's position count is from after it: three moments that never
+        coexisted, which is how the exit tick's row came to read 0 open positions beside a
+        positions value of 3281.10. `cash_source` records which of the two meanings the
+        row carries, because the difference is the proceeds and no reader can re-derive
+        it from the row alone.
         """
         currency = str(context.config.get(KEY_REPORTING_CURRENCY))
         if exchange is None:
@@ -567,18 +623,35 @@ class MemoryEngine(BaseEngine):
         # whether a cash-only equity is the truth or a hole. Lead ruling, 2026-09-16.
         open_positions = int(store.count_open_positions())
         marked = manager or {}
-        for field in (POSITIONS_VALUE_FIELD, UNREALISED_PNL_FIELD):
-            if open_positions and marked.get(field) is None:
-                return None, None, (
-                    f"{open_positions} open position(s) and no {field} this tick, so the "
-                    "only equity available is cash and a cash-only equity on an invested "
-                    "account is a drawdown that did not happen"
-                )
+        sold = self._closed_position_ids(exiting)
 
-        positions_value = decimal_field(
-            marked, POSITIONS_VALUE_FIELD, where=POSITION_MANAGER_KEY
-        )
-        unrealised = decimal_field(marked, UNREALISED_PNL_FIELD, where=POSITION_MANAGER_KEY)
+        if sold or closed:
+            account, skipped = self._after_exit(
+                marked, sold, closed, cash=cash, open_positions=open_positions
+            )
+            if account is None:
+                return None, None, skipped
+            cash_source = CashSource.AFTER_EXIT
+        else:
+            for field in (POSITIONS_VALUE_FIELD, UNREALISED_PNL_FIELD):
+                if open_positions and marked.get(field) is None:
+                    return None, None, (
+                        f"{open_positions} open position(s) and no {field} this tick, so the "
+                        "only equity available is cash and a cash-only equity on an invested "
+                        "account is a drawdown that did not happen"
+                    )
+            account = Account(
+                cash=cash,
+                positions_value=decimal_field(
+                    marked, POSITIONS_VALUE_FIELD, where=POSITION_MANAGER_KEY
+                ),
+                unrealised_pnl=decimal_field(
+                    marked, UNREALISED_PNL_FIELD, where=POSITION_MANAGER_KEY
+                ),
+            )
+            cash_source = CashSource.CYCLE_START
+
+        cash, positions_value, unrealised = account
         equity = cash + positions_value
 
         # The whole previous row, not `store.peak_equity()`, because this tick needs the
@@ -595,7 +668,7 @@ class MemoryEngine(BaseEngine):
         previous = store.latest_equity_snapshot()
         realised_cum = previous.realised_pnl_cum if previous is not None else Decimal(0)
         realised_cum = realised_cum + sum(
-            (trade.realised_pnl for trade in closed), start=Decimal(0)
+            (trade.row.realised_pnl for trade in closed), start=Decimal(0)
         )
         peak = equity if previous is None else max(previous.peak_equity, equity)
 
@@ -612,10 +685,112 @@ class MemoryEngine(BaseEngine):
                 unrealised_pnl=unrealised,
                 realised_pnl_cum=realised_cum,
                 open_position_count=int(store.count_open_positions()),
+                cash_source=cash_source,
                 updated_at=ts,
             )
         )
         return equity, peak, None
+
+    def _closed_position_ids(self, exiting: Mapping[str, Any] | None) -> frozenset[str]:
+        """Every `position_id` engine 22 closed on this tick.
+
+        Read from the rows engine 22 published rather than from the store, because the
+        store cannot say *when* a position was closed to the tick — and a position closed
+        three ticks ago must not be filtered out of a valuation it no longer appears in.
+        A closed row with no `position_id` raises rather than being skipped: skipping it
+        would leave engine 21's mark of a sold position in the sum, which is the defect
+        this whole branch exists to remove.
+        """
+        sold: set[str] = set()
+        for index, row in enumerate(self._rows(exiting, POSITIONS_FIELD)):
+            if str(row.get(POSITION_STATUS_FIELD)) != PositionStatus.CLOSED.value:
+                continue
+            position_id = row.get(POSITION_ID_FIELD)
+            if not position_id:
+                raise MissingInputError(
+                    f"state[{EXIT_KEY!r}][{POSITIONS_FIELD!r}][{index}] is closed and names "
+                    f"no {POSITION_ID_FIELD!r}, so the position it sold cannot be dropped "
+                    "from engine 21's valuation and the equity row would count it twice"
+                )
+            sold.add(str(position_id))
+        return frozenset(sold)
+
+    def _after_exit(
+        self,
+        marked: Mapping[str, Any],
+        sold: frozenset[str],
+        closed: Sequence[ClosedTrade],
+        *,
+        cash: Decimal,
+        open_positions: int,
+    ) -> tuple[Account | None, str | None]:
+        """The account after this tick's sales, by filtering and summing and nothing else.
+
+        The operator's ruling of 2026-09-17, in full: positions value and unrealised PnL
+        are engine 21's rows **minus every `position_id` engine 22 closed**, summed; cash
+        is engine 1's start-of-tick balance **plus** the `net_proceeds` of every closed
+        trade. Engine 19 performs no arithmetic on account figures of its own — it does
+        not subtract a mark, it does not price a sale, and it reads no engine's valuation
+        method. An earlier design in which engine 22 subtracted engine 21's marks was
+        withdrawn for exactly that coupling.
+
+        Three things make it skip the row instead, and each is the fail-closed reading of
+        a hole that would otherwise look like a working row:
+
+        1. **A remaining position with no `value` or no `unrealised_pnl`.** The operator's
+           first concern. Summing the rows that have one gives the account minus that
+           position — a drawdown that did not happen, from a row that looks complete. An
+           absent total does this already on an ordinary tick; filtering must not be a way
+           around it. A *closed* position with no mark is dropped and blocks nothing.
+        2. **Engine 21's remaining rows not covering what the account still holds.** The
+           count comes from the store after this tick's rows landed, so it is the number
+           of positions that survived the sale. Fewer rows than that is the same hole as
+           (1) arriving through a position engine 21 never published at all.
+        3. **A closed trade with no `net_proceeds`.** Treating it as zero puts the sale's
+           cash nowhere: the row would read as an account that sold a position and was
+           paid nothing for it, which is a loss the account did not take.
+        """
+        remaining = [
+            row
+            for row in self._rows(marked, POSITIONS_FIELD)
+            if str(row.get(POSITION_ID_FIELD)) not in sold
+        ]
+        if len(remaining) != open_positions:
+            return None, (
+                f"engine 22 closed {len(sold)} position(s) and engine 21 published "
+                f"{len(remaining)} row(s) for the {open_positions} the account still "
+                "holds, so the rows do not cover the account and summing them would "
+                "value less than it holds"
+            )
+
+        positions_value = Decimal(0)
+        unrealised = Decimal(0)
+        for row in remaining:
+            for field in (POSITION_VALUE_FIELD, UNREALISED_PNL_FIELD):
+                if row.get(field) is None:
+                    return None, (
+                        f"engine 22 closed {len(sold)} position(s) and the remaining "
+                        f"position {str(row.get(POSITION_ID_FIELD))!r} has no {field} this "
+                        "tick, so the only positions value available is a partial sum and "
+                        "a partial sum on an invested account is a drawdown that did not "
+                        "happen"
+                    )
+            positions_value += decimal_field(row, POSITION_VALUE_FIELD, where=POSITION_MANAGER_KEY)
+            unrealised += decimal_field(row, UNREALISED_PNL_FIELD, where=POSITION_MANAGER_KEY)
+
+        proceeds = Decimal(0)
+        for trade in closed:
+            if trade.net_proceeds is None:
+                return None, (
+                    f"the closed trade {trade.row.trade_id!r} carries no "
+                    f"{NET_PROCEEDS_FIELD}, so this tick's cash cannot include what the "
+                    "sale paid in and the row would report a position sold for nothing"
+                )
+            proceeds += trade.net_proceeds
+
+        return Account(
+            cash=cash + proceeds, positions_value=positions_value, unrealised_pnl=unrealised
+        ), None
 
 
 __all__ = ["STATE_KEY", "MemoryEngine"]

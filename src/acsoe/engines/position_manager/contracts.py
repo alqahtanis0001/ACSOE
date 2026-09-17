@@ -56,6 +56,7 @@ __all__ = [
     "POSITIONS_FIELD",
     "POSITIONS_VALUE_FIELD",
     "POSITION_ID_FIELD",
+    "POSITION_VALUE_FIELD",
     "QUOTES_FIELD",
     "QUOTE_BID_FIELD",
     "REASON_POSITION_UNRECORDABLE",
@@ -135,6 +136,21 @@ ORDERS_FIELD: Final = "orders"
 POSITIONS_VALUE_FIELD: Final = "positions_value"
 UNREALISED_PNL_FIELD: Final = "unrealised_pnl"
 HOLD_REASON_FIELD: Final = "hold_reason"
+
+#: On a position row: `qty * last_price`, as an exact decimal string. **Present exactly
+#: when `last_price` is**, including on a position opened by this tick's fill (spec 113).
+#: The rows that carry it sum to `positions_value` whenever that total is present.
+#:
+#: Engine 19 values positions from the totals on an ordinary tick. On a tick where engine
+#: 22 closed something, it drops the closed rows and sums `value` over the rest, because
+#: the totals still count the positions that were just sold (operator ruling 2026-09-17,
+#: spec 114). The two paths must agree, and a test that can fail keeps them agreeing.
+#: The totals are still computed separately from the rows, so that test compares two
+#: sums and not one number with itself.
+#:
+#: It is not a `positions` column. Engine 19 reads it off the payload, and the store
+#: keeps `qty` and `last_price`, from which it can always be recomputed.
+POSITION_VALUE_FIELD: Final = "value"
 
 #: What engine 22 acts on: one entry per position that reached a barrier.
 TRIGGERED_FIELD: Final = "triggered"

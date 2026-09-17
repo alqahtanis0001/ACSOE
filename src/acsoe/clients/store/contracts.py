@@ -104,6 +104,24 @@ class BlockStatus(StrEnum):
     ERROR = "ERROR"
 
 
+class CashSource(StrEnum):
+    """`equity_snapshots.cash_source` (migration 0005): where a row's `cash` came from.
+
+    `CYCLE_START` is engine 1's balance as fetched at the start of the tick. It is the
+    whole cash figure on any tick where engine 22 sold nothing, and on every row
+    written before 0005.
+
+    `AFTER_EXIT` is that balance **plus the `net_proceeds` of every sale engine 22
+    made this tick**. Engine 19 builds it by filtering and summing (operator ruling
+    2026-09-17, spec 114). Without the label, a reader cannot tell a row describing the
+    account after a sale from one describing it before, and the two differ by the
+    proceeds.
+    """
+
+    CYCLE_START = "cycle_start"
+    AFTER_EXIT = "after_exit"
+
+
 class PositionStatus(StrEnum):
     OPEN = "open"
     CLOSED = "closed"
@@ -268,6 +286,16 @@ class EquitySnapshotRow(_Row):
 
     The cash and unrealised components are stored rather than derived because the Phase 7
     alpha attribution reads the full curve *including cash periods*.
+
+    **`cash_source` defaults to `CYCLE_START`, and the default is temporary.** Engine 19
+    builds this row by keyword and does not pass the field yet. It will once spec 114
+    lands. A required field would make engine 19 raise on every tick until then, and no
+    equity row would be written at all. The default is also the true label for every
+    row engine 19 writes today, because today's rows are all start-of-tick cash. It
+    stops being true on the exit tick spec 114 changes. The risk is the one
+    `code-standards.md` names for a model default: a writer that forgets the field gets
+    `cycle_start` silently. Spec 114's wrong-label mutation is what catches that. Once
+    engine 19 passes the field on every row, the default can go.
     """
 
     id: int | None = None
@@ -282,6 +310,7 @@ class EquitySnapshotRow(_Row):
     unrealised_pnl: Money
     realised_pnl_cum: Money
     open_position_count: int
+    cash_source: CashSource = CashSource.CYCLE_START
     updated_at: Micros
 
 
