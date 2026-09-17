@@ -616,8 +616,9 @@ def test_equity_across_fill_passes_on_the_real_tree(
 ) -> None:
     """The real chain places, fills and records an entry, and equity moves by the fee.
 
-    Engine 21 values a position opened this tick at its fill price, so the mark-to-bid
-    part of the bound is zero on the fill tick and the tolerance is the maker fee alone.
+    Engine 21 stores a position opened this tick marked at its fill price (spec 106), so
+    the mark-to-bid part of the bound is zero on the fill tick and the tolerance is the
+    maker fee alone.
     The equity row therefore moves by exactly minus the fee, which is asserted, so a
     criterion whose bound had drifted wide would not pass this test by being loose.
     """
@@ -653,6 +654,40 @@ def test_equity_across_fill_fails_when_the_broker_leaves_out_an_unrecorded_fill(
     moved, bound, fee = moved_and_bound(outcome)
     assert moved > bound >= fee > 0, outcome.message
     assert "counted twice" in outcome.message, outcome.message
+    assert_names_tier_3(outcome)
+
+
+#: Engine 21's write of the fill-tick mark (spec 106), and B's mutant P1: the write gone,
+#: so the position is stored with `last_price` NULL on the tick its fill opened it.
+POSITION_MANAGER_MARK_ANCHOR = b'            position_row["last_price"] = format(mark, "f")\n'
+
+
+def test_equity_across_fill_fails_when_the_fill_tick_position_is_stored_with_no_mark(
+    verify_module: ModuleType, phase6_tree: Path, repo_root: Path
+) -> None:
+    """Spec 107: a NULL fill-tick mark is a FAIL naming the missing mark.
+
+    Since spec 106 engine 21 stores the fill price as the mark of a position its tick's
+    fill opened. The copy here drops that write (B's mutant P1). Before spec 107 the
+    criterion then read the equity row instead, found it valued at cost, and reported
+    PASS, so it could not tell the defect from the fix. The equity row is still right
+    under this mutant, because engine 21's totals are untouched. The only thing wrong
+    is the stored row, so the verdict has to come from the row.
+    """
+    real = repo_root / "src" / "acsoe" / "engines" / "position_manager" / "engine.py"
+    real_before = hashlib.sha256(real.read_bytes()).hexdigest()
+    engine = phase6_tree / "src" / "acsoe" / "engines" / "position_manager" / "engine.py"
+    source = engine.read_bytes()
+    assert source.count(POSITION_MANAGER_MARK_ANCHOR) == 1, "the anchor moved; P1 would not apply"
+    engine.write_bytes(source.replace(POSITION_MANAGER_MARK_ANCHOR, b""))
+
+    outcome = run(verify_module, EQUITY_ACROSS_FILL, phase6_tree)
+
+    assert hashlib.sha256(real.read_bytes()).hexdigest() == real_before
+    assert_fail(outcome, verify_module)
+    message = outcome.message
+    assert "criterion raised" not in message, message
+    assert "stored with no mark (last_price NULL)" in message, message
     assert_names_tier_3(outcome)
 
 

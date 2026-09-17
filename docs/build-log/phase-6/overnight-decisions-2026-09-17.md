@@ -51,6 +51,76 @@ double count it exists to catch. The case for: the branch is now reachable only 
 regression of spec 106, and a criterion that silently accepts a regression is proving less
 than it could.
 
+### D5 — Spec 100's bodies before spec 101; `console_shows_position_live` PENDINGs on spec 101 meanwhile
+
+**Took.** C writes all nine criterion bodies first, with `console_shows_position_live`
+reporting PENDING naming spec 101 until the console shows the position; spec 101 follows as
+its own boundary.
+**Rejected.** Building spec 101 first so every criterion can reach PASS in one pass.
+**Why.** Eight of the nine criteria are about the engines and the broker and need nothing from
+the console; doing them first gets the most evidence soonest, and a PENDING that names its
+missing subject is the criteria framework's normal shape. Order only.
+
+### D6 — Spec 105's criterion switches to the registered `bootstrap` chains
+
+**Took.** Now that spec 82 has landed, `paper_equity_continuous_across_fill` reads
+`build_chains()` instead of its hand-built registry-order list, in the same work as the
+other criteria.
+**Rejected.** Keeping the hand-built chains, which are independent of registration.
+**Why.** Its own docstring says to switch; a criterion that builds its own chains can pass
+while the registry is wrong, which is the Phase 2 tripwire lesson ("reach X through the code
+path X lives on"). Mechanism only; the assertion is unchanged.
+
+### D7 — More stale fallback prose, routed as specs 109 (A) and 110 (B), scheduled last
+
+**Took.** B found the same pre-ruling wording in A's lane (the Kraken client README and engine
+1's README, contracts, engine and test) and in B's `clients/store/client.py`. Two prose-only
+specs, one per owner, run after the seed-vocabulary reconciliation.
+**Rejected.** Folding them into spec 108 (A's lane is not B's), or running them now, alongside
+C's criteria work (D1: one agent in the tree at a time).
+**Why.** They change no behaviour and block nothing; C's criteria are the work the operator
+asked for tonight.
+
+### D8 — `escalation_completes_during_outage` fails the balance by failing `AssetPairs` too: **REVIEW**
+
+**Took (C's proposal, accepted).** In paper mode the broker never calls the real `Balance`,
+so failing that call alone changes nothing. C fails `AssetPairs` as well; the broker's
+`balance()` then raises `KrakenUnavailableError`, engine 1 records `balance` as a failed
+fetch, and engine 22 must liquidate on the **retained** `AssetPairs` (invariant 14),
+recording `asset_pairs_last_known_good`.
+**Rejected.** A balance-only failure (for example the fee tier absent while a fill is due,
+spec 103's path) — C is to record whether it is achievable and why it was not used.
+**Case against.** The Phase 6 row says "the balance fetch is still failing"; this subject
+fails more than that, so a pass also depends on the retained-cache path working. The case
+for: it is a strictly harder condition that exercises invariant 14's other override too, and
+the criterion's message names both failures, so nothing is hidden.
+
+### D9 — The escalation criterion must prove the resting-entry cancel non-trivially
+
+**Took.** At the committed config a resting entry is always cancelled by its unfilled window
+(300 s) long before `safety` can escalate (more than 15 one-minute blocked ticks), so on the
+escalation tick `entry_orders_cancelled` is true trivially. Asserting only that would prove
+nothing about engine 21's `close_intent` cancel. The criterion therefore **also** cancels a
+real resting entry under `close_intent` — an operator `close_all` issued well inside the
+entry's window, with `data_guard` blocking and the balance failing — and asserts the cancel
+happened because of `close_intent`. Its message states that a `safety` escalation can never
+find a resting entry at this config.
+**Rejected.** Asserting the flag alone (cheaper, proves less — the operator's stop bucket,
+so not an option); or changing `entry_unfilled_window_s` in the subject so a resting entry
+survives to the escalation (a config value — the stop bucket).
+
+## Findings
+
+### F1 — `safety`'s resting-entry escalation precondition is unreachable at the committed config
+
+Found by C while planning the criteria bodies, read-only. `trading.entry_unfilled_window_s`
+(300) is shorter than `safety.max_consecutive_data_blocks` (15) × `timeframes.loop_tick_s`
+(60), and invariant 8 cancels a stale entry even during a `data_guard` hold, so no resting
+entry is still on the book when `safety` escalates. Engine 11 also refuses a resting entry on a
+pair that already holds a position (spec 89), and engine 7 does not skip such a pair. Nothing
+is wrong — the window makes the system safer — but invariant 14's "or resting entry orders"
+clause is only reachable through the operator's own Close all. See Q2.
+
 ## Events
 
 ### E1 — The network was down 03:13–08:20 UTC; the session stalled with it
@@ -93,3 +163,24 @@ as "no fallback fired" on a record that cannot record one. (b) Keep it as a rese
 always-empty field. **Recommendation: (a).** **Case against:** engine 22 still publishes a
 real `fallbacks_used` (for rule 14's liquidation), so a uniform "every money-deciding engine
 carries the field" convention has some value for readers of the payloads.
+
+### Q2 — Is F1 acceptable as it stands?
+
+**Options.** (a) Accept: the window cancel covers the hazard invariant 14's clause was written
+for, and the operator's Close all is the path that still exercises a `close_intent` cancel of
+a resting entry. (b) Record the relationship between `entry_unfilled_window_s` and
+`max_consecutive_data_blocks × loop_tick_s` as a config-validation rule, so a future change to
+either value cannot silently make the clause reachable-but-untested. **Recommendation: (a),
+plus a one-line note in invariant 14.** **Case against:** (b) turns an accident of two
+defaults into an enforced property, which is the kind of coupling nobody decided on — the
+same objection `code-standards.md` makes to adding a constraint by default.
+
+## The operator's rulings, 2026-09-17 morning
+
+D1, D2, D5, D7: correctly in the "how" bucket — calibrated; do not escalate more. D3: accepted.
+D4: accepted and made a standing rule in `code-standards.md`. D6: "the best call in the log" — keep
+the instinct. D8: accepted. D9: right call; "an assertion that is true trivially is not an assertion."
+Q1: remove the field (spec 111); engine 22's stays. Q2: a third option — a test asserting the
+window/escalation relationship from config, commented as the notice that the clause has become
+reachable (spec 112), plus a one-line pointer in invariant 14. F1's engine 7 half: a Phase 7 item.
+E1: Known Risks. The operator is back; normal rhythm resumes.

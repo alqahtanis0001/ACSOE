@@ -11811,21 +11811,20 @@ def _judge_fill(
             "the fill's cost can only be read off one position that matches its fill; "
             + tier
         )
-    # The mark, from the store either way. Engine 21 does not re-mark a position opened
-    # by this tick's fill: it values it at the fill price and leaves `last_price` empty
-    # until the next tick. So an empty mark is accepted only if the equity row really
-    # valued the position at its fill price, and then the mark-to-bid gap is zero. Any
-    # other value with no mark is a FAIL, never a wider tolerance.
-    if position.last_price is not None:
-        mark = position.last_price
-    elif after.positions_value == qty * price:
-        mark = price
-    else:
+    # The mark, from the stored row only. Since spec 106 engine 21 stores a position
+    # opened by this tick's fill with `last_price` at the fill price. A NULL mark is
+    # therefore that fix regressed, and it is a FAIL. It is never read off the equity
+    # row instead: that would accept a position the console shows with no price.
+    # Spec 107; before it this branch accepted NULL when the equity row valued the
+    # position at cost, and B's mutant P1 (the NULL restored) passed.
+    if position.last_price is None:
         return failed(
-            f"entry {userref}'s position carries no mark on its fill tick and the equity "
-            f"row values it at {after.positions_value}, not its cost {qty * price}, so the "
-            "mark-to-bid part of the fill's cost cannot be read from the store; " + tier
+            f"entry {userref}'s position is stored with no mark (last_price NULL) on its "
+            f"fill tick, cycle {order.cycle_id}. Engine 21 stores the fill price as the mark "
+            "of a position this tick's fill opened (spec 106), so the mark-to-bid part of "
+            "the fill's cost cannot be read from the store; " + tier
         )
+    mark = position.last_price
     if after.positions_value != qty * mark:
         return failed(
             f"the fill tick's equity row values the position at {after.positions_value}, "
@@ -11859,8 +11858,9 @@ def check_paper_equity_continuous_across_fill(ctx: VerifyContext) -> Outcome:
     post-only buy), then the fill tick (a planted trade below the limit, which engine 21
     observes). The verdict is read from the store only: the two `equity_snapshots` rows,
     the entry's `orders` row (quantity, fill price, fee) and the new `positions` row (its
-    mark). The tolerance is the fee plus the quantity times the gap between mark and fill
-    price, and never a constant.
+    mark, which must be stored: a NULL `last_price` is a FAIL, spec 107). The tolerance is
+    the fee plus the quantity times the gap between mark and fill price, and never a
+    constant.
 
     The chains are assembled here in registry order because spec 82 has not registered
     them. When it does, this criterion should read the registered chains from

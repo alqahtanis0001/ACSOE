@@ -79,16 +79,15 @@ rather than as a zero spread. It therefore surfaces as `book_fetch_failed`. The 
 in `_unusable` is kept anyway, as the assertion that the client's refusal is the live branch:
 deleting a guard for something that cannot happen throws away the tripwire for the day it can.
 
-### One deliberate asymmetry with engine 11
+### No balance, no estimate
 
-Engine 11 `risk` applies invariant 2's paper-mode fallback to `paper.starting_balances` when
-engine 1 published no balances, because it must still size *something*. **Engine 9 does not.** It
-has nothing it must still do, so the conservative reading is to publish no estimate and let the
-gate refuse. Spec 96 step 4 lists a failed balance read as a fail-closed shape and this follows
-that list verbatim.
-
-Two engines reading one key and treating it differently is the kind of thing that looks like an
-oversight later, so it is written down here. Overturnable by the lead or the operator.
+When engine 1 published no balances, engine 9 publishes no estimate
+(`order_book_inputs_unavailable`) and engine 10 refuses on the absent key. Nothing stands in for
+the balance, in any mode. Here the balance **is** the basis notional, so a substitute would set
+how deep the walk goes and so price the hurdle. Invariant 2 in `context/trading-invariants.md`
+is the authority for this: it says what a failed balance fetch does in each mode, and why
+judging a stand-in value by its reader rules one out here. Spec 96 step 4 lists a failed balance
+read as a fail-closed shape, and this follows that list.
 
 A **zero** balance and an **absent** balance map are told apart: the first is a fact about the
 account (`no_quote_balance`), the second a fact about the call (`order_book_inputs_unavailable`).

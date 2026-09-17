@@ -557,6 +557,17 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
 
 Four commands. All four must be green before any task is reported complete. For `verify.py` mid-phase, green means **no FAIL** — PENDING is expected until phase close.
 
+**When a gate must be re-run before a commit.** Operator ruling of 2026-09-17 (decision D4 of
+the overnight log). **A re-gate is required when any source, test or config byte changed since
+the gate started.** A **docs-only** delta — files no test, criterion or engine imports or parses
+beyond the checks that read documents — needs only those checks (`docs_vocabulary` and the
+`tests/verify` tests that parse `context/*.md`), run immediately before the commit, and **the
+diff proving the delta is docs-only goes in the commit message** (`git diff --stat` over `src`,
+`tests`, `scripts`, `config` and `db`, identical before and after the documentation edits). A
+three-hour re-measurement of identical code proves nothing the first gate did not; a commit that
+carries code the gate never saw proves nothing at all, which is why the test is bytes, not
+judgement.
+
 ```
 pytest tests/ -q
 mypy --strict src/ scripts/

@@ -2441,3 +2441,93 @@ each counted once in the file today, and `patch_module` reads in text mode anywa
 `tests/` or `scripts/` file patches it (grep for `cost/engine`, `engines.cost`). `contracts.py`
 (288 CRLF) and `README.md` (140 CRLF) are CRLF as well.
 
+
+### Spec 108, fix — the prose now matches invariant 2; one constant gone; engine 10's source is LF
+
+**Agent:** B (session 6) · **Task:** spec 108 · **Date:** 2026-09-17
+
+**Fix.**
+
+- `clients/paper/broker.py`: removed `FALLBACK_PAPER_LEDGER` and its comment, and dropped it from
+  `__all__`; removed the re-export from `clients/paper/__init__.py`. Rewrote the
+  `PAPER_STARTING_BALANCES_KEY` comment: it is the ledger's opening figure and not a substituted
+  value; the broker is the authority on its own cash; `balance()` raises rather than answering
+  with that figure unadjusted. The forwarded-reads banner now says every row of the paper-mode
+  table blocks and that the balance, which is not forwarded, is not a fallback either.
+- `engines/cost/contracts.py` (module docstring, `CostAssessment` docstring),
+  `engines/cost/engine.py` (`_fallbacks` docstring), `engines/cost/README.md`: `fallbacks_used`
+  is described as a payload field, not a `rejections` column. Migration 0001 puts it on
+  `trades`, and nothing in `src/` reads it. The README's "Balance is the only paper-mode
+  fallback left" became "There is no paper-mode fallback left anywhere in this system"
+  (spec 106), and a paragraph records the correction.
+- `tests/engines/test_cost.py`: the summary line of
+  `test_this_engine_applies_no_fallback_and_says_so_by_recording_none` no longer says
+  "a real `rejections` column". The test is unchanged.
+- Applied by a byte-level helper (`scratchpad/b108/edit108.py`): each anchor must match exactly
+  once in the file's LF view, and each file is written back with the line ending it was found
+  with.
+
+**How-choices, with the option rejected.**
+
+- `engines/cost/contracts.py` (288 CRLF) and `README.md` (140 CRLF) **left CRLF**, edited through
+  the helper that keeps CRLF. Rejected: converting them as well. The spec names `engine.py`
+  only, and `contracts.py` carries the phase-3 anchor `EXCHANGE_FEE_TIER_KEY: Final = "fee_tier"`
+  (single-line, still counted once), so converting it would widen the change for no gain
+  tonight.
+- `engine.py` converted **before** the prose edit. Rejected: after. Converting first makes the
+  LF proof a comparison against the untouched byte copy, not against a file I had already
+  edited.
+- The broker's starting-balance sentence was rewritten rather than deleted, so the next reader
+  meets the rule where the constant is. Rejected: deleting the sentence and leaving only the
+  "only config key" paragraph.
+- The test name was kept. Rejected: renaming it, because the name is still true and appears in
+  earlier logs.
+
+**No mutation, and why.** Nothing here changes behaviour: comments, one unused constant, line
+endings. The proofs are instead:
+
+- **The constant had no user.** `logs/verify/b108-grep-constant-before.log`: four source lines,
+  all definition, re-export or `__all__`. `logs/verify/b108-grep-constant-after.log`: `grep -rn`
+  over `src tests scripts` finds nothing (exit 1).
+- **The LF conversion changed only line endings** (`logs/verify/b108-lf-proof.log`):
+  - Before: 328 CRLF / 0 bare LF / 0 bare CR, sha256
+    `9f8ac3d4b821614de5bc2a035d037c30b87acdb9a2b28f88f2da0472e2299087`.
+  - After: 0 CRLF / 328 LF, sha256
+    `7f8feb8873ddfb2764bdf295eab1e7d705ad39dc22d8cf021ba70ec47df94139`.
+  - `old.replace(b"\r\n", b"\n") == new` is True, the 11156 non-whitespace bytes are
+    identical, and `git hash-object --no-filters` equals HEAD's blob `7d423da`.
+- **The anchors still hold.** The two single-line strings in `test_phase3_criteria.py` each
+  count once in the LF file. `-k cost_gate` gives `7 passed` (`logs/verify/b108-anchors.log`).
+  `test_phase3_criteria.py` + `test_cost.py` + `tests/clients/paper` give `156 passed`
+  (`logs/verify/b108-narrow.log`).
+
+**Reported, not changed.**
+
+- `CostAssessment.fallbacks_used`: engine 10 produces it, always `()`, and nothing in `src/` or
+  `scripts/` reads it. The only other places are tests: `test_cost.py` asserts it is empty, and
+  the stand-in at `tests/verify/test_phase3_criteria.py:227` publishes it. It stays, because
+  removing it changes the payload shape. The lead's Q1 for the operator.
+- `clients/store/client.py:942` (B's, outside this spec's write list): the `filled_orders`
+  docstring says the balance is adjusted by every *recorded* fill, which is older than the
+  spec 103 amendment (every *executed* fill).
+- A's lane: `clients/kraken/README.md:55`, `engines/exchange/README.md:64`,
+  `engines/exchange/contracts.py:17`, `engines/exchange/engine.py:117` and
+  `tests/engines/test_exchange.py:12` still describe "invariant 2's paper-mode fallbacks" as
+  the consumer's decision; there are none left.
+
+### Spec 108 — the gate
+
+**Agent:** B (session 6) · **Date:** 2026-09-17
+
+Run one after another, each to its own file, with nothing else of mine running. pytest ran with
+`-p no:cacheprovider`, which only stops it writing its cache folder.
+
+| Command | Result | Log |
+|---|---|---|
+| `pytest tests/ -q` | `8 failed, 3201 passed, 2 skipped, 3 warnings in 1543.83s`. All 8 are `test_pending_on_the_real_tree_names_the_subject_and_the_spec` | `logs/verify/b108-gate-pytest.log` |
+| `mypy --strict src/ scripts/` | `Success: no issues found in 153 source files` | `logs/verify/b108-gate-mypy.log` |
+| `ruff check src/ tests/ scripts/` | `All checks passed!` | `logs/verify/b108-gate-ruff.log` |
+| `verify.py --phase 6` | `12 criteria: 2 PASS, 1 FAIL, 9 PENDING`. The FAIL is `toolchain_green` on the same eight | `logs/verify/b108-gate-verify.log` |
+
+Committed by the lead as `40bbc6b`, which went in before this gate finished. This entry was
+written afterwards at the lead's request.

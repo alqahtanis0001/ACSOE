@@ -170,6 +170,32 @@ fails only `toolchain_green`, on spec 100's known eight — phase 0 6/7, 1 9/10,
   takes `bare_tree` and never observes the PENDING its name promises; a four-quote docstring at
   `tests/verify/test_phase6_criteria.py:671` that `ruff format --check` flags.
 
+### The operator's rulings on the overnight log, 2026-09-17 morning
+
+**D3 accepted** (spec 105's criterion rejects a NULL fill-tick mark: the branch was reachable only by a
+regression of spec 106). **D4 accepted and made standing** — `code-standards.md`, "When a gate must be
+re-run before a commit". **D8 accepted** (the outage criterion fails `AssetPairs` too: strictly harder,
+and its message names both failures). **D6 and D9 called out as the right instincts**: a criterion that
+builds its own chains can pass while the registry is wrong; an assertion that is true trivially is not
+an assertion. **D1, D2, D5 and D7 were correctly bucketed as "how"** — the bucketing is calibrated and
+should not escalate more.
+
+- **Q1 → remove `CostAssessment.fallbacks_used`** (spec 111, B). An always-empty field reading as "no
+  fallback fired" on a record that cannot record one is a claim that looks true and means nothing.
+  Engine 22's field stays: it carries a real value. If C's fake cost engine in
+  `test_phase3_criteria.py` goes red, **C first establishes what that test was asserting** — a fake
+  publishing a field nothing produces may have been passing against a shape the real engines never had.
+- **Q2 → neither offered option; a third** (spec 112, B, in engine 17's tests): a test asserting
+  `trading.entry_unfilled_window_s < safety.max_consecutive_data_blocks × timeframes.loop_tick_s`, all
+  three read from config, commented that while it holds invariant 14's resting-entry clause is
+  reachable only through an operator Close all — so a change to either value fires the test as notice
+  that the clause has become reachable and untested. It forbids nothing and couples nothing; it makes
+  the change visible. The lead adds a one-line pointer to it in invariant 14 once it exists.
+- **F1's other half → a Phase 7 item, recorded not acted on:** engine 7 does not skip a pair that
+  already holds a position, and engine 11 then refuses it, so a candidate that cannot succeed is
+  computed through six engines every tick.
+- **E1 → Known Risks**, as the second unrecoverable recording gap. Nothing else to do.
+
 **Overnight, operator asleep:** decisions taken are listed in
 `docs/build-log/phase-6/overnight-decisions-2026-09-17.md`, with the rejected option for each.
 The network was down 03:13–08:20 UTC; the recorder was disconnected for those 308 minutes and
@@ -1413,6 +1439,7 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
 
 ## Known Risks
 
+- **A second unrecoverable gap in the live recording, 2026-09-17 03:13–08:20 UTC (308 minutes).** The network was down; the recorder's heartbeat reports `connected: false` for the whole span and both recorders and both supervisors reconnected on their own. The gap is marked in the archive and the archive is unedited (invariant 11); that span of order-book and spread history cannot be recovered. The first unrecoverable gap is the ten-hour silence of 2026-09-09, when no recorder was running.
 - **Historical archives carry no order book or spread.** Engine 9 and the spread half of Engine 10 cannot be backtested before live recording began. `scripts/record.py` ships in Phase 0 for exactly this reason and must not be switched off.
 - **A read-and-trade Kraken key exists on the dev machine.** Use a separate read-only key until Phase 8. The three live switches are the only thing between a bug and real money.
 - **Every Kraken pair is a lot of pairs.** Develop against a config-limited subset; the universe filter handles the rest at runtime.

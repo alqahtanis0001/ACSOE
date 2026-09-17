@@ -5,6 +5,37 @@ Never edit the tracker directly.
 
 ## Current Task
 
+### CLAIM 2026-09-17 — spec 107, then the spec 100 criteria bodies (Agent C, Interface and models, Opus 5 1M)
+
+Written before any code. Assigned by the lead under HANDOFF 5 (operator asleep, unattended
+rules). **107 first; stop and report to the lead; the criteria bodies only on the lead's
+go-ahead.** The only agent in the checkout. No commits, no registration, no `core/`,
+`bootstrap.py`, `config/`, `context/*` (except this file), other lanes' source, or the recorder
+processes. Cross-lane mutations only in copied trees (or byte-copied, hash-restored in the same
+statement), `PYTHONDONTWRITEBYTECODE=1`, a pytest summary line required for every verdict.
+
+| Spec | Files I will touch |
+|---|---|
+| **107** — engine 9's stale engine-11 prose; spec 105's criterion refuses a NULL fill-tick mark | `src/acsoe/engines/order_book/README.md`, `src/acsoe/engines/order_book/engine.py` (the `_basis_notional` docstring only), `scripts/verify.py` (`_judge_fill`), `tests/verify/test_phase6_criteria.py` |
+| **100** — the nine Phase 6 criteria bodies, driven from `bootstrap.build_chains()`; spec 105's criterion switched to `bootstrap`; the tier-sentence test and the four-quote docstring folded in | `scripts/verify.py`, `tests/verify/test_phase6_criteria.py`, `tests/verify/test_runner.py` if the list moves, `tests/harness/**` only if a scripting surface is missing |
+
+Records: this file and `docs/build-log/phase-6/c-interface.md`. Logs under `logs/verify/c107-*`
+and `c100c-*`; scratch under the session scratchpad.
+
+#### 107 — DONE, not committed; boundary report sent to the lead, waiting for the go-ahead
+
+`_judge_fill` now FAILs on a NULL fill-tick mark and names it; nothing else in the bound moved.
+Engine 9's README section is renamed "No balance, no estimate", and the `_basis_notional`
+docstring no longer describes engine 11. There is one new test, which applies B's P1 in the
+copied tree. Sweep: S1 and S2 were killed by the new test, and control S0 survived narrow and
+wide (the failing set was the known 8). Next: the criteria bodies, on the lead's go-ahead (the lead
+ruled 2026-09-17 on the balance mechanism and the resting-entry leg; see the build log). `tests/verify` wide: only the known 8 fail. ruff and mypy are clean.
+Full account in the build log.
+
+CRLF at claim time (Python byte count): every file above is 0 CRLF except
+`tests/verify/conftest.py`, which is 811 CRLF / 0 LF in the working tree (not planned to be
+edited).
+
 ### CLAIM 2026-09-16 — specs 104 then 105 (Agent C, Interface and models, Opus 5 1M)
 
 Written before any code. Assigned by the lead from the operator's rulings on A's spec 87

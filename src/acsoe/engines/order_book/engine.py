@@ -246,13 +246,11 @@ class OrderBookEngine(BaseEngine):
         a handler that cannot tell two situations apart will silently pick the wrong
         one.
 
-        **No paper-mode fallback, deliberately, and this differs from engine 11.**
-        Engine 11 `risk` falls back to `paper.starting_balances` when engine 1
-        published no balances, because it must still size something; engine 9 has
-        nothing it must still do, so the conservative reading is to publish no estimate
-        and let the gate refuse. Spec 96 step 4 lists it as a fail-closed shape and
-        this follows that list verbatim. Recorded in the README as a deliberate
-        asymmetry rather than an oversight.
+        **No balance, no estimate, in every mode.** Nothing stands in for an absent
+        `balances` map: here the balance is the basis notional, so a substitute would
+        set the depth of the walk and so price the hurdle. Invariant 2 is the authority
+        (`context/trading-invariants.md`); the README says the same in "No balance, no
+        estimate". Spec 96 step 4 lists it as a fail-closed shape.
 
         A currency **missing from a published map** is zero, not a failed fetch: engine
         1 publishes what the account holds, and an asset with no balance is not listed.

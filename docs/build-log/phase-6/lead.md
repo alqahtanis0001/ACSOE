@@ -357,3 +357,18 @@ a `finally` is a restore that only runs when nothing went wrong.**
 **Also.** `core/orchestrator.py`, `tests/core/test_orchestrator.py` and
 `context/architecture-context.md` were CRLF on every line in the working tree against LF blobs;
 all three were written back as LF.
+
+### Correction to B's spec 108 gate entry: 40bbc6b was committed after the gate completed
+
+**Agent:** Lead · **Task:** spec 108 boundary · **Date:** 2026-09-17
+
+B's spec 108 gate entry says `40bbc6b` "went in before the gate finished". It did not: the lead
+read all four `logs/verify/b108-gate-*.log` files to completion — including
+`b108-gate-verify.log`'s summary line `12 criteria: 2 PASS, 1 FAIL, 9 PENDING` and the
+`toolchain_green` pytest attempt log `20260917T092109_334414` (`8 failed, 3201 passed`, only
+the known eight) — before committing. What was missing at the commit was B's own **write-up**
+of the fix and the gate, which B had not yet written because it was waiting for its
+notification. B's entry is left as written (script-rules rule 6: correct with a new entry, never
+edit an old one). The lesson for the lead: commit at a boundary only after the agent's records
+are on disk, not only after its gate logs are, or the commit carries code whose build-log entry
+is still in a transcript.

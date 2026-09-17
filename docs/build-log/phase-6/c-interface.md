@@ -2473,3 +2473,94 @@ eight stayed green in every arm. Logs: `logs/verify/c100b-sweep-<arm>.log`.
 **G is killed only by the new message assertion.** MOVED-r survives it because the result
 is still PENDING. A criterion whose guard has been dropped keeps reporting PENDING until its
 body is written, so a check on the result alone cannot tell "absent" from "not reached".
+
+### Spec 107, diagnosis — spec 105's criterion accepts the defect spec 106 fixed, and engine 9 describes a fallback that is gone
+
+**Agent:** C (interface and models) · **Task:** spec 107 · **Date:** 2026-09-17
+
+**What happened (1).** `_judge_fill` in `scripts/verify.py` reads the fill-tick mark from the
+`positions` row. When `last_price` is NULL it does not fail: it accepts the row if the equity
+row valued the position at exactly `qty x fill price`, and then sets the mark-to-bid gap to
+zero. I wrote that branch in spec 105 because engine 21 did store NULL on the fill tick then.
+Spec 106 (B, `268f49e`) changed engine 21 so the fill-tick row carries `last_price` = the fill
+price and `unrealised_pnl` = 0. B then ran its mutant P1, which removes that `last_price` write
+again, against my criterion tests: **survived**, `15 passed` (B's build log, spec 106
+mutations). So the branch is now reachable only by that regression, and the criterion reports
+PASS on it.
+
+**Why it matters.** It is a small hole, but the shape is the one this project keeps finding: a
+criterion that accepts the broken form of the thing next to what it judges. The console reads
+`last_price` (spec 101), so a NULL mark on the fill tick is a position shown with no price.
+The criterion is the only phase-level check that reads that row on that tick.
+
+**What happened (2).** `src/acsoe/engines/order_book/README.md` ("One deliberate asymmetry with
+engine 11") and the `_basis_notional` docstring in `engine.py` both say engine 11 falls back to
+`paper.starting_balances` when engine 1 publishes no balance. Spec 106 removed that fallback.
+Engine 9's own rule (no balance, no estimate) is unchanged and correct; only the comparison is
+stale.
+
+**Fix (planned, spec 107).** The NULL-mark branch becomes a FAIL that names the missing mark.
+The mark comes from `last_price` only, and nothing else in the bound changes. A new test makes
+engine 21 skip the `last_price` write in the copied tree (B's P1) and requires that FAIL. The
+two prose passages state engine 9's rule and point at invariant 2, without describing engine 11.
+
+### Spec 107, fix — the NULL mark is a FAIL, and three mutations of the new branch
+
+**Agent:** C (interface and models) · **Task:** spec 107 · **Date:** 2026-09-17
+
+**Fix.** `_judge_fill` reads the mark from `positions.last_price` only. A NULL there is a FAIL
+that names the missing mark, the fill tick's cycle, and spec 106. Nothing else in the bound
+moved: the tolerance is still `fee + qty x |mark - fill|`, and the check that the equity row
+values the position at `qty x mark` is still next. Engine 9's README section is renamed "No
+balance, no estimate" and states engine 9's own rule, pointing at invariant 2 for the reason.
+The `_basis_notional` docstring says the same in four lines. Neither mentions engine 11.
+
+**The new test.** `test_equity_across_fill_fails_when_the_fill_tick_position_is_stored_with_no_mark`
+deletes engine 21's `position_row["last_price"] = format(mark, "f")` in the copied
+`phase6_tree` (B's P1; the anchor occurs once in engine 21 and nowhere in `tests/` or
+`scripts/`), hashes the real engine 21 on both sides, and requires FAIL with the words
+"stored with no mark (last_price NULL)". Under P1 the equity row is still exactly right,
+because engine 21's totals are untouched. So the verdict can only come from the stored row,
+which is what the test pins.
+
+**P1, run once through a scratch probe on a copied tree** (`scratchpad/c107/probe_p1.py`,
+`logs/verify/c107-probe-p1.log`), verbatim:
+
+> FAIL | entry 1690626088's position is stored with no mark (last_price NULL) on its fill tick, cycle 3. Engine 21 stores the fill price as the mark of a position this tick's fill opened (spec 106), so the mark-to-bid part of the fill's cost cannot be read from the store; at fee tier 3, reference friction about 0.65% round trip and a hurdle of 1.625%; tier 1 is a no-trade regime at the current barriers
+
+Real engine 21 sha256 before and after: `2010de69d0163ac38aeda657da9ec928f71b51cb9e824178cd8eb01e9e46e4e8`.
+
+**Mutations of the criterion** (`scratchpad/c107/sweep107.py`). It takes a byte copy of
+`scripts/verify.py` (0 CRLF, each anchor exactly once), restores it in a `finally` before the
+next arm, and compares the sha256 in the same statement. It runs with
+`PYTHONDONTWRITEBYTECODE=1`, `sys.executable -X faulthandler` and `-p no:cacheprovider`, and
+every verdict needs a pytest summary line. Narrow target:
+`test_phase6_criteria.py -k equity_across_fill`, baseline `6 passed`. The file sha256 was the
+same before the sweep and after every restore:
+`a7040cd4699777e17a5d788e3fda7048a76f128efa945a22d2331533cc2e6b07`. Before choosing the control
+I grepped `tests/` and `scripts/` for its text: `if position.last_price is None` occurs only
+at the criterion's own line.
+
+| Arm | Mutation | Mutant sha256 | Summary | Killing test |
+|---|---|---|---|---|
+| S1 | the pre-107 acceptance restored: a NULL mark is read as the fill price when the equity row values the position at cost | `c5c629ab770e…` | 1 failed, 5 passed | `…fails_when_the_fill_tick_position_is_stored_with_no_mark`: the criterion said PASS (`equity 5000.00 on cycle 2 and 4996.3343443507499 …`) |
+| S2 | a NULL mark is always read as the fill price, and the FAIL is unreachable | `9c2729d45013…` | 1 failed, 5 passed | the same test, the same PASS |
+| S0 | control: `if None is position.last_price:` | `ee3d895a7167…` | 6 passed | — (the wide run is below) |
+
+Logs: `logs/verify/c107-sweep-<arm>-narrow.log`.
+
+**Wide, on the fixed tree.** `pytest tests/verify` gave `8 failed, 384 passed, 2 warnings in
+494.11s`, and the 8 are exactly the known
+`test_pending_on_the_real_tree_names_the_subject_and_the_spec` parametrisations
+(`logs/verify/c107-verify-wide.log`). `ruff check src/ tests/ scripts/`: all checks passed.
+`mypy --strict src/ scripts/`: no issues in 153 files. `ruff format --check` flags the same
+pre-existing lines in `verify.py` and `order_book/engine.py` as at `HEAD` (352 and 13 diff
+lines, both before and after this change). It also flags the four-quote docstring, which is
+folded into the spec 100 bodies. **Not yet run: control S0 against the whole of
+`tests/verify`.** It survived narrow only; see the progress file.
+
+**Control S0, wide** (`logs/verify/c107-sweep-S0-control-wide.log`). The lead asked for this
+run. Result: `8 failed, 384 passed in 508.32s`, and the failing set is identical to the
+baseline's known 8, so S0 survived behaviourally. The harness prints exit `0x1`, but the
+verdict comes from comparing the two failing sets. `verify.py` sha256 after the restore:
+`a7040cd4…6b07`, the same as before.

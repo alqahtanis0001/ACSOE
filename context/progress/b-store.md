@@ -27,6 +27,29 @@ Records: this file and `docs/build-log/phase-6/b-store.md`. Scratch `...\scratch
 logs `logs/verify/b108-*`. Not touched: `bootstrap.py`, `core/`, `context/*`, other lanes,
 the recorder processes.
 
+### Spec 108 — DONE 2026-09-17, committed by the lead as `40bbc6b`
+
+- `FALLBACK_PAPER_LEDGER` removed from `clients/paper/broker.py` and `__init__.py`. Before the
+  removal, grep found it in those four source lines only; afterwards, `grep -rn` over
+  `src tests scripts` finds nothing.
+- Stale prose fixed: `fallbacks_used` is a `trades` column, not a `rejections` one (cost
+  `contracts.py`, `engine.py`, `README.md`, one `test_cost.py` docstring); the cost README's
+  "Balance is the only paper-mode fallback left"; the broker's "one substituted value" comment
+  and its forwarded-reads banner.
+- `engines/cost/engine.py` CRLF -> LF. The converted file equals the HEAD blob `7d423da`, and
+  both phase-3 anchors still match once. The cost `contracts.py` and `README.md` stay CRLF (a
+  how-choice; see the build log).
+- **Reported, not changed:**
+  - `CostAssessment.fallbacks_used` has a producer (always `()`) and no reader in `src/` or
+    `scripts/`; the lead's Q1 for the operator.
+  - `clients/store/client.py:942` says "recorded" fill, which is older than spec 103; outside
+    my write list.
+  - A's `clients/kraken/README.md:55`, `engines/exchange/{README.md:64, contracts.py:17,
+    engine.py:117}` and `tests/engines/test_exchange.py:12` still call the paper-mode
+    fallbacks the consumer's decision.
+- Gate: mypy clean, ruff clean, pytest `8 failed, 3201 passed` (known eight), verify `2 PASS,
+  1 FAIL (toolchain_green, same eight), 9 PENDING`.
+
 ## Phase 6, session 5 — CLAIMED 2026-09-16, spec 106
 
 Tree clean at `e29c84e` when claimed. Claimed before any code, per rule 1. Operator rulings of
