@@ -511,6 +511,12 @@ class PositionManagerEngine(BaseEngine):
         Positions opened by a fill on *this* tick are included in the totals but are not
         re-marked: they are worth what was just paid for them, and `last_price` on a
         position that has existed for no time is the fill price.
+
+        **The row says so too** (spec 106). Its `last_price` is the fill price and its
+        `unrealised_pnl` is zero, computed from the same mark the totals use, so the stored
+        position and the equity row engine 19 writes from these totals describe one
+        valuation. Before spec 106 the row carried neither, and engine 19 stored both NULL
+        on the one tick where the valuation was not in doubt.
         """
         marked: list[tuple[Any, dict[str, Any]]] = []
         value = Decimal(0)
@@ -546,7 +552,12 @@ class PositionManagerEngine(BaseEngine):
         for _, position_row in fills:
             qty = Decimal(str(position_row["qty"]))
             entry_price = Decimal(str(position_row["entry_price"]))
-            value += qty * entry_price
+            mark = entry_price
+            pnl = qty * (mark - entry_price)
+            position_row["last_price"] = format(mark, "f")
+            position_row["unrealised_pnl"] = format(pnl, "f")
+            value += qty * mark
+            unrealised += pnl
             marked.append((_FilledPosition(position_row), position_row))
 
         if not complete:

@@ -63,13 +63,14 @@ It does not double-count the spread against engine 10. That gate charges the spr
 *friction on a round trip*; this one uses the book to answer *how many units the money
 buys*. Two different questions asked of the same data.
 
-## Invariant 2's one surviving paper-mode fallback
+## No published balance, no sizing — in every mode
 
-Spec 37 retired the fee-tier row, so **balance is the only paper-mode fallback left in
-this system**, and :meth:`RiskEngine._balances` is its only implementation. In `paper`
-mode a failed `Balance` fetch sizes against `paper.starting_balances` and records
-`balance_from_paper_starting_balances` on the decision; in every other mode it blocks.
-The fallback is never optimistic and never silent — invariant 2 requires both.
+When engine 1 publishes no balance this gate blocks, as it does on every other missing
+input. Operator ruling of 2026-09-16: the paper-mode fallback to `paper.starting_balances`
+that :meth:`RiskEngine._balances` used to apply is gone, because that map is the paper
+ledger's *opening* value and after one executed fill it would have approved a candidate
+against cash the account no longer holds. In paper mode the balance is the paper broker's
+ledger, served through engine 1; when the broker cannot answer, there is no balance.
 
 ## What is fetched, never remembered
 
@@ -93,7 +94,6 @@ from acsoe.engines.risk.contracts import (
     EXCHANGE_BALANCES_KEY,
     EXCHANGE_KEY,
     EXCHANGE_PAIR_RULES_KEY,
-    FALLBACK_BALANCE_FROM_PAPER,
     MARKET_SENSOR_KEY,
     MARKET_SENSOR_QUOTES_KEY,
     PAIR_COSTMIN_FIELD,
@@ -121,15 +121,6 @@ RISK_FRACTION_KEY = "trading.risk_fraction_per_trade"
 REPORTING_CURRENCY_KEY = "trading.base_reporting_currency"
 MAX_CONCURRENT_KEY = "trading.max_concurrent_positions"
 STOP_PCT_KEY = "barriers.stop_pct"
-
-#: The currency-to-amount map invariant 2 names as the balance fallback. Read only in
-#: paper mode, only when engine 1 published no balances at all, and never otherwise.
-PAPER_STARTING_BALANCES_KEY = "paper.starting_balances"
-
-#: The one mode the balance fallback applies in. `live` blocks because invariant 2 says a
-#: failed fetch always blocks in live mode; `replay` blocks because it is not `paper` and
-#: because blocking is the direction a gate defaults in. See the README.
-PAPER_MODE = "paper"
 
 
 class MissingInputError(Exception):
@@ -194,7 +185,7 @@ class RiskEngine(BaseEngine):
         try:
             open_positions = self._count_open_positions(context)
             max_concurrent = int(_config_decimal(context, MAX_CONCURRENT_KEY))
-            inputs, fallbacks = self._read_inputs(context, state)
+            inputs = self._read_inputs(context, state)
             exposure = self._pair_exposure(context, inputs.pair)
         except MissingInputError as missing:
             return self._blocked_on_missing_input(str(missing), started)
@@ -215,7 +206,7 @@ class RiskEngine(BaseEngine):
         # tie. The earlier order was chosen to keep pre-spec-89 rejection codes stable,
         # and there are no such rows: no engine before Phase 6 could open a position.
         if exposure is not None:
-            return self._reject(inputs, exposure.reason_code, exposure.reason, fallbacks, started)
+            return self._reject(inputs, exposure.reason_code, exposure.reason, started)
 
         # The portfolio as a whole is full. The coarser of the two statements, and the one
         # that refuses a candidate on a pair the account does *not* already hold — which
@@ -225,7 +216,6 @@ class RiskEngine(BaseEngine):
                 inputs,
                 REASON_MAX_CONCURRENT_POSITIONS,
                 f"Already holding {open_positions} of {max_concurrent} allowed positions",
-                fallbacks,
                 started,
             )
 
@@ -257,7 +247,6 @@ class RiskEngine(BaseEngine):
                     f"in {inputs.quote_currency}, and there is no exchange rate to convert "
                     "between them"
                 ),
-                fallbacks,
                 started,
             )
 
@@ -272,7 +261,6 @@ class RiskEngine(BaseEngine):
                     f"Position needs {target_notional:f} {inputs.quote_currency} and the "
                     f"account holds {inputs.quote_balance:f}"
                 ),
-                fallbacks,
                 started,
             )
 
@@ -291,7 +279,6 @@ class RiskEngine(BaseEngine):
                     f"Position of {qty:f} is below the pair's minimum order size of "
                     f"{inputs.ordermin:f}, short by {inputs.ordermin - qty:f}"
                 ),
-                fallbacks,
                 started,
             )
 
@@ -309,7 +296,6 @@ class RiskEngine(BaseEngine):
                     f"Position value of {value_at_bid:f} {inputs.quote_currency} at the "
                     f"bid is below the pair's minimum order value of {inputs.costmin:f}"
                 ),
-                fallbacks,
                 started,
             )
 
@@ -323,7 +309,6 @@ class RiskEngine(BaseEngine):
             ordermin=inputs.ordermin,
             costmin=inputs.costmin,
             reason_code=None,
-            fallbacks_used=fallbacks,
         )
         return EngineResult(
             engine=self.name,
@@ -434,15 +419,8 @@ class RiskEngine(BaseEngine):
         equity: Decimal = snapshot.equity
         return equity
 
-    def _read_inputs(
-        self, context: EngineContext, state: State
-    ) -> tuple[RiskInputs, tuple[str, ...]]:
-        """The sizing inputs, and any fallback that had to fire to assemble them.
-
-        The fallbacks travel with the inputs rather than being recomputed later, because
-        invariant 2 requires the *decision* to record which fallback fired and there is
-        exactly one place that knows: the point where the substitution happened.
-        """
+    def _read_inputs(self, context: EngineContext, state: State) -> RiskInputs:
+        """The sizing inputs, every one of them published or configured, none substituted."""
         pair = _require(state.get(SCOUT_KEY), "pair", SCOUT_KEY)
 
         # Two levels, both through `_require`. Engine 1 publishes the whole `AssetPairs`
@@ -457,7 +435,7 @@ class RiskEngine(BaseEngine):
         where = f"{rules_where}.{PAIR_RULES_PAIRS_KEY}.{pair}"
         quote = str(_require(facts, PAIR_QUOTE_FIELD, where))
 
-        balances, fallbacks = self._balances(context, exchange, quote)
+        balances = self._balances(exchange)
         quotes = _require(
             state.get(MARKET_SENSOR_KEY), MARKET_SENSOR_QUOTES_KEY, MARKET_SENSOR_KEY
         )
@@ -491,65 +469,35 @@ class RiskEngine(BaseEngine):
             raise MissingInputError(f"{quotes_where}.{pair} has a non-positive price")
         if inputs.stop_pct <= 0:
             raise MissingInputError(f"config {STOP_PCT_KEY} must be positive")
-        return inputs, fallbacks
+        return inputs
 
-    def _balances(
-        self, context: EngineContext, exchange: Any, quote: str
-    ) -> tuple[Any, tuple[str, ...]]:
-        """The account's balances — or invariant 2's one surviving paper-mode fallback.
+    def _balances(self, exchange: Any) -> Any:
+        """The balances engine 1 published, or a block. **In every mode, with no fallback.**
 
-        **This is the only fallback left in the system.** Spec 37 retired "assume tier 1"
-        on 2026-09-10, and pair rules and the spread block in every mode, so the balance
-        row is the last one in invariant 2's paper-mode table that still substitutes a
-        value instead of refusing. Engine 1 deliberately applies no fallback of its own —
-        it reports the failed call and leaves the decision to the consumer that has to
-        record which one fired — so this method is where the row is implemented.
+        Operator ruling of 2026-09-16, invariant 2. Until then, in paper mode, an absent
+        map was replaced by the raw `paper.starting_balances` config. That map is the paper
+        ledger's *opening* value, unadjusted by any fill, and the affordability check in
+        `process` compares against whatever this returns: after one executed fill (~3,332
+        of 5,000 spent, ~1,664 held) a second candidate sized from equity (~3,331) passed
+        against 5,000 and was approved — invariant 6 broken by the gate that enforces it.
+        The branch was unreachable only because engines 7 and 10 stop the chain first on
+        the same outage, which made them load-bearing for an invariant they do not own.
+        The build log for 2026-09-16 has the worked example.
 
-        Three cases, and only the second is a fallback:
+        In paper mode the balance is the paper broker's ledger, served through engine 1.
+        When the broker cannot answer, engine 1 publishes none, and this is the refusal.
 
-        - `balances` present: use it. A currency *missing from* a published map is not a
-          failed fetch — it is an account that holds nothing in that currency, and it is
-          refused by the caller's `_require` rather than substituted here.
-        - `balances` absent, mode is `paper`: `paper.starting_balances`, recorded.
-        - `balances` absent, any other mode: block. Invariant 2 is explicit that in live
-          mode a failed fetch always blocks, and the one exception in that document is
-          rule 14's liquidation, which is not this. `replay` is not `paper` either, and a
-          gate defaults towards refusing.
-
-        The map is used exactly as configured. "Adjusted by simulated fills" is the fill
-        simulator's contribution and that is Phase 6; the `README.md` names the phase so
-        the gap is recorded rather than discovered.
+        A currency *missing from* a published map is a different fact — an account holding
+        nothing in that currency — and is refused by the caller's `_require`, which names
+        the currency.
         """
         published = exchange.get(EXCHANGE_BALANCES_KEY) if isinstance(exchange, dict) else None
-        if published is not None:
-            return published, ()
-
-        if context.mode != PAPER_MODE:
+        if published is None:
             raise MissingInputError(
-                f"{EXCHANGE_KEY}.{EXCHANGE_BALANCES_KEY} in {context.mode} mode, where a "
-                "failed fetch blocks (invariant 2); the balance fallback is paper-mode only"
+                f"{EXCHANGE_KEY}.{EXCHANGE_BALANCES_KEY}: engine 1 published no balance this "
+                "tick, and no mode substitutes one (invariant 2)"
             )
-        try:
-            starting = context.config.get(PAPER_STARTING_BALANCES_KEY)
-        except Exception as exc:
-            # An absent key raises by contract. That is a gate that cannot reach its
-            # configuration, which blocks — it is never a reason to invent a balance.
-            raise MissingInputError(
-                f"config {PAPER_STARTING_BALANCES_KEY} is unreadable: {exc}"
-            ) from exc
-        if not isinstance(starting, dict) or not starting:
-            raise MissingInputError(
-                f"config {PAPER_STARTING_BALANCES_KEY} is not a currency-to-amount map"
-            )
-        if quote not in starting:
-            # Falling back to a map that does not name this pair's quote currency would
-            # be substituting nothing for something. Refused, and named, so the operator
-            # can see which currency the paper account was never given.
-            raise MissingInputError(
-                f"config {PAPER_STARTING_BALANCES_KEY} names no {quote} balance to fall "
-                "back to"
-            )
-        return dict(starting), (FALLBACK_BALANCE_FROM_PAPER,)
+        return published
 
     # ------------------------------------------------------------------ outcomes
 
@@ -558,7 +506,6 @@ class RiskEngine(BaseEngine):
         inputs: RiskInputs,
         reason_code: str,
         reason: str,
-        fallbacks: tuple[str, ...],
         started: float,
     ) -> EngineResult:
         """Refuse the candidate. **No quantity is published, in any form.**
@@ -574,7 +521,6 @@ class RiskEngine(BaseEngine):
             ordermin=inputs.ordermin,
             costmin=inputs.costmin,
             reason_code=reason_code,
-            fallbacks_used=fallbacks,
         )
         return EngineResult(
             engine=self.name,

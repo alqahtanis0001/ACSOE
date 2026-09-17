@@ -930,6 +930,45 @@ def test_a_position_opened_by_this_ticks_fill_is_counted_in_the_portfolio_value(
     assert Decimal(data[UNREALISED_PNL_FIELD]) == 0
 
 
+def test_a_position_opened_by_this_ticks_fill_is_stored_marked_at_its_fill_price(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+) -> None:
+    """Spec 106: the stored row agrees with the valuation, through engine 19's write.
+
+    `_mark` values a position opened this tick at what was paid for it, and engine 19's
+    equity row is written from those totals. Until spec 106 the position's own row carried
+    no mark, so engine 19 stored `last_price` and `unrealised_pnl` NULL on exactly that
+    tick — C found it building spec 105's criterion, which had to accept a NULL mark as a
+    special case.
+
+    Asserted on what the real engine 19 wrote into the real store, read back, not only on
+    engine 21's payload: the store is what the console and spec 105's criterion read. The
+    bid (99.99) is not the fill price (99.00), so a row marked at the bid on its fill tick
+    fails here as surely as an unmarked one.
+    """
+    from acsoe.engines.memory.engine import MemoryEngine
+
+    store.write_order(resting_entry(context))
+    traded(kraken, context, ["98.00"])
+    state = build_state(context)
+    state["position_manager"] = manager.process(context, state).data
+
+    recorded = MemoryEngine().process(context, state)
+
+    assert recorded.status is EngineStatus.OK
+    stored = store.position(position_id_for(USERREF))
+    assert stored is not None, "engine 19 recorded the position"
+    assert stored.last_price == LIMIT
+    assert stored.unrealised_pnl == 0
+    snapshot = store.latest_equity_snapshot()
+    assert snapshot is not None, "engine 19 wrote the fill tick's equity row"
+    assert snapshot.positions_value == stored.qty * stored.last_price
+    assert snapshot.unrealised_pnl == stored.unrealised_pnl
+
+
 def test_a_position_with_no_quote_carries_no_last_price(
     manager: PositionManagerEngine, context: Any, store: StoreClient, kraken: Any
 ) -> None:

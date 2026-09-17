@@ -1,5 +1,34 @@
 # Agent B — Store and trading
 
+## Phase 6, session 5 — CLAIMED 2026-09-16, spec 106
+
+Tree clean at `e29c84e` when claimed. Claimed before any code, per rule 1. Operator rulings of
+2026-09-16 (tracker, "The operator's three rulings on the rehearsal round", ruling 3).
+
+**Spec 106 — engine 11's balance fallback removed; engine 21's fill-tick mark stored.**
+
+1. `src/acsoe/engines/risk/{engine,contracts}.py` + `README.md`: `_balances` returns the
+   published map or raises `MissingInputError` in every mode; the paper branch and its
+   constants go if nothing else reads them.
+2. `tests/engines/test_risk.py`: the fallback tests become block tests, led by the one that
+   would have caught the defect — a paper tick after an executed fill with no published
+   balance must block.
+3. `src/acsoe/engines/position_manager/engine.py` (+ README if its text changes): a position
+   opened by this tick's fill is stored with `last_price` = fill price and
+   `unrealised_pnl` = 0. `tests/engines/test_position_manager.py`: a test pinning the stored
+   row through engine 19.
+4. Mutations from byte copies (R1, R2, P1, P2, a grepped control).
+
+**Line endings measured in Python at claim time, and kept as found:** `engines/risk/engine.py`
+599 CRLF / 0 LF, `contracts.py` 301 / 0, `README.md` 276 / 0, `tests/engines/test_risk.py`
+1167 / 0 — all CRLF, edited through a byte-level helper that keeps CRLF. Engine 21's
+`engine.py`, `README.md`, `contracts.py` and its test file are pure LF. `engines/cost/engine.py`
+(328 CRLF) is not touched in this spec.
+
+Records: this file and `docs/build-log/phase-6/b-store.md`. Scratch `...\scratchpad\b106\`;
+logs `logs/verify/b106-*`. Not touched: `bootstrap.py`, `core/`, `context/*`, the broker,
+other engines, other lanes' tests.
+
 ## Phase 6, session 4 — CLAIMED 2026-09-16, specs 94 then 103, in that order
 
 Tree clean at `a668df3` when claimed. Claimed before any code, per rule 1.

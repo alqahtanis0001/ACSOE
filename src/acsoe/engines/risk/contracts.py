@@ -64,7 +64,6 @@ __all__ = [
     "EXCHANGE_BALANCES_KEY",
     "EXCHANGE_KEY",
     "EXCHANGE_PAIR_RULES_KEY",
-    "FALLBACK_BALANCE_FROM_PAPER",
     "MARKET_SENSOR_KEY",
     "MARKET_SENSOR_QUOTES_KEY",
     "MINUS_SIGN",
@@ -107,8 +106,9 @@ EXCHANGE_PAIR_RULES_KEY: Final = "pair_rules"
 PAIR_RULES_PAIRS_KEY: Final = "pairs"
 
 #: A flat `{currency: decimal string}` map, under :data:`EXCHANGE_KEY`. Audited and
-#: correct as written. **Absent when the `Balance` fetch failed**, which is the one place
-#: in this system where invariant 2's paper-mode fallback still applies — see the engine.
+#: correct as written. **Absent when the balance could not be read**, and then this gate
+#: blocks, in every mode: invariant 2 has no balance fallback since 2026-09-16. In paper
+#: mode the map is the paper broker's ledger.
 EXCHANGE_BALANCES_KEY: Final = "balances"
 
 #: Engine 3 `market_sensor` (A). The market-data engine, and the publisher of the entry
@@ -128,11 +128,6 @@ QUOTE_BID_FIELD: Final = "bid"
 
 #: Engine 7 `scout` (B). Which pair the tick is considering.
 SCOUT_KEY: Final = "scout"
-
-#: The name of invariant 2's one surviving paper-mode fallback, as it is recorded on the
-#: decision. Written into `rejections.fallbacks_used` by engine 19, and it is the only
-#: string this engine ever puts there.
-FALLBACK_BALANCE_FROM_PAPER: Final = "balance_from_paper_starting_balances"
 
 #: `AssetPairs` fields, per pair. **Never a constant and never a config key** — spec 35
 #: quotes `AGENTS.md`: any remembered order minimum is stale.
@@ -257,6 +252,12 @@ class RiskSizing(BaseModel):
     the figure `costmin` was actually tested against. They are equal only on a zero
     spread. Publishing one and calling it both would put the number a decision was *not*
     made on into the record of that decision.
+
+    **There is no `fallbacks_used`, since spec 106.** It carried the name of the paper
+    balance fallback, which the operator removed on 2026-09-16, so it had no producer left.
+    It had no reader either: `rejections` has no such column, and engine 19, engine 16 and
+    the console never read it from this payload. An always-empty field would have read as
+    "no fallback fired" on a record that cannot record one.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -270,7 +271,6 @@ class RiskSizing(BaseModel):
     ordermin: Money
     costmin: Money
     reason_code: str | None = None
-    fallbacks_used: tuple[str, ...] = ()
 
     def to_state_data(self) -> dict[str, Any]:
         """The JSON-serialisable payload, money as exact decimal strings.
@@ -287,7 +287,6 @@ class RiskSizing(BaseModel):
             "ordermin": format(self.ordermin, "f"),
             "costmin": format(self.costmin, "f"),
             "reason_code": self.reason_code,
-            "fallbacks_used": list(self.fallbacks_used),
         }
         if self.approved:
             for field, value in (

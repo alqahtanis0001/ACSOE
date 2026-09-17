@@ -2154,3 +2154,152 @@ the same fifteen minutes.** One thing I did that I would not repeat: I ran my ga
 `verify.py` (which runs its own pytest) **concurrently**, so two full suites shared the
 machine. Nothing is written to the tree by either, so it cannot have changed an answer, but
 it doubles the load on a machine that is faulting natively today.
+
+### Spec 106, diagnosis — engine 11's paper fallback would approve a trade against cash already spent
+
+**Agent:** B (session 5) · **Task:** spec 106 · **Date:** 2026-09-16
+
+Written before any change, per the script rules. The finding is the operator's and the lead's
+(tracker, "The operator's three rulings on the rehearsal round", ruling 3); this entry records
+what the branch in my engine would have done if reached, read from the code.
+
+**What happened.** `RiskEngine._balances` (`src/acsoe/engines/risk/engine.py`) had three cases:
+the published `exchange.balances` map if present; otherwise, **in paper mode only**, the raw
+`paper.starting_balances` config map, recorded as `balance_from_paper_starting_balances`;
+otherwise a block. `_read_inputs` takes `quote_balance` from whichever map came back, and the
+invariant 6 affordability check is `if target_notional > inputs.quote_balance` — so in the
+paper branch the check compares against the **opening** balance, unadjusted by anything.
+
+The lead's worked example, followed through the code:
+
+| Step | Figure |
+|---|---|
+| Paper account opens | `paper.starting_balances` USD 5,000.00 |
+| First entry fills (another pair) | ~3,332 spent, cash ~1,664 held |
+| Engine 19's equity (cash + position) | ~4,996 |
+| Second candidate, sized from equity: `4,996 × 1% / 1.5%` | `target_notional` ~3,331 |
+| Engine 1 publishes no balance this tick | paper branch returns `{USD: 5000.00}` |
+| `3,331 > 5,000`? | **no** — affordability passes |
+
+With `ordermin`/`costmin` cleared, a different pair (so `position_open_on_pair` is silent) and
+one position against a cap of three, the engine **approves** a ~3,331 position against ~1,664
+held. Invariant 6: *never allocate cash the account does not hold in that pair's quote
+currency.* The gate built to refuse exactly that would have said yes.
+
+**Why the branch existed and why it was wrong by Phase 6.** Its own docstring said the map is
+used "exactly as configured" and deferred "adjusted by simulated fills" to "the fill
+simulator's contribution and that is Phase 6". Phase 6 did not adjust this map; it put the
+ledger in the broker (spec 88, then spec 103), so engine 1's published balance *is* the
+adjusted figure and the config map is only its opening value. What was left in engine 11 was a
+second answer to "what does the account hold", and on any tick after a fill the wrong one.
+
+**Why "unreachable" was the wrong reassurance, including from me.** Engine 1 publishes no
+balance in paper only when the broker's `balance()` raises, which since spec 103 is the fee
+outage with a fill due. On that tick engine 7 excludes every pair and engine 10 has no fee
+tier, so the chain stops before engine 11. My own spec 103 entry says exactly that — "engine
+11's paper-mode balance fallback is not reachable through this path" — and reported the
+branch as "sitting awkwardly" rather than asking what it would *do*. Unreachability is a
+property of the callers; correctness is a property of the branch. Leaning on engines 7 and 10
+made their handling of an absent balance load-bearing for invariant 6, which neither owns, so
+an unrelated change to either would have armed the branch with nothing going red.
+
+**Why no test objected.** `test_paper_mode_falls_back_to_the_configured_starting_balances_and_records_it`
+failed the balance on an account that had **never traded**, where the configured 5,000 and the
+fetched 5,000 agree — its docstring even says "the sizing is unchanged and the only observable
+difference is the recorded fallback". The fixture was the one account on which the defect
+cannot show. The `code-standards.md` rule, "a double must be capable of exhibiting the
+property under test", in a fixture rather than a double.
+
+**A second thing the read found: the recorded fallback went nowhere.** The README called the
+fallback "never silent" because `fallbacks_used` named it on the decision. But `rejections`
+has no `fallbacks_used` column (migration 0001 puts one on `trades` only), `RejectionRow`
+has no such field, and engine 19's `_write_rejection` never reads it; engine 16 and the
+console do not read it either. The contracts comment "written into `rejections.fallbacks_used`
+by engine 19" described a column that does not exist. With the branch gone the field has no
+producer and no reader, so it goes too (decision below, in the fix entry).
+
+**Engine 21, folded in (C's observation from spec 105).** `_fill` builds a new position's row
+without `last_price` or `unrealised_pnl`, and `_mark` adds `qty × entry_price` to the
+portfolio value for that row without writing the mark onto it. So engine 19 stores the fill
+tick's position with both columns NULL while `_mark`'s docstring says "`last_price` on a
+position that has existed for no time is the fill price" and the equity row values it there.
+Checked before changing it, for a reason the docstring might be the wrong half: the bid is
+the mark for every *existing* position, but the fill-tick valuation at the price paid is the
+documented design, it is what spec 105's continuity criterion is built on (that criterion
+accepts a NULL mark only when the equity row valued the position at cost, and otherwise reads
+`last_price`), and engine 22 does not read `last_price` at all. No reason found to change the
+docstring; the stored row is the half that is wrong.
+
+### Spec 106, fix — engine 11 blocks on an absent balance in every mode; engine 21 stores the fill-tick mark
+
+**Agent:** B (session 5) · **Task:** spec 106 · **Date:** 2026-09-16
+
+**Fix, engine 11.** `RiskEngine._balances(exchange)` returns the published map or raises
+`MissingInputError("exchange.balances: engine 1 published no balance this tick, and no mode
+substitutes one (invariant 2)")`. The paper branch is gone, and with it
+`PAPER_STARTING_BALANCES_KEY` and `PAPER_MODE` (nothing else in the engine read them; the
+broker has its own copy of the key name). `_read_inputs` and `_reject` no longer thread a
+fallbacks tuple. The README's "balance fallback" section is replaced by the rule, the worked
+example, and why "unreachable" was not enough. The four `tests/verify/` patcher anchors on
+this engine's text (`if qty < inputs.ordermin:`, `approved=False,⏎ordermin=inputs.ordermin,`,
+`inputs,⏎REASON_BELOW_ORDERMIN,`, and `if self.approved:⏎for field, value in (` in contracts)
+are untouched, and `tests/verify/test_phase3_criteria.py -k risk` is green (6 passed).
+
+**Decision: `FALLBACK_BALANCE_FROM_PAPER` and `RiskSizing.fallbacks_used` are removed, not
+kept empty.** The spec allowed removal only if engine 19 and the console do not read the
+field. Checked in the code: `RejectionRow` has no `fallbacks_used`, the `rejections` table
+has no such column (only `trades` does, migration 0001), `MemoryEngine._write_rejection`
+reads `reason_code` and the four economics fields and nothing else, engine 16 reads `qty`
+and `approved`, the console reads the store, and `scripts/verify.py` never reads it from
+this payload (the one `fallbacks_used` in `tests/verify/test_phase3_criteria.py` is inside a
+stub engine 10). So it had no producer and no reader. Keeping it always empty would have
+published "no fallback fired" on a record that cannot say otherwise. `test_decision.py`
+re-validates engine 11's real payload through `RiskSizing` with `extra="forbid"` and is
+green, because the payload no longer carries the key either.
+
+**Line endings.** `engines/risk/engine.py`, `contracts.py`, `README.md` and
+`tests/engines/test_risk.py` were uniformly CRLF in the working tree and stay CRLF: edited
+through a byte-level helper (`scratchpad/b106/crlf_edit.py`) that edits an LF view and
+writes the file's own ending back, re-counted after every write (545/0, 300/0, 289/0,
+1321/0). Engine 21's files are LF and stay LF. `engines/cost/engine.py` not touched.
+
+**Tests, `tests/engines/test_risk.py`.** Replaced: the paper-fallback test, the live-mode
+block (now one parametrisation), "a rejection on a fallback tick still records the
+fallback", "an approved sizing records no fallback", and the GBP "the map names no such
+currency" test (its subject was the removed config map). Added:
+
+- `test_after_a_paper_fill_a_tick_with_no_published_balance_blocks[the ledger cannot answer |
+  the ledger answers]` — **the test that would have caught it.** Engine 19's rows for one
+  executed fill are written through the real row models (0.06664 BTC at 50,000.00, fee
+  3.6652: cash 1,664.3348, equity 4,996.3348, one open position), a second entry rests on
+  ETH/USD with a print through its limit, and the order client is the real `PaperBroker`,
+  so engine 1's balance is the ledger. A precondition asserts the witness sits in the
+  defect's window: the notional sized from equity (3,330.889…) is above the cash held and
+  below `paper.starting_balances`. One input differs: whether `TradeVolume` answers. It
+  does → the ledger is 1,664.3348 − 198.4356 = 1,465.8992 and the refusal is
+  `insufficient_quote_balance` naming that figure; it does not → engine 1 publishes no
+  balance and the refusal is `risk_inputs_unavailable` naming the absence. No `qty` either way.
+- `test_a_failed_balance_fetch_blocks_in_every_mode_and_names_the_absence[paper|live|replay]`
+  — the whole payload pinned to `{reason_code, approved: False}`.
+- `test_the_same_paper_tick_with_its_balance_published_is_sized` — the pass half.
+- `test_a_missing_balance_is_refused_before_anything_is_sized` — `ordermin` 500 plus no
+  balance must report the absence, not `below_ordermin`.
+- `test_an_approval_publishes_no_fallback_field` — the approved key set, pinned.
+- The EUR test now asserts the reason names `exchange.balances.EUR` and **not** the absent
+  map, so the two `risk_inputs_unavailable` causes are told apart.
+
+**Fix, engine 21.** `_mark`'s loop over this tick's fills now writes `last_price` (the fill
+price) and `unrealised_pnl` (`qty × (mark − entry)`, which is zero) onto the row, from the
+same `mark` it adds to `positions_value`, and adds the zero to the unrealised total. The
+docstring and README say the row now agrees. Test:
+`test_a_position_opened_by_this_ticks_fill_is_stored_marked_at_its_fill_price` runs engine 21
+and then the real engine 19 over the real store, reads the position back, and asserts
+`last_price == 99.00` (the bid is 99.99, so a bid mark fails too), `unrealised_pnl == 0`,
+and that the equity row engine 19 wrote values the position at `qty × last_price`.
+
+**What the neighbours said, after the change.** `tests/verify/test_phase6_criteria.py -k
+equity`: `5 passed, 35 deselected` (`logs/verify/b106-phase6-equity.log`). A's
+`tests/engines/test_trade_chain_rehearsal.py`: `7 passed` (`logs/verify/b106-A-rehearsal.log`).
+The criterion itself, run directly: **PASS**, "fee 3.6656556492501 + 26.26015939 x |mark
+126.9 - fill 126.9|" (`logs/verify/b106-criterion-105.log`). Scout, decision, feature-chain
+rehearsal, exit, execution, reason prose and `tests/clients/paper/`: `466 passed`.

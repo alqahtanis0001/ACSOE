@@ -33,7 +33,7 @@ notional", and $5,000 x 1% / 1.5% is $3,333.33.
 | Candidate pair | `state["scout"]["pair"]` | 7 `scout` (B) |
 | `ordermin`, `costmin`, `lot_decimals` | `state["exchange"]["pair_rules"]["pairs"][pair]` | 1 `exchange` (A), from `AssetPairs` |
 | Quote currency | `state["exchange"]["pair_rules"]["pairs"][pair]["quote"]` | 1 `exchange` (A) |
-| Quote balance | `state["exchange"]["balances"][quote]` | 1 `exchange` (A) |
+| Quote balance | `state["exchange"]["balances"][quote]` — in paper mode, the paper broker's ledger | 1 `exchange` (A) |
 | Entry price — **ask** for sizing, **bid** for `costmin` | `state["market_sensor"]["quotes"][pair]` | 3 `market_sensor` (A) |
 | Total equity | `store.latest_equity_snapshot()` | 19 `memory`, Phase 4 |
 | Open position count | `store.count_open_positions()` | 19 `memory`, Phase 4 |
@@ -59,7 +59,9 @@ added by spec 89 are there for the same reason and from the same tables.
 ## Output written to `state["risk"]`
 
 On approval: `pair`, `approved`, `qty`, `notional`, `value_at_bid`, `risk_amount`,
-`ordermin`, `costmin`, `reason_code`, `fallbacks_used`.
+`ordermin`, `costmin`, `reason_code`. On a refusal: `pair`, `approved`, `ordermin`,
+`costmin`, `reason_code` — or, when an input is missing, only `approved` and
+`reason_code`.
 
 `notional` and `value_at_bid` are **two different numbers and both are published**.
 `notional` is `qty x ask`, the cash the order commits at the worst price the buy could
@@ -120,7 +122,8 @@ In order, because the order is part of the behaviour:
 8. Any input absent, null or unparseable — `risk_inputs_unavailable`. A published `null`
    `ordermin` means the `AssetPairs` fetch failed, and invariant 2 gives pair rules no
    fallback at all; it must never be readable as zero, which would make every position
-   trivially large enough.
+   trivially large enough. **An absent balance is one of these, in every mode** — see the
+   section below.
 
 ## One position per pair — spec 89, and it was enforced nowhere
 
@@ -215,41 +218,51 @@ absent pair or a non-positive price is a block.** Never a fallback, and never a 
 carried over from a previous tick: invariant 2 gives the spread no fallback in any mode,
 and a stale price is a fabricated one.
 
-## The balance fallback — the only one left in the system
+## No published balance blocks, in every mode — there is no fallback
 
-Spec 37 retired invariant 2's fee-tier row on 2026-09-10. Pair rules block, the spread
-blocks, and the fee tier now blocks too, so **balance is the last remaining paper-mode
-fallback in this project — and until spec 41 nothing implemented it.** It fell between two
-correct decisions: engine 1 deliberately applies no fallback of its own, on the stated
-grounds that the consumer is the one that has to record which fired, and the consumer was
-reading a `fallbacks_used` key engine 1 never published.
+**The rule.** When `state["exchange"]["balances"]` is absent, this gate blocks with
+`risk_inputs_unavailable`, and the reason names the absence: *missing exchange.balances:
+engine 1 published no balance this tick, and no mode substitutes one (invariant 2)*. Paper,
+live and replay alike. In paper mode the balance engine 1 publishes is the paper broker's
+ledger — `paper.starting_balances` adjusted by every fill the broker has executed — and when
+the broker cannot answer (a fill is due and the fee tier needed to charge it did not return)
+engine 1 publishes none, exactly as a failed `Balance` call does in live.
 
-| Mode | `state["exchange"]["balances"]` absent | Recorded on the decision |
-|---|---|---|
-| `paper` | Size against `paper.starting_balances` | `balance_from_paper_starting_balances` |
-| `live` | **Block** | — |
-| `replay` | **Block** | — |
+A `balances` map that was published and names no EUR is a different fact — an account
+holding nothing in EUR — and blocks naming the currency.
 
-`live` blocks because invariant 2 says a failed fetch always blocks in live mode, and the
-one exception in that document is rule 14's emergency liquidation, which is not this.
-`replay` blocks because the table in invariant 2 is a *paper-mode* table and a gate that
-is unsure refuses; that reading is the implementer's and is flagged as such rather than
-presented as settled.
+**The reason: the fallback this replaced would have broken invariant 6.** Until spec 106,
+in paper mode, an absent map was replaced by the raw `paper.starting_balances` config and
+recorded as `balance_from_paper_starting_balances`. That map is the ledger's *opening*
+value. The affordability check (gate condition 4) compares the sizing against whatever
+balance it is given, so after one executed fill:
 
-Three things this fallback is not:
+| | |
+|---|---|
+| paper account opens | 5,000 |
+| first entry fills, another pair | ~3,332 spent, ~1,664 held |
+| equity (cash + position), which sizing reads | ~4,996 |
+| second candidate: `4,996 × 1% / 1.5%` | ~3,331 notional |
+| checked against the fallback | `3,331 > 5,000`? no — **approved** |
 
-- **It is not the "currency missing from the map" case.** A `balances` map that was
-  published and simply names no EUR is an account holding nothing in EUR, not an outage.
-  That blocks, and it never reaches the fallback. Only an *absent* `balances` — engine 1's
-  `null`, meaning the `Balance` call failed — does.
-- **It is not silent.** Invariant 2: every decision affected by a fallback records which
-  one fired. That includes rejections, which are the rows this system produces most of: a
-  candidate refused on a tick where the fallback fired carries it too.
-- **It is not yet adjusted by fills.** Invariant 2 says the map is used "adjusted by
-  simulated fills". The fill simulator is **Phase 6** and does not exist, so this engine
-  uses the configured map exactly as written. The gap is recorded here rather than left to
-  be discovered: a paper account that has traded will size against its starting balance
-  until Phase 6 lands.
+— a ~3,331 position against ~1,664 held, which invariant 6 forbids in as many words. The
+branch dated from Phase 3, when its docstring deferred "adjusted by simulated fills" to
+Phase 6; Phase 6 put the ledger in the broker instead, so what was left here was a second,
+wrong answer to what the account holds. **Removed by the operator on 2026-09-16.**
+
+**Why "it is unreachable" was not enough.** On the only paper path that publishes no balance
+today, engine 7 excludes every pair and engine 10 has no fee tier, so the chain stops before
+this gate. That made engines 7 and 10 load-bearing for an invariant neither owns: an
+unrelated change to either would have armed the branch with nothing going red. The question
+that found it was *what would the branch do if reached*, not *can it be reached*.
+`test_after_a_paper_fill_a_tick_with_no_published_balance_blocks` is the test that would have
+caught it — it fails the balance on an account that has already traded, which is the one
+kind of account where the two answers differ. The old fallback test used an account that had
+never traded, where they agree.
+
+**`fallbacks_used` went with it.** It named that fallback and nothing else, and nothing read
+it: `rejections` has no such column, and engines 19 and 16 and the console never read it
+from this payload. The payload no longer carries the key.
 
 ## Two rules that are easy to get subtly wrong
 

@@ -33,6 +33,7 @@ import pytest
 from tests.harness.fake_kraken import FakeKrakenClient
 
 from acsoe.clients.kraken.contracts import QuoteTick, TradeTick
+from acsoe.clients.paper.broker import PaperBroker
 from acsoe.clients.store.client import StoreClient
 from acsoe.clients.store.contracts import (
     EquitySnapshotRow,
@@ -43,12 +44,12 @@ from acsoe.clients.store.contracts import (
     OrderType,
     PositionRow,
     PositionStatus,
+    to_micros,
 )
 from acsoe.core.contracts import EngineStatus
 from acsoe.engines.exchange.engine import ExchangeEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
 from acsoe.engines.risk.contracts import (
-    FALLBACK_BALANCE_FROM_PAPER,
     REASON_BELOW_COSTMIN,
     REASON_BELOW_ORDERMIN,
     REASON_ENTRY_RESTING_ON_PAIR,
@@ -412,7 +413,6 @@ def test_a_sub_ordermin_position_is_rejected_not_resized(
         "ordermin",
         "costmin",
         "reason_code",
-        "fallbacks_used",
     }, "a refused candidate must publish no quantity field at all, in any form"
     assert Decimal(result.data["ordermin"]) == Decimal("500")
 
@@ -603,8 +603,8 @@ def test_the_balance_is_read_per_quote_currency(
     *that* quote currency. A EUR-quoted pair may not spend the USD pot.
 
     Note what this is **not**: a failed `Balance` fetch. The map was published and simply
-    names no EUR, which is an account holding nothing rather than an outage, so it blocks
-    rather than reaching the paper-mode fallback below.
+    names no EUR, which is an account holding nothing rather than an outage, so the reason
+    names the currency and not the absent map the tests below refuse on.
     """
     eur_pair = "SOL/EUR"
     kraken.set_pair_rule(
@@ -624,8 +624,8 @@ def test_the_balance_is_read_per_quote_currency(
 
     assert result.blocks_trading is True
     assert result.data["reason_code"] == REASON_INPUTS_UNAVAILABLE
-    assert "EUR" in (result.reason or "")
-    assert FALLBACK_BALANCE_FROM_PAPER not in (result.reason or "")
+    assert "exchange.balances.EUR" in (result.reason or "")
+    assert NO_BALANCE_PUBLISHED not in (result.reason or "")
 
 
 def test_a_pair_quoted_in_another_currency_is_refused_for_want_of_a_rate(
@@ -918,69 +918,240 @@ def test_an_unreadable_orders_table_blocks_rather_than_reading_as_no_exposure(
 
 
 # --------------------------------------------------------------------------- #
-# The balance fallback — invariant 2's last surviving one, built by spec 41
+# No published balance blocks, in every mode — spec 106
+#
+# Invariant 2 has had no balance fallback since the operator's ruling of 2026-09-16.
+# Until then this section tested a paper-mode substitution of `paper.starting_balances`
+# on an account that had never traded — the one account on which the configured balance
+# and the real one agree, so those tests could not have shown what the substitution did
+# wrong. The first test below uses an account that has already traded, which is the
+# witness that can.
 # --------------------------------------------------------------------------- #
 
+#: How the refusal names an absent map. A currency missing from a *published* map is also
+#: `risk_inputs_unavailable`, so the reason is what tells the two facts apart —
+#: `code-standards.md`: where one code has several causes, assert the cause.
+NO_BALANCE_PUBLISHED = "missing exchange.balances: engine 1 published no balance this tick"
 
-def test_paper_mode_falls_back_to_the_configured_starting_balances_and_records_it(
-    risk: RiskEngine, sized_context: Any, kraken: FakeKrakenWithStream
+#: The first fill, on another pair: 0.06664 BTC at 50,000.00 is 3,332.00, plus a 3.6652
+#: fee. Cash is then 5,000.00 - 3,335.6652 = 1,664.3348, and equity — what the sizing
+#: reads — is that cash plus the position at cost, 4,996.3348. The lead's worked example
+#: for spec 106, in exact figures.
+FIRST_FILL_QTY = Decimal("0.06664")
+FIRST_FILL_PRICE = Decimal("50000.00")
+FIRST_FILL_FEE = Decimal("3.6652")
+CASH_AFTER_FIRST_FILL = (
+    Decimal(EQUITY) - FIRST_FILL_QTY * FIRST_FILL_PRICE - FIRST_FILL_FEE
+)
+EQUITY_AFTER_FIRST_FILL = CASH_AFTER_FIRST_FILL + FIRST_FILL_QTY * FIRST_FILL_PRICE
+
+#: The second entry, resting on a third pair, with a trade printed through its limit so the
+#: paper broker must price a fill before it can say what the account holds. Tier 3 maker.
+DUE_PAIR = "ETH/USD"
+DUE_QTY = Decimal("0.1")
+DUE_LIMIT = Decimal("1980.00")
+MAKER = "0.0022"
+DUE_SPEND = DUE_QTY * DUE_LIMIT + DUE_QTY * DUE_LIMIT * Decimal(MAKER)
+
+MICROS = 1_000_000
+
+
+def _decimal(value: Any) -> Decimal:
+    return Decimal(repr(value) if isinstance(value, float) else str(value))
+
+
+def an_account_that_has_already_traded(
+    context: Any, store: StoreClient, kraken: FakeKrakenWithStream, clock: Any
 ) -> None:
-    """The paper half of the pair.
+    """The store and the order client as the daemon would have them, one fill later.
 
-    Spec 37 retired "assume tier 1", so balance is the only row of invariant 2's
-    paper-mode table that still substitutes a value instead of refusing — and until spec
-    41 nothing in the system implemented it. Engine 1 deliberately applies no fallback of
-    its own and leaves it to the consumer that has to record which one fired, so this is
-    the consumer doing both halves: substituting, and recording.
+    Engine 19's rows are written by hand, through the real row models, because engine 19
+    does not run here: the first entry `filled`, the position it opened, and the equity row
+    that counts it. The order client is the real `PaperBroker` wrapping the fake, so what
+    engine 1 publishes as the balance is the paper ledger, computed from those rows — not
+    a figure this file asserts into existence.
 
-    `paper.starting_balances` is `{USD: "5000.00"}` in the committed config, which is the
-    same figure the balances carry, so the sizing is unchanged and the *only* observable
-    difference is the recorded fallback. That is deliberate: it isolates the recording.
+    A second entry rests on another pair with a trade printed through its limit, so the
+    broker has a fill to price before it can answer. That is invariant 2's own example of
+    the broker being unable to answer: when the fee tier does not return, engine 1
+    publishes no balance.
     """
-    kraken.fail("balance")
+    now = to_micros(context.now)
+    store.write_order(
+        OrderRow.model_validate(
+            {
+                **entry_order(1_001, OTHER_PAIR).model_dump(),
+                "order_id": "paper-1001",
+                "status": OrderStatus.FILLED,
+                "qty": FIRST_FILL_QTY,
+                "limit_price": FIRST_FILL_PRICE,
+                "filled_qty": FIRST_FILL_QTY,
+                "avg_fill_price": FIRST_FILL_PRICE,
+                "fee": FIRST_FILL_FEE,
+                "placed_at": now - 20 * 60 * MICROS,
+                "closed_at": now - 15 * 60 * MICROS,
+            }
+        )
+    )
+    store.write_position(
+        PositionRow.model_validate(
+            {
+                **open_position("pos-btc", OTHER_PAIR).model_dump(),
+                "qty": FIRST_FILL_QTY,
+                "entry_price": FIRST_FILL_PRICE,
+                "target_price": FIRST_FILL_PRICE * Decimal("1.03"),
+                "stop_price": FIRST_FILL_PRICE * Decimal("0.985"),
+                "entry_userref": 1_001,
+            }
+        )
+    )
+    store.write_equity_snapshot(
+        EquitySnapshotRow(
+            cycle_id=2,
+            run_id="test-run",
+            ts=now - 60 * MICROS,
+            currency="USD",
+            equity=EQUITY_AFTER_FIRST_FILL,
+            peak_equity=Decimal(EQUITY),
+            cash=CASH_AFTER_FIRST_FILL,
+            positions_value=FIRST_FILL_QTY * FIRST_FILL_PRICE,
+            unrealised_pnl=Decimal("0"),
+            realised_pnl_cum=Decimal("0"),
+            open_position_count=1,
+            updated_at=now - 60 * MICROS,
+        )
+    )
+    store.write_order(
+        OrderRow.model_validate(
+            {
+                **entry_order(1_002, DUE_PAIR).model_dump(),
+                "order_id": "paper-1002",
+                "qty": DUE_QTY,
+                "limit_price": DUE_LIMIT,
+                "placed_at": now - 2 * 60 * MICROS,
+            }
+        )
+    )
+    kraken.set_fee_tier(tier=3, maker_fee_pct=MAKER, taker_fee_pct="0.0038")
+    # The best bid sits a cent below the resting limit, so the stream's print at the bid
+    # is strictly below it and after `placed_at`: the broker must fill it.
+    kraken.set_order_book(DUE_PAIR, bids=[("1979.99", "5")], asks=[("1980.01", "5")])
+    kraken.stream_pairs([PAIR, DUE_PAIR], at=context.now - timedelta(seconds=60))
+    context.clients.kraken = PaperBroker(
+        kraken, store=store, config=context.config, clock=clock
+    )
+
+
+@pytest.mark.parametrize(
+    "ledger_answers",
+    [False, True],
+    ids=["the ledger cannot answer", "the ledger answers"],
+)
+def test_after_a_paper_fill_a_tick_with_no_published_balance_blocks(
+    risk: RiskEngine,
+    sized_context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    fixed_clock: Any,
+    ledger_answers: bool,
+) -> None:
+    """**The test that would have caught the fallback** — spec 106 step 3.
+
+    A paper account that has already traded: ~3,335 of 5,000 spent, ~1,664 held, equity
+    ~4,996. The candidate is sized from equity, ~3,331. The precondition below states the
+    window the defect lived in: that notional is **more** than the account holds and
+    **less** than `paper.starting_balances`. Against the fetched ledger the gate refuses
+    it; against the configured map, which is what the removed fallback supplied when
+    engine 1 published nothing, it approved it — invariant 6 broken by the gate that
+    enforces it.
+
+    One input differs between the two cases: whether the fee tier that prices the due
+    fill returns. When it does, the ledger answers and the refusal is the affordability
+    rule, naming what the account holds. When it does not, engine 1 publishes no balance
+    and the refusal is the absence — never a size.
+    """
+    assert sized_context.mode == "paper"
+    an_account_that_has_already_traded(sized_context, store, kraken, fixed_clock)
+    if not ledger_answers:
+        kraken.fail("trade_volume")
     state = build_state(sized_context)
+
+    config = sized_context.config
+    notional = (
+        EQUITY_AFTER_FIRST_FILL
+        * _decimal(config.get("trading.risk_fraction_per_trade"))
+        / _decimal(config.get("barriers.stop_pct"))
+    )
+    opening = _decimal(config.get("paper.starting_balances")["USD"])
+    assert CASH_AFTER_FIRST_FILL < notional < opening, (
+        "the witness must sit where the configured balance and the real one disagree"
+    )
+
+    result = risk.process(sized_context, state)
+
+    assert result.blocks_trading is True
+    assert result.data["approved"] is False
+    assert "qty" not in result.data
+    if ledger_answers:
+        held = Decimal(state["exchange"]["balances"]["USD"])
+        assert held == CASH_AFTER_FIRST_FILL - DUE_SPEND, "the ledger counts both fills"
+        assert result.data["reason_code"] == REASON_INSUFFICIENT_QUOTE_BALANCE
+        assert f"the account holds {held:f}" in (result.reason or "")
+    else:
+        assert state["exchange"]["balances"] is None, "the broker could not answer"
+        assert result.data["reason_code"] == REASON_INPUTS_UNAVAILABLE
+        assert NO_BALANCE_PUBLISHED in (result.reason or "")
+
+
+@pytest.mark.parametrize("mode", ["paper", "live", "replay"])
+def test_a_failed_balance_fetch_blocks_in_every_mode_and_names_the_absence(
+    risk: RiskEngine, sized_context: Any, kraken: FakeKrakenWithStream, mode: str
+) -> None:
+    """The plain block, in each mode, with the whole payload pinned.
+
+    Invariant 2: every row of the paper-mode table blocks, and live always did. The payload
+    is compared whole, so a refusal that also carried a size — or any key naming a
+    substitution — fails here rather than passing on the status alone.
+    """
+    import dataclasses
+
+    kraken.fail("balance")
+    context = dataclasses.replace(sized_context, mode=mode)
+    state = build_state(context)
     assert state["exchange"]["balances"] is None, "engine 1 publishes null, never a default"
+
+    result = risk.process(context, state)
+
+    assert result.status is EngineStatus.BLOCK
+    assert result.blocks_trading is True
+    assert result.data == {"reason_code": REASON_INPUTS_UNAVAILABLE, "approved": False}
+    assert NO_BALANCE_PUBLISHED in (result.reason or "")
+
+
+def test_the_same_paper_tick_with_its_balance_published_is_sized(
+    risk: RiskEngine, sized_context: Any
+) -> None:
+    """The pass half of the test above: one input differs, the `Balance` call answering."""
+    state = build_state(sized_context)
+    assert state["exchange"]["balances"] is not None
 
     result = risk.process(sized_context, state)
 
     assert result.blocks_trading is False
     assert result.data["approved"] is True
-    assert result.data["fallbacks_used"] == [FALLBACK_BALANCE_FROM_PAPER]
     assert Decimal(result.data["qty"]) == Decimal("33.33333333")
 
 
-def test_live_mode_blocks_on_the_same_failed_balance_fetch(
+def test_a_missing_balance_is_refused_before_anything_is_sized(
     risk: RiskEngine, sized_context: Any, kraken: FakeKrakenWithStream
 ) -> None:
-    """The live half, and the pair is why it exists.
+    """Formerly "a rejection on a fallback tick still records the fallback".
 
-    The paper test alone passes against an implementation that never looks at the mode and
-    always falls back — which would be invariant 2 inverted, since a failed fetch in live
-    mode always blocks and the one exception in that document is rule 14's liquidation.
-    So the two are written as a pair against the same failure.
-    """
-    import dataclasses
-
-    kraken.fail("balance")
-    live = dataclasses.replace(sized_context, mode="live")
-
-    result = risk.process(live, build_state(live))
-
-    assert result.blocks_trading is True
-    assert result.data["reason_code"] == REASON_INPUTS_UNAVAILABLE
-    assert "live" in (result.reason or "")
-    assert "qty" not in result.data
-
-
-def test_a_rejection_on_a_fallback_tick_still_records_the_fallback(
-    risk: RiskEngine, sized_context: Any, kraken: FakeKrakenWithStream
-) -> None:
-    """Invariant 2: *every decision* affected by a fallback records which fallback fired.
-
-    A rejection is a decision. Recording the fallback only on approvals would leave the
-    `rejections` rows — which are the research dataset — unable to say that the tick was
-    priced against a configured balance rather than a fetched one, and rejections are the
-    rows this system produces most of.
+    With this `ordermin` a sized candidate is refused `below_ordermin` —
+    `test_a_sub_ordermin_position_is_rejected_not_resized` is the twin with the balance
+    published. With no balance there is nothing to size against, so the refusal must be
+    the absence: a sizing refusal here would mean a size was computed from a balance
+    nobody published.
     """
     kraken.fail("balance")
     kraken.set_pair_rule(PAIR, ordermin="500")
@@ -988,51 +1159,34 @@ def test_a_rejection_on_a_fallback_tick_still_records_the_fallback(
     result = risk.process(sized_context, build_state(sized_context))
 
     assert result.blocks_trading is True
-    assert result.data["reason_code"] == REASON_BELOW_ORDERMIN
-    assert result.data["fallbacks_used"] == [FALLBACK_BALANCE_FROM_PAPER]
+    assert result.data["reason_code"] == REASON_INPUTS_UNAVAILABLE
+    assert NO_BALANCE_PUBLISHED in (result.reason or "")
 
 
-def test_an_approved_sizing_with_no_failure_records_no_fallback(
+def test_an_approval_publishes_no_fallback_field(
     risk: RiskEngine, sized_context: Any
 ) -> None:
-    """The other side of the recording: a fallback that did not fire is not reported.
+    """`fallbacks_used` left the payload with the fallback it named (spec 106).
 
-    Worth one test because the old implementation read a key nothing published and so
-    reported `[]` on every tick including the ones where a fallback *should* have fired.
-    An empty list means something now.
+    It had no reader: `rejections` has no such column, and engines 16 and 19 and the
+    console never read it from here. An always-empty list would read as "no fallback
+    fired" on a record that can no longer record one. The refusal's key set is pinned in
+    `test_a_sub_ordermin_position_is_rejected_not_resized`.
     """
     data = risk.process(sized_context, build_state(sized_context)).data
 
     assert data["approved"] is True
-    assert data["fallbacks_used"] == []
-
-
-def test_the_fallback_is_not_applied_when_the_map_names_no_such_currency(
-    risk: RiskEngine, sized_context: Any, kraken: FakeKrakenWithStream
-) -> None:
-    """Falling back to a map that does not name this pair's quote currency would be
-    substituting nothing for something. `paper.starting_balances` is `{USD: ...}`, so a
-    GBP-quoted pair whose `Balance` fetch failed blocks and names the currency."""
-    gbp_pair = "SOL/GBP"
-    kraken.set_pair_rule(
-        gbp_pair,
-        base="SOL",
-        quote="GBP",
-        ordermin="0.05",
-        costmin="5.00",
-        tick_size="0.001",
-        lot_decimals=8,
-        pair_decimals=3,
-    )
-    kraken.set_order_book(gbp_pair, bids=[(DEFAULT_BID, "500")], asks=[(DEFAULT_ASK, "500")])
-    kraken.stream_pairs([gbp_pair], at=sized_context.now - timedelta(seconds=60))
-    kraken.fail("balance")
-
-    result = risk.process(sized_context, build_state(sized_context, pair=gbp_pair))
-
-    assert result.blocks_trading is True
-    assert result.data["reason_code"] == REASON_INPUTS_UNAVAILABLE
-    assert "GBP" in (result.reason or "")
+    assert set(data) == {
+        "pair",
+        "approved",
+        "qty",
+        "notional",
+        "value_at_bid",
+        "risk_amount",
+        "ordermin",
+        "costmin",
+        "reason_code",
+    }
 
 
 # --------------------------------------------------------------------------- #

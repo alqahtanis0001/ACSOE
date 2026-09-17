@@ -130,6 +130,12 @@ own docstring says it does. The same rule per position: no `last_price` and no
 `unrealised_pnl` on a position with no quote, never a price carried over from a previous
 tick.
 
+**A position opened by this tick's fill is valued at the fill price, and its row says
+so:** `last_price` is the fill price and `unrealised_pnl` is zero, from the same mark the
+totals use, so the stored position and the equity row describe one valuation. It is not
+re-marked at the bid until the next tick. Spec 106: before it, the row carried neither and
+engine 19 stored both NULL while the totals valued the position at cost.
+
 **`hold_reason` is null rather than omitted** on a tick that did not hold. Null is the
 answer there; an omission is indistinguishable from an engine that never ran.
 
