@@ -122,7 +122,6 @@ class CostEngine(BaseEngine):
             hurdle_pct=hurdle,
             clears_hurdle=clears,
             reason_code=None if clears else self._reason_code(inputs),
-            fallbacks_used=self._fallbacks(),
         )
         duration_ms = (time.perf_counter() - started) * 1000.0
 
@@ -216,28 +215,6 @@ class CostEngine(BaseEngine):
             return Decimal(str(value))
         except (InvalidOperation, ValueError) as exc:
             raise MissingInputError(f"config {HURDLE_MULTIPLE_KEY} is not a number: {value!r}") from exc
-
-    def _fallbacks(self) -> tuple[str, ...]:
-        """The fallbacks **this engine applied**. There are none, and that is the point.
-
-        Invariant 2: "Every decision affected by a fallback records which fallback
-        fired", and `CostAssessment.fallbacks_used` is where this engine would record
-        it. It is a payload field, not a `rejections` column: `fallbacks_used` is a
-        `trades` column (migration 0001), and nothing in `src/` reads this one.
-
-        Spec 37 retired the fee-tier row of the paper-mode table on 2026-09-10 —
-        `AssetPairs` carries no fee schedule, so there was no runtime source
-        the named tier could have come from, and the only way to honour that row was to
-        write a fee percentage into the code. A confirmed pair with no fee data now
-        blocks, in every mode, and this gate has no fallback left to apply.
-
-        It used to read `state["exchange"]["fallbacks_used"]`, which **engine 1 does not
-        publish and never did**, so it returned an empty tuple on every tick regardless.
-        The dead read is deleted rather than re-pointed at `failed_fetches`: a failed
-        fetch is not a fallback, and putting one in this column would misreport exactly
-        the thing invariant 2 asks to be recorded.
-        """
-        return ()
 
     # ------------------------------------------------------------------ reasons
 

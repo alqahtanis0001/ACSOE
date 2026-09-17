@@ -2801,3 +2801,142 @@ writing rows, then applying 5 alone; the CHECK refusing five shapes of wrong val
 NULL; the round trip asserting the stored text so a writer that dropped the field and let the
 database default fill it fails the `after_exit` case. Named here because an unswept area is a
 hole with a shape the next reader needs.
+
+### An always-empty `fallbacks_used` is a claim that looks true and means nothing
+
+**Agent:** B · **Task:** spec 111 · **Date:** 2026-09-17
+
+**What happened.** Engine 10 `cost` published `fallbacks_used: []` on every tick. Spec 108
+reported it to the lead rather than removing it — removing a published field changes the shape —
+and the operator ruled on it as Q1: the field goes.
+
+**Why.** Three facts, each checked in the code rather than in a description of it. It has **no
+producer of a value**: `_fallbacks()` returned `()` unconditionally, and had done since spec 40
+deleted the dead read of `state["exchange"]["fallbacks_used"]`, a key engine 1 does not publish
+and never did. It has **no reader**: `rejections` carries no such column (migration 0001 puts
+`fallbacks_used` on `trades`), engine 19 harvests the four `ECONOMICS_FIELDS` and `reason_code`
+from a blocker's payload and nothing else, and engine 16 and the console never read it from here.
+And there is **nothing left for it to record**: spec 37 retired the fee-tier row of invariant 2's
+paper-mode table and spec 106 removed the last paper-mode fallback in the system, so this gate
+applies none, in any mode.
+
+What makes it worth removing rather than leaving is the third fact meeting the first. An empty
+list reads as *no fallback fired on this decision* — a statement about the tick. It is really a
+statement about the field: nothing could ever have fired, because nothing can write it. A record
+that cannot record the thing it is named for answers the question anyway, and answers it
+reassuringly. Engine 22 `exit`'s `fallbacks_used` stays, and the contrast is the point: there the
+list is filled from the fetch failures rule 14 tolerates during a liquidation, so an empty one
+there is a measurement.
+
+**The precedent is spec 106**, which removed `RiskSizing.fallbacks_used` on the same three
+findings a day earlier, and whose payload key set is now pinned by
+`test_an_approval_publishes_no_fallback_field`. This is the same removal in engine 10.
+
+**Fix.** The field, its `to_state_data` line and `_fallbacks()` are gone from
+`engines/cost/{contracts,engine}.py`; the prose in both files and in the README now says what
+is true, with the README carrying the paragraph on why it was removed rather than left as a
+harmless constant. `tests/engines/test_cost.py`'s assertion that the list was empty becomes
+`test_this_engine_publishes_no_fallback_field_and_the_key_set_is_pinned`, which asserts the key
+is **absent** and pins `COST_PAYLOAD_KEYS` as a set on both ticks that publish a full assessment,
+plus the smaller missing-input shape separately. A set rather than a `>=`: the property is
+*which* keys there are, and a `>=` is satisfied by a payload carrying an extra field nothing
+reads, which is the thing being removed.
+
+**Two mutations, both killed, both by that one test** (`logs/verify/b111-sweep-M1.log`,
+`…-M2.log`). M1 re-adds `"fallbacks_used": []` to `CostAssessment.to_state_data`:
+`1 failed, 30 passed`. M2 re-adds it to `_blocked_on_missing_input`'s payload, which is the arm
+the third assertion exists for: `1 failed, 30 passed`. Baseline `31 passed`; each arm restored
+from a byte copy in a `finally` with the sha256 compared in the same statement
+(`2965ca3c43e9e143`, `37c50de06a20739a`), one arm on disk at a time.
+
+**`tests/verify/test_phase3_criteria.py` did not go red: `48 passed` before and `48 passed`
+after** (`logs/verify/b111-phase3-criteria-{before,after}.log`). Reported rather than passed
+over, because the operator's question about it has an answer. Its `CONSTANT_FEE_COST_ENGINE`
+is a deliberately-wrong engine written to disk for the criterion to FAIL against, and it still
+publishes `"fallbacks_used": []` — a shape no real engine produces any more. It stayed green
+because `check_cost_gate_uses_live_fee_tier` reads `net_edge_pct`, `reason_code`,
+`clears_hurdle` and `hurdle_pct` and never the key set, so an extra field in the double is
+inert. That is the *double that stopped tracking what it doubles* from `code-standards.md`,
+caught at the moment it stopped tracking: harmless today, and it is C's file and C's question
+what the fake should be. Not edited.
+
+**One more place carries the old shape and is not mine:** `docs/PROJECT-STATE.md:1001` still
+lists `fallbacks_used: tuple[str, ...]` in engine 10's row of the cross-chain key table (line
+1002 lists engine 11's, which spec 106 removed). Reported to the lead.
+
+### Decision: the window/escalation tripwire asserts a config relationship, not an engine
+
+**Agent:** B · **Task:** spec 112 · **Date:** 2026-09-17
+
+**What it is for.** Invariant 14 says `safety` escalates only when there are open positions
+**or resting entry orders**, and the resting-entry half has no escalation test. It cannot have
+one on today's config: `safety` escalates after `safety.max_consecutive_data_blocks` ×
+`timeframes.loop_tick_s` = 900s of outage, and engine 21 cancels a resting entry after
+`trading.entry_unfilled_window_s` = 300s — while the manage chain is holding on the very
+`data_guard` block that is counting towards the escalation, because invariant 8's cancellation
+is a decision about elapsed time and not about price. Every resting entry is off the book long
+before an outage could escalate, so the clause is reachable only through an operator Close all,
+which `escalation_completes_during_outage` exercises.
+
+**Options.** Leave it (F1 stays a note nobody reads); write the escalation test anyway against a
+hand-built state the orchestrator cannot produce; or assert the *reason* the path is unreachable
+and let a change to either value announce itself. The operator ruled the third, and the reason is
+A's Phase 5 rule: an unreachable path earns an assertion that it is unreachable rather than a
+deletion, and the assertion has to sit on the cause.
+
+**Chose.** `test_a_resting_entry_is_cancelled_by_its_window_before_safety_could_escalate` in
+`tests/engines/test_safety.py`, asserting `trading.entry_unfilled_window_s <
+safety.max_consecutive_data_blocks × timeframes.loop_tick_s` with all three read through the real
+loader (`load_config`) from the committed `config/default.yaml`, by dotted key. No literals: a
+literal would pin this file's memory of the config rather than the config, and the change the
+test exists to notice *is* a change to the config. Reading by dotted key means `Config.get` also
+raises if any of the three is renamed, so a rename fires it as loudly as a retune.
+
+**Because** it forbids nothing and couples nothing. The failure message says in as many words
+that nothing is broken: the clause has become reachable through a `safety` escalation and now
+needs its own test.
+
+**Proven capable of failing, twice** (`logs/verify/b112-proof-W1-window-1200.log`,
+`…-W2-window-900-equal.log`). The committed config is the lead's file and other agents run in
+this checkout, so it was never edited: each arm copies `config/default.yaml` to the scratchpad
+with the window raised and re-points the test's one config-path expression at the copy for the
+length of one run, restoring `tests/engines/test_safety.py` from a byte copy in a `finally` with
+the sha256 compared in the same statement (`819d599514db3c18` both arms). W1, window 1200s:
+`1 failed`, message `trading.entry_unfilled_window_s is 1200s, which is no longer below
+safety.max_consecutive_data_blocks (15) x timeframes.loop_tick_s (60s) = 900s`. W2, window 900s —
+the boundary, because the comparison is strict and an untested boundary is a boundary nobody
+decided: `1 failed`, same message with 900s. Both name all three values and the product.
+
+**Cost.** One test that goes red on a config change that is otherwise legitimate. That is the
+point of it, and the message is written so the next reader is not misled into reverting the
+config. The lead adds a one-line pointer to the test in invariant 14.
+
+### The store's ledger docstring still described the ledger it had before spec 103
+
+**Agent:** B · **Task:** spec 110 · **Date:** 2026-09-17
+
+**What happened.** `StoreClient.filled_orders`'s docstring opened "paper mode's balance is
+`paper.starting_balances` adjusted by every **recorded** fill". That was the operator's ruling as
+first written, and it was superseded on exactly that point on 2026-09-16: the broker's balance
+includes every fill **it has executed**, recorded or not.
+
+**Why it matters more than a word.** The superseded sentence is the defect spec 103 fixed, quoted
+as the current design in the docstring of the very query the broker calls. A balance counting only
+recorded fills lags the broker by one tick — the broker decides a resting entry's fill part-way
+through a tick and engine 19 records it at the end of it — and that lag counted the notional twice
+on the fill tick, moved `peak_equity` to a figure the account never held, and froze every paper
+account on the next tick. A reader who trusted the docstring would have reintroduced it, and the
+docstring is the natural place to look for what the read is *for*.
+
+**Fix.** Rewritten to say what it now is: the recorded half of the broker's ledger, with the
+broker adding the fills it holds and the store has not seen on top; and the restart source, where
+the store is the whole ledger and a fill executed but never recorded must be absent from the
+rebuilt positions too, so the two still agree. Invariant 2 is cited for both halves.
+
+**Grep of the lane for other pre-103 wording: one hit, and it was this one.** Searched
+`clients/store/`, `clients/paper/`, `db/migrations/`, all eight of my engines and my tests for
+"adjusted by every", "recorded fill", "every recorded", "simulated fill" and "ledger". Everything
+else already reads "every fill it has executed" — `clients/paper/broker.py:129` and `:365`, and
+`engines/risk/README.md:227` — and the two remaining "simulated fill" mentions
+(`broker.py:378`, `tests/clients/paper/test_broker.py:632`) are the argument for *why* the ledger
+is unconditional in paper rather than a failure path, which is still true.

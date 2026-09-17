@@ -1,5 +1,94 @@
 # Agent B — Store and trading
 
+## Phase 6, session 8 — CLAIMED 2026-09-17, specs 111, 112, 110 in that order
+
+Claimed before any code, per rule 1. Tree clean at `df49cb4`, the full gate green when handed
+to me (13 criteria, 12 PASS, 0 FAIL, 1 PENDING). I am the first work after a green gate, so any
+red I introduce is mine and visible immediately.
+
+**Spec 111 — `CostAssessment.fallbacks_used` removed** (operator ruling on Q1). No behaviour
+change to the gate: the field is always `()`, has no producer of a value and no reader in `src/`
+or `scripts/`. `_fallbacks()` goes with it if it has no other use; the prose in
+`engines/cost/{contracts.py,engine.py,README.md}` goes; `tests/engines/test_cost.py` asserts the
+key is **absent** and pins the published key set. `tests/verify/test_phase3_criteria.py` is run
+before and after and **not edited** — if it goes red I report it and stop that thread, because a
+fake publishing a field no real engine produces is a question about what that test was asserting.
+
+**Spec 112 — the window/escalation tripwire** (operator ruling on Q2). One test in
+`tests/engines/test_safety.py` asserting `trading.entry_unfilled_window_s <
+safety.max_consecutive_data_blocks × timeframes.loop_tick_s`, all three read through the real
+config loader from `config/default.yaml`, never as literals. It forbids no change; it makes one
+visible. Proven capable of failing against a copied config with the window raised.
+
+**Spec 110 — `StoreClient.filled_orders`'s docstring**, which still says the paper balance is
+adjusted by every *recorded* fill. Since spec 103 the broker counts every fill it has executed;
+the store is the recorded half and the restart source. Prose only, plus a grep of my lane for
+other pre-103 wording.
+
+**Line endings measured in Python at claim time** (`b.count(b"\r\n")` against `b.count(b"\n")`,
+never `grep -c`): `engines/cost/contracts.py` 293 CRLF / 0 LF and `engines/cost/README.md` 146 / 0
+— **both stay CRLF**, edited through a byte-level helper. `tests/engines/test_safety.py` 1493 CRLF
+/ 0 LF, **stays CRLF**. Pure LF and staying so: `engines/cost/engine.py` (331), the store client
+(1212), `tests/engines/test_cost.py` (619), and both records. My lane is mixed, so every edit goes
+through the same LF-view helper rather than a text-mode round trip.
+
+Records: this file and `docs/build-log/phase-6/b-store.md`. Scratch `...\scratchpad\`; logs
+`logs/verify/b111-*`, `b112-*`, `b110-*`. Not touched: `core/`, `bootstrap.py`, `config/` (read
+only), `context/*` beyond this file, `scripts/verify.py`, `tests/verify/**`, other lanes. No
+commit; no full gate from me, by instruction.
+
+### Specs 111, 112, 110 — DONE 2026-09-17, not committed (the lead commits)
+
+- **Spec 111.** `CostAssessment.fallbacks_used`, its `to_state_data` line and
+  `CostEngine._fallbacks()` are gone; `_fallbacks` had no other caller. The prose in
+  `engines/cost/{contracts.py,engine.py,README.md}` follows, with the README carrying the
+  paragraph on why the field was removed rather than left as a harmless constant.
+  `test_this_engine_applies_no_fallback_and_says_so_by_recording_none` becomes
+  **`test_this_engine_publishes_no_fallback_field_and_the_key_set_is_pinned`**: the key is
+  asserted **absent**, and `COST_PAYLOAD_KEYS` is pinned as a set on both ticks that publish a
+  full assessment, with the smaller missing-input shape pinned separately.
+  **Nothing still reads the field**: `rejections` has no such column (migration 0001 puts it on
+  `trades`), engine 19 harvests the four `ECONOMICS_FIELDS` plus `reason_code`, and engine 16 and
+  the console never read it from here.
+  **Two mutations, both KILLED, both by that one test** — M1 re-adds the key to the priced
+  payload, M2 to the missing-input payload; `1 failed, 30 passed` each against a `31 passed`
+  baseline, each restored from a byte copy with the sha256 compared in the same statement.
+- **`tests/verify/test_phase3_criteria.py` did not go red: `48 passed` before, `48 passed`
+  after**, not edited. Its `CONSTANT_FEE_COST_ENGINE` still publishes `"fallbacks_used": []` — a
+  shape no real engine produces now. It stayed green because `check_cost_gate_uses_live_fee_tier`
+  reads `net_edge_pct`, `reason_code`, `clears_hurdle` and `hurdle_pct` and never the key set, so
+  an extra field in that double is inert. Reported to the lead as the *double that stopped
+  tracking what it doubles*; it is C's file and C's question.
+- **Spec 112.** **`test_a_resting_entry_is_cancelled_by_its_window_before_safety_could_escalate`**
+  in `tests/engines/test_safety.py` (with the comparison in
+  `assert_entry_window_below_escalation`). All three values read through the real loader from
+  `config/default.yaml` by dotted key, never as literals, so a rename fires it too. Proven red
+  twice against copied configs, the committed one never touched: window 1200s and window 900s
+  (the strict boundary), each `1 failed` with a message naming
+  `trading.entry_unfilled_window_s`, `safety.max_consecutive_data_blocks` (15),
+  `timeframes.loop_tick_s` (60s) and the product 900s.
+- **Spec 110.** `StoreClient.filled_orders`'s docstring now says what it is since spec 103 — the
+  recorded half of the broker's ledger, with the broker adding fills the store has not seen, and
+  the restart source where a fill executed but never recorded must be absent from the rebuilt
+  positions too. **Lane grep for other pre-103 wording: one hit, and it was this one.** Everything
+  else already reads "every fill it has executed" (`clients/paper/broker.py:129`, `:365`,
+  `engines/risk/README.md:227`); the two "simulated fill" mentions that remain are the argument
+  for why the ledger is unconditional in paper, which still holds.
+- **Line endings, measured in Python before and after.** `engines/cost/contracts.py` 293 -> 294
+  CRLF / 0 LF, `engines/cost/README.md` 146 -> 153 CRLF / 0 LF, `tests/engines/test_safety.py`
+  1493 -> 1558 CRLF / 0 LF — all three still pure CRLF. `engines/cost/engine.py` 331 -> 308,
+  `tests/engines/test_cost.py` 619 -> 650, `clients/store/client.py` 1212 -> 1228 — all still pure
+  LF. No file is mixed; every edit went through an LF view and was written back in the file's own
+  ending.
+- **Narrow results** (`logs/verify/b111-*`, `b112-*`, `b110-*`): `tests/engines/test_cost.py` +
+  `test_safety.py` + `test_safety_guard_chain.py` + `test_memory_rows.py` + `test_decision.py` +
+  `tests/clients/store` + `tests/clients/paper` **463 passed**; `tests/verify/test_phase3_criteria.py`
+  **48 passed**; `ruff check src/ tests/ scripts/` `All checks passed!`; `mypy --strict src/
+  scripts/` `Success: no issues found in 153 source files`. No full gate from me, by instruction.
+- **For the lead, not mine to fix:** `docs/PROJECT-STATE.md:1001` still lists `fallbacks_used` in
+  engine 10's row of the cross-chain key table, and `:1002` still lists engine 11's, which spec
+  106 removed.
+
 ## Phase 6, session 7 — CLAIMED 2026-09-17, spec 113 (version 2)
 
 Claimed before any code, per rule 1. HEAD `dd9ea39`; the working tree carries C's spec 100

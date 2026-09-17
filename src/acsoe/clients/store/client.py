@@ -937,11 +937,27 @@ class StoreClient:
         return tuple(OrderRow(**_row_to_dict(row)) for row in rows)
 
     def filled_orders(self) -> tuple[OrderRow, ...]:
-        """Every order that filled, oldest first. The paper ledger's read.
+        """Every order that filled, oldest first. The **recorded half** of the paper
+        broker's ledger, and the thing a restart rebuilds that ledger from.
 
-        Spec 88: paper mode's balance is `paper.starting_balances` adjusted by every
-        recorded fill, so the ledger needs the fills themselves — the quantity, the
-        average price and the fee on each — and not a total.
+        The ledger needs the fills themselves — the quantity, the average price and the
+        fee on each — rather than a total, which is why this hands back rows.
+
+        **It is not the whole ledger, and the docstring used to say it was.** Invariant 2,
+        as the operator amended it on 2026-09-16 (spec 103): in paper mode the balance is
+        `paper.starting_balances` adjusted by every fill **the broker has executed**,
+        recorded or not. The two differ for exactly one tick — the broker decides a resting
+        entry's fill when engine 21 asks for it, part-way through a tick, and engine 19
+        records it at the end of that tick — so the broker adds the fills it holds and this
+        store has not seen yet on top of these rows. A balance counting only *recorded*
+        fills lagged the broker's own knowledge by a tick, counted the same cash twice on
+        the fill tick, and froze the account on the next one.
+
+        **The restart is the other half of that amendment, and it is what this read is
+        for.** A restarted daemon holds no executed fills of its own, so the store is the
+        whole ledger. A fill the broker executed and engine 19 never recorded — a process
+        that died between the two — is absent from what this returns, and must be absent
+        from the rebuilt positions too, so the two still agree.
 
         **Deliberately not a `SUM()`.** Money columns are TEXT with a `typeof` check, so
         SQLite would either compare and add them lexicographically or coerce them to

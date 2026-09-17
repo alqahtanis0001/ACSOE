@@ -50,6 +50,7 @@ from acsoe.engines.safety.contracts import (
     SafetyCondition,
 )
 from acsoe.engines.safety.engine import SafetyEngine
+from acsoe.platform.config import load_config
 
 RUN = "run-fresh"
 
@@ -572,6 +573,70 @@ def test_an_open_position_alone_is_exposure(
     result = outage_tick(calm, paper_config, fake_clients)
 
     assert result.data["command_emitted"] == CommandName.CLOSE_ALL.value
+
+
+# --------------------------------------------------------------------------- #
+# Invariant 14's resting-entry clause, and the day it becomes reachable
+# --------------------------------------------------------------------------- #
+
+#: The three committed values the clause's reachability is a function of. Named as dotted
+#: keys and read through the real loader, never copied here as numbers: `Config.get` raises
+#: on a key that does not exist, so a rename of any of the three fires this as loudly as a
+#: retune does.
+ENTRY_WINDOW_KEY = "trading.entry_unfilled_window_s"
+OUTAGE_LIMIT_KEY = "safety.max_consecutive_data_blocks"
+LOOP_TICK_KEY = "timeframes.loop_tick_s"
+
+
+def assert_entry_window_below_escalation(config: Any) -> None:
+    """The comparison, lifted out of the test so the can-it-fail proof can drive it with a
+    copied config rather than by editing the committed one, which is not B's file."""
+    window = int(config.get(ENTRY_WINDOW_KEY))
+    blocks = int(config.get(OUTAGE_LIMIT_KEY))
+    tick = int(config.get(LOOP_TICK_KEY))
+    escalation_s = blocks * tick
+    assert window < escalation_s, (
+        f"{ENTRY_WINDOW_KEY} is {window}s, which is no longer below "
+        f"{OUTAGE_LIMIT_KEY} ({blocks}) x {LOOP_TICK_KEY} ({tick}s) = {escalation_s}s. "
+        "Invariant 14's resting-entry clause has become reachable through a `safety` "
+        "escalation and now needs an escalation test of its own. Nothing is wrong yet: "
+        "this test is the notice, not a veto."
+    )
+
+
+def test_a_resting_entry_is_cancelled_by_its_window_before_safety_could_escalate(
+    repo_root: Path,
+) -> None:
+    """Why invariant 14's "or resting entry orders" clause has no escalation test here.
+
+    `safety` escalates on exactly one condition: `data_guard` blocking more than
+    `safety.max_consecutive_data_blocks` consecutive ticks, which at
+    `timeframes.loop_tick_s` seconds per tick cannot happen sooner than the product of the
+    two. A resting entry is cancelled after `trading.entry_unfilled_window_s` — invariant
+    8 — and engine 21 cancels it **even while the manage chain is holding on a `data_guard`
+    block**, because that is a decision about elapsed time rather than about price: it
+    reads `context.now`, needs no market data, and reduces exposure.
+
+    So while the window is the shorter of the two, every resting entry is already off the
+    book by the time an outage could escalate, and the clause is reachable only through an
+    operator Close all — which is the leg `escalation_completes_during_outage` exercises.
+    That is why `test_a_resting_entry_order_alone_is_exposure` above proves the
+    *precondition* is counted and no test proves the escalation cancels a resting entry:
+    on the committed config, no tick can present one.
+
+    **If this test fires, nothing is broken.** The clause has become reachable through a
+    `safety` escalation and is untested, and the failure message names all three values so
+    the next reader can see which one moved. It does not forbid the change; it makes it
+    visible — A's Phase 5 rule, that an unreachable path earns an assertion that it is
+    unreachable rather than a deletion.
+
+    The values come from the committed `config/default.yaml` through the real loader.
+    Literals here would pin this file's memory of the config instead of the config, and
+    the change this test exists to notice is a change to the config.
+    """
+    assert_entry_window_below_escalation(
+        load_config(repo_root / "config" / "default.yaml", load_env=False)
+    )
 
 
 # --------------------------------------------------------------------------- #

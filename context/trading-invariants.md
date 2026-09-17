@@ -211,6 +211,8 @@ Everything else in this document makes the system less willing to act. This rule
 
 `safety` escalates only when there are **open positions or resting entry orders**. A resting post-only buy is exposure that has not happened yet; left on the book through a blackout it can open a position into a market the system has already declared untrustworthy.
 
+**At the committed config a `safety` escalation can never find a resting entry, and a test says so.** `trading.entry_unfilled_window_s` (300s) is shorter than `safety.max_consecutive_data_blocks` × `timeframes.loop_tick_s` (900s), and invariant 8 cancels a stale entry even during a `data_guard` hold, so the entry is always gone before the escalation. The resting-entry clause above is therefore reachable only through the operator's own Close all, which is what `escalation_completes_during_outage` exercises. `test_a_resting_entry_is_cancelled_by_its_window_before_safety_could_escalate` in `tests/engines/test_safety.py` asserts that relationship from the config. **It forbids no change: if either value moves, the test firing is the notice that this clause has become reachable through an escalation and needs its own test.** Operator ruling 2026-09-17 (finding F1 of the overnight log).
+
 ### The drawdown and loss-streak limits freeze. They do not liquidate
 
 Ruled by the operator, 2026-09-10. Breaching `safety.max_drawdown_pct` or `safety.max_consecutive_losses` makes `safety` write a **`freeze`** row, not a `close_all`. So does the error-rate limit. `close_all` is reserved for the data-outage escalation above and for the operator's own Close all button.

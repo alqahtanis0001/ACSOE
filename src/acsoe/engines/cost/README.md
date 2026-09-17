@@ -59,7 +59,8 @@ on a `float` rather than coercing it.
 ## Output written to `state["cost"]`
 
 `pair`, `expected_move_pct`, `friction_pct`, `net_edge_pct`, `hurdle_pct`,
-`clears_hurdle`, `reason_code`, `fallbacks_used`.
+`clears_hurdle`, `reason_code`. That is the whole of it, and `tests/engines/test_cost.py`
+pins the set: a key added here without a reader is the defect spec 111 removed.
 
 The four percentage names are the `rejections` column names, deliberately: engine 19
 `memory` fills that table from this payload, and a translation step between the engine
@@ -109,20 +110,26 @@ takes no paper trades and produces no rejection rows past this gate. That is the
 description of an unauthenticated clone, and it beats one that generates a research
 dataset priced on a fee somebody guessed.
 
-So `fallbacks_used` on this engine's payload is **always empty**. It records
-fallbacks *this engine applied*. It is **not** a copy of engine 1's `failed_fetches`, and
-the distinction is the whole reason the old dead read was deleted rather than re-pointed:
-a failed fetch is the opposite of a fallback. Nothing was substituted, so nothing was
-traded on, and writing one into that field would misreport exactly the thing invariant 2
-asks to be recorded. **There is no paper-mode fallback left anywhere in this system**:
+**So this engine applies no fallback, and since spec 111 it no longer publishes a
+`fallbacks_used` field to say so.** Removed by the operator's ruling of 2026-09-17, and
+the reason is worth one paragraph because the field looked harmless. It had no producer of
+a value — `_fallbacks()` returned an empty tuple unconditionally, and had done since spec
+40 deleted its dead read of `state["exchange"]["fallbacks_used"]`, a key engine 1 does not
+publish and never did. It had no reader either: `rejections` has no such column (migration
+0001 puts `fallbacks_used` on `trades`), engine 19 builds a rejection row from the four
+percentages and `reason_code` of the engine that blocked, and engine 16 and the console
+never read it from here. What was left was an empty list on every tick, which reads as *no
+fallback fired on this decision* — a statement about the tick — while really being a
+statement about the field: nothing could ever have fired, because nothing can write it. A
+record that cannot record the thing it is named for answers the question anyway, and
+answers it reassuringly. **There is no paper-mode fallback left anywhere in this system**:
 the last one, engine 11 `risk`'s balance, was removed by the operator on 2026-09-16
-(spec 106).
+(spec 106), and `RiskSizing.fallbacks_used` went with it on the same three findings.
 
-**`fallbacks_used` is not a `rejections` column.** This page used to say it was, and that
-engine 19 filled it. Migration 0001 puts `fallbacks_used` on `trades` only; engine 19
-builds a rejection row from the four percentages and `reason_code` of the engine that
-blocked, and nothing in `src/` reads this field. It stays on the payload because removing
-it changes the published shape, which spec 108 reported to the lead rather than decided.
+Engine 22 `exit` keeps its `fallbacks_used` and should. There the list is filled from the
+fetch failures rule 14 tolerates during a liquidation, so an empty one is a measurement
+rather than a shape. The rule this leaves behind: a field recording *whether something
+happened* earns its place only where the something can happen.
 
 ## Two things worth knowing before you change this
 

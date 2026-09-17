@@ -572,29 +572,57 @@ def test_the_local_percentage_formatter_agrees_with_the_console(ratio: str) -> N
 # The test that stood here asserted `fallbacks_used == ["fee_tier_assumed_tier_1"]`. It is
 # deleted rather than rewritten, per spec 40 and the operator's ruling of 2026-09-10: the
 # tier 1 fallback is retired, so the assertion has no subject left. See the build log.
+#
+# Its replacement asserted the field was empty. That went the same way on the operator's
+# ruling of 2026-09-17 (spec 111), and for the same reason one level up: an always-empty
+# field has no subject either. What is asserted now is the field's **absence**.
+
+#: Every key `CostAssessment.to_state_data` publishes. Pinned as a set rather than checked
+#: one at a time, because the property is *which* keys there are: a `>=` or a
+#: key-by-key assertion is satisfied by a payload carrying an extra field nothing reads,
+#: which is exactly what spec 111 removed. Engine 19 reads four of these plus
+#: `reason_code`; nothing reads a fifth percentage that is not here.
+COST_PAYLOAD_KEYS = {
+    "pair",
+    "expected_move_pct",
+    "friction_pct",
+    "net_edge_pct",
+    "hurdle_pct",
+    "clears_hurdle",
+    "reason_code",
+}
 
 
-def test_this_engine_applies_no_fallback_and_says_so_by_recording_none(
+def test_this_engine_publishes_no_fallback_field_and_the_key_set_is_pinned(
     cost: CostEngine,
     engine_context: Any,
     fake_kraken: FakeKrakenClient,
     publish_exchange: ExchangePublisher,
 ) -> None:
-    """`fallbacks_used` on the published payload is empty, in every mode.
+    """`fallbacks_used` left the payload with the last fallback that could have named it.
 
-    Invariant 2 requires every decision affected by a fallback to record which one fired,
-    and after spec 37 this gate has no fallback to apply: `AssetPairs` carries no fee
-    schedule, so "assume tier 1" was never implementable from a runtime source, and a
-    confirmed pair with no fee data now blocks.
+    It had no producer of a value and no reader: `rejections` has no such column
+    (migration 0001 puts `fallbacks_used` on `trades`), and engines 19 and 16 and the
+    console never read it from here. After spec 37 retired the fee-tier row of invariant
+    2's paper-mode table and spec 106 removed the last paper-mode fallback in the system,
+    an empty list here read as "no fallback fired on this decision" on a record that could
+    not have recorded one. Removed by the operator, spec 111.
 
-    Asserted on a blocked tick as well as a priced one, because the blocked one is where
-    the tempting mistake lives: engine 1 publishes `failed_fetches` on exactly that tick,
-    and copying a failed fetch into this column would look like diligence while
-    misreporting the thing invariant 2 asks to be recorded. A failure to fetch is the
-    opposite of a fallback — nothing was substituted, so nothing was traded on.
+    Asserted on all three published shapes, because the third is where the tempting
+    mistake lived: engine 1 publishes `failed_fetches` on exactly the tick where the fee
+    tier is missing, and copying a failed fetch into a field of this name would have
+    looked like diligence while misreporting the thing invariant 2 asks to be recorded.
+
+    The key set is pinned on the two ticks that publish a full assessment, so a field
+    added back with no reader is red rather than invisible.
     """
     priced = cost.process(engine_context, build_state(publish_exchange(TIER_3)))
-    assert priced.data["fallbacks_used"] == []
+    assert priced.data["clears_hurdle"] is True
+    assert set(priced.data) == COST_PAYLOAD_KEYS
+
+    below = cost.process(engine_context, build_state(publish_exchange(TIER_1)))
+    assert below.data["clears_hurdle"] is False
+    assert set(below.data) == COST_PAYLOAD_KEYS
 
     fake_kraken.fail("trade_volume")
     exchange = publish_exchange()
@@ -602,7 +630,10 @@ def test_this_engine_applies_no_fallback_and_says_so_by_recording_none(
 
     blocked = cost.process(engine_context, build_state(exchange))
     assert blocked.blocks_trading is True
-    assert blocked.data.get("fallbacks_used", []) == []
+    # The missing-input block publishes deliberately less — `_blocked_on_missing_input`
+    # refuses to put half-priced economics into `rejections` — so its shape is pinned
+    # separately rather than against the set above.
+    assert set(blocked.data) == {"reason_code", "clears_hurdle"}
 
 
 def test_the_published_payload_is_json_serialisable(

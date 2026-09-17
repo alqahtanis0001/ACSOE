@@ -48,24 +48,28 @@ is engine 4 `data_guard`, which blocks on stale data, a negative spread and a mi
 candle: all three are market-data faults and should arrive from one publisher rather than
 two. The one path that went through ratification is the one path that was right.
 
-## `failed_fetches` is not `fallbacks_used`
+## There is no `fallbacks_used` here, on either side
 
 Engine 1 deliberately applies no paper-mode fallback of its own — it reports which calls
 failed and leaves the fallback decision to the consumer that has to record it. So there
 is no `fallbacks_used` on `state["exchange"]` and there never was; this engine's read of
-one returned an empty tuple on every tick, silently.
+one returned an empty tuple on every tick, silently, until spec 40 deleted the dead read.
 
-After spec 37 retired the fee-tier row of invariant 2's paper-mode table, **there is no
-fee-tier fallback in any mode**: a confirmed pair with no fee data blocks. So this engine
-applies no fallback at all, and :attr:`CostAssessment.fallbacks_used` is correspondingly
-empty. It names fallbacks *this engine applied*, never engine 1's failed fetches. Copying
-a failed fetch into it would misreport the record invariant 2 asks for: a failure to
-fetch is not a fallback, it is the opposite of one.
+**The published field of that name went too, on the operator's ruling of 2026-09-17
+(spec 111).** It had no producer of a value — `_fallbacks()` returned `()` unconditionally
+— and no reader: `rejections` has no such column (migration 0001 puts `fallbacks_used` on
+`trades`), engine 19 builds a rejection from the four percentages and `reason_code` of the
+engine that blocked, and engine 16 and the console never read it from here. Spec 37 retired
+the fee-tier row of invariant 2's paper-mode table and spec 106 removed the last paper-mode
+fallback in the system, so this gate applies none in any mode: the empty list read as *no
+fallback fired on this decision* while saying only that nothing can write the field. The
+README carries the paragraph on why it was removed rather than left as a harmless constant.
 
-It is **not** a `rejections` column, whatever this docstring said before spec 108.
-Migration 0001 puts `fallbacks_used` on `trades` only, engine 19 builds a rejection from
-the four percentages and `reason_code` of the engine that blocked, and nothing in `src/`
-reads this field.
+Engine 22 `exit` keeps its `fallbacks_used`, and the contrast is the point: there the list
+is filled from the fetch failures rule 14 tolerates during a liquidation, so an empty one
+is a measurement. Copying engine 1's failed fetches into a field of this name would have
+misreported the record invariant 2 asks for either way — a failure to fetch is not a
+fallback, it is the opposite of one.
 
 `failed_fetches` is still read, for one purpose only: when the fee tier is missing and the
 `trade_volume` call is named there, the operator sentence quotes *that call's* reason.
@@ -253,13 +257,12 @@ class CostAssessment(BaseModel):
     the engine that computes a number and the table that stores it, which is a place for
     them to stop meaning the same thing.
 
-    `fallbacks_used` is **not** one of those columns: `rejections` has none, migration
-    0001 puts it on `trades`, and engine 19 reads only the four percentages from here
-    (spec 108). It holds the fallbacks **this engine applied**, and after spec 37
-    retired the fee-tier row of invariant 2's paper-mode table there are none, in any
-    mode — so it is empty and this engine has nothing to put in it. It is not a copy of
-    engine 1's `failed_fetches`: a failed fetch is the opposite of a fallback, and
-    recording one there would misreport exactly the thing invariant 2 wants recorded.
+    **There is no `fallbacks_used`, since spec 111.** It was always empty — no producer
+    of a value and no reader anywhere — so it read as "no fallback fired" on a record that
+    could not have recorded one. The module docstring says what it was; the README says
+    why it left the published shape rather than staying as a harmless constant.
+    `tests/engines/test_cost.py` pins the key set, so a field added back here without a
+    reader goes red.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -271,7 +274,6 @@ class CostAssessment(BaseModel):
     hurdle_pct: Money
     clears_hurdle: bool
     reason_code: str | None = None
-    fallbacks_used: tuple[str, ...] = ()
 
     def to_state_data(self) -> dict[str, Any]:
         """The JSON-serialisable form the orchestrator will put in `state["cost"]`.
@@ -289,5 +291,4 @@ class CostAssessment(BaseModel):
             "hurdle_pct": format(self.hurdle_pct, "f"),
             "clears_hurdle": self.clears_hurdle,
             "reason_code": self.reason_code,
-            "fallbacks_used": list(self.fallbacks_used),
         }
