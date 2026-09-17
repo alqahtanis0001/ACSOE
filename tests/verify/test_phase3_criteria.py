@@ -32,9 +32,11 @@ halves of its proof passed.
 
 from __future__ import annotations
 
+import importlib.util
 import shutil
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -180,6 +182,13 @@ def test_no_phase_3_criterion_hardcodes_an_exchange_value(verify_module: ModuleT
 #: criterion checking a single tick passes against it. That is the whole point:
 #: `AGENTS.md` opens by saying any remembered fee percentage is stale, and this is what
 #: "stale" looks like when it is otherwise competent code.
+#:
+#: **It must publish engine 10's key set, and only a tick can say whether it still does.**
+#: It carried `"fallbacks_used": []` from spec 45 until spec 117: faithful when written,
+#: inert from the first day (engine 10's `_fallbacks()` already returned an empty tuple
+#: unconditionally), and stale once spec 111 removed the field -- with this file at 48
+#: passed on both sides of that removal.
+#: `test_the_fabricated_cost_engine_publishes_engine_tens_key_set` is what re-checks it.
 CONSTANT_FEE_COST_ENGINE = '''
 import time
 from decimal import Decimal
@@ -224,7 +233,6 @@ class CostEngine(BaseEngine):
             "hurdle_pct": format(hurdle, "f"),
             "clears_hurdle": clears,
             "reason_code": None if clears else "net_edge_below_hurdle",
-            "fallbacks_used": [],
         }
         return EngineResult(
             engine=self.name,
@@ -235,6 +243,75 @@ class CostEngine(BaseEngine):
             duration_ms=(time.perf_counter() - started) * 1000.0,
         )
 '''
+
+
+def _double_cost_engine(tmp_path: Path) -> Any:
+    """`CONSTANT_FEE_COST_ENGINE` as a class, against the **real** package.
+
+    Loaded from a file by path rather than `exec`ed into a dict so it gets an ordinary
+    module identity and its `from acsoe...` imports resolve the way they do in the
+    fabricated tree. The tree is not needed here: the only thing being read off this
+    engine is the shape of what it publishes.
+    """
+    path = tmp_path / "constant_fee_cost_engine.py"
+    path.write_text(CONSTANT_FEE_COST_ENGINE, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("constant_fee_cost_engine", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.CostEngine
+
+
+def test_the_fabricated_cost_engine_publishes_engine_tens_key_set(
+    verify_module: ModuleType, tmp_path: Path
+) -> None:
+    """Spec 117. The double is a claim about engine 10's payload, and this re-checks it.
+
+    It stopped being true in spec 111 and **nothing went red**: the double kept
+    publishing `fallbacks_used` after engine 10 dropped it, and this file was 48 passed
+    on both sides of that change, because `check_cost_gate_uses_live_fee_tier` reads
+    `net_edge_pct`, `clears_hurdle`, `hurdle_pct` and `reason_code` and never looks at
+    the key set. `code-standards.md`: a double is the one claim in this codebase that
+    nothing re-checks -- mypy does not compare the two, and the criterion passes
+    precisely because it never asks.
+
+    The comparison is deliberately **not** a copy of B's `COST_PAYLOAD_KEYS`. Both key
+    sets are read off a tick, so this needs no list of field names to go stale in its
+    turn, and it goes red whichever side moves: an extra key in the double, a missing
+    one, or engine 10 changing its payload without the double following.
+
+    It belongs here and not inside the criterion. The criterion drives this fabrication
+    on its FAIL path, so a shape assertion there would be a test of the fabrication in
+    the one arm where the fabrication is the subject -- and it would answer every
+    induced-failure test in this file with a complaint about a key instead of the defect
+    each one induces. The real engine's key set is pinned in B's lane, on the real
+    engine, by `test_this_engine_publishes_no_fallback_field_and_the_key_set_is_pinned`.
+    """
+    contracts_mod, problem = verify_module.try_import("acsoe.engines.cost.contracts")
+    assert contracts_mod is not None, problem
+    config, problem = verify_module._phase3_config()
+    assert config is not None, problem
+    real_cls, problem = verify_module._engine_class("acsoe.engines.cost.engine", "cost")
+    assert real_cls is not None, problem
+
+    tier = verify_module.CHEAP_TIER
+    real, _pair, problem = verify_module._cost_tick(config, contracts_mod, real_cls, *tier)
+    assert real is not None, problem
+    double, _pair, problem = verify_module._cost_tick(
+        config, contracts_mod, _double_cost_engine(tmp_path), *tier
+    )
+    assert double is not None, problem
+
+    # The real engine reached a full assessment. It publishes two keys and nothing else
+    # on the missing-input block, so without this the comparison could be between two
+    # refusals that agree with each other and say nothing about the shape under test.
+    assert real.data["clears_hurdle"] is True
+    # The double refuses this tier, which is the defect it exists to exhibit: the
+    # expensive fee is compiled into it, so the cheap tier does not clear. It publishes a
+    # priced payload either way, and that payload is what is being compared.
+    assert double.data["clears_hurdle"] is False
+    assert double.data["net_edge_pct"]
+    assert set(double.data) == set(real.data)
 
 
 def test_cost_gate_is_pending_when_the_engine_does_not_exist(

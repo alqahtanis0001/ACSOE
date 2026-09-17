@@ -2536,3 +2536,50 @@ four, engine 22's four) and the Phase 4 replay fix.
 From the lead, before spec 82 registration. Writing only `tests/verify/test_phase6_criteria.py`,
 this file and my Phase 6 build log. The mutation proof runs on a byte copy of
 `scripts/verify.py`, restored in a `finally`. No commit, no registration, nothing in `src/`.
+
+
+### CLAIM — specs 115, 117 then 101, 2026-09-17
+
+From the lead, in that order. Spec 101 is the last one needed to make the ninth Phase 6
+criterion green.
+
+- **115** — `check_toolchain_green` keeps pytest's evidence file and summary line on a PASS.
+  Writing `scripts/verify.py` and `tests/verify/test_phase0_criteria.py` (where
+  `toolchain_green`'s tests live).
+- **117** — `CONSTANT_FEE_COST_ENGINE` in `tests/verify/test_phase3_criteria.py` still
+  publishes `fallbacks_used`, which engine 10 stopped publishing in spec 111. Answer the
+  operator's question from the history before changing anything.
+- **101** — the console renders the open position live, and
+  `check_console_shows_position_live` gets its criterion body. Writing
+  `src/acsoe/console/**`, `tests/console/**`, `scripts/verify.py`,
+  `tests/verify/test_phase6_criteria.py`.
+
+Report to the lead after 115 + 117 together, then wait before 101. No commit. Nothing in
+`core/`, `bootstrap.py`, `config/`, any engine, `clients/**` or another lane's tests.
+
+
+### Specs 115 and 117 done, 2026-09-17
+
+**115.** `check_toolchain_green` writes pytest's evidence file on a PASS and puts pytest's
+summary line in the PASS message. New helper `_pytest_count_note` in `scripts/verify.py`;
+three tests in `tests/verify/test_phase0_criteria.py`. The retry, the timeouts, the
+exit-code classification and the `TOOLCHAIN` commands are untouched, and the existing
+tests that pin them are unchanged and green. Verified against **real** pytest on a
+throwaway tree as well as against the scripted stub, because the committed tests script
+`_run_tool` and so prove the plumbing rather than the parse. Four mutations, four killed,
+one control survived.
+
+**117.** The answer to the operator's question is that the double's `fallbacks_used` was
+**never load-bearing** -- faithful to engine 10 on the day it was written (spec 45,
+2026-09-10) and faithful to a field that already returned an empty tuple unconditionally,
+with `check_cost_gate_uses_live_fee_tier` never having contained the string on any commit.
+The key is removed from the double. **No key-set assertion went into the criterion**: the
+criterion drives a fabrication on its FAIL path, `COST_PAYLOAD_KEYS` is B's contract and a
+second copy in C's `verify.py` would be the same defect one level up, and a shape check
+running before the arithmetic would shadow every induced-failure test in the file. The
+check that was missing is on the *double*, and it now exists: a tripwire that drives real
+engine 10 and the fabricated one over the same tick and compares `set(result.data)`. The
+stale key was observed red against it before being removed.
+
+**Nothing changed in `src/`.** No commit. Spec 101 not started -- waiting for the lead's
+go-ahead at this boundary.

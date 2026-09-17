@@ -1034,6 +1034,98 @@ def test_a_failure_deposits_the_whole_captured_output_and_names_the_file(
     assert b"\r\n" not in deposited[0].read_bytes()
 
 
+#: A pytest tail as pytest actually prints it: progress lines, then the counts line
+#: wrapped in `=` padding. Assembled rather than written as one string so the assertions
+#: below can name a line that is *not* the summary and prove the whole output was kept.
+GREEN_PROGRESS: Final = "tests/verify/test_runner.py ................ [ 42%]"
+GREEN_SUMMARY: Final = "3271 passed, 2 skipped in 1887.83s"
+GREEN_OUTPUT: Final = GREEN_PROGRESS + "\n" + "=" * 8 + " " + GREEN_SUMMARY + " " + "=" * 8
+
+
+def test_a_green_pytest_puts_its_count_in_the_pass_message_and_keeps_the_output(
+    verify_module: ModuleType, bare_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec 115. The count survives a PASS, not only a failure.
+
+    The lead's gate ran `pytest tests/ -q` itself beside `verify.py` and read the number
+    of tests off it; the operator retired that second run on 2026-09-17 because it is the
+    identical command. That leaves this criterion as the only thing running the suite at a
+    boundary, so a PASS reading `all green` and nothing else would have **deleted** the
+    count rather than moved it - and `0 passed` and `3271 passed` are both exit 0.
+
+    Asserted on the deposited file as well as the message, and on a progress line that
+    could only have come from above the summary, because a message-only assertion would
+    pass against a criterion that read the count and threw the output away.
+    """
+    scripted_toolchain(
+        verify_module, bare_tree, monkeypatch, [(0, GREEN_OUTPUT), (0, ""), (0, "")]
+    )
+    outcome = run(verify_module, "toolchain_green", bare_tree)
+
+    assert outcome.result is verify_module.Result.PASS
+    assert GREEN_SUMMARY in outcome.message
+    assert "criterion raised" not in outcome.message
+
+    deposited = sorted((bare_tree / verify_module.TOOLCHAIN_EVIDENCE_DIR).glob("*.log"))
+    assert len(deposited) == 1, "mypy and ruff exited 0 with no output and deposit nothing"
+    assert deposited[0].as_posix() in outcome.message
+    written = deposited[0].read_text(encoding="utf-8")
+    assert "# tool:       pytest" in written
+    assert "# returncode: exit 0" in written
+    assert GREEN_PROGRESS in written
+    assert GREEN_SUMMARY in written
+    assert b"\r\n" not in deposited[0].read_bytes()
+
+
+def test_a_green_pytest_that_printed_no_summary_says_so_rather_than_implying_one(
+    verify_module: ModuleType, bare_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The degraded branch, stated rather than silent.
+
+    Exit 0 with no counts line is what `-p no:terminal`, a plugin swallowing the report,
+    or a truncated capture look like. Saying nothing there would leave a PASS message
+    indistinguishable in shape from one that genuinely counted, which is how the number
+    stops being on record again without anybody changing this code.
+    """
+    scripted_toolchain(verify_module, bare_tree, monkeypatch, [(0, ""), (0, ""), (0, "")])
+    outcome = run(verify_module, "toolchain_green", bare_tree)
+
+    assert outcome.result is verify_module.Result.PASS
+    assert "printed no summary line" in outcome.message
+    assert len(sorted((bare_tree / verify_module.TOOLCHAIN_EVIDENCE_DIR).glob("*.log"))) == 1
+
+
+def test_the_count_is_read_off_the_attempt_that_finished_not_the_crashed_one(
+    verify_module: ModuleType, bare_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash then a clean retry is still a PASS, and it still has to carry a count.
+
+    The two attempts print different numbers here on purpose. `CRASH_OUTPUT` says
+    `520 passed` - which is how far the process had got before it died, not a total - and
+    the retry says 3271. Both strings land in the message, one as the crash report and one
+    as the count, so this asserts *which* of them is introduced as the count rather than
+    only that both appear.
+    """
+    calls = scripted_toolchain(
+        verify_module,
+        bare_tree,
+        monkeypatch,
+        [(3221225477, CRASH_OUTPUT), (0, GREEN_OUTPUT), (0, ""), (0, "")],
+    )
+    outcome = run(verify_module, "toolchain_green", bare_tree)
+
+    assert outcome.result is verify_module.Result.PASS
+    assert calls == ["pytest", "pytest", "mypy", "ruff"], "the retry allowance is unchanged"
+    assert "pytest `" + GREEN_SUMMARY + "`" in outcome.message
+    assert "pytest `520 passed in 12.68s`" not in outcome.message
+    assert "RETRIED AFTER CRASH" in outcome.message
+
+    deposited = sorted((bare_tree / verify_module.TOOLCHAIN_EVIDENCE_DIR).glob("*.log"))
+    assert len(deposited) == 2, "the crash's evidence and the clean retry's, both kept"
+    retry_log = next(p for p in deposited if "attempt2" in p.name)
+    assert retry_log.as_posix() in outcome.message
+
+
 def test_a_verdict_on_the_retry_stands_as_the_verdict(
     verify_module: ModuleType, bare_tree: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

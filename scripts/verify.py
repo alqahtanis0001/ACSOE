@@ -1223,7 +1223,10 @@ TOOLCHAIN = (
     ("ruff", ["-m", "ruff", "check", "--output-format=concise", "src/", "tests/", "scripts/"], 2),
 )
 
-#: Where a failing toolchain command's **complete** captured output is written.
+#: Where a toolchain command's **complete** captured output is written.
+#:
+#: Every failure deposits one, and so does a *green* pytest run - see
+#: `_pytest_count_note`, and the operator ruling of 2026-09-17 behind it.
 #:
 #: The criterion prints one line, and one line is not a diagnosis. Until this existed
 #: the message carried `describe_exit`'s last three lines and the rest was dropped on
@@ -1345,7 +1348,11 @@ def write_toolchain_evidence(
     output: str,
     attempt: int,
 ) -> str:
-    """Write one failing command's whole captured output. Returns what to say about it.
+    """Write one command's whole captured output. Returns what to say about it.
+
+    Called for every failure, and for a pytest run that *passed* - the operator's gate no
+    longer runs its own `pytest tests/ -q` beside this one, so the run this wrapper drove
+    is now the only place the suite's output exists.
 
     Never raises. A gate that cannot write its evidence still has to report the verdict
     it already has, so a failure here degrades to a note in the message rather than to
@@ -1368,7 +1375,8 @@ def write_toolchain_evidence(
         "# root:       " + str(root) + "\n"
         "#\n"
         "# Everything below is the tool's captured stdout and stderr, complete and\n"
-        "# unedited. The criterion's own message quotes only the last three lines.\n"
+        "# unedited. The criterion's own message quotes the last three lines of a\n"
+        "# failure, or pytest's summary line when the run was green.\n"
         "\n"
     )
     body = output if output else "(the command produced no output at all)\n"
@@ -1381,6 +1389,32 @@ def write_toolchain_evidence(
     except OSError as exc:
         return "full output could NOT be written (" + type(exc).__name__ + ": " + str(exc) + ")"
     return "full output: " + path.as_posix()
+
+
+def _pytest_count_note(
+    root: Path, *, args: Sequence[str], output: str, attempt: int
+) -> str:
+    """What a **green** pytest run is on record as having actually run.
+
+    The lead's gate used to run `pytest tests/ -q` itself, beside `verify.py`, and read the
+    count off it. The operator retired that second run on 2026-09-17 because it is the
+    identical command - which leaves this wrapper as the only thing that runs the suite at
+    a boundary, and a PASS message reading only "all green" would have deleted the number
+    rather than moved it. `0 passed` and `3271 passed` are both exit 0, and the difference
+    between them is the difference between a gate and a formality: a collection error that
+    pytest reports as exit 5 is loud, but a `pytest.ini` typo, a renamed directory or a
+    `-p no:cacheprovider` accident that simply collects less is silent at the returncode.
+
+    The evidence file goes down for the same reason it does on a failure - the output is
+    gone otherwise - and a PASS that cannot state its count says so instead of implying one.
+    """
+    evidence = write_toolchain_evidence(
+        root, name="pytest", args=args, returncode=0, output=output, attempt=attempt
+    )
+    summary = pytest_summary_line(output)
+    if summary is None:
+        return "pytest exited 0 but printed no summary line - " + evidence
+    return "pytest `" + summary + "` - " + evidence
 
 
 def _interpreter_with_toolchain(root: Path) -> tuple[str | None, list[str]]:
@@ -1489,6 +1523,11 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
     suspected to be hardware - see `docs/build-log/phase-0.md`. The retry is a
     mitigation that keeps the gate usable while leaving the fault visible in every
     run it occurs in.
+
+    A PASS carries pytest's own summary line and the path to its complete output, on
+    whichever attempt finished - see `_pytest_count_note`. This is the only place the
+    suite's count is produced now that the gate has stopped running `pytest` a second
+    time beside this one.
     """
     if os.environ.get(RECURSION_GUARD_ENV):
         return pending("skipped: this run is inside a toolchain_green subprocess")
@@ -1516,6 +1555,7 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
     env[RECURSION_GUARD_ENV] = "1"
     failures: list[str] = []
     survived: list[str] = []
+    counted: list[str] = []
     crashed = False
     for name, args, tool_max_exit in TOOLCHAIN:
         timeout_s = TOOL_TIMEOUT_S.get(name, SUBPROCESS_TIMEOUT_S)
@@ -1529,6 +1569,8 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
             )
             continue
         if returncode == 0:
+            if name == "pytest":
+                counted.append(_pytest_count_note(ctx.root, args=args, output=output, attempt=1))
             continue
         # Everything from here on is a failure of some kind, and every one of them
         # deposits the whole captured output before the message is reduced to a line.
@@ -1567,6 +1609,11 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
             # Clean on the retry. PASS, but the crash is named in the message: a
             # mitigated fault that stops being reported stops being a known risk.
             survived.append(first + "; the retry was clean")
+            # The count comes off the attempt that actually finished. Reading it off the
+            # crashed first attempt instead would report however far the run had got
+            # before the process died, as a total.
+            if name == "pytest":
+                counted.append(_pytest_count_note(ctx.root, args=args, output=output, attempt=2))
             continue
         retry_evidence = write_toolchain_evidence(
             ctx.root, name=name, args=args, returncode=returncode, output=output, attempt=2
@@ -1597,14 +1644,12 @@ def check_toolchain_green(ctx: VerifyContext) -> Outcome:
         # The prefix is deliberate: the criterion prints one line, and a crash has to
         # be visible in it without opening anything.
         return failed(("CRASH - " if crashed else "") + "; ".join(failures))
+    message = "pytest, mypy --strict and ruff all green (" + label + ")"
+    if counted:
+        message += " - " + "; ".join(counted)
     if survived:
-        return passed(
-            "pytest, mypy --strict and ruff all green ("
-            + label
-            + ") - RETRIED AFTER CRASH: "
-            + "; ".join(survived)
-        )
-    return passed("pytest, mypy --strict and ruff all green (" + label + ")")
+        message += " - RETRIED AFTER CRASH: " + "; ".join(survived)
+    return passed(message)
 
 
 # --------------------------------------------------------------------------- #

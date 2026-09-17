@@ -3260,3 +3260,172 @@ killing line) · `c114-sweep-wide.log` (M1 diagnostic, and C0 against the whole 
 3271 passed, 2 skipped in 1887.83s) · `c114-cash-source-default.log` (37 failed, 167 errors,
 202 tests, 7 files + A's) · `c114-narrow-final.log` (5 failed, 445 passed) · `c114-ruff.log` ·
 `c114-mypy.log`.
+
+
+### Decision: a green pytest deposits its evidence, and the PASS carries the count
+
+**Agent:** C · **Task:** spec 115 · **Date:** 2026-09-17
+
+**Options.** Put pytest's summary line in the PASS message and leave the evidence file a
+failure-only artefact; or write the file on a green run too and name it in the message.
+
+**Chose.** Both -- `_pytest_count_note` in `scripts/verify.py` writes the evidence and
+returns ``pytest `N passed ...` - full output: ...``, and `check_toolchain_green` joins
+those notes into the PASS message.
+
+**Because.** The operator retired the lead's separate `pytest tests/ -q` on 2026-09-17 on
+the ground that `toolchain_green` runs the identical command. That is true of the command
+and was not true of the *record*: the wrapper reported "all green" and threw the run away,
+so retiring the second run would have deleted the test count from every boundary rather
+than moving it. `0 passed` and `3271 passed` are both exit 0. Exit 5 covers *no tests
+collected*, but a renamed directory, a stray `-k`, or a `testpaths` edit that simply
+collects **less** is silent at the returncode, and that is the failure the count exists to
+make visible.
+
+**Cost.** One log file per gate run under `logs/verify/toolchain_green/`, which is
+gitignored, plus a longer PASS message. Nothing in the retry, the timeout, the exit-code
+classification or the `TOOLCHAIN` commands moved.
+
+**The degraded branch is stated, not silent.** Exit 0 with no counts line reports
+`pytest exited 0 but printed no summary line`. A PASS that cannot count has to look
+different from one that did, or the number stops being on record again without anyone
+touching this code.
+
+**Which attempt the count comes from.** On the crash-then-clean-retry path it is read off
+the **retry**. `CRASH_OUTPUT` in the Phase 0 tests is `520 passed in 12.68s` followed by a
+Windows fatal exception -- that is how far the process had got before it died, not a
+total, and introducing it as the count would be the same defect this spec fixes wearing a
+plausible number. `test_the_count_is_read_off_the_attempt_that_finished_not_the_crashed_one`
+drives the two attempts with **different** counts, so it asserts which one is introduced
+as the count rather than only that both strings appear.
+
+**Checked against real pytest, not against my memory of it.** The three committed tests
+script `_run_tool`, so they prove the plumbing and not the parse. A hand run built a
+throwaway tree (`src/`, `scripts/`, one two-test `tests/`) and called the real
+`check_toolchain_green` on it. Verbatim:
+
+    PASS - pytest, mypy --strict and ruff all green (python.exe) - pytest `2 passed in
+    0.21s` - full output: .../20260917T212441_263818-pytest-attempt1.log
+
+and the deposited file carried the header, the progress line and the summary with LF
+endings. `pytest_summary_line` was written for a crash report and had never been asked to
+parse a *green* tail before.
+
+**Mutations.** Narrow set `tests/verify/test_phase0_criteria.py`, baseline `74 passed in
+22.17s`. `scripts/verify.py` sha256 `63ef97974a31` before and after, compared in the same
+statement as the restore; every anchor asserted to occur exactly once;
+`PYTHONDONTWRITEBYTECODE=1`; `sys.executable`. Log at `logs/verify/c115-sweep.log`.
+
+| Arm | What it does | Verdict | Killed by |
+|---|---|---|---|
+| T1 | a green pytest deposits nothing and the PASS says nothing (the spec's named mutation) | KILLED | `test_a_green_pytest_puts_its_count_in_the_pass_message_and_keeps_the_output`, `test_a_green_pytest_that_printed_no_summary_says_so_rather_than_implying_one` |
+| T2 | the note keeps the evidence path and drops the summary line | KILLED | `...puts_its_count_in_the_pass_message...`, `...read_off_the_attempt_that_finished...` |
+| T3 | a crash then a clean retry passes with no count at all | KILLED | `test_the_count_is_read_off_the_attempt_that_finished_not_the_crashed_one` |
+| T4 | the summary reaches the message and the output is thrown away | KILLED | all three |
+| C0 | control: the crash note is printed *before* the count instead of after | SURVIVED | -- |
+
+**C0 is a checked negative and is reported as one.** Nothing asserts the order of the two
+clauses in the PASS message and nothing should: both are present, both are named, and an
+operator reads the whole line. It is here so the four kills above are not the only thing
+the sweep can say.
+
+### The fake cost engine's `fallbacks_used`: what it was asserting, and whether it ever mattered
+
+**Agent:** C · **Task:** spec 117 · **Date:** 2026-09-17
+
+**What happened.** `CONSTANT_FEE_COST_ENGINE` in `tests/verify/test_phase3_criteria.py`
+-- the deliberately-wrong cost engine `check_cost_gate_uses_live_fee_tier` is proved FAIL
+against -- publishes `"fallbacks_used": []`. Engine 10 stopped publishing that key in spec
+111, and the file was **48 passed before and after**. B found it while removing the field
+and reported it rather than editing, because the file is C's.
+
+**The operator's question: what was that key asserting?** **Nothing, on any day of its
+life.** Two findings, from the history rather than from today's code:
+
+1. The double was born in `6291981` (spec 45, 2026-09-10) and carried the key from its
+   first line. At that commit engine 10 *did* publish `fallbacks_used`, as
+   `fallbacks_used=self._fallbacks()`. So the double was faithful when written.
+2. It was faithful to something **already inert**. `_fallbacks()` at that same commit
+   returns an empty tuple unconditionally, and its own docstring says why: it used to read
+   `state["exchange"]["fallbacks_used"]`, *"which engine 1 does not publish and never
+   did"*. On the day the double copied the field, the field it copied could not take a
+   non-empty value. The double's `[]` was a faithful copy of a constant.
+
+**Had it ever been load-bearing?** No, and the check is cheap:
+`git log -S "fallbacks_used" -- scripts/verify.py` has exactly one hit, `df49cb4`, which
+is spec 113/114 and engine 22's trade rows -- a different field on a different engine.
+`check_cost_gate_uses_live_fee_tier` has never contained the string. It reads
+`net_edge_pct` twice, then `clears_hurdle`, `hurdle_pct` and `reason_code`, and
+`result.blocks_trading`. The key set has never been in its field of view, so the extra
+field was inert on the day it was written and inert on the day it went stale. This is
+`code-standards.md`'s *double that stopped tracking what it doubles*, caught unusually at
+the exact moment it stopped -- and the more interesting half is that **the drift is not
+what made it useless**. It was never carrying a claim.
+
+**Decision: the key comes out, and no key-set assertion goes into the criterion.** Spec
+117 step 3 invites the answer that the right check lives in B's lane, and it does.
+`tests/engines/test_cost.py::test_this_engine_publishes_no_fallback_field_and_the_key_set_is_pinned`
+already compares `set(result.data)` against `COST_PAYLOAD_KEYS` on **the real engine**, on
+all three published shapes. Three reasons not to copy it into the criterion:
+
+* The criterion judges a *fabricated* engine on its FAIL path, so a key-set assertion
+  there is a test of C's fabrication in exactly the arm where the fabrication is the
+  subject.
+* `COST_PAYLOAD_KEYS` is a statement about B's payload. A second copy maintained in C's
+  `verify.py` is the same defect one level up: a description of another lane's contract,
+  kept by the lane that does not own it, with nothing comparing the two.
+* It would **shadow the FAIL arms that already exist.** Each induced-failure test in this
+  file induces one defect and asserts the criterion names *that* defect (`"did not move
+  when the fee tier did"`, `"Something other than the reported fee"`). A shape check
+  running before the arithmetic would answer every one of them with a complaint about a
+  key, and those assertions would go red for a reason that has nothing to do with what
+  they test.
+
+**Fix.** The key is deleted from the double, and the blindness is closed **where it
+actually is** -- on the double, not on the criterion.
+`test_the_fabricated_cost_engine_publishes_engine_tens_key_set` drives the real engine 10
+and the fabricated one over the same tick, through the criterion's own `_cost_tick`, and
+compares `set(result.data)`. It reads the two payloads rather than either lane's
+description of them, so it carries no copy of the key set and goes red whichever side
+moves.
+
+**What now goes red that did not before.** Restoring `"fallbacks_used": []` to the double
+turns that test red -- which is precisely what `48 passed both before and after` was
+reporting as fine. Deleting a *real* key from the double turns it red too, in the other
+direction, so it is a tripwire rather than a one-sided ban on extra fields. Both arms were
+observed, and the tree's pre-fix state was observed red with the tripwire in place before
+the key was removed. Mutation table with sha256s below.
+
+**Mutations, spec 117.** Against `tests/verify/test_phase3_criteria.py`, which is a CRLF
+file -- read and written as bytes throughout, with the anchors carrying `\r\n`, because a
+patch that normalised the endings would rewrite all 1222 lines and the restore check would
+be comparing the wrong thing. sha256 `e3366224b083` before and after, compared in the same
+statement as the restore. Every anchor asserted to occur exactly once.
+`PYTHONDONTWRITEBYTECODE=1`, `sys.executable`. Narrow set the file itself, baseline
+`49 passed in 21.81s`. Log at `logs/verify/c117-sweep.log`.
+
+| Arm | What it does | Verdict | Killed by |
+|---|---|---|---|
+| F1 | `"fallbacks_used": []` is put back -- the exact state the file was 48-green in | KILLED, `1 failed, 48 passed` | `test_the_fabricated_cost_engine_publishes_engine_tens_key_set` |
+| F2 | the drift in the other direction: the double drops `hurdle_pct`, which engine 10 publishes | KILLED, `1 failed, 48 passed` | the same test, and nothing else |
+| C0 | control: a *value* in the double changes (`pair` uppercased) and no key does | SURVIVED, `49 passed` | -- |
+
+**Both kills are `1 failed`, and that is the finding.** Each arm is caught by the new test
+and by nothing else in the file -- F1 is the stale key restored, and the seven existing
+observations of `cost_gate_uses_live_fee_tier` sat green through it for a whole spec. F2
+proves the tripwire is a comparison rather than a one-sided ban on extra fields: a double
+that quietly drops a key engine 10 publishes is the same defect and the criterion is as
+blind to it.
+
+**C0 is a checked negative.** The double's *values* are load-bearing only where the
+criterion reads them, and `pair` is not one of those -- the criterion takes the pair from
+`_cost_tick`'s return, not from the payload. It survives because the tripwire is about
+shape, which is what it should be about; filed here so the two kills are not the only
+thing the sweep says.
+
+**Narrow results.** `tests/verify/test_phase3_criteria.py` 48 passed before, **49 passed**
+after (`logs/verify/c117-phase3.log`). `tests/verify/test_phase3_criteria.py` +
+`test_phase0_criteria.py` together, with `pytest-randomly` left on, 123 passed.
+`tests/verify/test_runner.py` + `test_workspace_sweep.py` + `test_docs_vocabulary.py`
+55 passed. B's own pin, run read-only to check the claim above rather than to change
+anything: `tests/engines/test_cost.py -k key_set` 1 passed.
