@@ -29,6 +29,26 @@ Records: this file and `docs/build-log/phase-6/b-store.md`. Scratch `...\scratch
 logs `logs/verify/b106-*`. Not touched: `bootstrap.py`, `core/`, `context/*`, the broker,
 other engines, other lanes' tests.
 
+### Spec 106 — DONE 2026-09-17, committed by the lead as `268f49e`
+
+- Engine 11 blocks on an absent `exchange.balances` in every mode, the reason naming the
+  absence; the paper fallback, `PAPER_STARTING_BALANCES_KEY`, `PAPER_MODE`,
+  `FALLBACK_BALANCE_FROM_PAPER` and `RiskSizing.fallbacks_used` removed (no producer, no reader).
+- Tests: `test_after_a_paper_fill_a_tick_with_no_published_balance_blocks` (real broker ledger,
+  one fill, the defect's window asserted), every-mode block, pass twin, before-sizing refusal,
+  approved key set; EUR test separates absent map from missing currency.
+- Engine 21 stores `last_price` = fill price and `unrealised_pnl` = 0 on the fill tick; pinned
+  through the real engine 19 by `test_a_position_opened_by_this_ticks_fill_is_stored_marked_at_its_fill_price`.
+- Spec 105 criterion PASS (mark = fill); A's rehearsal 7 passed.
+- Mutations: R1, R1b, R2, P1, P1b, P2, P3 killed by the tests written for them; controls R0, P0
+  survived narrow and wide (only the known eight).
+- Gate: mypy clean, ruff clean, pytest `8 failed, 3201 passed` (known eight), verify `2 PASS,
+  1 FAIL (toolchain_green, same eight), 9 PENDING`.
+- **Open, mine:** `engines/cost/contracts.py` + README call `fallbacks_used` a `rejections`
+  column (it is on `trades` only); `clients/paper/broker.py` exports unused
+  `FALLBACK_PAPER_LEDGER`. **Reported to C via the lead:** engine 9's docs still describe
+  engine 11's fallback; spec 105's criterion keeps a NULL-mark branch only the defect reaches.
+
 ## Phase 6, session 4 — CLAIMED 2026-09-16, specs 94 then 103, in that order
 
 Tree clean at `a668df3` when claimed. Claimed before any code, per rule 1.

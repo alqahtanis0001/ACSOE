@@ -16,6 +16,11 @@ column of the registry table in ``context/engine-contracts.md``.
 **Phase 5 registers engines 5, 6, 12, 13, 8 and 15, spec 77**; see ``OPPORTUNITY_CHAIN``.
 Fifteen of the twenty-three engines are registered or offline after it.
 
+**Phase 6 registers engines 9, 14, 16, 18, 21 and 22, spec 82**, and every live engine is
+now registered: twenty-one of the twenty-three, in the registry table's order with no
+holes. The other two, 20 and 23, are offline and never appear here. The next paragraph
+describes the chain as it stood after Phase 3 and is kept as history.
+
 **What was registered after Phase 3, and why the chain was not yet in full registry
 order.** Nine of the twenty-three engines existed then. The opportunity chain runs 7 -> 10 ->
 11 with 5, 6, 12, 13, 8 and 9 absent from between them, and 14, 15, 16 and 18 absent
@@ -55,15 +60,21 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from acsoe.core.contracts import Chains
+from acsoe.engines.adaptive_router.engine import AdaptiveRouterEngine
 from acsoe.engines.anomaly.engine import AnomalyEngine
 from acsoe.engines.cost.engine import CostEngine
 from acsoe.engines.data_guard.engine import DataGuardEngine
+from acsoe.engines.decision.engine import DecisionEngine
 from acsoe.engines.exchange.engine import ExchangeEngine
+from acsoe.engines.execution.engine import ExecutionEngine
+from acsoe.engines.exit.engine import ExitEngine
 from acsoe.engines.feature.engine import FeatureEngine
 from acsoe.engines.macro_context.engine import MacroContextEngine
 from acsoe.engines.market_data_recorder.engine import MarketDataRecorderEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
 from acsoe.engines.memory.engine import MemoryEngine
+from acsoe.engines.order_book.engine import OrderBookEngine
+from acsoe.engines.position_manager.engine import PositionManagerEngine
 from acsoe.engines.prediction.engine import PredictionEngine
 from acsoe.engines.regime.engine import RegimeEngine
 from acsoe.engines.risk.engine import RiskEngine
@@ -137,14 +148,27 @@ GUARD_CHAIN: tuple[BaseEngine, ...] = (
 #: ``skeptic.veto_threshold`` were ruled on 2026-09-14 and 2026-09-15 and are in
 #: ``config/default.yaml``, all three provisional until the chain runs end to end.
 #:
-#: **One hole is load-bearing this phase and it is stated rather than found.** Engine 10
-#: ``cost`` reads ``state["order_book"]["estimated_slippage_pct"]`` and engine 9 does not
-#: exist until Phase 6, so ``cost`` blocks every candidate that reaches it and engine 15
-#: ``skeptic`` is never reached in this chain. Engine 15 was therefore rehearsed through two
-#: real orchestrator ticks by B-3 in ``tests/engines/test_feature_chain_rehearsal.py`` with
-#: 10 and 11 left out, and the same file asserts that in this full chain the tick stops at
-#: ``cost`` and ``skeptic`` never runs. Registration was held until that rehearsal and B-2's
-#: rehearsals of 5, 6, 12, 13 and 8 were green, the same deferral as Phases 2, 3 and 4.
+#: In Phase 5 engine 10 blocked every candidate for want of engine 9's slippage estimate,
+#: so engine 15 was rehearsed with 10 and 11 left out. That hole is closed.
+#:
+#: **Phase 6 registers 9, 14, 16 and 18, spec 82, and the chain is now complete** — the
+#: registry table's order with no holes. 9 ``order_book`` sits before 10 ``cost``, which
+#: reads its ``estimated_slippage_pct`` and refuses when it is absent (engine 9 never
+#: blocks on its own). 14 ``adaptive_router`` sits after 11 ``risk`` and before 15
+#: ``skeptic``; nothing it publishes may change whether a gate blocks (invariant 4).
+#: 16 ``decision`` is a **gate** (operator ruling 2026-09-16): it refuses unless every
+#: approving engine judged this tick's pair and bar, and it composes the one order intent
+#: 18 ``execution`` reads — so 18 is last, and places a post-only entry only on an intent.
+#:
+#: Registration was held until two rehearsals, each by an agent that did not build the
+#: engines, were green: B's spec 94 over 9 and 14 (``test_feature_chain_rehearsal.py``, on
+#: a thin recorded book where engine 9's estimate is non-zero, so engine 10's use of it is
+#: proven by recomputation) and A's spec 87 over 18, 21 and 22
+#: (``test_trade_chain_rehearsal.py``, every upstream engine real). Those rehearsals found
+#: two defects between engines, both fixed before this registration: a paper fill counted
+#: twice in equity (spec 103) and an errored opportunity-chain tick left unrecorded
+#: (spec 104). Every trade the chain can produce is at a fee tier the fake client supplies;
+#: at tier 1 the cost gate is unreachable by construction at the current barriers.
 OPPORTUNITY_CHAIN: tuple[BaseEngine, ...] = (
     FeatureEngine(),
     MacroContextEngine(),
@@ -152,19 +176,26 @@ OPPORTUNITY_CHAIN: tuple[BaseEngine, ...] = (
     RegimeEngine(),
     AnomalyEngine(),
     PredictionEngine(),
+    OrderBookEngine(),
     CostEngine(),
     RiskEngine(),
+    AdaptiveRouterEngine(),
     SkepticEngine(),
+    DecisionEngine(),
+    ExecutionEngine(),
 )
 
 #: Engines 21, 22, 19. Every tick, every mode. Watches positions, exits them, records
 #: everything — including on the fourteen ticks in fifteen where no bar closed.
 #:
-#: **Phase 4 registers 19 `memory`, spec 58.** 21 `position_manager` and 22 `exit` are
-#: Phase 6 and stay absent, so this is registry order with holes exactly as the
-#: opportunity chain has been since Phase 3. The order matters when they land: 19 runs
-#: **last**, because it records what 21 and 22 did on this tick, and an engine cannot
-#: record a decision that has not been taken yet.
+#: **Phase 4 registered 19 `memory`, spec 58; Phase 6 registers 21 `position_manager` and
+#: 22 `exit`, spec 82, and the chain is complete.** The order is load-bearing: 21 watches
+#: the positions and resting entries and publishes the triggers and marks, 22 reads those
+#: triggers and places the exits (or, with `close_intent` set, liquidates regardless of a
+#: `data_guard` hold, invariant 14), and 19 runs **last** because it records what 21 and 22
+#: did on this tick — an engine cannot record a decision that has not been taken yet. The
+#: orchestrator clears `close_intent` only when 21 reports `entry_orders_cancelled` and 22
+#: reports `positions_closed`.
 #:
 #: Registration was held until engine 19 had been driven through **two real orchestrator
 #: ticks** by an agent that did not build it — B, in
@@ -181,7 +212,11 @@ OPPORTUNITY_CHAIN: tuple[BaseEngine, ...] = (
 #: the same tick by the only identity the schema recognises. Contract rule 7 turns the
 #: `IntegrityError` into `ERROR`, the tick completes, engine 19 publishes nothing, and the
 #: first tick's row survives untouched. That is the fail-closed outcome, not a defect.
-MANAGE_CHAIN: tuple[BaseEngine, ...] = (MemoryEngine(),)
+MANAGE_CHAIN: tuple[BaseEngine, ...] = (
+    PositionManagerEngine(),
+    ExitEngine(),
+    MemoryEngine(),
+)
 
 
 def build_chains() -> Chains:

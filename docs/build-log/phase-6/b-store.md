@@ -2303,3 +2303,88 @@ equity`: `5 passed, 35 deselected` (`logs/verify/b106-phase6-equity.log`). A's
 The criterion itself, run directly: **PASS**, "fee 3.6656556492501 + 26.26015939 x |mark
 126.9 - fill 126.9|" (`logs/verify/b106-criterion-105.log`). Scout, decision, feature-chain
 rehearsal, exit, execution, reason prose and `tests/clients/paper/`: `466 passed`.
+
+### Spec 106 — nine mutations: seven killed by the tests written for them, two controls
+
+**Agent:** B (session 5) · **Task:** spec 106 step 5 · **Date:** 2026-09-16
+
+Harness: `scratchpad/b106/sweep106.py` on spec 94's machinery (byte copy to scratch, every
+anchor exactly once, `PYTHONDONTWRITEBYTECODE=1`, `-p no:cacheprovider`, `sys.executable`,
+restore in a `finally` before the next arm with the sha256 compared in the same statement, no
+verdict without a pytest summary line). `engines/risk/engine.py` is CRLF, so its multi-line
+anchors carry `\r\n`; engine 21 is LF. **Controls chosen after grepping `tests/` and
+`scripts/verify.py` for their line text** (the spec 94 lesson): `if published is None:`
+appears only in verify.py's own code, never as a patcher anchor on engine 11, and
+`unrealised += pnl` appears nowhere. Hashes before the sweep and after every restore,
+identical: `risk/engine.py` `8383393c…52ce2`, `position_manager/engine.py`
+`2010de69…ee4e8` (full values in `logs/verify/b106-sweep-hashes-before.txt`). Narrow targets:
+`tests/engines/test_risk.py` (baseline `50 passed`) and `tests/engines/test_position_manager.py`
+(baseline `49 passed`). Logs `logs/verify/b106-sweep-*`.
+
+| Arm | Mutation | Verdict (file) | Killing test — written for it | Notes |
+|---|---|---|---|---|
+| R0 | `if published is None:` → `if None is published:` — **control** | survived, `50 passed` | — | wide: behaviourally survived (below) |
+| R1 | the paper fallback restored at the call site (paper mode, absent map → `paper.starting_balances`) | killed, `3 failed` | `test_after_a_paper_fill_a_tick_with_no_published_balance_blocks[the ledger cannot answer]` — `blocks_trading` False, **approved at notional `3330.8898660000`** on the account holding 1,664.3348: the defect, reproduced | also `…in_every_mode…[paper]` and `test_a_missing_balance_is_refused_before_anything_is_sized` (`below_ordermin` where the absence belongs) |
+| R1b | the same fallback in every mode | killed, `5 failed` | the after-fill test, and `…in_every_mode…[paper, live, replay]` | the before-sizing test |
+| R2 | `_balances` returns `{}` instead of raising | killed, `5 failed` | `…in_every_mode…[paper, live, replay]` and the after-fill test, **at the reason assertion only**: the gate still blocks, but says `missing exchange.balances.USD` — an account holding no USD — for an outage | the before-sizing test |
+| P0 | `unrealised += pnl` → `unrealised = unrealised + pnl` — **control** | survived, `49 passed` | — | wide: behaviourally survived (below) |
+| P1 | the fill-tick row's `last_price` not written (the defect restored) | killed, `1 failed` | `test_a_position_opened_by_this_ticks_fill_is_stored_marked_at_its_fill_price` — stored `last_price` `None` | none |
+| P1b | neither `last_price` nor `unrealised_pnl` written | killed, `1 failed` | the same test | none |
+| P2 | the row's `unrealised_pnl` is `pnl + 1` on the fill tick | killed, `1 failed` | the same test — stored `1.00`, not 0 | none |
+| P3 | the fill-tick row marked at the bid while the totals value it at cost | killed, `1 failed` | the same test — stored `99.99`, not `99.00` | none |
+
+**R2 is the arm that justifies asserting the words.** Both causes of
+`risk_inputs_unavailable` block, so a test asserting the code and the block passes R2. What
+R2 breaks is what the operator is told: "the account holds no USD" sends them to the account,
+while the truth is that engine 1 could not read it. Only `NO_BALANCE_PUBLISHED` in the reason
+tells the two apart, and the EUR test pins the other direction.
+
+**Every P arm is killed by one test and nothing else in the file.** The payload-level test
+beside it (`…counted_in_the_portfolio_value`) asserts the *totals* and stays green under all
+four, which is exactly how the NULL row lived beside correct totals since spec 92.
+
+**What else can see these arms — measured, not assumed.**
+
+- **P1 against spec 105's criterion tests and A's rehearsal** (`tests/verify/test_phase6_criteria.py`
+  and `tests/engines/test_trade_chain_rehearsal.py`, `-k "equity or rehearsal or filled or
+  watched"`): **survived**, `15 passed, 32 deselected`. The criterion still has its NULL-mark
+  branch — it accepts a missing `last_price` when the equity row valued the position at cost —
+  so it cannot tell the defect from the fix; the stored-row test in my file is the only guard.
+  Now that engine 21 always stores the mark on the fill tick, that branch is reachable only by
+  the defect. Reported to C through the lead; the criterion is C's.
+- **R1 against both rehearsals, `test_scout.py` and `test_decision.py`: survived**,
+  `134 passed`. Every one of them publishes a balance, so the removed branch is guarded by
+  `test_risk.py` alone — which is where it should be, and is now said rather than assumed.
+
+**The two controls, against the whole of `tests/`** (`logs/verify/b106-sweep-R0-control-1t-tests_.log`,
+`…P0-control-1t-tests_.log`). Expected red: the eight parametrisations of
+`test_pending_on_the_real_tree_names_the_subject_and_the_spec` (C, spec 100).
+
+- **R0 — behaviourally survived**, `8 failed, 3201 passed, 2 skipped` in 1339.20s: exactly the
+  known eight, nothing else.
+- **P0 — behaviourally survived**, `8 failed, 3201 passed, 2 skipped` in 1446.45s: exactly the
+  known eight, nothing else.
+
+The harness labels both "KILLED" because pytest exited 1; the failing sets were compared with
+the known red, which is the verdict. Hashes after both runs equal the pre-sweep values. No
+native fault this time; no run was repeated.
+
+### Spec 106 — the gate at the spec 106 boundary
+
+**Agent:** B (session 5) · **Date:** 2026-09-17
+
+Run sequentially, each to its own file, after the sweep and with nothing else of mine running.
+
+| Command | Result | Log |
+|---|---|---|
+| `mypy --strict src/ scripts/` | `Success: no issues found in 153 source files` | `logs/verify/b106-gate-mypy.log` |
+| `ruff check src/ tests/ scripts/` | `All checks passed!` | `logs/verify/b106-gate-ruff.log` |
+| `pytest tests/ -q` | `8 failed, 3201 passed, 2 skipped, 3 warnings in 1411.00s` — exactly the known eight | `logs/verify/b106-gate-pytest.log` |
+| `verify.py --phase 6` | `12 criteria: 2 PASS, 1 FAIL, 9 PENDING`; the FAIL is `toolchain_green` on the same eight; `paper_equity_continuous_across_fill` PASS, `docs_vocabulary` PASS | `logs/verify/b106-gate-verify.log` |
+
+Committed by the lead as `268f49e`. **Reported, not changed:** engine 9's README ("One deliberate
+asymmetry with engine 11") and `order_book/engine.py` docstring still describe the removed
+fallback (C's); spec 105's criterion keeps a NULL-mark branch only the defect now reaches (C's);
+`engines/cost/contracts.py` and README call `fallbacks_used` a `rejections` column, and
+`clients/paper/broker.py` exports an unused `FALLBACK_PAPER_LEDGER` under a stale comment (mine,
+for a later session).

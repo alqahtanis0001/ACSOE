@@ -149,7 +149,31 @@ correctness is a property of the branch. **Also folded into spec 106:** engine 2
 opened this tick with `last_price` NULL while its `_mark` docstring says the mark is the fill price
 (C's observation from spec 105).
 
-**Registration (spec 82) is approved and follows C's test move and B's spec 106.**
+**Done, 2026-09-17.** C's test move `d28b756`; spec 106 (B) `268f49e` — engine 11 blocks on an
+absent balance in every mode, `RiskSizing.fallbacks_used` removed (no producer, no reader; the
+column exists on `trades` only), engine 21 stores the fill price as the fill-tick mark.
+**Registration (spec 82) applied**: opportunity chain 5, 6, 7, 12, 13, 8, 9, 10, 11, 14, 15, 16,
+18 and manage chain 21, 22, 19, in registry order with no holes; `is_gate_matches_registry`
+23 engines, 8 gates, 0 mismatches. **Re-gated phases 0–6 on the registered tree**: every phase
+fails only `toolchain_green`, on spec 100's known eight — phase 0 6/7, 1 9/10, 2 8/9, 3 8/9,
+4 9/10, 5 13/14, 6 2 PASS / 1 FAIL / 9 PENDING. No fallout from registration.
+
+**Follow-ups, routed as small specs (operator, 2026-09-17):**
+- **Spec 107 (C):** engine 9's README and `_basis_notional` docstring still describe engine 11's
+  removed fallback; spec 105's criterion still accepts a fill-tick position with no stored mark,
+  which since spec 106 only a regression can produce (B's mutant P1 survives it today).
+- **Spec 108 (B):** `engines/cost/contracts.py` and README call `fallbacks_used` a `rejections`
+  column (it is on `trades` only); `clients/paper/broker.py` exports an unused
+  `FALLBACK_PAPER_LEDGER` and calls the starting balance a substituted value; engine 10's source
+  file is CRLF in the working tree.
+- **Folded into the spec 100 criteria bodies (C):** `test_the_tier_sentence_is_pending_rather_than_wrong_when_the_harness_is_absent`
+  takes `bare_tree` and never observes the PENDING its name promises; a four-quote docstring at
+  `tests/verify/test_phase6_criteria.py:671` that `ruff format --check` flags.
+
+**Overnight, operator asleep:** decisions taken are listed in
+`docs/build-log/phase-6/overnight-decisions-2026-09-17.md`, with the rejected option for each.
+The network was down 03:13–08:20 UTC; the recorder was disconnected for those 308 minutes and
+that span of book history is lost.
 
 ### FINDING: a defect mutation testing structurally cannot reach
 
