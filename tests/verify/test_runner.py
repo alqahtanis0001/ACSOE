@@ -384,3 +384,128 @@ def test_an_empty_phase_reports_cleanly_rather_than_dividing_by_zero(
 ) -> None:
     report = verify_module.format_report(5, Path("/repo"), [], [])
     assert "no criteria registered" in report
+
+
+# --------------------------------------------------------------------------- #
+# The gate has to be able to print its own verdicts
+# --------------------------------------------------------------------------- #
+#
+# `verify.py --phase 6 > log 2>&1` died mid-run on 2026-09-18 with
+# `UnicodeEncodeError: 'charmap' codec can't encode character U+2212`. A redirected
+# stream on Windows is opened with `locale.getencoding()` - cp1252 here - and cp1252 has
+# no minus sign. `ui-context.md` rule 6 *requires* U+2212 in numeric output, so the
+# project's own house style was unprintable by its own gate and the two had never met.
+#
+# Nothing caught it because every test of this module reads `outcome.message` as a `str`.
+# The printer had never been driven through a stream with a real encoding, so the one path
+# the operator actually looks at was exercised only against pytest's forgiving capture.
+
+
+#: U+2212, built with `chr` rather than typed. `ruff`'s RUF001 refuses the literal in
+#: a source file, and more to the point an editor that helpfully normalised it into an
+#: ASCII hyphen would turn these tests into hyphen tests - which cp1252 encodes
+#: perfectly well, so both of them would go green against the bug they exist to catch.
+MINUS_SIGN = chr(0x2212)
+
+
+def _cp1252_stream() -> Any:
+    """A text stream encoding exactly as a redirected stdout does on this machine."""
+    import io
+
+    return io.TextIOWrapper(io.BytesIO(), encoding="cp1252", newline="\n")
+
+
+def test_a_locale_encoded_stream_cannot_carry_the_minus_sign_this_project_mandates(
+    verify_module: ModuleType,
+) -> None:
+    """The hazard, pinned so the fix below cannot become decoration.
+
+    This is the crash the operator hit, reproduced in three lines. It is a permanent part
+    of the file rather than a step that was run once: it is what makes
+    `make_console_utf8` load-bearing, and without it a future edit could drop the
+    reconfigure and the next test would go on passing against a stream that never needed
+    it.
+    """
+    line = verify_module.criterion_line(
+        _criterion(verify_module, "c", None),
+        verify_module.passed(MINUS_SIGN + "60.50 is what the console renders"),
+        8,
+    )
+    with pytest.raises(UnicodeEncodeError, match="charmap"):
+        print(line, file=_cp1252_stream(), flush=True)
+
+
+def test_the_gate_makes_its_own_streams_utf8_before_it_prints_anything(
+    verify_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fix, on the same stream that raised above.
+
+    Asserted on the **bytes**, not on the absence of an exception: a stream that silently
+    dropped the character would also not raise, and a verdict quoting a figure the console
+    renders has to arrive with the figure in it.
+    """
+    stream = _cp1252_stream()
+    monkeypatch.setattr(verify_module.sys, "stdout", stream)
+    monkeypatch.setattr(verify_module.sys, "stderr", stream)
+
+    assert verify_module.make_console_utf8() == []
+
+    line = verify_module.criterion_line(
+        _criterion(verify_module, "c", None),
+        verify_module.passed(MINUS_SIGN + "60.50 is what the console renders"),
+        8,
+    )
+    print(line, file=stream, flush=True)
+    written = stream.buffer.getvalue()
+    assert MINUS_SIGN.encode() in written
+    assert written.decode("utf-8")
+
+
+def test_a_lone_surrogate_in_a_verdict_is_escaped_rather_than_ending_the_run(
+    verify_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Why the errors mode is `backslashreplace` and not `strict`.
+
+    UTF-8 encodes every code point **except a lone surrogate**, and lone surrogates reach
+    this program by an ordinary route: `os.fsdecode` maps undecodable filesystem bytes
+    into the surrogate range, and criterion messages embed paths - `toolchain_green`'s
+    "full output: ..." is one. Strict UTF-8 would therefore still be able to kill a run,
+    on a rarer input, which is the worse version of this bug rather than a fixed one.
+
+    The escape is asserted to be *present* because it keeps the information: it names the
+    code point, where `replace` would discard it.
+    """
+    stream = _cp1252_stream()
+    monkeypatch.setattr(verify_module.sys, "stdout", stream)
+    monkeypatch.setattr(verify_module.sys, "stderr", stream)
+    verify_module.make_console_utf8()
+
+    line = verify_module.criterion_line(
+        _criterion(verify_module, "c", None),
+        verify_module.passed("full output: /tmp/\udce9.log"),
+        8,
+    )
+    print(line, file=stream, flush=True)
+    # The **bytes** backslashreplace emits: the six ASCII characters of the escape,
+    # not a `\u` escape, which a bytes literal does not have and which Python warns
+    # about as an invalid escape sequence.
+    assert rb"\udce9" in stream.buffer.getvalue()
+
+
+def test_a_stream_that_cannot_be_reconfigured_is_named_rather_than_swallowed(
+    verify_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never raises, and never pretends. A stream this cannot fix is one where the
+    original crash is still possible, and the operator has to learn that from the header
+    rather than from a traceback six criteria later."""
+
+    class _NoReconfigure:
+        def write(self, text: str) -> int:
+            return len(text)
+
+        def flush(self) -> None:
+            return None
+
+    monkeypatch.setattr(verify_module.sys, "stdout", _NoReconfigure())
+    monkeypatch.setattr(verify_module.sys, "stderr", _NoReconfigure())
+    assert verify_module.make_console_utf8() == ["stdout", "stderr"]

@@ -101,6 +101,12 @@ def _position_payload(view: PositionView) -> dict[str, Any]:
         "timeout_at": view.timeout_at,
         "age_text": view.age_text,
         "staleness": staleness_payload(view.staleness),
+        # Spec 101. Both halves are sent: the code because a consumer of this payload that
+        # is not the page should not have to parse English back into a reason, and the
+        # prose because the page must never map a code itself. `console/format.py` is the
+        # one place that mapping happens.
+        "hold_reason": view.hold_reason,
+        "hold_reason_text": view.hold_reason_text,
     }
 
 

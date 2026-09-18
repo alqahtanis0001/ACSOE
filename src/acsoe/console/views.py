@@ -209,6 +209,35 @@ class PositionView(_View):
     age_text: str
     staleness: Staleness
 
+    hold_reason: str | None
+    """The manage chain's hold on this position, as engine 21 published it.
+
+    **Deliberately required, with no default**, although ``None`` is the ordinary value.
+    `code-standards.md` records the cost of the other choice in this exact place: a
+    `PositionRow` whose `hold_reason` defaults to ``None`` satisfied the assertion a test
+    was making about engine 19, so the test passed under its own mutation. A default here
+    is a second source for the value under test, and every construction site is the
+    reader, which always has the row in hand.
+
+    ``None`` on a position nothing held, which is the ordinary case, and the field is
+    **null rather than absent** for the reason `position_manager/contracts.py` gives one
+    level up: on a tick that did not hold, the null *is* the answer.
+
+    Spec 101. Engine 21 has published this since Phase 6 and engine 19 has stored it on
+    the row, and until now the console read the row and rendered nothing — so a held
+    position and an ordinary one were the same row on screen. What that withheld is
+    specific: a hold means **exits are paused**, and an operator watching a position sit
+    on its stop needs to know the exit is not coming this tick."""
+
+    hold_reason_text: str
+    """:attr:`hold_reason` as operator prose, through ``REASON_PROSE``.
+
+    Empty string when nothing held, so the cell is blank rather than carrying a word for
+    the absence of a hold. A code that reaches the screen is the defect
+    :func:`~acsoe.console.format.operator_reason` exists to prevent — `ownership.md` makes
+    `console/format.py` the one place a `hold_reason` becomes English, and this is the
+    field that carries the result."""
+
 
 class FeedRowView(_View):
     """One row of the cycle feed: time, pair, outcome, reason.

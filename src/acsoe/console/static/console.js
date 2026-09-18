@@ -166,21 +166,65 @@
     }
     count("position-count", payload.positions.length, "position");
     fill("positions", payload.positions, function (p) {
-      return row([
+      var tr = row([
         [p.pair, ""],
         [p.qty_text, "num"],
         [p.entry_price_text, "num"],
-        [p.last_price_text, "num"],
+        /* `aged` names the three figures that come from the daemon's last touch
+           of this row, which is what `staleness` is measured from. It carries no
+           style of its own - it is how the staleness below finds them without
+           counting columns, so inserting a column cannot silently fade the wrong
+           cell. */
+        [p.last_price_text, "num aged"],
         [p.target_price_text, "num"],
         [p.stop_price_text, "num"],
-        [p.unrealised_pnl_text, "num " + p.direction],
-        [p.unrealised_pnl_pct_text, "num " + p.direction],
+        [p.unrealised_pnl_text, "num aged " + p.direction],
+        [p.unrealised_pnl_pct_text, "num aged " + p.direction],
         /* Spec 101. Rendered, never computed: the age arrives as text from the
            reader, which holds the console's one clock. Deriving it here from
            opened_at would read the *browser's* clock, which belongs to neither
            the daemon nor the console and is the one nobody controls. */
-        [p.age_text, "num"]
+        [p.age_text, "num"],
+        /* Spec 101. Already prose when it arrives. The page never maps a reason
+           code: console/format.py is the one place that happens, and a code on
+           screen is a log line shown to an operator. */
+        [p.hold_reason_text, ""]
       ]);
+
+      /* Rule 5, on the position row. The reader has decided the verdict and
+         written the age since Phase 1 and the payload has carried both; nothing
+         applied them, so a row the daemon had not touched for an hour rendered at
+         full opacity beside a fresh one. applyStaleness is reused rather than
+         reimplemented - rule 5 gets one implementation - and it finds the .age
+         span through the cell's parent row.
+
+         Three cells and not the whole row. `staleness` is measured from
+         `updated_at`, so it ages exactly the figures that update: the mark, and
+         the two unrealised figures computed from it. The entry, target and stop
+         were decided at the fill and are still exactly true; fading them would say
+         the position is doubtful when what is old is one number. Fading the whole
+         row would be worse - `age_us` says a long-held position is hours old, so a
+         row faded on the position's age would sit at half opacity permanently,
+         which is the failure ui-context.md names for a slow poll interval. */
+      var aged = tr.querySelectorAll(".aged");
+      if (aged.length) {
+        /* The age goes beside the mark alone - three copies of one age is noise,
+           and rule 5 asks for the age of the figure, not of every column. It is
+           created before the loop because applyStaleness writes into it. */
+        aged[0].appendChild(document.createElement("span")).className = "age";
+      }
+      /* ONE call site, and the verdict is its argument. An earlier version faded
+         the mark through applyStaleness and the other two through their own
+         classList.toggle, which is two places for rule 5 to be decided - and the
+         mutation that passed `null` here survived the whole console suite,
+         because a test can see that applyStaleness is CALLED far more easily
+         than it can see what it was handed. With one call the argument is the
+         only thing to assert, and test_a_stale_position_row_is_faded_and_shows_
+         its_age pins the call with p.staleness in it. */
+      for (var a = 0; a < aged.length; a += 1) {
+        applyStaleness(aged[a], p.staleness);
+      }
+      return tr;
     });
   }
 

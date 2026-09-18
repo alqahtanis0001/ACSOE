@@ -1,5 +1,89 @@
 # Phase 6 — shared task list
 
+## HANDOFF 7, 2026-09-18 02:45 local — THE NINE CRITERIA ARE GREEN. Phase 6 is not closed.
+
+**Read this first. HANDOFF 6 and earlier are history.** Written for a session that has read the
+documents and nothing else: everything below is on disk, nothing of substance lives in a
+transcript.
+
+### Where it stands
+
+`python scripts/verify.py --phase 6` → **13 criteria, 13 PASS, 0 FAIL, 0 PENDING, exit 0**
+(`logs/verify/phase6-20260918-nine-lead-*.log`; `toolchain_green` reports `3297 passed, 2
+skipped`). **The first complete paper trade runs end to end** through the registered chains at fee
+tier 3 — post-only entry past all eight gates, fill at its limit, minute-by-minute watch, exit on
+each of target, stop and timeout — with every order, position, trade and equity row reconciled
+against figures recomputed from the book and the live fee tier, and the console rendering the
+position live.
+
+**Do NOT close the phase.** The operator wants to see the trade before it closes. When the nine
+were green the lead reported and stopped, which is where this handoff begins.
+
+**Nothing is in flight. Every agent is stopped and the tree is clean at the commit carrying this
+handoff.** Their progress files and build logs are current: `context/progress/{a-platform,
+b-store,c-interface}.md`, `docs/build-log/phase-6/*.md`.
+
+### What this session built, in order
+
+Registration of engines 9, 14, 16, 18, 21, 22 (spec 82); the nine criteria bodies (100); the
+exit-cycle equity row (113 B, 114 C, 116 A); the console showing the position live (101 C); and
+the smaller work: 103, 104, 105, 106, 107, 108, 110, 111, 112, 115, 117. **Four defects were found
+that would each have shipped as working code**, all recorded in `context/progress-tracker.md`:
+the paper-fill double count, the unrecorded errored tick, the exit-cycle equity row (three moments
+that never coexisted), and `verify.py` dying on the minus sign its own house style mandates —
+exiting 1, the code a real FAIL returns, with six criteria never run.
+
+### The next steps, in this order
+
+1. **The seed-vocabulary reconciliation** — B repoints every seeded `rejections` row to an
+   `(engine, code)` pair the live system can emit (engine 9's becomes engine 10 refusing on the
+   absent estimate); **then** C retires the prose that no longer has a producer. Every code stays
+   mapped until B's half lands, because the seeded rows exist and must render. The finding is in
+   the tracker under "the Phase 0 seed's refusal vocabulary is invented".
+2. **Spec 109 (A)** — engine 1 and the Kraken client stop describing paper-mode fallbacks that no
+   longer exist.
+3. **Spec 118 (C)** — the recorded prices agree with the recorded `pair_decimals`, over the two
+   committed fixtures.
+4. **The `cash_source` default removal (lead)** — `EquitySnapshotRow.cash_source`'s default goes,
+   **landing with a test that a row lacking a source is refused**; ~8 files across three lanes, so
+   it is a lead task under ownership rule 6, and B's test *of* the default is retired by it.
+5. Then the phase close, on the operator's word: the final gate, the tracker, and
+   `docs/build-log/phase-6.md` consolidated from the four per-agent logs.
+
+### Standing rules in force (all also in `context/code-standards.md` or the tracker)
+
+- **The gate is `verify.py` alone**, with `mypy --strict src/ scripts/` and
+  `ruff check src/ tests/ scripts/` before it. The bare `pytest tests/ -q` is **retired** — the
+  same suite twice on an unchanged tree measured nothing, and spec 115 puts the test count in the
+  gate's own PASS message.
+- **One authoritative gate at every boundary, immediately before the commit**, and **commit only
+  once the agent's records are on disk**, not merely its logs. A re-gate is required when any
+  source, test or config byte changed since the gate started; a docs-only delta needs only the
+  document checks, with the diff proving it docs-only in the commit message.
+- **Push-notify the operator only when blocked on a ruling** — one line, and the blocked item
+  stops while other work continues.
+- **Any finding or design choice costing more than about three hours goes to the operator with the
+  options before anyone starts.** Gates, re-gates and agreed work are exempt.
+- **One agent in the tree at a time.** Two lanes sweeping at once make each other's results wrong.
+- **Every assertion proven capable of failing, with the proof in the build log. Mutation over
+  reading.** Mutate from a byte copy, restore in a `finally` with the sha256 compared in the same
+  statement, anchors asserted to occur exactly once, `PYTHONDONTWRITEBYTECODE=1`, and a verdict
+  with no pytest summary line is not a result. **Ask of every kill which test killed it**: three
+  survivors this phase (V8, V12, V1) and two kills-for-the-wrong-reason (M1, and A's first M4)
+  were found that way.
+- **Never write a file through a bash heredoc carrying escapes** — three incidents this phase; the
+  escape is decoded one layer above the shell. Use the file tool and `chr(0x2212)`.
+- **Prose is part of the deliverable**, not decoration: this code goes into a dissertation. And
+  **stale prose with no decision entry behind it is a finding to report, not a typo to fix
+  silently.**
+
+### Open, and needing nobody's permission to read
+
+`docs/build-log/phase-6/overnight-decisions-2026-09-17.md` holds every decision taken while the
+operator slept, each with the option rejected; its Q1 and Q2 are closed. The two `REVIEW`-marked
+choices the operator has not revisited are D3 (the criterion rejecting a NULL fill-tick mark) and
+D8 (the outage criterion failing `AssetPairs` to fail the balance).
+
 ## HANDOFF 6, 2026-09-17 19:20 local — the criteria bodies exist; the exit-cycle row is mid-fix; MUCH IS UNCOMMITTED
 
 **Read this first. HANDOFF 5 and earlier are history.** Written at the operator's instruction

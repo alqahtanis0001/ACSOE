@@ -3429,3 +3429,516 @@ after (`logs/verify/c117-phase3.log`). `tests/verify/test_phase3_criteria.py` +
 `tests/verify/test_runner.py` + `test_workspace_sweep.py` + `test_docs_vocabulary.py`
 55 passed. B's own pin, run read-only to check the claim above rather than to change
 anything: `tests/engines/test_cost.py -k key_set` 1 passed.
+
+
+### Spec 101 step 1: what the console actually shows of a live position
+
+**Agent:** C · **Task:** spec 101 · **Date:** 2026-09-17
+
+**What happened.** Hand check before any change, as step 1 requires. A real daemon at fee
+tier 3 was driven through `verify.py`'s own harness -- `_driven` / `_warm_up` / `_entry` /
+`_fill` -- so engines 18, 21 and 19 opened a position for real, and a `ConsoleReader` was
+pointed at that same database and asked for `positions()` on three ticks: the fill, a
+second tick with the mark moved, and a tick engine 4 blocked so engine 21 held. Every
+field of the view and of the WebSocket payload was dumped. `BTC/USD`, `pair_decimals` 1,
+`lot_decimals` 8, entry 126.9, qty 26.26015939, position `pos-1690626088`.
+
+**Most of it is already right, and that is worth saying first.** The mark moved with the
+market (126.9 to 127.425 to 124.596), `unrealised_pnl` moved with it and changed sign,
+`direction` went `flat` / `pos` / `neg`, the percentage was explicitly signed throughout
+(`+0.00%`, `+0.41%`, `−1.82%`), the minus is a real U+2212 -- it crashed my own dump
+script under cp1252, which is the most convincing evidence rule 6 holds that I could have
+asked for -- and `age_text` counted up `0ms` / `1m 00s` / `2m 00s` against `timeout_at`.
+Phase 1 built this against seeded rows and it survives contact with rows engine 19 wrote.
+
+**Three findings.**
+
+**1. The hold is invisible.** On the held tick engine 21 published
+`hold_reason='data_guard_blocked'` and engine 19 stored it on the position -- both
+confirmed in the dump -- and the console renders **nothing**. `PositionView` has no
+`hold_reason` field at all, so a held position and an ordinary one are the same row on
+screen. This is the criterion's own PENDING and spec 101 step 3. What the operator is not
+being told is specific and it matters: exits are paused. The prose already exists in
+`REASON_PROSE` (`format.py`), added with engine 21's codes -- *"Exits are paused while
+this tick's market data is rejected; the position is still watched"* -- and nothing was
+ever wired to render it.
+
+**2. Staleness is computed, sent, and then dropped on the floor.** `PositionView.staleness`
+is built by the reader, reaches the browser inside `_position_payload`, and
+`static/console.js` **never applies it to a position row**. `applyStaleness` is called
+twice, both times for the status band (balance, data age). So `ui-context.md` rule 5 --
+"any figure older than `console.stale_after_ms` renders at 50% opacity with its age shown
+beside it" -- does not hold for the open-positions region, which is the region spec 101 is
+about. The CSS was never the gap: `.stale { opacity: 0.5 }` and `.age` are both already in
+`console.css` under a comment quoting rule 5. Nothing called them.
+
+This is the shape `code-standards.md` keeps recording from other directions -- a value
+that is produced, carried and asserted on at the producing end, with no test anywhere
+asking whether the consumer does anything with it. `test_a_position_view_renders_every_
+figure_as_a_string_too` checks `staleness.stale_after_ms` on the view; no test asks
+whether a stale row looks stale.
+
+**3. Rule 4 holds for every figure the daemon quantized, and `unrealised_pnl` is not one.**
+This one is a **stop-and-report, not a fix**, and it is recorded here rather than acted on.
+
+`ui-context.md` rule 4 reads "Money renders to the quote currency's own precision from
+`AssetPairs`, never more digits than the exchange itself uses." `format.py`'s own header
+restates the same rule as "Money renders to the precision it was stored at", and
+`format_money` therefore never quantizes -- a Phase 1 decision with a test behind it
+(`test_money_renders_at_the_precision_it_was_stored_at`). The two readings agree exactly
+as long as the **writer** quantizes to the exchange's precision, and for prices it does:
+`entry_price_text` is `126.9`, one decimal, which is this pair's `pair_decimals`.
+
+`unrealised_pnl_text` rendered **`−60.50340723456`** -- eleven decimal places. It is a
+product, `qty` at 8 lot decimals times a price, and nothing quantizes the result. By
+`ui-context.md`'s wording that is a violation on the figure an operator looks at most; by
+`format.py`'s wording the console is behaving correctly and the number it was handed is
+the problem.
+
+**Why I am not deciding it.** Every available fix is either outside my lane or forbidden
+by this spec:
+
+* Quantizing in the reader or the view is **re-rounding money the console did not
+  compute**, which spec 101's own scope limit forbids ("do not compute PnL in the browser
+  or the reader beyond formatting what engine 21 published") -- and it changes the value
+  the operator reads, not merely its presentation.
+* Quantizing in engine 21 is B's lane and changes what the daemon stores.
+* And the rule does not say which precision a *PnL* takes. `pair_decimals` is a **price**
+  precision for a pair; an unrealised PnL is an amount in the quote currency, whose own
+  display precision `AssetPairs` gives per asset -- and the console has no asset-level
+  data plumbed to it at all.
+
+So three documents would have to agree before a line is written, and the operator is the
+one who settles that. Reported rather than decided, per the lead's instruction. Everything
+about rule 4 that **is** settled gets asserted: the criterion checks the price figures
+against the `pair_decimals` engine 1 published on the same tick, so the half of the rule
+that holds is held, and the half that does not is named here rather than quietly rounded
+away.
+
+**Fix (findings 1 and 2).** Recorded below with the design choice and the mutations.
+
+
+### Spec 101: the fix, and a correction to finding 3 that the criterion made for me
+
+**Agent:** C · **Task:** spec 101 · **Date:** 2026-09-17
+
+**Fix for findings 1 and 2.** `PositionView` gained `hold_reason` and `hold_reason_text`;
+the reader fills them from `PositionRow.hold_reason` through `operator_reason`;
+`payloads.py` sends both halves; the template gained a left-aligned `Hold` column and
+`console.js` renders `p.hold_reason_text` in it. Rule 5 now reaches the row: the three
+`aged` cells take the `stale` class and the mark carries an `.age` span, through the
+**existing** `applyStaleness` rather than a second implementation.
+
+**Both view fields are required, with no default**, although `None` is the ordinary value
+for `hold_reason`. `code-standards.md` records the cost of the other choice in this exact
+place and in this lane: a `PositionRow` whose `hold_reason` defaults to `None` satisfied
+the assertion a test was making about engine 19, and the test passed under its own
+mutation. Every construction site is the reader, which always has the row.
+
+**Decision: a `Hold` column, left-aligned and last.** Options were a tenth column, a
+second row beneath each position spanning the table, or a `title` attribute.
+
+*Chose* the column. `ui-context.md` designs the status band, the open-positions region and
+the cycle feed, and it hands an undesigned column "the same table treatment as the cycle
+feed: left-aligned labels, right-aligned tabular numbers" — and the cycle feed's own row
+is *time · pair · outcome · reason*. A reason as a trailing left-aligned column is
+therefore the treatment the document already gives a reason, rather than one I invented.
+
+*Rejected* the spanning second row: it changes the row count of a table an operator scans
+by eye, and a region that is sometimes one row per position and sometimes two is harder
+to read at a glance than a column that is usually blank. *Rejected* the `title`
+attribute outright — invisible to a keyboard user and to anyone not hovering, which fails
+the quality floor rather than meeting it.
+
+`test_the_hold_column_is_prose_and_stays_out_of_the_tabular_run` holds the one thing that
+could quietly go wrong: marking it `num` would right-align an English clause into the mono
+face, which is the treatment the document reserves for numbers.
+
+**Which cells rule 5 fades, and why not the row.** `staleness` is measured from
+`updated_at`, so it ages exactly the figures that come from the daemon's last touch: the
+mark and the two unrealised figures computed from it. The entry, target and stop were
+decided at the fill and are still exactly true. Fading the whole row would be worse than
+imprecise: `age_us` says a long-held position is hours old, so a row faded on the
+*position's* age would sit at half opacity for as long as it was held — which is the
+failure `ui-context.md` names for a poll interval set too close to the stale threshold,
+"a slow poll would fade the entire screen to half opacity permanently". The three cells
+are found by an `aged` marker class rather than by counting columns, so inserting a
+column cannot silently fade the wrong one, and the marker deliberately has **no** CSS:
+`.stale { opacity: 0.5 }` stays the only appearance rule, asserted by
+`test_the_stylesheet_still_owns_rule_5_and_nothing_else_declares_the_opacity`.
+
+### Correction: rule 4 is broken wider than the hand check said, and the criterion found it
+
+**Agent:** C · **Task:** spec 101 · **Date:** 2026-09-17
+
+**What happened.** Finding 3 above named `unrealised_pnl` as the one figure rendering more
+decimals than the exchange uses. That was the figure I *looked at*. When the criterion
+asserted the rule across all four price figures, it came back FAIL naming three more:
+
+    the mark renders '124.596', which is 3 decimal places where AssetPairs gives this
+    pair 1; the target renders '130.707', ... 3 ...; the stop renders '124.9965',
+    which is 4 decimal places where AssetPairs gives this pair 1
+
+**Why.** Only the **entry price** has a writer that puts it on the exchange's grid —
+engine 18 quantizes the limit before placing the order, and `verify.py`'s `_entry`
+recomputes that and refuses anything else. The target and the stop are
+`entry * (1 +/- pct)` from engine 21 and **nothing quantizes the product**. The unrealised
+PnL is `qty * (mark - entry)`, a lot-precision quantity times a price, and nothing
+quantizes that either. The mark is the published bid, which in this drive is a price the
+criterion itself pinned — so on that one figure a criterion would be judging its own
+harness.
+
+**This is the correction worth keeping**, and it is the same shape as the rule this lane
+has now hit three times: *a description of the code is not the code.* I read one figure,
+generalised from it, and wrote a build-log entry naming one field. The check that ran
+against all four disagreed with me within a minute of existing. The hand check was not
+wrong to look — it found the thing — it was wrong to stop at the first instance and
+report the shape from a sample of one.
+
+**Decided: measured and named, never judged.** `_console_rule_4` in `scripts/verify.py`
+returns the over-precise figures and the PASS message carries them verbatim. Three
+reasons a FAIL would have been the wrong verdict:
+
+* It would be **red on a tree nobody has broken.** The console renders exactly what it was
+  handed; the digits are the daemon's.
+* Every fix is outside this spec or this lane. Quantizing in the reader is what spec 101's
+  scope limit forbids by name — "do not compute PnL in the browser or the reader beyond
+  formatting what engine 21 published" — and re-rounding changes the value, not its
+  presentation. Quantizing in engine 21 is B's lane.
+* **The rule does not settle which precision applies.** `ui-context.md` says "the quote
+  currency's own precision from `AssetPairs`"; `format.py` says "the precision it was
+  stored at" and never quantizes, with a Phase 1 test behind it. `pair_decimals` is a
+  **price** precision for a pair, and an unrealised PnL is an amount in the quote
+  currency, whose own display precision `AssetPairs` gives per *asset* — which the console
+  has no plumbing for at all.
+
+So the criterion asserts the half that is settled (the entry price must be on engine 18's
+grid, a FAIL if the console loses or invents a digit there) and reports the rest as an
+`OPEN` clause in its PASS line. Saying nothing would have let the operator's open question
+quietly become the answer; failing would have been a gate that is wrong about a tree that
+is right.
+
+**Raised to the lead as a stop-and-report.** Nothing was changed in engine 21, in the
+reader's formatting or in either document.
+
+
+### The staleness test could not see its own mutation, and the sweep is what said so
+
+**Agent:** C · **Task:** spec 101 · **Date:** 2026-09-18
+
+**What happened.** The first console sweep came back eight arms, **seven killed and S1
+SURVIVED**. S1 is `applyStaleness(aged[0], null)` — the verdict is computed, serialised,
+sent, and then thrown away at the last step. That is *exactly* the pre-spec-101 behaviour
+the whole staleness half of this spec exists to fix, and the entire console suite,
+including the test I had just written for it, stayed green: `365 passed`.
+
+**Why.** `test_a_stale_position_row_is_faded_and_shows_its_age` asserted
+`"applyStaleness" in source` and `"p.staleness" in source` as **two separate substring
+checks**. Under S1 both were still true: the call was still there, and `p.staleness` was
+still there — in a *different* statement, the `classList.toggle` loop that faded the other
+two cells. The test said "this row applies its staleness" and asserted "these two words
+both occur somewhere in this function". A test can see that a function is called far more
+easily than it can see what it was handed.
+
+This is the substring trap from `code-standards.md` in its passing-for-the-wrong-reason
+direction, and it is the second time this lane has hit that direction specifically. It is
+also the lead's instruction (1) failing on its own terms: the staleness fix was to be
+**asserted, not merely fixed**, and it was merely fixed.
+
+**Fix, and it is in the code as much as in the test.** The builder had **two** places
+where rule 5 was decided — `applyStaleness` for the mark, `classList.toggle` for the other
+two cells — and two places is what made the argument hard to pin. There is now **one**: the
+`.age` span is created first, then a single loop calls `applyStaleness(aged[a],
+p.staleness)` over every aged cell. The test pins that call **with its argument**, asserts
+`applyStaleness` occurs exactly once so the argument is the only thing that can be wrong,
+and asserts `classList` does not appear at all so a second path cannot grow back. S1
+re-aimed at the new line is **KILLED**.
+
+**The residual limit, stated rather than hidden**, as `check_console_tabular_figures`
+states its own: this reads source text. It holds the verdict to being *passed* to the one
+function that fades a cell; it cannot watch a browser compute an opacity. What it now does
+is go red the moment the position row stops handing rule 5 its answer, which is the
+failure that actually occurred.
+
+**Mutations, spec 101 console side.** Four targets, byte copies taken before anything was
+applied, all restored in a `finally` with every sha256 compared in the same statement.
+Every anchor asserted to occur exactly once. `PYTHONDONTWRITEBYTECODE=1`,
+`sys.executable`, narrow set `tests/console/`, baseline `365 passed`. Logs:
+`logs/verify/c101-sweep.log` (the run that found S1) and `logs/verify/c101-sweep-2.log`
+(after the fix).
+
+sha256 before and after: `reader.py` `082714b4297b`, `payloads.py` `a6a5fc14d628`,
+`index.html` `1e82c54dadfc`, `console.js` `98ab474489fc` in the first sweep and
+`8199ec2f1655` in the second — the one file the fix changed, and the only hash that
+differs between the two runs.
+
+| Arm | File | What it does | Verdict | Killed by |
+|---|---|---|---|---|
+| H1 | reader | drops the hold engine 19 stored | KILLED, 3 failed | the three `test_live_position` hold tests |
+| H2 | reader | the raw reason code reaches the screen instead of prose | KILLED, 1 failed | `test_a_held_position_shows_its_reason_as_operator_prose` |
+| H3 | payloads | the prose is built and then not sent to the browser | KILLED, 1 failed | the same test, through `payload()` |
+| H4 | console.js | the page renders an empty Hold cell whatever arrives | KILLED, 2 failed | `..._builds_one_cell_per_column`, `..._shows_the_hold_reason_spec_101_asks_for` |
+| S1 | console.js | rule 5 is never applied to the row (the pre-spec-101 behaviour) | **SURVIVED**, then KILLED | `test_a_stale_position_row_is_faded_and_shows_its_age`, after the fix above |
+| S2 | console.js | the unrealised figure stops fading with the mark it comes from | KILLED, 1 failed | `test_the_faded_cells_are_the_figures_that_age_and_not_the_whole_row` |
+| S3 | console.js | a figure decided at the fill fades with the mark | KILLED, 1 failed | the same test, from the other side |
+| T1 | template | the prose column joins the tabular run | KILLED, 1 failed | `test_the_hold_column_is_prose_and_stays_out_of_the_tabular_run` |
+| C0 | reader | control: `is None` becomes a falsiness test | SURVIVED | — |
+
+**C0 is a checked negative and is reported as one.** `hold_reason` is either a code or
+null; no engine writes it empty, so `is None` and falsiness cannot disagree on any value
+that exists. Killing it would need a fixture asserting a fact the system cannot produce.
+It is in the table so the eight kills are not the only thing the sweep says — and, this
+time, so that a survivor in the table is not automatically read as a hole.
+
+**S2 and S3 are the pair that matters for the "which cells" claim.** S2 stops the
+unrealised figure fading with the mark it is computed from; S3 fades a figure that was
+decided at the fill and cannot go stale. One test kills both, from opposite directions,
+which is what stops it being a one-sided ban on a class name.
+
+**The criterion's FAIL arm is not in this sweep** and is observed separately, in a copied
+tree, at `logs/verify/c101-fail-arm.log`: `reader.py` sha256 `082714b4297b` before and
+after, the mutation applied only to the copy, and the verdict
+
+    FAIL - the console's open-positions region: the console still shows the mark as 126.9
+    after the market moved to 127.4; the open-positions region is a snapshot, not live
+
+It is registered in `MUTATIONS` as `console_serves_the_previous_mark` and is the only
+entry there that breaks a file in C's own lane; every other arm breaks an engine. A
+criterion whose FAIL arm lives in somebody else's file is not watching its own subject go
+wrong.
+
+
+### Rule 4 amended: what the criterion now says, and the one figure it cannot stand behind
+
+**Agent:** C · **Task:** spec 101 · **Date:** 2026-09-18
+
+**The ruling.** The operator amended `ui-context.md` rule 4 rather than round anything: an
+**order price** renders at the precision it was stored at, because its writer rounded it
+to the exchange's grid before sending it; a **derived threshold** renders at the precision
+it was computed to, **and the console does not round it.** Rule 4 is a rule about
+*writers*, and the console has never been able to obey the older wording — it reads only
+the store, and the store holds no pair rules. Rounding the barriers at write time was
+available (engine 21 holds `pair_rules` at the line where it writes the row) and was
+rejected, because `research/labelling.py` computes its barriers the same unrounded way, so
+rounding the live ones would make the system trigger on barriers the training labels were
+never built from.
+
+**What changed in the criterion.** `_console_rule_4` is gone, replaced by two readings
+that the amendment separates:
+
+* `_console_thresholds` reports the target, the stop and the unrealised PnL **as what they
+  are** — derived, deliberately unrounded — citing rule 4 *as amended 2026-09-18* so the
+  sentence stays true if the rule moves again. They are no longer described as a breach.
+* `_console_mark_precision` measures the mark on its own, because it is a third case: an
+  exchange-supplied bid passed through unchanged should already be on the grid.
+
+The entry price is unchanged and is still the one rule-4 **FAIL** in this criterion: it is
+the order price, engine 18 put it on the grid, and the console rendering it at any other
+precision is the console losing or inventing a digit.
+
+**Why the old wording had to go and not just be tolerated.** It reported a measurement
+against a rule that no longer applies — a permanent false positive in a PASS message,
+which is the thing the operator rejected. A gate that cries about correct behaviour on
+every run teaches its reader to skim it.
+
+**The mark: this criterion judges its own harness, and that is on the record.** `drive.pin`
+sets the bid the criterion then measures. An assertion about a value the test itself
+supplied proves nothing about that value — the same defect as a double that agrees with
+its caller, arriving through a *fixture* rather than through a stub. So the message says
+so in as many words: *NOT a verdict on engine 3: this criterion pinned that bid itself.*
+
+**The independent measurement, and it is conclusive.** A bid the drive did not choose was
+available after all: `tests/fixtures/book_sample.jsonl` is 977 Kraken v2 book frames copied
+**byte-for-byte** out of `data/raw/` by A's cutter, and the recorded `AssetPairs` sits
+beside it in `tests/fixtures/kraken/asset_pairs.json`. Both are recordings; neither is a
+number anybody in this project chose. Measured by hand:
+
+* **BTC/USD** — recorded `pair_decimals` **1**, and **783 recorded book prices, every one
+  at exactly 1 decimal place.** The exchange publishes on its own grid, so the 3dp mark in
+  this criterion is this harness's pin and **not** an engine 3 finding. Nothing to route
+  to A.
+* **ADA/USD** — prices at 4, 5 and 6 places, and **no `pair_decimals` for it in the
+  recorded `AssetPairs` at all**, so there is nothing to compare against. Reported as
+  inconclusive rather than guessed: inventing a precision for it would be exactly the
+  fabricated-exchange-value `AGENTS.md` opens by forbidding. (A cheaper asset plausibly
+  carries a larger `pair_decimals`; plausible is not measured.)
+
+**The archive check is deliberately not added to this criterion.** A criterion named
+`console_shows_position_live` has no business asserting Kraken's price grid, and
+`order_book_slippage_on_recorded_book` already reads that fixture in A's own area. Where it
+would belong is recorded in `_console_mark_precision`'s docstring along with the numbers,
+so the next person does not have to re-derive them.
+
+
+### The gate cannot print its own verdicts when its output is redirected
+
+**Agent:** C · **Task:** spec 101 follow-up · **Date:** 2026-09-18
+
+**What happened.** The lead ran `python scripts/verify.py --phase 6 > log 2>&1` and the
+process **died mid-run**:
+
+    File "...scripts/verify.py", line 14314, in main
+        print(criterion_line(criterion, outcome, width), flush=True)
+    UnicodeEncodeError: 'charmap' codec can't encode character '\u2212' in position 647
+
+Seven criteria had printed. The remaining criteria **never ran**, and the phase result was
+never printed. Log: `logs/verify/phase6-20260918-spec101-lead-verify.log`.
+
+**Why.** `main()` prints to `sys.stdout`. When stdout is a console, Python 3.13 on Windows
+uses the UTF-8 console writer and everything is fine; when it is **redirected to a file**,
+the stream is opened with `locale.getencoding()`, which here is **cp1252**, and cp1252 has
+no U+2212. Every gate run this project has ever done was fine because no criterion message
+had ever contained one. Spec 101's is the first: `ui-context.md` rule 6 requires U+2212 in
+numeric output, my criterion asserts the console obeys it, and the PASS message quotes the
+figures it checked — `−1.82%`, `−60.50340723456`.
+
+**So the project's own house style was unprintable by its own gate**, and the two had never
+met. Nothing was wrong with the message; the tool could not carry it.
+
+**Why no test caught it.** Every test of `verify.py` calls the criteria directly and reads
+`outcome.message` as a `str`. **Nothing had ever driven `main()`'s printer through a stream
+with a real encoding**, so the entire output path — the one thing the operator actually
+looks at — was exercised only against pytest's capture, which is UTF-8 and forgiving. This
+is the seam rule from `code-standards.md` in a new place: the criteria's tests assert what
+a criterion *returns*, and the printer's behaviour is what the operator *gets*, and no test
+stood between the two.
+
+**And note which failure mode this is.** Not a wrong answer — a *lost* one. The run died
+with `exit 1`, which is the same exit code a real FAIL produces, so a reader who saw only
+the code would conclude the phase was red on its merits. Six criteria that had not yet run
+reported nothing at all.
+
+**Fix.** `main()` makes its own streams UTF-8 before it prints anything, with
+`errors="backslashreplace"` so that a verdict can never be lost to an encoding — see the
+next entry for why `strict` is not enough even with UTF-8. Done inside `main()` and **not**
+at import, because `tests/verify/` imports this module and reconfiguring global streams at
+import time would fight pytest's capture.
+
+**Consequence.** `scripts/verify.py` only. The criterion message the operator settled is
+not touched.
+
+
+### The fix, and what could still end a run
+
+**Agent:** C · **Task:** spec 101 follow-up · **Date:** 2026-09-18
+
+**Fix.** `make_console_utf8()` in `scripts/verify.py`, called as the first statement of
+`main()`, reconfigures `sys.stdout` and `sys.stderr` to UTF-8 with
+`errors="backslashreplace"`. It returns the streams it could not change, and `main()`
+prints a **WARNING** line under the header naming them — on such a stream the original
+crash is still possible, and the reader has to learn that before it happens rather than
+from a traceback six criteria later.
+
+It never raises. A stream that cannot be reconfigured (already wrapped, replaced by a
+test, something a caller handed us) is not a reason to refuse to run the gate. And it is
+called from `main()` and **never at import**, because `tests/verify/` imports this module
+and mutating global streams at import time would fight pytest's capture.
+
+**Why `backslashreplace` and not `strict`, which is the part worth keeping.** UTF-8
+encodes every Unicode scalar value, so with `strict` the fix would look complete. It is
+not: UTF-8 cannot encode a **lone surrogate**, and lone surrogates reach this program by
+an ordinary route rather than an exotic one — `os.fsdecode` maps undecodable filesystem
+bytes into the surrogate range, and criterion messages **embed paths**
+(`toolchain_green`'s "full output: ..." is one, and it is a path this tool constructs on
+every run). Strict UTF-8 would therefore still be able to kill a run, on a rarer input,
+which is the worse version of this bug rather than a fixed one: the same defect, now
+firing once a year instead of once a phase, when nobody is expecting it.
+
+`backslashreplace` over `replace` because it keeps the information. The escape names the
+code point; `replace` discards it. A tool whose whole purpose is not losing a diagnosis
+should not lose one at the last step either.
+
+**So, the answer to "can any criterion message still carry a character this cannot
+represent": no.** Every `str` is now printable — scalars by UTF-8, lone surrogates by the
+escape. The only residual is a stream with no `reconfigure` at all, and that is named in
+the output rather than hidden.
+
+**Proofs, both on the record.** `logs/verify/c101-encoding-proof.log`. `verify.py` sha256
+`4659e831fd67` before and after, compared in the same statement as the restore; the anchor
+occurs exactly once; `PYTHONDONTWRITEBYTECODE=1`; `sys.executable`.
+
+*A. The tests fail on today's code.* With `make_console_utf8`'s body neutered in place,
+`tests/verify/test_runner.py` goes **3 failed, 22 passed** — the three tests about the fix.
+`test_a_locale_encoded_stream_cannot_carry_the_minus_sign_this_project_mandates` stays
+**green**, and deliberately: it pins the *hazard*, which is a property of cp1252 and not of
+this code, and it is what stops the fix quietly becoming decoration. Restored: 25 passed.
+
+*B. The fixed path works end to end, through the real `main()`.* A subprocess drives
+`main()` against a registry holding one criterion whose verdict carries U+2212, with
+**stdout redirected to a file** and `PYTHONIOENCODING=cp1252` so the stream is opened
+exactly as the operator's redirect opened it:
+
+| | exit | `UnicodeEncodeError` in output | U+2212 present | summary line |
+|---|---|---|---|---|
+| with the fix | 0 | no | yes, as UTF-8 | yes |
+| without it | 1 | **yes** | no | **no** |
+
+The bottom row is the operator's failure reproduced exactly, including the part that makes
+it dangerous: **exit 1 with no summary line**, which is indistinguishable by exit code from
+a phase that is red on its merits.
+
+**A note on how this entry was nearly written wrong.** The first draft of the test file
+went in through a bash heredoc and the `\u2212` escapes arrived as literal minus signs,
+which `ruff`'s RUF001 then refused. That is the **third** time a heredoc has done this in
+this project and my own build log records the previous two. The literals are now
+`chr(0x2212)`, which has a second reason beyond the lint: an editor that helpfully
+normalised the character into an ASCII hyphen would turn these tests into *hyphen* tests,
+and cp1252 encodes a hyphen perfectly well — so both halves would go green against the
+very bug they exist to catch.
+
+
+### Recurrence: the bash heredoc has now eaten an escape three times in one phase
+
+**Agent:** C · **Task:** spec 101 follow-up · **Date:** 2026-09-18
+
+**Filed as a pattern, on the lead's instruction, because three is not an accident.** The
+first two are already in this file as incidents; this is the entry that names the
+mechanism.
+
+**What happens.** A file is written with
+
+    python - <<'PYEOF'
+    ... source containing \u2212 or \n ...
+    PYEOF
+
+The quoted delimiter is supposed to make the heredoc literal, and for the **shell** it
+does. The escape is eaten one layer up, before the shell ever sees it: the tool call's own
+argument is a JSON-ish string, so `\u2212` in the command text can arrive at bash already
+decoded to the character, and `\n` already decoded to a newline. The heredoc then faithfully
+passes on something that is no longer what was written. Nothing warns, because the result
+is still valid Python.
+
+**The three occurrences, and note that the symptom differs every time** — which is why it
+keeps being read as a fresh problem rather than as this one:
+
+1. **Escapes silently dropped from an edit** (recorded earlier this phase): three edits
+   lost, discovered only because the file did not do what it said.
+2. **A `\n` inside a patch string became a real newline**, so an anchor that should have
+   matched one line spanned two and matched nothing. Caught by an `assert count == 1`.
+3. **Today**: `\u2212` arrived as a literal U+2212 in `tests/verify/test_runner.py`, and
+   `ruff`'s RUF001 refused it. Caught by the linter, not by me.
+
+**Why it is worth a rule and not just care.** Each time, the failure surfaced somewhere
+unrelated to the cause — a silent no-op, a non-matching anchor, a lint about ambiguous
+characters — and each time the first hypothesis was about the *content* rather than the
+*transport*. The cost is not the mistake; it is the minutes spent looking in the wrong
+place, three times.
+
+**The rule, which was already written down and which I broke anyway.** Write files with
+the file tool, or with a Python script written to disk and then executed. **Never a bash
+heredoc carrying escapes.** My own build log has said so since yesterday. I used one today
+because the edit was small, which is exactly the circumstance the rule exists for: nobody
+reaches for a heredoc on a large file.
+
+**Two guards that actually caught things, worth keeping:**
+
+* **Never hand-type a mandated character into source.** `chr(0x2212)` in both
+  `scripts/verify.py` and `tests/verify/test_runner.py`. This defends against more than
+  the transport: an editor that normalised U+2212 into an ASCII hyphen would turn the
+  encoding tests into *hyphen* tests, and cp1252 encodes a hyphen perfectly well — so
+  both halves would go green against the bug they exist to catch.
+* **Every patch script asserts its anchor occurs exactly once, before writing.** That is
+  what caught occurrence 2, and today it is what stopped a half-applied patch reaching
+  disk: the `_console_rule_4` replacement aborted on `assert text.count(whole) == 1`
+  because the two anchor halves needed the blank line between them, and the file was left
+  untouched rather than mangled.

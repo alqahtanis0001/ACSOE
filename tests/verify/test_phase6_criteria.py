@@ -10,10 +10,10 @@ Three observations per criterion, and the order they arrive in is the phase's or
 
 **Where it stands.** The nine were written while every subject was unbuilt and reported
 PENDING, naming the engine or fixture that owed each. Since spec 82 registered the Phase 6
-engines and spec 100's bodies landed, eight drive the registered chain to a verdict and
-`console_shows_position_live` stays PENDING on spec 101. Each is observed three ways here:
-PENDING on `unbuilt_tree`, its verdict on the real tree (`REAL_TREE`), and FAIL under a
-named mutation of the thing it judges, made in a copied tree (`MUTATIONS`).
+engines, spec 100's bodies landed and spec 101 built the console half, **all nine drive
+the registered chain to a verdict**. Each is observed three ways here: PENDING on
+`unbuilt_tree`, its verdict on the real tree (`REAL_TREE`), and FAIL under a named
+mutation of the thing it judges, made in a copied tree (`MUTATIONS`).
 
 Two branches that *can* be driven to a verdict today are driven to one here, because a
 branch nobody has executed is a comment: the fixture that exists and is **empty** (FAIL,
@@ -104,7 +104,7 @@ REAL_TREE: dict[str, tuple[str, str]] = {
     "unfilled_entry_cancels_without_chasing": ("PASS", "and not before"),
     "triggered_stop_holds_on_data_guard_block": ("PASS", "placed no exit"),
     "escalation_completes_during_outage": ("PASS", "can never find one"),
-    "console_shows_position_live": ("PENDING", "(C, spec 101)"),
+    "console_shows_position_live": ("PASS", "live, not a snapshot"),
     "order_book_slippage_on_recorded_book": ("PASS", "equals engine 9's payload exactly"),
     "adaptive_router_weights_on_fixture": ("PASS", "a property of the fixture"),
 }
@@ -220,10 +220,11 @@ def test_the_real_tree_verdict_and_what_it_says(
 ) -> None:
     """The verdict the gate reports on the registered tree, and what the line says.
 
-    Eight PASS. A PASS line has to say what was shown, because the operator reads it;
-    the fragment pins the claim each one exists to make. The console criterion is
-    PENDING and names spec 101, which owes it. A message that says `criterion raised` is
-    a stack trace and judged nothing.
+    Nine PASS since spec 101. A PASS line has to say what was shown, because the operator
+    reads it; the fragment pins the claim each one exists to make, and
+    `console_shows_position_live` was the ninth — PENDING and naming spec 101 until the
+    console grew `hold_reason` and this criterion grew the drive that reads it back. A
+    message that says `criterion raised` is a stack trace and judged nothing.
     """
     outcome = real_tree_outcomes[name]
     result, fragment = REAL_TREE[name]
@@ -241,8 +242,7 @@ def test_every_phase_6_criterion_names_fee_tier_3_in_its_own_message(
     At tier 1 the cost gate is unreachable by construction. The bar is 2.5x friction,
     tier-1 reference friction is about 1.25% round trip, and 3.125% is above the 3.0%
     target barrier, so nothing clears and a verdict from that regime says nothing about
-    the engines. All nine drive the registered chain at tier 3 (or will, for the
-    console), so all nine say so.
+    the engines. All nine drive the registered chain at tier 3, so all nine say so.
     """
     message = real_tree_outcomes[name].message
     assert "tier 3" in message, message
@@ -918,6 +918,34 @@ MUTATIONS: dict[str, tuple[str, str, bytes, bytes, str]] = {
         b"        if sold or closed:\n",
         b"        if False:\n",
         "value positions the account does not hold",
+    ),
+    # Spec 101's named mutation: the console serves the previous tick's mark.
+    #
+    # `entry_price` **is** the previous tick's mark here, and that is why this arm is the
+    # one the spec names rather than an arbitrary wrong field. On the fill tick engine 21
+    # marks a position at the price it was just filled at — `_mark`'s own docstring says
+    # so — so a reader serving `entry_price` is serving exactly the figure the first read
+    # legitimately saw. It passes the first read and freezes on the second, which is the
+    # whole shape of the defect: a region that renders a correct number once and then
+    # stops being live. A reader serving, say, the stop would be caught by the first read
+    # and would prove nothing about the second.
+    #
+    # In C's own lane, and the only entry here that is: every other arm breaks an engine.
+    # A criterion whose FAIL arm is in somebody else's file is not observing its own
+    # subject go wrong.
+    "console_serves_the_previous_mark": (
+        "console_shows_position_live",
+        "src/acsoe/console/reader.py",
+        (
+            b"            last_price=row.last_price,\n"
+            b'            last_price_text="" if row.last_price is None '
+            b"else format_money(row.last_price),\n"
+        ),
+        (
+            b"            last_price=row.entry_price,\n"
+            b"            last_price_text=format_money(row.entry_price),\n"
+        ),
+        "the open-positions region is a snapshot, not live",
     ),
     # Engine 14 keeps the older of two rows for one (version, fold).
     "older_duplicate_kept": (

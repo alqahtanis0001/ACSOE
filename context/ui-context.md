@@ -60,7 +60,11 @@ These are not stylistic. Misread numbers cost money.
 1. `font-variant-numeric: tabular-nums` on every numeric element, without exception. Columns of prices must align digit-for-digit or they cannot be scanned.
 2. Percentages are always explicitly signed: `+0.62%`, `−1.50%`. Never bare.
 3. **Colour is never the only signal.** The sign carries the meaning; colour reinforces it. A red-green colourblind operator must lose nothing.
-4. Money renders to the quote currency's own precision from `AssetPairs`, never more digits than the exchange itself uses.
+4. **An order price renders at the precision it was stored at**, because it was rounded to the exchange's grid before it was sent — `AssetPairs`'s `pair_decimals`, applied by the engine that placed it. **A derived threshold renders at the precision it was computed to, and the console does not round it.** Amended by the operator 2026-09-18; it read "money renders to the quote currency's own precision from `AssetPairs`, never more digits than the exchange itself uses", which **the console has never been able to obey and was never the right reader of**: it reads only the store, the store holds no pair rules, and it renders whatever quantum the writer chose. Rule 4 is a rule about **writers**, and it held only where a writer happened to round.
+
+   **Two reasons the console must not round a threshold.** A position's `stop_price` *is* the trigger — engine 21 compares the tick's traded low against that exact stored value — so rendering it at the exchange's precision would show the operator a number that is not the threshold, which is the opposite of what this rule exists for. And `research/labelling.py` computes its barriers the same unrounded way (`close × (1 ± pct)`), so rounding them anywhere — in the view or at write time — would make the live system trigger on barriers the training labels were never built from. Rounding at write time was available: engine 21 holds `pair_rules` when it writes the row. It was rejected for that reason; see the tracker.
+
+   **An exchange-supplied price is a third case.** A mark passed through unchanged (engine 3's published bid) should already sit at the exchange's precision. If it renders more digits than `pair_decimals`, that is an upstream fault to find, not a display to round.
 5. Any figure older than `console.stale_after_ms` renders at 50% opacity with its age shown beside it. Stale data must look stale.
 6. Use a proper minus sign (−, U+2212) in numeric output, not a hyphen. Hyphens break tabular alignment.
 

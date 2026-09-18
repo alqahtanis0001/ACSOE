@@ -2583,3 +2583,96 @@ stale key was observed red against it before being removed.
 
 **Nothing changed in `src/`.** No commit. Spec 101 not started -- waiting for the lead's
 go-ahead at this boundary.
+
+
+### CLAIM — spec 101 in progress, 2026-09-17
+
+Go-ahead from the lead at `aa3e26f`. Step 1's hand check is done and in the build log:
+three findings -- `hold_reason` invisible, position-row staleness computed and never
+applied, and an unquantized `unrealised_pnl` that is a **stop-and-report** rather than
+something I decide. Writing `src/acsoe/console/**`, `tests/console/**`,
+`scripts/verify.py`, `tests/verify/test_phase6_criteria.py`, this file and my build log.
+No commit.
+
+
+### Spec 101 done — the ninth criterion is green, 2026-09-17
+
+`console_shows_position_live` reaches **PASS**, with PENDING, PASS and FAIL all observed.
+
+**Console.** `PositionView` carries `hold_reason` and `hold_reason_text` (both required,
+no defaults); the reader fills them through `operator_reason`; `payloads.py` sends both;
+the template has a left-aligned `Hold` column and `console.js` renders the prose in it.
+Rule 5 now reaches the open-positions region — it was computed, serialised and dropped
+before — on the three figures that come from the daemon's last touch, through the
+existing `applyStaleness` rather than a second implementation.
+
+**Criterion.** `_console_position_body` drives a real position through engines 18, 21 and
+19 with `verify.py`'s own harness and reads it back through `ConsoleReader` four times:
+after the fill, after a tick at a mark the criterion moved (recomputed, never read back),
+with the console's clock past `console.stale_after_ms` (both readings taken), and on a
+tick engine 4 blocked. It also proves the console placed nothing and that its connection
+refuses a write to the daemon's live database.
+
+**STOP-AND-REPORT for the operator, raised and not decided: `ui-context.md` rule 4.** The
+hand check named `unrealised_pnl`; the criterion, asserting across all four price figures,
+found three more. Only the **entry price** sits on the exchange's grid, because engine 18
+quantizes it before placing. The target and stop are `entry * (1 +/- pct)` from engine 21
+and the unrealised PnL is `qty * (mark - entry)`, and **nothing quantizes any of them**.
+Every fix is outside this spec or this lane, and the rule itself does not settle which
+precision a PnL *amount* takes — `pair_decimals` is a price precision, `AssetPairs` gives
+a currency's own precision per asset, and `format.py` states rule 4 as "the precision it
+was stored at" with a Phase 1 test behind it. The criterion therefore **measures and names
+it in the PASS message** and fails only on the half that is settled. Nothing was changed
+in engine 21, in the reader's formatting, or in either document.
+
+Full detail, the design choices with their rejected options, and the correction to my own
+hand-check finding are in `docs/build-log/phase-6/c-interface.md`. No commit.
+
+
+### Spec 101 sweep: the staleness test could not see its own mutation
+
+Recorded in full in the build log. The first console sweep returned **S1 SURVIVED** — the
+arm that throws the staleness verdict away at the last step, which is the pre-spec-101
+behaviour this spec exists to fix — with the whole console suite green, because my test
+checked two substrings separately rather than the call with its argument. Fixed in the
+code (one call site, not two) and in the test (the argument pinned, `applyStaleness`
+asserted to occur exactly once, `classList` asserted absent). Re-aimed, S1 is KILLED. Eight
+arms killed, one declared control survived.
+
+
+### Rule 4 ruling applied to spec 101, 2026-09-18
+
+The criterion no longer reports the target, stop and unrealised PnL as a breach — the
+amended rule says a derived threshold renders unrounded by design, and the message now
+cites `ui-context.md` rule 4 as amended 2026-09-18 rather than a measurement against a
+rule that no longer applies. The entry price is still asserted as the one order price.
+
+The mark is measured separately and the message states plainly that **the criterion pinned
+the bid it then measures**, so on that figure it judges its own harness. The independent
+measurement was possible and is conclusive for the pair under test: 783 recorded BTC/USD
+book prices from `book_sample.jsonl`, every one at exactly the 1 decimal place the
+recorded `AssetPairs` gives that pair. **No engine 3 finding; nothing to route to A.**
+ADA/USD is inconclusive — the recorded `AssetPairs` carries no `pair_decimals` for it, and
+I did not invent one.
+
+
+### verify.py could not print its own verdicts when redirected — fixed, 2026-09-18
+
+The lead's gate died mid-run: a redirected stream on Windows is cp1252, which has no
+U+2212, and spec 101's PASS message was the first criterion message ever to contain one.
+Seven criteria printed, six never ran, and the phase result was never reported — exiting
+1, the same code a real FAIL gives.
+
+`make_console_utf8()` in `scripts/verify.py` now sets stdout and stderr to UTF-8 with
+`errors="backslashreplace"` as the first statement of `main()`, and names any stream it
+could not change in a WARNING under the header. `backslashreplace` rather than `strict`
+because UTF-8 still cannot encode a **lone surrogate**, and those reach here through
+`os.fsdecode` on the paths criterion messages embed. Nothing a criterion can put in a
+message can end a run now.
+
+Four tests in `tests/verify/test_runner.py`; three go red with the fix neutered and the
+fourth pins the hazard itself. Proved end to end as well, through the real `main()` with
+stdout redirected and `PYTHONIOENCODING=cp1252`: without the fix, exit 1 and no summary
+line; with it, exit 0 and the minus sign in the file. Log
+`logs/verify/c101-encoding-proof.log`. Nothing else changed — the criterion message the
+operator settled is untouched.

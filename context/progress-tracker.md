@@ -203,6 +203,103 @@ into a real newline, a NUL byte, an unterminated heredoc) — the Phase 0 lesson
 any escape-carrying script with the file tool. `research/labelling.py` is wholly CRLF in the working
 tree (C's lane, not yet converted).
 
+### PHASE 6's NINE CRITERIA ARE GREEN, 2026-09-18 02:40 local
+
+`verify.py --phase 6`: **13 criteria, 13 PASS, 0 FAIL, 0 PENDING, exit 0** —
+`logs/verify/phase6-20260918-nine-lead-*.log`, `toolchain_green` reporting
+`3297 passed, 2 skipped`. The first complete paper trade runs end to end through the registered
+chains at fee tier 3: a post-only entry past all eight gates, a fill at its limit, a minute-by-
+minute watch, and an exit on each of target, stop and timeout, with every order, position, trade
+and equity row reconciled against figures recomputed from the book and the live fee tier. The
+phase is **not closed**: the operator wants to see the trade first.
+
+### Standing rules from 2026-09-17/18, recorded because they lived only in conversation
+
+- **The gate is `verify.py` alone**, with `mypy` and `ruff` before it; the bare `pytest` run is
+  retired. Reasoning in `code-standards.md`.
+- **Push notification to the operator only when blocked on a ruling**, one line naming what is
+  blocked and what the question is, and the blocked item stops while other work continues. Never
+  for progress or boundary reports.
+- **Any finding or design choice costing more than about three hours goes to the operator with
+  the options before anyone starts on it.** Gate runs, re-gates and already-agreed work are
+  exempt and take what they take. (~48 hours of coding time remained for Phases 6 to 8 when this
+  was ruled.)
+- **The seed-vocabulary reconciliation and spec 109 stay in the phase**, scheduled after the nine
+  criteria are green. This code goes into a dissertation: a comment describing a fallback deleted
+  yesterday is something a reader believes, so **correct prose is part of the deliverable, not
+  decoration on it.**
+- **Stale prose with no decision entry behind it is a FINDING, reported, not a typo silently
+  corrected.** Three of this phase's findings started as something that read wrong.
+- **What does not change:** every assertion proven capable of failing with the proof in the build
+  log; one authoritative gate at every boundary; mutation over reading; commit and push at every
+  boundary. The three defects this phase found — the entry double count, the unrecorded error
+  tick, the exit-cycle row — would each have shipped as working code.
+
+### Price precision is read live, and is held as a constant nowhere
+
+Checked in the code 2026-09-18 and recorded because it was nowhere written down. Invariant 2's
+table already lists "tick size, decimals" as exchange-supplied; this is the confirmation that the
+code honours it. `clients/kraken/rest.py` parses `pair_decimals` and `tick_size` out of
+`AssetPairs`; engine 1 publishes them; **engine 18 `execution`** rounds a limit price down onto
+`pair_decimals` before placing it (`round_down_to_tick`, which refuses a negative value as "not a
+grid"); **engine 7 `scout`** refuses a pair whose barriers fall inside one `tick_size`
+(`barriers_below_tick_size`). No constant anywhere holds a precision, and the console holds none
+either — it renders the quantum its writer stored. **So the locked decision on exchange-supplied
+values covers precision exactly as it covers fees and minimums.**
+
+### ADA/USD: a tool that answered "I cannot tell" rather than a plausible number
+
+Spec 101 measured the recorded book prices against the recorded `AssetPairs` declaration. For
+**BTC/USD** the declaration is `pair_decimals: 1` and all 783 recorded prices carry exactly one
+decimal — the exchange is on its own grid, so the extra digits in the criterion's mark were the
+harness's own pinned bid and **not** an engine 3 fault. For **ADA/USD the recorded `AssetPairs`
+carries no entry at all**, so there was no declaration to compare against, and C reported it
+**inconclusive rather than inferring a precision from the prices it happened to see** — which a
+quiet pair could make wrong, and which would have been the fabricated exchange value `AGENTS.md`
+forbids in its first paragraph. Recorded as the behaviour to keep: a tool that returns "I cannot
+tell" beats one that returns a plausible number. **Spec 118 (C)** turns the comparison into a
+standing criterion over both committed fixtures, scheduled after the nine criteria are green; it
+can never go red because Kraken changed its settings, only because a re-cut fixture is internally
+inconsistent.
+
+### RULING 2026-09-18: rule 4 amended, and rounding barriers at write time rejected on the record
+
+C's spec 101 criterion measured what the console renders against the pair's `pair_decimals` and
+found the **mark, target and stop** past it; only the entry price sits on the grid, because engine
+18 quantizes it before placing. The operator amended `ui-context.md` rule 4 rather than round
+anything: **an order price renders at the precision it was stored at; a derived threshold renders
+at the precision it was computed to, and the console does not round it.** Rule 4 has never been a
+rule the console could obey — it reads only the store, the store holds **no pair rules**, and it
+renders whatever quantum the writer chose. It is a rule about **writers**.
+
+**Rounding the barriers at write time was available and is rejected, for a reason that has nothing
+to do with display.** Engine 21 holds `state["exchange"]["pair_rules"]` at the line where it writes
+`target_price` and `stop_price` (it already reads `pair_facts` there for `base` and `quote`), so
+the option was real. But `research/labelling.py` computes its barriers the same unrounded way
+(`close × (1 ± pct)`), so rounding the live ones would make the system trigger on barriers **the
+training labels were never built from** — a look-ahead-shaped inconsistency, and a silent one.
+Rounding in the view was rejected too: it needs a migration, a writer and a new seam into C's lane
+to change how three numbers look, and `stop_price` **is** the trigger engine 21 compares against, so
+rendering it rounded would show the operator a number that is not the threshold. Recorded here
+because someone will otherwise propose it again.
+
+**The mark is a separate case, still open.** It is an exchange-supplied bid passed through
+unchanged, not a product, so it should already be at the exchange's precision. C measures it against
+`pair_decimals` separately and reports; a breach is engine 3's, in A's lane, and a finding of its
+own — not part of this amendment.
+
+**And a criterion that pins a value cannot judge it.** C's console criterion supplies the mark it
+then measures, so on that one figure it is judging its own harness. Recorded as the standing shape
+it is: an assertion about a value the test itself supplied proves nothing about that value.
+
+**Also ruled:** engine 19's two extra refusals stay (a closed trade with no `net_proceeds`; engine
+21's rows not covering what the store still holds) — both fail closed, and a gap in the equity
+series is visible to engine 17 where a wrong row is not. **Each refusal records which case it was:
+a gap with no reason is the same defect as a number with no provenance.** And
+`EquitySnapshotRow.cash_source`'s default is removed after the nine criteria are green, **landing
+with a test that a row lacking a source is refused** — otherwise the change deletes a check instead
+of tightening one.
+
 ### The operator's rulings on the overnight log, 2026-09-17 morning
 
 **D3 accepted** (spec 105's criterion rejects a NULL fill-tick mark: the branch was reachable only by a

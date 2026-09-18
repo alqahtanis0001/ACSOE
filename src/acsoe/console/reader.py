@@ -447,6 +447,14 @@ class ConsoleReader:
             age_us=max(now - row.opened_at, 0),
             age_text=format_age(max(now - row.opened_at, 0) // _MICROS_PER_MILLI),
             staleness=self.staleness(row.updated_at, now=now),
+            hold_reason=row.hold_reason,
+            # `operator_reason` and not the raw code, for the reason `ownership.md` puts
+            # `REASON_PROSE` in one file: a code that reaches the screen is a log line
+            # shown to an operator. An empty string on a position nothing held, so the
+            # cell is blank rather than carrying a word for the absence of a hold.
+            hold_reason_text=(
+                "" if row.hold_reason is None else operator_reason(row.hold_reason)
+            ),
         )
 
     # -- cycle feed -----------------------------------------------------

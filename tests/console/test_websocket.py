@@ -205,6 +205,60 @@ async def test_a_change_reaches_a_connected_client_within_two_poll_intervals(
         await socket.close()
 
 
+def move_the_mark(db_path: Path, last_price: str) -> str:
+    """Re-mark the first open position, from a separate connection.
+
+    The daemon's own way of doing it is an engine-21 tick, and
+    `tests/console/test_live_position.py` drives exactly that; here the subject is the
+    **transport**, and `move_the_watermark` above already sets the precedent that a change
+    made by the other process is written directly. Returns the position it moved.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        position_id, updated_at = conn.execute(
+            "SELECT position_id, updated_at FROM positions WHERE status = 'open' "
+            "ORDER BY position_id LIMIT 1"
+        ).fetchone()
+        conn.execute(
+            "UPDATE positions SET last_price = ?, updated_at = ? WHERE position_id = ?",
+            (last_price, int(updated_at) + 1_000_000, position_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return str(position_id)
+
+
+@pytest.mark.asyncio
+async def test_a_moved_mark_reaches_the_browser_inside_the_same_budget(
+    socket_app: Any, seeded_db: Path, poll_config: _StubConfig
+) -> None:
+    """Spec 101 step 5. The push is what makes the open-positions region *live*.
+
+    The cadence is proved above and the composition is proved below, and neither of them
+    on its own says the open-positions region travels: one watches a watermark and the
+    other compares whole screens against a reader that would agree with a frozen figure
+    as readily as with a moved one. This asserts the value — a mark no seed wrote —
+    arrives, inside the budget config gives, on the push.
+    """
+    moved = "424242.42"
+    socket = Socket(socket_app)
+    try:
+        assert (await socket.open())["type"] == "websocket.accept"
+        position_id = move_the_mark(seeded_db, moved)
+
+        budget = 2 * poll_interval_seconds(poll_config)
+        payload = await socket.next_push(timeout=budget + 1.0)
+        assert payload is not None, f"nothing pushed inside {budget}s"
+    finally:
+        await socket.close()
+
+    rows = payload["state"]["positions"]
+    row = next(r for r in rows if r["position_id"] == position_id)
+    assert row["last_price"] == moved
+    assert row["last_price_text"] == moved
+
+
 @pytest.mark.asyncio
 async def test_the_push_carries_every_screen_from_the_same_view_models(
     socket_app: Any, seeded_db: Path, seed_clock: Any

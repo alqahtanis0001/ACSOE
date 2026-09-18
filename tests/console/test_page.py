@@ -479,3 +479,146 @@ def test_the_positions_table_shows_the_age_spec_101_asks_for() -> None:
     """
     assert "Age" in _positions_headers()
     assert "p.age_text" in _positions_row_cells()
+
+
+def test_the_positions_table_shows_the_hold_reason_spec_101_asks_for() -> None:
+    """Spec 101 step 3, at the only layer that can be wrong about it silently.
+
+    The reader has carried `hold_reason` since spec 101 and `payloads.py` sends it; a page
+    that never renders it produces no error anywhere — the operator simply is not told
+    that exits are paused. Named, for the reason the age test above is named: the column
+    count is satisfied by any two matching lists.
+
+    The prose and not the code: `p.hold_reason_text` is the rendered sentence and
+    `p.hold_reason` is the raw value engine 21 published. Asserting the *code* is absent
+    from the row builder is the half that matters, because a code on screen is a log line
+    shown to an operator and `console/format.py` is the one place a code becomes English.
+    """
+    cells = _positions_row_cells()
+    assert "Hold" in _positions_headers()
+    assert "p.hold_reason_text" in cells
+    assert "p.hold_reason" not in cells
+
+
+def test_the_hold_column_is_prose_and_stays_out_of_the_tabular_run() -> None:
+    """`ui-context.md`: content is left-aligned, numbers are right-aligned in their column.
+
+    A reason is a sentence. Marking it `num` would right-align an English clause and put
+    it in the mono face with tabular figures, which is the one treatment the document
+    reserves for numbers. Read off the template rather than asserted as a rule, because
+    the header is where a column declares itself numeric.
+    """
+    html = TEMPLATE_PATH.read_text(encoding="utf-8")
+    start = html.index('data-region="positions"')
+    end = html.index("</thead>", start)
+    headers = re.findall(r"<th([^>]*)>(.*?)</th>", html[start:end], flags=re.S)
+    hold = [attrs for attrs, label in headers if label.strip() == "Hold"]
+    assert hold, "the Hold column is not in the open-positions header"
+    assert "num" not in hold[0]
+
+
+# --------------------------------------------------------------------------- #
+# Rule 5 on the open-positions region. Spec 101.
+# --------------------------------------------------------------------------- #
+#
+# The reader has decided the verdict and written the age since Phase 1, and the payload
+# has carried both; nothing applied them to a position row, so a row the daemon had not
+# touched for an hour rendered at full opacity beside a fresh one. `.stale` and `.age`
+# were already in the stylesheet under a comment quoting rule 5. Nothing called them.
+
+
+def _positions_builder_source(*, code_only: bool = False) -> str:
+    """The body of the position row builder in `console.js`.
+
+    `code_only` strips the block comments. Every assertion below that says a word must
+    **not** appear needs that: this builder's comments explain why the opacity lives in
+    CSS, so a naive search finds "opacity" in the sentence saying it is not here and the
+    test fails against the very code it is asking for.
+    """
+    script = (STATIC_DIR / "console.js").read_text(encoding="utf-8")
+    start = script.index('fill("positions"')
+    source = script[start : script.index("/* ------", start)]
+    return re.sub(r"/\*.*?\*/", "", source, flags=re.S) if code_only else source
+
+
+def test_a_stale_position_row_is_faded_and_shows_its_age() -> None:
+    """Rule 5 reaches the open-positions region, not only the status band.
+
+    "Any figure older than `console.stale_after_ms` renders at 50% opacity with its age
+    shown beside it. Stale data must look stale." Before spec 101 `applyStaleness` was
+    called exactly twice, both times for the band, and the position row's own `staleness`
+    was computed, serialised, sent and dropped.
+
+    Asserted on the row builder's source because there is no browser here, and **the
+    argument is pinned, not just the call**. That distinction is the whole test: the first
+    version of it asserted `"applyStaleness" in source` and `"p.staleness" in source`
+    separately, and the mutation that passes `null` as the verdict — which is precisely
+    the pre-spec-101 behaviour, a row that never fades — **survived the entire console
+    suite**, because both substrings were still there. A test can see that a function is
+    called far more easily than it can see what it was handed.
+
+    The residual limit is stated rather than hidden, as `check_console_tabular_figures`
+    states its own: this reads source text, so it holds the verdict to being *passed* to
+    the one function that fades a cell. It cannot watch a browser compute an opacity. What
+    it can do, and does, is go red the moment the position row stops handing rule 5 its
+    answer — which is the failure that actually happened here.
+    """
+    source = _positions_builder_source(code_only=True)
+    assert "applyStaleness(aged[a], p.staleness)" in source, (
+        "the position row does not hand its staleness verdict to applyStaleness; a stale "
+        "row would render at full opacity"
+    )
+    assert '"age"' in source, "there is no .age span for the age to be written into"
+    assert source.count("applyStaleness") == 1, (
+        "rule 5 is decided in more than one place in this builder; the argument above "
+        "then stops being the only thing that can be wrong"
+    )
+    assert "classList" not in source, (
+        "a second path sets the stale class directly, so applyStaleness is no longer the "
+        "one answer to whether this row is faded"
+    )
+    assert "0.5" not in source and "opacity" not in source, (
+        "the opacity belongs in console.css under rule 5, not in a second implementation"
+    )
+
+
+def test_the_faded_cells_are_the_figures_that_age_and_not_the_whole_row() -> None:
+    """Which figures rule 5 governs here, and it is not all of them.
+
+    `staleness` is measured from `updated_at` — the last time the daemon touched the row —
+    so it ages exactly the figures that update: the mark and the two unrealised figures
+    computed from it. The entry, target and stop were decided at the fill and are still
+    exactly true; fading them would say the position is doubtful when what is old is one
+    number.
+
+    Fading the whole row would be worse than wrong. `age_us` says a long-held position is
+    hours old, and a row faded on the *position's* age would sit at half opacity for as
+    long as it was held — which is the failure `ui-context.md` names for a poll interval
+    set too close to the stale threshold: "a slow poll would fade the entire screen to
+    half opacity permanently".
+    """
+    source = _positions_builder_source()
+    aged = re.findall(r"\[\s*(p\.[A-Za-z_]+),\s*\"num aged", source)
+    assert set(aged) == {
+        "p.last_price_text",
+        "p.unrealised_pnl_text",
+        "p.unrealised_pnl_pct_text",
+    }, aged
+    for settled in ("p.entry_price_text", "p.target_price_text", "p.stop_price_text"):
+        assert f'[{settled}, "num"]' in source, (
+            f"{settled} is decided at the fill and must not fade with the mark"
+        )
+
+
+def test_the_stylesheet_still_owns_rule_5_and_nothing_else_declares_the_opacity() -> None:
+    """One implementation of "stale looks stale", in the one file that styles anything.
+
+    `.stale { opacity: 0.5 }` is the whole of rule 5's appearance and it was already
+    there; spec 101 added callers, not a second rule. A `.aged` selector appearing here
+    would mean the marker class had grown a style, and the marker exists to *name* which
+    figures age, not to change how they look.
+    """
+    css = CONSOLE_CSS.read_text(encoding="utf-8")
+    assert len(re.findall(r"\.stale\s*\{", css)) == 1
+    assert "opacity: 0.5" in css
+    assert ".aged" not in css

@@ -557,6 +557,47 @@ A `noqa` is a claim that the linter is wrong *here*, and it has to be readable a
 
 Four commands. All four must be green before any task is reported complete. For `verify.py` mid-phase, green means **no FAIL** — PENDING is expected until phase close.
 
+**The gate is `verify.py` alone, with `mypy` and `ruff` before it.** Operator ruling
+2026-09-18. The separate `pytest tests/ -q` is **retired**: `toolchain_green` runs the identical
+command, and its wrapper is the part that earns its place — the crash-aware retry, the timeout
+handling and the exit-code classification, none of which a bare run has, and which caught the
+scipy collection error and the 900-second timeout. Running the same suite twice on an unchanged
+tree, 27 minutes apart, measured nothing the first run had not. The one thing the bare run
+provided was the test count, and spec 115 puts that in the gate's own PASS message. Keep `mypy`
+and `ruff` first if failing fast is worth the seconds; they are not the cost.
+
+**A criterion's message is a string in every test and a byte stream to the operator, and those
+are different things.** Spec 101's PASS message was the first criterion message in this project
+to contain `U+2212` — which `ui-context.md` rule 6 *requires* in numeric output — and
+`scripts/verify.py` died writing it: redirected stdout on Windows opens at the locale encoding,
+cp1252, which cannot encode that character. **The house style and the gate that enforces it had
+never met.** Every test of `verify.py` reads `outcome.message` as a `str`, so the printer had only
+ever been driven through pytest's capture, which is UTF-8 and forgiving; the path the operator
+actually reads had no test between it and the criteria. The failure was not a wrong verdict but a
+**lost** one: seven criteria printed, six never ran, no phase result, and **exit 1 — the same code
+a real FAIL returns**, so the exit code alone read as a phase that was red on its merits. Fixed by
+reconfiguring both streams to UTF-8 with `errors="backslashreplace"` before anything prints, and
+naming any stream that could not be reconfigured. **Not `strict`**: UTF-8 encodes every Unicode
+scalar, so strict would *look* complete, but it cannot encode a lone surrogate — and `os.fsdecode`
+puts those in paths, which criterion messages embed on every run. Strict would have moved the same
+bug from once a phase to once a year. The general rule: **where a value crosses from your process
+into someone else's stream, test it through a stream with that encoding, not through the test
+runner's.**
+
+**Never write a file through a bash heredoc carrying escapes.** Three incidents in Phase 6, with
+three different symptoms — silently dropped edits, an anchor that spanned two lines and matched
+nothing, and a literal `U+2212` that `ruff` refused — which is why it kept being read as a fresh
+problem instead of one mechanism. **The mechanism: the escape is decoded one layer above the
+shell.** The tool call's own argument handling resolves `
+` and `−` before the shell sees
+the heredoc, so a quoted heredoc faithfully passes on something that is no longer what was
+written, and nothing warns because the result is still valid Python. Use the file tool, or a
+Python script whose mandated characters are built with `chr(0x2212)` — which also defends against
+an editor normalising the glyph to an ASCII hyphen, since cp1252 encodes a hyphen fine and both
+halves of an encoding test would then go green against the bug they exist to catch. And have every
+patch script assert its anchor occurs **exactly once before writing**, so a bad match aborts
+instead of half-applying.
+
 **When a gate must be re-run before a commit.** Operator ruling of 2026-09-17 (decision D4 of
 the overnight log). **A re-gate is required when any source, test or config byte changed since
 the gate started.** A **docs-only** delta — files no test, criterion or engine imports or parses

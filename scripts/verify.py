@@ -12912,6 +12912,431 @@ CONSOLE_LIVE_CONTRACT: Final = (
     "through engines 18, 21 and 19 and read it back through the console reader"
 )
 
+#: How far the mark is moved between the two reads, as a fraction of the fill price.
+#:
+#: A fraction and not a number of ticks, because the point is only that it **moves** and
+#: the pair's own price scale is not this file's to know. Small enough that neither
+#: barrier is reached - a triggered exit would close the position out from under the
+#: second read - and large enough to survive rounding onto the pair's grid.
+CONSOLE_MARK_STEP: Final = Decimal("0.004")
+
+
+def _console_reader(drive: Drive) -> Any:
+    """A `ConsoleReader` on the daemon's own database, with the daemon's own clock.
+
+    The **same** clock object, not a copy. The console is a separate process and its
+    clock is the only time it has, so a criterion that gave it a second clock would be
+    measuring the gap between two fixtures rather than what the operator sees; and a
+    staleness assertion against a clock that drifts from the daemon's is a race.
+    """
+    cls, problem = _symbol("acsoe.console.reader", "ConsoleReader")
+    if cls is None:
+        raise DriveError(f"the console reader is not importable: {problem}")
+    stale_after_ms = int(drive.config.get("console.stale_after_ms"))
+    return cls(Path(drive.store.db_path), clock=drive.clock, stale_after_ms=stale_after_ms)
+
+
+def _console_position(drive: Drive, position_id: str) -> Any:
+    """The one open-positions row the console would render for `position_id`."""
+    reader = _console_reader(drive)
+    try:
+        views = reader.positions()
+    finally:
+        reader.close()
+    found = [view for view in views if str(view.position_id) == position_id]
+    if len(found) != 1:
+        raise DriveError(
+            f"the console's open-positions region holds {len(views)} row(s) and "
+            f"{len(found)} of them is {position_id}; engine 19 stored one open position"
+        )
+    return found[0]
+
+
+def _console_refuses_a_write(drive: Drive) -> str:
+    """The console's connection refuses an `UPDATE` on the daemon's live database.
+
+    Spec 101's scope limit is "the console places no order", and `ui-context.md` puts it
+    more strongly: the console holds no credentials and can never place one. The narrow
+    structural half of that is asserted here by **attempting** a write and requiring
+    SQLite to refuse it - a guard that has never been shown to fire is not a guard - and
+    the broader half, that nothing reached the broker, is asserted by the caller.
+    """
+    reader = _console_reader(drive)
+    try:
+        connection = reader.store.connection
+        try:
+            connection.execute("UPDATE positions SET last_price = '1'")
+        except sqlite3.OperationalError as refused:
+            return str(refused)
+        raise DriveError(
+            "the console's connection accepted an UPDATE on the daemon's positions table; "
+            "it is opened read-only precisely so this cannot depend on anyone's discipline"
+        )
+    finally:
+        reader.close()
+
+
+#: U+2212, the minus sign `ui-context.md` rule 6 requires. Built with `chr` rather
+#: than typed, so an editor that helpfully normalised the character into an ASCII
+#: hyphen would turn this file's own assertions into hyphen assertions - which is the
+#: exact defect rule 6 exists to catch, arriving through the check rather than the code.
+CONSOLE_MINUS: Final = chr(0x2212)
+
+
+def _decimal_places(text: str) -> int:
+    """How many digits a rendered figure carries after the point."""
+    head, _, tail = text.partition(".")
+    del head
+    return len(tail)
+
+
+def _console_number_rules(view: Any, *, pair_decimals: int, negative: bool) -> list[str]:
+    """`ui-context.md`'s number rules, on the row the operator is actually looking at.
+
+    Returns the violations. **Only the rules a live position can demonstrate** are here:
+    tabular figures are CSS and are held page-wide by `console_tabular_figures`, the
+    palette by `console_tokens_no_raw_hex`, and the focus ring and reduced motion by
+    `console_focus_and_reduced_motion` - all three Phase 1 criteria that run in this same
+    gate. Re-implementing them here would be a second, weaker copy of a check that
+    already exists.
+
+    **Rule 4's other half is reported, not judged.** The operator amended the rule on
+    2026-09-18: an order price renders at the precision it was stored at, and a derived
+    threshold at the precision it was computed to, unrounded by design. The entry price is
+    the order price and is asserted here; `_console_thresholds` reports the derived ones,
+    and `_console_mark_precision` measures the mark, which is a third case and says why it
+    cannot stand behind its own number.
+    """
+    problems: list[str] = []
+
+    # Rule 2. Explicitly signed, always, including a flat position: a bare `0.00%` in a
+    # column of signed figures reads as a missing value rather than a flat one.
+    if not view.unrealised_pnl_pct_text.startswith(("+", CONSOLE_MINUS)):
+        problems.append(
+            f"the unrealised percentage renders {view.unrealised_pnl_pct_text!r}, which "
+            "carries no explicit sign"
+        )
+
+    # Rule 6. A proper minus sign, never a hyphen - a hyphen is narrower than a digit and
+    # breaks the tabular alignment the whole column depends on.
+    for label, text in (
+        ("unrealised PnL", view.unrealised_pnl_text),
+        ("unrealised percentage", view.unrealised_pnl_pct_text),
+    ):
+        if "-" in text:
+            problems.append(f"the {label} renders {text!r}, with an ASCII hyphen in it")
+        if negative and not text.startswith(CONSOLE_MINUS):
+            problems.append(
+                f"the {label} renders {text!r} on a position that is down; rule 3 says the "
+                "sign carries the meaning and the colour only reinforces it"
+            )
+    if negative and view.direction != "neg":
+        problems.append(
+            f"the row's direction is {view.direction!r} on a position that is down, so the "
+            "colour and the sign disagree"
+        )
+
+    # Rule 4, on the one figure that is settled. Engine 18 quantizes the entry onto the
+    # pair's own grid before it places the order - `_entry` above recomputes that and
+    # refuses anything else - so the console rendering it at any other precision is the
+    # console losing or inventing a digit, and that is a FAIL rather than a question.
+    if _decimal_places(view.entry_price_text) != pair_decimals:
+        problems.append(
+            f"the entry price renders {view.entry_price_text!r}, which is "
+            f"{_decimal_places(view.entry_price_text)} decimal places where engine 18 "
+            f"placed it on this pair's {pair_decimals}-decimal grid"
+        )
+    return problems
+
+
+def _console_thresholds(view: Any, *, pair_decimals: int) -> list[str]:
+    """The derived figures and the precision they render at. **Not a breach.**
+
+    `ui-context.md` rule 4, **as the operator amended it on 2026-09-18**: an *order price*
+    renders at the precision it was stored at, because its writer rounded it to the
+    exchange's grid before sending it; a *derived threshold* renders at the precision it
+    was computed to, **and the console does not round it.** Rule 4 is a rule about
+    writers, and the console has never been able to obey the older wording - it reads only
+    the store, and the store holds no pair rules.
+
+    So these three are reported as what they are rather than as a finding. The target and
+    the stop are `entry * (1 +/- pct)` from engine 21; the unrealised PnL is
+    `qty * (mark - entry)`. Rounding them at write time was available - engine 21 holds
+    `pair_rules` at the line where it writes the row - and was **rejected**, because
+    `research/labelling.py` computes its barriers the same unrounded way, so rounding the
+    live ones would make the system trigger on barriers the training labels were never
+    built from. And `stop_price` *is* the trigger engine 21 compares the traded low
+    against, so a rounded rendering would show the operator a number that is not the
+    threshold.
+
+    The one figure rule 4 still governs here is the **entry price**, and
+    `_console_number_rules` asserts it as a FAIL.
+    """
+    return [
+        f"{label} {text!r} ({_decimal_places(text)}dp)"
+        for label, text in (
+            ("target", view.target_price_text),
+            ("stop", view.stop_price_text),
+            ("unrealised", view.unrealised_pnl_text),
+        )
+        if _decimal_places(text) > pair_decimals
+    ]
+
+
+def _console_mark_precision(view: Any, *, pair_decimals: int) -> str:
+    """The mark's precision against the pair's grid. **A measurement this criterion cannot
+    stand behind, and it says so.**
+
+    The mark is not a derived threshold: it is an exchange-supplied bid passed through
+    unchanged, so it should already sit on the grid, and a mark rendering more digits than
+    `pair_decimals` would be engine 3 publishing a bid off it - A's lane, and a finding of
+    its own rather than part of the 2026-09-18 amendment.
+
+    **But this criterion pins the bid it then measures.** `drive.pin` sets the quote, so
+    on this one figure the criterion is judging its own harness, and an assertion about a
+    value the test itself supplied proves nothing about that value. That shape is on the
+    record deliberately - it is the same defect as a double that agrees with its caller,
+    arriving through a *fixture* rather than through a stub.
+
+    The independent measurement belongs to the recorded archive and not here: every price
+    in `tests/fixtures/book_sample.jsonl` is a Kraken v2 book frame copied byte-for-byte
+    out of `data/raw/`, and BTC/USD's own `pair_decimals` sits in the recorded
+    `AssetPairs` beside it. Measured by hand for spec 101 and reported to the lead - 783
+    recorded BTC/USD prices, every one at exactly 1 decimal place, which is that pair's
+    `pair_decimals`. The exchange is on its grid, so the digits below are this harness's.
+    That check is **not** added here on purpose: a criterion named
+    `console_shows_position_live` has no business asserting Kraken's price grid, and
+    `order_book_slippage_on_recorded_book` already reads that fixture in A's own area.
+    """
+    places = _decimal_places(view.last_price_text)
+    if places <= pair_decimals:
+        return (
+            f"The mark renders {view.last_price_text!r}, on this pair's "
+            f"{pair_decimals}-decimal grid"
+        )
+    return (
+        f"The mark renders {view.last_price_text!r} ({places}dp) where AssetPairs gives "
+        f"this pair {pair_decimals} - NOT a verdict on engine 3: this criterion pinned "
+        "that bid itself, so here it measures its own harness. The archive says the "
+        "exchange is on the grid (783 recorded BTC/USD book prices, all 1dp)"
+    )
+
+
+def _console_position_body(
+    tier: str, tools: dict[str, Any], polars: Any, subject: FillSubjectModel
+) -> str:
+    """Spec 101. A position a real daemon opened, read back through the console.
+
+    Four reads of the same position, and each one is a different claim:
+
+    1. **After the fill** - the region renders at all, on a row engine 19 wrote from
+       engine 21's payload rather than on a seeded one.
+    2. **After a second tick at a moved mark** - the region is *live*. The move is
+       recomputed here from the price this criterion pinned, so a reader serving the
+       previous tick's figure cannot satisfy it by being consistent with itself. That is
+       the FAIL arm spec 101 names.
+    3. **With the console's clock past `console.stale_after_ms`** - rule 5. Both readings
+       are taken: a staleness check that only ever observes `True` is satisfied by a
+       reader that fades everything permanently.
+    4. **On a tick engine 4 blocked** - the hold, as operator prose and never as a code.
+
+    Throughout: nothing the console did reached the broker, and its connection refuses a
+    write to the daemon's own database.
+    """
+    del tier
+    manager_contracts, guard = tools["manager"], tools["guard"]
+    hold = str(manager_contracts.HOLD_DATA_GUARD_BLOCKED)
+    prose_map, problem = _symbol("acsoe.console.format", "REASON_PROSE")
+    if prose_map is None:
+        raise DriveError(f"the console's reason map is not importable: {problem}")
+
+    with _driven(tools, subject, polars) as drive:
+        _warm_up(drive)
+        entry, entry_state = _entry(drive)
+        filled, _ = _fill(drive, entry)
+        pair = entry.pair
+        pair_decimals = int(entry_state["exchange"]["pair_rules"]["pairs"][pair]["pair_decimals"])
+        placed = len(drive.broker.requests)
+
+        # 1. The fill tick.
+        first = _console_position(drive, filled.position_id)
+        if first.last_price != entry.limit:
+            raise DriveError(
+                f"the console shows the mark as {first.last_price}, and the position was "
+                f"filled at {entry.limit}; on the fill tick the mark is the fill price"
+            )
+        if first.hold_reason is not None:
+            raise DriveError(
+                f"the console shows a hold of {first.hold_reason!r} on a tick nothing blocked"
+            )
+
+        # 2. A second tick, at a mark this criterion moved.
+        grid = Decimal(1).scaleb(-pair_decimals)
+        moved = (entry.limit * (1 + CONSOLE_MARK_STEP)).quantize(grid, rounding=ROUND_DOWN)
+        if moved == entry.limit:
+            raise DriveError(
+                f"the moved mark {moved} rounds onto the same grid point as the fill "
+                f"{entry.limit}, so this drive could not tell a live figure from a frozen one"
+            )
+        drive.pin(moved)
+        at = filled.filled_at + drive.tick_s
+        state = drive.tick(at)
+        if "trading_blocked_by" in state:
+            raise DriveError(f"the second tick was blocked by {state['trading_blocked_by']}")
+        second = _console_position(drive, filled.position_id)
+        if second.last_price != moved:
+            raise DriveError(
+                f"the console still shows the mark as {second.last_price} after the market "
+                f"moved to {moved}; the open-positions region is a snapshot, not live"
+            )
+        # Recomputed from the market this criterion pinned, never read back. `qty` is the
+        # filled quantity and the two marks are both this file's, so a reader that served
+        # either tick's figure twice fails this even though it would be self-consistent.
+        expected_move = entry.qty * (moved - entry.limit)
+        if second.unrealised_pnl - first.unrealised_pnl != expected_move:
+            raise DriveError(
+                f"the rendered unrealised PnL moved by "
+                f"{second.unrealised_pnl - first.unrealised_pnl} when the mark moved from "
+                f"{entry.limit} to {moved} on {entry.qty}, which is {expected_move}"
+            )
+        if second.unrealised_pnl_text == first.unrealised_pnl_text:
+            raise DriveError(
+                f"both ticks rendered the unrealised PnL as {second.unrealised_pnl_text!r}; "
+                "the figure the operator reads did not move even though the value did"
+            )
+
+        # 3. Rule 5, from the console's own clock.
+        fresh = second.staleness
+        stale_after_ms = int(drive.config.get("console.stale_after_ms"))
+        if fresh.is_stale:
+            raise DriveError(
+                f"the console calls a position it was just handed stale (age "
+                f"{fresh.age_us}us against {stale_after_ms}ms); every figure on the screen "
+                "would sit at half opacity permanently"
+            )
+        stale = _stale_reading(drive, filled.position_id, stale_after_ms)
+
+        # 4. The hold, on a tick engine 4 blocks.
+        held_at = at + drive.tick_s
+        printed = filled.stop - TOUCH_PAST
+        drive.market.plant_trade(
+            pair, at=datetime.fromtimestamp(held_at - drive.tick_s // 2, tz=UTC), price=str(printed)
+        )
+        drive.cross(
+            pair,
+            quoted=(filled.stop - Decimal("0.4")).quantize(Decimal("0.001")),
+            book_bid=(filled.stop - Decimal("0.7")).quantize(Decimal("0.001")),
+        )
+        blocked_state = drive.tick(held_at)
+        if blocked_state.get("trading_blocked_by") != "data_guard":
+            raise DriveError(
+                "the crossed quote did not block the tick on data_guard: "
+                f"{blocked_state.get('trading_blocked_by')!r}"
+            )
+        if (blocked_state.get("data_guard") or {}).get("reason_code") != guard.REASON_NEGATIVE_SPREAD:
+            raise DriveError(
+                f"engine 4 blocked for {(blocked_state.get('data_guard') or {}).get('reason_code')!r}"
+            )
+        if (blocked_state.get("position_manager") or {}).get("hold_reason") != hold:
+            raise DriveError(
+                "engine 21 did not hold on a tick data_guard blocked, so there is no hold "
+                "for the console to show"
+            )
+        held = _console_position(drive, filled.position_id)
+        if held.hold_reason != hold:
+            raise DriveError(
+                f"engine 21 published hold_reason {hold!r} and the console shows "
+                f"{held.hold_reason!r}"
+            )
+        expected_prose = prose_map.get(hold)
+        if not expected_prose:
+            raise DriveError(f"console/format.py has no operator prose for {hold!r}")
+        if held.hold_reason_text != expected_prose:
+            raise DriveError(
+                f"the console renders the hold as {held.hold_reason_text!r}; "
+                f"REASON_PROSE[{hold!r}] is {expected_prose!r}"
+            )
+        if hold in held.hold_reason_text:
+            raise DriveError(
+                f"the reason code {hold!r} is on the screen inside "
+                f"{held.hold_reason_text!r}; a code reaching the operator is a log line"
+            )
+
+        # The number rules, on the down tick where the sign has something to carry.
+        if held.unrealised_pnl >= 0:
+            raise DriveError(
+                "the held tick left the position up, so the minus sign and the negative "
+                "direction have nothing to demonstrate"
+            )
+        problems = _console_number_rules(held, pair_decimals=pair_decimals, negative=True)
+        problems += _console_number_rules(second, pair_decimals=pair_decimals, negative=False)
+        if problems:
+            raise DriveError("ui-context.md's number rules: " + "; ".join(problems))
+        thresholds = _console_thresholds(held, pair_decimals=pair_decimals)
+        mark_precision = _console_mark_precision(held, pair_decimals=pair_decimals)
+
+        # Read-only, throughout. Nothing the console did placed or cancelled anything.
+        refusal = _console_refuses_a_write(drive)
+        if len(drive.broker.requests) != placed:
+            raise DriveError(
+                f"the broker saw {len(drive.broker.requests) - placed} further request(s) "
+                "while the console was reading; the console places no order"
+            )
+
+    return (
+        f"{pair} position {filled.position_id}: the console read engine 19's row at the fill "
+        f"mark {entry.limit}, and after one tick at {moved} it renders "
+        f"{second.last_price_text} with the unrealised PnL moved by exactly "
+        f"{expected_move} on {entry.qty} - live, not a snapshot. Past "
+        f"console.stale_after_ms ({stale_after_ms}ms) the same row reports stale with its "
+        f"age {stale.staleness.age_text!r} beside it, and fresh before it. On the tick "
+        f"engine 4 blocked for a crossed quote the row shows the hold as "
+        f"{held.hold_reason_text!r} and never the code {hold!r}. Signed percentages "
+        f"({second.unrealised_pnl_pct_text} and {held.unrealised_pnl_pct_text}), a real "
+        f"U+2212, and the entry price at exactly this pair's {pair_decimals} AssetPairs "
+        f"decimal(s), which is where engine 18 put it. The console placed nothing - the "
+        f"broker saw {placed} request(s) before and after - and its connection refused a "
+        f"write: {refusal}. "
+        + (
+            "Every derived figure is inside the pair's precision too"
+            if not thresholds
+            else (
+                "Derived thresholds render at the precision they were computed to and the "
+                "console does not round them - ui-context.md rule 4 as amended 2026-09-18: "
+                + ", ".join(thresholds)
+                + ". Rounding them at write time was available and was rejected, because "
+                "research/labelling.py computes its barriers the same unrounded way and "
+                "stop_price is the trigger engine 21 compares against"
+            )
+        )
+        + ". "
+        + mark_precision
+    )
+
+
+def _stale_reading(drive: Drive, position_id: str, stale_after_ms: int) -> Any:
+    """The same row, read by a console whose clock has moved past the threshold.
+
+    The *console's* clock, and not the row's age, because the console is a separate
+    process: a reader that judged staleness from anything the row itself carries would
+    report a screen fresh while the daemon was dead. Restored afterwards, so the drive's
+    own clock is where the next tick expects it.
+    """
+    was = drive.clock.now()
+    try:
+        drive.clock.set(was + timedelta(milliseconds=stale_after_ms * 2))
+        view = _console_position(drive, position_id)
+    finally:
+        drive.clock.set(was)
+    if not view.staleness.is_stale:
+        raise DriveError(
+            f"a console {stale_after_ms * 2}ms behind the row still calls it fresh; "
+            "ui-context.md rule 5: stale data must look stale"
+        )
+    if not view.staleness.age_text:
+        raise DriveError("the stale row carries no age to show beside the figure")
+    return view
+
 
 # --- order_book_slippage_on_recorded_book ----------------------------------- #
 
@@ -13306,10 +13731,10 @@ def check_console_shows_position_live(ctx: VerifyContext) -> Outcome:
     console expects, and a position written by engine 19 out of engine 21's payload is
     written to the shape engine 21 publishes.
 
-    **PENDING until spec 101 lands**, naming it. The console has no `hold_reason` on its
-    position view today, which is spec 101 step 3; the body that drives a position and
-    reads it back through the reader is spec 101's to write, together with its FAIL
-    proof (the reader serving the previous tick's mark).
+    The PENDING guard below is kept although the drive now exists, and it is kept in
+    the order it was written in: an absent `hold_reason` on `PositionView` is the console
+    half of this criterion not being built, which is PENDING, and it must not arrive as a
+    `DriveError` two hundred lines into a drive that spent a minute getting there.
     """
     with root_import_path(ctx.root):
         tier, problem = _tier_sentence(3)
@@ -13328,12 +13753,11 @@ def check_console_shows_position_live(ctx: VerifyContext) -> Outcome:
                     "the console's open-positions region shows no hold reason yet: "
                     "PositionView has no `hold_reason` (C, spec 101) - " + CONSOLE_LIVE_CONTRACT
                 )
-            else:
-                problem = pending(
-                    "PositionView carries `hold_reason`; the live-position drive is spec "
-                    "101's to write (C, spec 101) - " + CONSOLE_LIVE_CONTRACT
-                )
-        return _awaiting(problem, tier)
+        if problem is not None:
+            return _awaiting(problem, tier)
+    return _driven_verdict(
+        ctx, _console_position_body, what="the console's open-positions region"
+    )
 
 
 def check_order_book_slippage_on_recorded_book(ctx: VerifyContext) -> Outcome:
@@ -13844,7 +14268,58 @@ def format_report(
     return "\n".join(lines)
 
 
+def make_console_utf8() -> list[str]:
+    """Make this process's own stdout and stderr able to carry a verdict.
+
+    **The gate could not print its own house style, and the two had never met.** On
+    2026-09-18 `verify.py --phase 6 > log 2>&1` died mid-run with
+    `UnicodeEncodeError: 'charmap' codec can't encode character '\\u2212'`: a redirected
+    stream on Windows is opened with `locale.getencoding()`, which is cp1252 here, and
+    cp1252 has no minus sign. `ui-context.md` rule 6 *requires* U+2212 in numeric output
+    and `console_shows_position_live` quotes the figures it checked, so its PASS message
+    was the first criterion message ever to contain one. Seven criteria had printed; the
+    other six never ran and the phase result was never reported.
+
+    Note the shape of that failure: not a wrong verdict but a **lost** one, exiting 1 -
+    the same code a real FAIL returns - so a reader with only the exit code would have
+    concluded the phase was red on its merits.
+
+    **`errors="backslashreplace"`, not `strict`, and that is not belt-and-braces.** UTF-8
+    encodes every code point *except* a lone surrogate, and lone surrogates reach this
+    program by an ordinary route: `os.fsdecode` maps undecodable filesystem bytes to the
+    surrogate range, and criterion messages embed paths - `toolchain_green`'s "full
+    output: ..." is one. Strict UTF-8 would therefore still be able to kill a run, on a
+    rarer input, which is the worst version of this bug rather than a fixed one.
+    `backslashreplace` also keeps the information: the escape names the code point, where
+    `replace` would discard it, and a tool whose purpose is not losing a diagnosis should
+    not lose one here either.
+
+    Returns what it could not change, for the caller to report. Never raises: a stream
+    that cannot be reconfigured - already wrapped, replaced by a test, a pipe someone
+    handed us - is not a reason to refuse to run the gate, and on such a stream the old
+    behaviour is exactly what happens today.
+
+    Called from `main()` and **never at import**: `tests/verify/` imports this module, and
+    mutating global streams at import time would fight pytest's capture.
+    """
+    unchanged: list[str] = []
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            unchanged.append(name)
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (OSError, ValueError):
+            unchanged.append(name)
+    return unchanged
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    # Before the first `print`, and before anything that could raise into a traceback.
+    unprintable = make_console_utf8()
+
     parser = argparse.ArgumentParser(
         prog="verify.py", description="Run the executable exit criteria for one build phase."
     )
@@ -13882,6 +14357,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     # that printed nothing". The text is byte-identical to the batched report.
     for line in report_header(args.phase, context.root):
         print(line, flush=True)
+    if unprintable:
+        # Said rather than swallowed. On such a stream a verdict carrying a character the
+        # locale encoding cannot represent will still kill the run, and the reader needs
+        # to know that before it happens rather than from the traceback afterwards.
+        print(
+            "WARNING: "
+            + " and ".join(unprintable)
+            + " could not be set to UTF-8; a verdict containing a character this "
+            + "locale cannot encode will end the run",
+            flush=True,
+        )
     width = name_column_width(to_run)
     results: list[tuple[Criterion, Outcome]] = []
     for criterion in to_run:
