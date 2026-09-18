@@ -27,6 +27,7 @@ from acsoe.clients.store.client import StoreClient
 from acsoe.clients.store.contracts import (
     BlockRecordRow,
     BlockStatus,
+    CashSource,
     CommandName,
     CommandSource,
     EquitySnapshotRow,
@@ -167,6 +168,7 @@ def write_equity(store: StoreClient, *, equity: str, peak: str, ts: int = 1_000)
             unrealised_pnl=Decimal("0.00"),
             realised_pnl_cum=Decimal("0.00"),
             open_position_count=0,
+            cash_source=CashSource.CYCLE_START,
             updated_at=ts,
         )
     )

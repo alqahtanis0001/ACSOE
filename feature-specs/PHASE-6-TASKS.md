@@ -1,5 +1,78 @@
 # Phase 6 — shared task list
 
+## HANDOFF 8, 2026-09-18 08:50 local — the nine criteria are green and the follow-up work is done. The phase is NOT closed.
+
+**Read this first. HANDOFF 7 and earlier are history.** Written for a session that has read the
+documents and nothing else.
+
+### State
+
+`python scripts/verify.py --phase 6` → **14 criteria, 14 PASS, 0 FAIL, 0 PENDING, exit 0**
+(`logs/verify/phase6-20260918-cashsource2-lead-*.log`; `toolchain_green` reports `3314 passed, 2
+skipped`). The tree is clean, every agent is stopped, and everything below is committed and pushed.
+**The operator has not yet seen the first paper trade, and asked to before the phase closes. Do not
+close it.**
+
+### Done since HANDOFF 7 (the operator was asleep; the night's decisions, each with the option
+rejected, are in `docs/build-log/phase-6/overnight-decisions-2026-09-18.md`)
+
+| Spec | What | Owner |
+|---|---|---|
+| 119 | Every seeded rejection uses an `(engine, code)` pair the live system can emit | B |
+| 120 | The orphaned `REASON_PROSE` prose retired; **both** directions of the walk now asserted | C |
+| 109 | The last stale paper-mode-fallback prose, eight sites across six files | A |
+| 118 | New 14th criterion: the recorded book agrees with the recorded `pair_decimals` | C |
+| — | `EquitySnapshotRow.cash_source`'s default removed, with a refusal test | Lead |
+
+### Open questions for the operator — nothing else is blocked on them
+
+All four are in the night's decision log with options and a recommendation:
+
+- **Q1.** Invariant 14 grants engines 21 and 22 a retained balance **neither reads**. Engine 22
+  deliberately reads only the retained `AssetPairs`; B recorded that deviation from spec 93 and
+  escalated it on 2026-09-16; the invariant never moved. Amend the invariant, or change engine 22?
+- **Q2.** Spec 118's own premise was wrong: the two fixtures are **not** frozen together
+  (`asset_pairs.json` 2026-09-08, `book_sample.jsonl` cut 2026-09-16, no provenance block). The
+  check is honest and its prose says so; aligning them is a ruling.
+- **Q3.** That criterion compares **1 pair of 5**. Widening to 3 of 5 is a re-cut **C** runs (not
+  A — the cutter chooses nothing), and it shares the fixture with
+  `order_book_slippage_on_recorded_book`, so the two must move together.
+- **F1.** An invented ADA/USD `pair_decimals` for the fake client sits two screens from the new
+  criterion. Not a defect; the docstring names it as the thing it must not read.
+
+Smaller, also for the operator: a tautological assertion in `tests/engines/test_exchange.py`
+(A found it in its own lane and left it, since a prose spec does not touch assertions); a stale
+line in `context/progress/b-store.md:287`; and C's finding that `outside_universe` **never** had a
+producer — `feature-specs/44` said the key "already exists" and nothing ever checked it was used.
+
+### What is left in Phase 6
+
+1. **The operator sees the first paper trade**, then rules on closing.
+2. The phase close itself: the final gate, the tracker, and `docs/build-log/phase-6.md`
+   consolidated from the four per-agent logs.
+3. Anything the operator rules on Q1–Q3.
+
+### Standing rules (all also in `context/code-standards.md` or the tracker)
+
+- **The gate is `verify.py` alone**, with `mypy --strict src/ scripts/` and
+  `ruff check src/ tests/ scripts/` before it. The bare `pytest` run is retired; spec 115 puts the
+  test count in the gate's own PASS message.
+- **One gate per boundary, immediately before the commit**, and **commit only once the agent's
+  records are on disk**. A re-gate is required when any source, test or config byte changed since
+  the gate started; a docs-only delta needs only the document checks, with the proving diff in the
+  commit message.
+- **Every measurement lands in a file and is filtered afterwards.** The lead broke this the same
+  night it wrote it into HANDOFF 7: a red enumeration piped through `tail` kept the summary and
+  threw away all 39 failure and 167 error names.
+- **One agent in the tree at a time**; push-notify the operator only when blocked on a ruling;
+  anything over ~3 hours goes to the operator with options first (gates and agreed work exempt).
+- **Every assertion proven capable of failing, mutation over reading**, byte-copy restores with the
+  sha256 compared in the same statement, anchors asserted to occur exactly once, and **ask of every
+  kill which test killed it**.
+- **Never write a file through a bash heredoc carrying escapes** (three incidents this phase).
+- **Prose is part of the deliverable**, and **stale prose with no decision entry behind it is a
+  finding to report, not a typo to fix silently** — every prose spec this phase produced one.
+
 ## HANDOFF 7, 2026-09-18 02:45 local — THE NINE CRITERIA ARE GREEN. Phase 6 is not closed.
 
 **Read this first. HANDOFF 6 and earlier are history.** Written for a session that has read the

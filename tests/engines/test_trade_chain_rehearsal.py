@@ -1067,6 +1067,7 @@ def test_a_block_by_any_other_engine_does_not_hold_a_touched_stop(
             unrealised_pnl=Decimal("0"),
             realised_pnl_cum=Decimal("0"),
             open_position_count=0,
+            cash_source=CashSource.CYCLE_START,
             updated_at=filled.opened_at + 1,
         )
     )
@@ -1118,6 +1119,7 @@ def test_a_restarted_process_does_not_place_the_same_entry_twice(
             unrealised_pnl=Decimal("0"),
             realised_pnl_cum=Decimal("0"),
             open_position_count=0,
+            cash_source=CashSource.CYCLE_START,
             updated_at=to_micros(rehearsal.at(-BAR)),
         )
     )

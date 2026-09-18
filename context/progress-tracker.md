@@ -231,6 +231,31 @@ line wider and a real code under the wrong engine passes everything. Also: B's f
 five bad pairs rather than six, because its sampled draw never picked the `order_book` row, which
 is why the second test walks the constant rather than the written rows.
 
+### `EquitySnapshotRow.cash_source`'s default removed (lead), 2026-09-18
+
+Operator ruling, and spec 113's own recommendation. The default was `CYCLE_START` while engine 19
+did not pass the field — a required field would have made engine 19 raise on every tick and written
+**no equity row at all** — and spec 114 made engine 19 pass it on both branches, which is the
+precondition the default was waiting on. The field is now required; ten fixture sites across eight
+files pass it explicitly. **The removal landed with the operator's condition: a test that a row
+lacking a source is refused**, proven red by restoring the default from a byte copy (only that test
+failed; `contracts.py` sha256 identical after the restore).
+
+**The condition earned itself within the hour.** Adding the keyword to the store's `make_equity`
+helper made B's old `test_a_row_built_without_a_cash_source_says_cycle_start` **pass while
+asserting nothing** — it called the very helper that now supplies the value. Retiring it without
+the replacement would have removed a check rather than tightened one, which is exactly what the
+operator said when they ruled.
+
+**Two process mistakes of the lead's, recorded rather than quietly fixed.** (1) The red measurement
+that enumerates every broken site was run as `pytest ... | tail -4 > log`, which kept the summary
+and threw away all 39 failure names and 167 error names — the "evidence destroyed at the pipe" rule
+from `code-standards.md`, which the lead had written into HANDOFF 7 a few hours earlier. Re-run
+redirected whole; 30 minutes lost and nothing else. (2) The script that inserted the `CashSource`
+import left the block unsorted in two files, and **the gate caught it** (`ruff` I001 inside
+`toolchain_green`, a real FAIL on the lead's own work), taking two attempts to place the name
+correctly. Both are in `docs/build-log/phase-6/lead.md`.
+
 ### SPEC 118 (C): the recorded book is checked against the recorded declaration — and the ruling's own premise was wrong
 
 `recorded_book_agrees_with_recorded_pair_decimals`, the 14th Phase 6 criterion: every recorded

@@ -45,6 +45,7 @@ from tests.harness.fake_kraken import TIER_3, FakeKrakenClient, fee_tier_profile
 
 from acsoe.clients.kraken.contracts import QuoteTick, TradeTick
 from acsoe.clients.store.contracts import (
+    CashSource,
     CommandName,
     CommandRow,
     CommandSource,
@@ -570,6 +571,7 @@ def write_equity(store: Any, amount: str = "5000.00") -> None:
             unrealised_pnl=Decimal("0.00"),
             realised_pnl_cum=Decimal("0.00"),
             open_position_count=0,
+            cash_source=CashSource.CYCLE_START,
             updated_at=1_000,
         )
     )

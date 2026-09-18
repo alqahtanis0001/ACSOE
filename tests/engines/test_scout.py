@@ -32,7 +32,7 @@ from tests.harness.fake_kraken import FakeKrakenClient
 
 from acsoe.clients.kraken.contracts import QuoteTick, TradeTick
 from acsoe.clients.store.client import StoreClient
-from acsoe.clients.store.contracts import EquitySnapshotRow
+from acsoe.clients.store.contracts import CashSource, EquitySnapshotRow
 from acsoe.core.contracts import EngineStatus
 from acsoe.engines.exchange.engine import ExchangeEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
@@ -148,6 +148,7 @@ def write_equity(store: StoreClient, amount: str) -> None:
             unrealised_pnl=Decimal("0.00"),
             realised_pnl_cum=Decimal("0.00"),
             open_position_count=0,
+            cash_source=CashSource.CYCLE_START,
             updated_at=1_000,
         )
     )

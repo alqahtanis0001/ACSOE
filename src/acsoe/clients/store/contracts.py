@@ -287,15 +287,15 @@ class EquitySnapshotRow(_Row):
     The cash and unrealised components are stored rather than derived because the Phase 7
     alpha attribution reads the full curve *including cash periods*.
 
-    **`cash_source` defaults to `CYCLE_START`, and the default is temporary.** Engine 19
-    builds this row by keyword and does not pass the field yet. It will once spec 114
-    lands. A required field would make engine 19 raise on every tick until then, and no
-    equity row would be written at all. The default is also the true label for every
-    row engine 19 writes today, because today's rows are all start-of-tick cash. It
-    stops being true on the exit tick spec 114 changes. The risk is the one
-    `code-standards.md` names for a model default: a writer that forgets the field gets
-    `cycle_start` silently. Spec 114's wrong-label mutation is what catches that. Once
-    engine 19 passes the field on every row, the default can go.
+    **`cash_source` is required, and has no default** (operator ruling 2026-09-18, spec
+    113's own recommendation). It carried `CYCLE_START` while engine 19 did not pass the
+    field — a required field would have made engine 19 raise on every tick and written no
+    equity row at all — and spec 114 made engine 19 pass it on both branches, which is the
+    precondition the default was waiting on. Removing it closes the risk
+    `code-standards.md` names for a model default: **a writer that forgets the field would
+    have been given `cycle_start` silently**, and on an exit tick that label is false. A
+    row built without a source is now refused at construction, which is the same refusal
+    delivered earlier and with a better message.
     """
 
     id: int | None = None
@@ -310,7 +310,7 @@ class EquitySnapshotRow(_Row):
     unrealised_pnl: Money
     realised_pnl_cum: Money
     open_position_count: int
-    cash_source: CashSource = CashSource.CYCLE_START
+    cash_source: CashSource
     updated_at: Micros
 
 

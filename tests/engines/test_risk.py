@@ -36,6 +36,7 @@ from acsoe.clients.kraken.contracts import QuoteTick, TradeTick
 from acsoe.clients.paper.broker import PaperBroker
 from acsoe.clients.store.client import StoreClient
 from acsoe.clients.store.contracts import (
+    CashSource,
     EquitySnapshotRow,
     OrderIntent,
     OrderRow,
@@ -263,6 +264,7 @@ def sized_context(engine_context: Any, store: StoreClient, kraken: Any) -> Any:
             unrealised_pnl=Decimal("0.00"),
             realised_pnl_cum=Decimal("0.00"),
             open_position_count=0,
+            cash_source=CashSource.CYCLE_START,
             updated_at=1_000,
         )
     )
@@ -1018,6 +1020,7 @@ def an_account_that_has_already_traded(
             unrealised_pnl=Decimal("0"),
             realised_pnl_cum=Decimal("0"),
             open_position_count=1,
+            cash_source=CashSource.CYCLE_START,
             updated_at=now - 60 * MICROS,
         )
     )

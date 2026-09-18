@@ -69,6 +69,7 @@ def make_equity(
         unrealised_pnl=Decimal("0.00"),
         realised_pnl_cum=Decimal("0.00"),
         open_position_count=0,
+        cash_source=CashSource.CYCLE_START,
         updated_at=ts,
     )
 
@@ -235,6 +236,7 @@ def test_a_float_is_refused_before_it_reaches_the_database() -> None:
             unrealised_pnl=Decimal("0.00"),
             realised_pnl_cum=Decimal("0.00"),
             open_position_count=0,
+            cash_source=CashSource.CYCLE_START,
             updated_at=1,
         )
 
@@ -322,12 +324,40 @@ def test_the_cash_source_is_written_and_read_back_as_given(
     assert [r.cash_source for r in store.equity_series()] == [source]
 
 
-def test_a_row_built_without_a_cash_source_says_cycle_start() -> None:
-    """The model default, and it is deliberate for now: engine 19 builds the row by
-    keyword and does not pass the field until spec 114, and every row it writes today
-    really is start-of-tick cash. The docstring on `EquitySnapshotRow` says when the
-    default goes."""
-    assert make_equity(ts=1, equity="1.00", peak="1.00").cash_source is CashSource.CYCLE_START
+def test_a_row_built_without_a_cash_source_is_refused() -> None:
+    """**The replacement for the test of the default, not its deletion** (operator ruling
+    2026-09-18). While `cash_source` defaulted to `CYCLE_START`, a writer that forgot the
+    field was handed a label rather than an error — and on an exit tick that label is
+    false, in the one series engine 17 reads to compute the drawdown that freezes the
+    account. Spec 114 made engine 19 pass the field on both branches, which is the
+    precondition the default was waiting on, so the default is gone and its absence is
+    now a refusal at construction.
+
+    Retiring the old test without this one would have removed a check instead of
+    tightening one: nothing would then hold the field required, and the next fixture to
+    omit it would simply get whatever a future default said.
+    """
+    fields = {
+        "cycle_id": 1,
+        "run_id": "run-a",
+        "ts": 1,
+        "currency": "USD",
+        "equity": Decimal("1.00"),
+        "peak_equity": Decimal("1.00"),
+        "cash": Decimal("1.00"),
+        "positions_value": Decimal("0.00"),
+        "unrealised_pnl": Decimal("0.00"),
+        "realised_pnl_cum": Decimal("0.00"),
+        "open_position_count": 0,
+        "updated_at": 1,
+    }
+    # The same fields with a source are accepted, so the refusal below is about the
+    # missing field and not about the rest of the row.
+    assert EquitySnapshotRow(**fields, cash_source=CashSource.AFTER_EXIT).cash_source is (
+        CashSource.AFTER_EXIT
+    )
+    with pytest.raises(ValidationError, match="cash_source"):
+        EquitySnapshotRow(**fields)
     assert [member.value for member in CashSource] == ["cycle_start", "after_exit"]
 
 

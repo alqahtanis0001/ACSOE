@@ -372,3 +372,28 @@ notification. B's entry is left as written (script-rules rule 6: correct with a 
 edit an old one). The lesson for the lead: commit at a boundary only after the agent's records
 are on disk, not only after its gate logs are, or the commit carries code whose build-log entry
 is still in a transcript.
+
+### I destroyed the red measurement at the pipe, having written the rule against it the same night
+
+**Agent:** Lead · **Task:** cash_source default removal · **Date:** 2026-09-18
+
+**What happened.** Removing `EquitySnapshotRow.cash_source`'s default, I ran the full suite to
+enumerate every site that breaks and wrote it as `pytest ... 2>&1 | tail -4 > log`. The run took
+30 minutes and reported `39 failed, 3108 passed, 167 errors`. **The four lines I kept are the
+summary; the names of all 39 failures and 167 errors went to the floor.** The background task's own
+output file holds the same four lines, because the pipe ran inside it.
+
+**Why it matters more than the lost half hour.** `code-standards.md` carries this exact rule —
+*"The evidence is destroyed at the pipe, before re-running is even a decision… Redirect to a file
+and read the file. A summary line is not evidence; it is the receipt for evidence you did not
+keep."* Phase 4 lost an unattributable failure to it. I wrote that same rule into HANDOFF 7 for the
+next session a few hours earlier, and then broke it on the first command that produced a large
+list.
+
+**Why I reached for it.** The habit is from reading *verdicts*, where the summary line is the whole
+answer, and every gate command I have run tonight legitimately ends in a tail. This run was the
+opposite: a deliberate red whose **contents** were the product. The tell was available and I did
+not take it — a command whose purpose is "enumerate what broke" cannot be satisfied by a count.
+
+**Fix.** Re-run redirected whole to `logs/verify/lead-cashsource-red2.log`, and read the file. For
+the rest of this task every measurement lands in a file first and is filtered afterwards.
