@@ -38,7 +38,9 @@ are in the same file.
 **Rejected.** One cross-lane cleanup spec (ownership rule 6 forbids it), or folding all of
 them into spec 100 (it would mix B's lane into C's task).
 
-### D3 — Spec 107's tightening of spec 105: **REVIEW**
+### D3 — Spec 107's tightening of spec 105: **RESOLVED — accepted by the operator 2026-09-17**
+
+**Ruling (2026-09-17 morning):** accepted. *"The branch is reachable only by a regression of spec 106, and a criterion that silently accepts a regression proves less than it could."* Re-confirmed 2026-09-18 when the lead wrongly listed it as still open; the ruling had been recorded here all along and only the REVIEW tag was left standing.
 
 **Took.** Tighten the criterion so that a fill-tick position with no stored mark is a FAIL,
 now that spec 106 makes engine 21 store the fill price as the mark.
@@ -81,7 +83,9 @@ C's criteria work (D1: one agent in the tree at a time).
 **Why.** They change no behaviour and block nothing; C's criteria are the work the operator
 asked for tonight.
 
-### D8 — `escalation_completes_during_outage` fails the balance by failing `AssetPairs` too: **REVIEW**
+### D8 — `escalation_completes_during_outage` fails the balance by failing `AssetPairs` too: **RESOLVED — accepted by the operator 2026-09-17**
+
+**Ruling (2026-09-17 morning):** accepted — strictly harder, it exercises invariant 14's retained-cache override as well, and the message names both failures so a pass cannot hide which path carried it. Re-confirmed 2026-09-18, same correction as D3.
 
 **Took (C's proposal, accepted).** In paper mode the broker never calls the real `Balance`,
 so failing that call alone changes nothing. C fails `AssetPairs` as well; the broker's

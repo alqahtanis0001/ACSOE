@@ -80,9 +80,13 @@ exiting 1, the code a real FAIL returns, with six criteria never run.
 ### Open, and needing nobody's permission to read
 
 `docs/build-log/phase-6/overnight-decisions-2026-09-17.md` holds every decision taken while the
-operator slept, each with the option rejected; its Q1 and Q2 are closed. The two `REVIEW`-marked
-choices the operator has not revisited are D3 (the criterion rejecting a NULL fill-tick mark) and
-D8 (the outage criterion failing `AssetPairs` to fail the balance).
+operator slept, each with the option rejected. **All of it is ruled: Q1, Q2, and every decision
+including D3 and D8**, which the operator accepted on the morning of 2026-09-17 and which now
+carry their ruling inline. An earlier draft of this handoff called D3 and D8 outstanding; they
+never were. The acceptance had been recorded in that file's rulings section the whole time, and
+only the `**REVIEW**` tags on the entries were left standing — **a record is not resolved because
+the resolution sits somewhere else in the same file; the marker has to move.**
+`overnight-decisions-2026-09-18.md` is the list for the night of the 18th.
 
 ## HANDOFF 6, 2026-09-17 19:20 local — the criteria bodies exist; the exit-cycle row is mid-fix; MUCH IS UNCOMMITTED
 
