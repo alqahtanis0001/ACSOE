@@ -36,6 +36,60 @@ produce both.**
    gate, so nothing either publishes may make the system more willing to trade (invariant 4), and
    making it less willing is a veto only a gate may issue.
 
+**Open, 2026-09-18 (S3, below):** item 1's "friction ≈ 0.65%, bar 1.625%" and "tier 1 is a
+no-trade regime" are the invariant's **reference** figures. The fake exchange's tier 3 charges
+0.11% / 0.19% and the first round trip's friction was 0.308%; its tier 1 would clear the gate.
+Not re-worded here, because what the criteria claim is the operator's ruling.
+
+### The operator's rulings on Q1–Q4, 2026-09-18, and what acting on them found
+
+The four questions of `docs/build-log/phase-6/overnight-decisions-2026-09-18.md`, ruled by the
+operator before sleeping on 2026-09-18. **Two of the four could not be carried out as ruled, and
+the lead stopped on both** rather than choose; everything is in
+`docs/build-log/phase-6/overnight-decisions-2026-09-18-night.md`, the night's one decision list.
+
+- **Q1 — the retained balance in invariant 14. Ruled: do not amend invariant 14; change engine 22
+  to read the retained balance, stopping first if that changes behaviour. Invariant 14 is not
+  amended. The engine change STOPPED (S1): it changes behaviour.** The only decision a balance could
+  inform in engine 22 is the sell quantity, and the paper ledger is quote-side only
+  (`clients/paper/fills.py:196`), so a cap sells nothing and a paper liquidation never completes.
+  Worse, `PaperBroker.last_known_good_balances` forwards the **real** exchange client's retained
+  `Balance` (`clients/paper/broker.py:262`), which in paper mode is not the paper account at all.
+  Options and a recommendation are in S1.
+- **Q2 — spec 118's premise. Ruled: a provenance block on `asset_pairs.json` naming the archive and
+  date it was cut from; re-record both fixtures together at the next cut. STOPPED (S2): there is no
+  archive.** `tests/fixtures/kraken/asset_pairs.json` has one commit (`afaf2f5`, 2026-09-08, the
+  Phase 0 harness), and `tests/harness/fake_kraken.py`'s docstring calls every file in that
+  directory **"invented test data for a fake exchange"**, promised to be replaced by recordings in
+  Phase 2, which never happened. So spec 118's criterion, named for a *recorded* declaration,
+  compares a real recording against an invented one, and the Phase 2 candle criterion's
+  `tick_size` tolerance reads the same invented file. No provenance block was written: one naming an
+  archive would be fabricated. Options in S2.
+- **Q3 — spec 118's coverage. Ruled: accepted, not tonight. RECORDED.**
+  `recorded_book_agrees_with_recorded_pair_decimals` **compares 1 pair of the 5 its two fixtures
+  carry** (BTC/USD, 783 prices). The other four are named in its own message with the reason each is
+  not compared. **Its PASS must not be read as broader than one pair.** Widening it to 3 of 5
+  (ETH/USD and SOL/USD, both already in the 2026-09-16 archive) is **scheduled and not started**. It
+  is a re-cut C runs, and it moves `order_book_slippage_on_recorded_book` with it, since the two
+  share `tests/fixtures/book_sample.jsonl`. **After S2 the widening is not sufficient on its own**:
+  it widens a comparison whose declaration side is still invented, so it should land with S2's
+  answer.
+- **Q4 — how the operator sees the first paper trade. Ruled: a database walk-through. DONE:**
+  `docs/build-log/phase-6/first-paper-trade.md`. It is the criterion's own target round trip with
+  its database kept, and every number is read from the rows or marked where it is not. It found
+  that **the database holds no record of why the trade was taken** (F-new-1), and that every
+  criterion's tier sentence quotes friction the run did not compute (S3, below).
+
+**S3 — the tier sentence, found building Q4. STOPPED; an operator question.** Item 1 above, rule 8
+of `feature-specs/PHASE-6-TASKS.md`, and every trade-driving criterion's message say the criteria
+run at "reference friction about 0.65% … a hurdle of 1.625%". **Those are the invariant's reference
+values, quoted by a fixed string** (`tests/harness/fake_kraken.py:235-249`). The fake's tier 3
+actually charges maker 0.0011 and taker 0.0019, and the round trip's friction was **0.308%** with a
+hurdle of **0.462%**. And **the fake's tier 1 is not a no-trade regime**: 0.25% / 0.45% puts the bar
+near 1.77%, under the 3% target. So "tier 1 is a no-trade regime" is true of Kraken's reference
+schedule and is **neither measured nor tested by any criterion**. It changes no gate and no
+reconciliation. It changes what the PASS lines claim.
+
 ### Where Phase 6 stands, 2026-09-16 06:30Z
 
 **All six engines and the fill simulator are built.** 9 `order_book`, 14 `adaptive_router`,
@@ -306,11 +360,13 @@ amendment (2026-09-10, 09-16, and tonight).
    prose, so choosing which fact to write would have been answering the question.
 
 **A's own method correction, worth more than the edit.** Its first CRLF count used
-`grep -c $'$'` and reported all ten files as wholly CRLF, four of which hold no CR at all — the
+`grep -c $'
+$'` and reported all ten files as wholly CRLF, four of which hold no CR at all — the
 giveaway being every count equalling `wc -l`. Re-measured in Python, the tool that would do the
 writing. Trusting the first reading would have converted six LF files to CRLF wholesale: a diff
 that hides a real change inside three thousand touched lines. `code-standards.md` already warns
-that this shell's `grep -c $'$'` lies; this is the second time it has been caught doing so.
+that this shell's `grep -c $'
+$'` lies; this is the second time it has been caught doing so.
 
 **No mutation table, with the reason stated rather than the omission left to be noticed:** the
 change adds and alters no assertion, so there is nothing to mutate that would not merely re-test
@@ -675,7 +731,7 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 | 3 — Economics | **Green** | 2026-09-10 — 9 PASS, 0 FAIL, 0 PENDING |
 | 4 — Memory and replay | **Green on its gate; close and consolidation withheld by the operator** | 2026-09-11 — 10 PASS, 0 FAIL, 0 PENDING; re-verified 2026-09-12 at the Phase 5 preflight, same result, `replay_full_archive` skipped as `--live` |
 | 5 — Models | **Green** | 2026-09-15 — 14 PASS, 0 FAIL, 0 PENDING; phases 0 to 4 re-gated in order on the same quiet tree, all exit 0. Specs 59–79: A (61, 78, 79), B (62, 76), C (60, 63–75), Lead (59, 77). Nine rulings confirmed by the operator plus one addition (per-fold effective sample size) |
-| 6 — Decision and execution | **Open, in progress 2026-09-16** | Preflight of phase 5 on a quiet tree: 14 PASS, 0 FAIL, 0 PENDING. Specs 80–102, five operator rulings |
+| 6 — Decision and execution | **Open — gate green, close awaits the operator** | 2026-09-18 — phases 0 to 6 re-gated in order at `98c0485` on a quiet tree, Phase 6 **14 PASS, 0 FAIL, 0 PENDING**, exit 0 (`logs/verify/phase6-20260918-close-prep-lead-verify.log`); phases 0–5 in the same run, all exit 0. Specs 80–120 (102 parked to Phase 7). **Not marked green**: the operator sees the first paper trade and rules on S1–S3 first |
 | 7 — Evaluation | Blocked on 6 | — |
 | 8 — Live readiness | Blocked on 7 | — |
 
@@ -713,6 +769,75 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 | Lead | — | The `core/` command reader, broken in three places rather than one; the run record at startup and the persisted-mode write; `bootstrap.py` registration of engines 1 to 4; the four config keys; the spec set; and the `recorded_fraction` floor that closed the `recording_span_continuous` defect. |
 
 - **Nothing is outstanding for any agent.** A, B and C all report clear. Two items deliberately survive the close and are carried in Next Up rather than hidden: `cli/engine.py` still passes a `Clients()` of three `None`s, and engine 17's `CONDITION_ACTION` table is unratified.
+
+## Phase 6 — merged for the close, NOT closed
+
+*Merged from the three progress files by the lead, 2026-09-18, as close preparation ordered by the
+operator. **The phase is open**: the gate is green and the operator rules on the close after seeing
+the first paper trade. Shared task list: `feature-specs/PHASE-6-TASKS.md`. Narrative:
+`docs/build-log/phase-6.md`. Commit hashes are from `git log`, because the progress files rarely
+record them.*
+
+| Agent | Specs | State |
+|---|---|---|
+| Lead | 80, 81, 82, 83 | All done: 80 `5f84df3`, 81 `ea17381`, 82 `69038a7`, 83 recorded in this tracker and `phase-5.md`. Plus `context.previous_now` (`4b78593`), `state["block_status"]` (`a668df3`), the `cash_source` default removal (`98c0485`), and tonight's close preparation. |
+| A — Platform | 84, 85, 86, 87, 109, 116, and the `order_book` config section for 80 | All done: 84–86 `4d9e106`, the 84 amendment and the config section `8fcc0d2`, 87 `3b2cedf` (its xfail lifted in `ab2bf4f`), 116 `df49cb4`, 109 `adbce06`. |
+| B — Store and trading | 88, 89, 90, 91, 92, 93, 94, 103, 106, 108, 110, 111, 112, 113, 119, migrations 0003 and 0004 | All done: 88/89/92 `55cf626`, 90 `b2fb9de`, 91 `41ebf19`, 93 `ee51d2e`, 94 `49e369a`, 103 `178a0a8`, 106 `268f49e`, 108 `40bbc6b`, 110–112 `05a76f6`, 113 `df49cb4`, 119 `c0e95f9`, 0003/0004 `4e129c9`. |
+| C — Interface and models | 95, 96, 97, 98, 99, 100, 101, 104, 105, 107, 114, 115, 117, 118, 120; **102 parked to Phase 7** | All done except 102: 95 `8941eec`, 96–98 `a089bc7`, 99 `27b203c`/`c7f6d13`, 100 `27b203c`/`d28b756`/`df49cb4`, 101 `e3b5406`, 104 `3e1ded8`, 105 `76035be`, 107 `dd9ea39`, 114 `df49cb4`, 115/117 `aa3e26f`, 118 `97927d9`, 120 `2beb8ba`. **Spec 102 was parked by the operator** (`fe06a72`); its two partial diffs are in C's scratchpad as named in `c-interface.md`, and item 1 of Current Phase still says the DI prerequisites were "pulled forward", which is true of the plan and not of what landed. |
+
+**The progress files' own status lines are stale, and they are the teammates' files, so the lead
+reports this rather than edits them.** Teammates do not commit, so their claims were written
+"DONE, not committed" or "gates not yet run" and never moved when the lead committed. Every spec in
+the table is committed, but the lines still say otherwise: A `a-platform.md` :16, :278, :328, :358,
+:383, :425, :461, :757-763; B `b-store.md` :40, :121, :200, :392, :441, :616-621, :722, :772, :774,
+:810-815, :849, :904, :909, :934, :959, :999, :1036 (**spec 92 has no done line at all**),
+:1052-1055; C `c-interface.md` :28, :118, :128 (spec 100 bodies "IN PROGRESS"), :212, :222, :271
+(spec 102 "IN PROGRESS", parked), :2584-2585, :2737. **The table above is the state.** This is the
+shape the night of the 17th named — *a record is not resolved because the resolution exists
+somewhere else; the marker has to move* — and each teammate should move its own markers at the
+start of Phase 7.
+
+**Carried out of the teammates' files rather than lost with them.**
+
+1. **Standing instructions that outlive the phase.**
+   - **The recorder, the recording manager and the funding poller keep running**, never stopped,
+     restarted or reconfigured. Order-book history cannot be recovered.
+   - The live client's order refusal stays as the **one copy to remove in Phase 8**
+     (`rest.ORDER_CALLS`, compared against the protocol).
+   - The paper wiring stays written as `== "paper"`, never `!= "live"`.
+   - Re-cutting `book_sample.jsonl` moves `order_book_slippage_on_recorded_book` as well as spec 118.
+   - Line endings are measured in Python, never with this shell's `grep -c`.
+2. **Open items no ruling has closed, beyond Q1–Q3 and S3 above.**
+   - **A's tautological assertion**, `tests/engines/test_exchange.py:214-215`:
+     `assert data["fee_tier"] is None` then `assert "tier" not in str(data.get("fee_tier"))`,
+     which is `"tier" not in "None"`. A's lane.
+   - **`research/labelling.py` is still wholly CRLF**: 479 of 479 lines, measured in Python. C's lane.
+   - **Two prose items B raised on 2026-09-16 and nobody picked up**:
+     - the console sentence for `exits_placed` says exits are "resting", when every exit is a
+       market sell (F-new-3)
+     - `docs/PROJECT-STATE.md` still lists `fallbacks_used` on engines 10 and 11 (F-new-4)
+   - **Design decisions flagged to the lead with no recorded ruling**:
+     - B's spec 88 deviation, `_pending` pruned by recording (`b-store.md:993-997`)
+     - B's engine 16 choices, optional provenance and the pair/bar check as a walk
+       (`b-store.md:791-803`)
+     - C's `REASON_`/`HOLD_` naming collision, "a rename is the lead's call"
+       (`c-interface.md:2004-2008`)
+   - **Undiagnosed one-offs, recorded here so they are not lost**:
+     - B's `yaml/scanner.py` fault and `0xC0000005` (`b-store.md:610-614`)
+     - C's segfault inside `check_docs_vocabulary` (`c-interface.md:2118-2126`)
+
+     Both fit the known native fault's signature on this machine. Neither was measured, so both
+     stay unexplained rather than attributed.
+   - **C's stated limitation**: the mutation "the model loses a field" was deliberately not run
+     (`c-interface.md:2171-2176`).
+3. **Deferred to Phase 7:**
+   - spec 102
+   - the execution-offset bandit
+   - the skeptic's 13-fold cap, with Phase 5 Finding 1 re-measured before it is cited
+   - engine 7 skipping a pair that already holds a position
+   - the console's scan tally
+   - engine 14: watch whether anything starts reading `state["adaptive_router"]`. The guard test
+     scans engine 15 only, and engines 16 and 18 grew after it was written.
 
 ## Phase 5 — how it closed
 
@@ -1145,6 +1270,60 @@ All four unmapped codes (these two plus engine 21's `data_guard_blocked` and
 `position_unrecordable`) now have prose. `data_guard_blocked` is the first **hold** reason in the
 map and is deliberately not worded as a refusal: nothing was rejected, exits are paused, and the
 position is still being watched.
+
+### FINDING: a test went green while asserting nothing, because it called the helper that supplied the value
+
+**The clearest example this phase of a test passing for the wrong reason.** Recorded as a finding
+on the operator's instruction of 2026-09-18, not as a smaller item.
+
+When the lead removed `EquitySnapshotRow.cash_source`'s default (`98c0485`), the field became
+required, and every site that built a row without it had to pass it. One of those sites was
+`make_equity` in `tests/clients/store/test_store.py`, the shared helper that builds equity rows for
+the store's tests. It gained `cash_source=CashSource.CYCLE_START`. B's existing test,
+`test_a_row_built_without_a_cash_source_says_cycle_start`, built its row **through that same
+helper** and asserted the row said `cycle_start`. After the change it **still passed**. It passed
+because the helper now supplied the very value it asserted, not because anything defaulted.
+It was asserting nothing.
+
+**The operator's condition is what caught it.** The removal was ruled "landing with a test that a
+row lacking a source is refused — otherwise the change deletes a check instead of tightening one."
+Writing that replacement (`test_a_row_built_without_a_cash_source_is_refused`, which builds the
+row from a field map with the key omitted) is what forced the question of what the old test had
+been measuring. The replacement was proven red by restoring the default from a byte copy: only it
+failed, and `contracts.py`'s sha256 was identical after the restore.
+
+**Why it is a finding and not a slip.** The same shape recurs across this project: a value under
+test supplied by the test's own machinery. Phase 6 has now seen it through a fixture value, a
+model's own default (`PositionRow.hold_reason`), a criterion that pins the mark it then measures,
+and here a shared helper. None of these is visible by reading the test: each assertion is true.
+**What catches it is asking where the asserted value came from**, and here the answer moved while
+the test text did not change at all.
+
+### FINDING: `outside_universe` never had a producer, because a spec said the key already existed and nothing checked
+
+**The same shape as the finding above, one level up**: not a test supplying its own value, but a
+specification supplying its own premise. Recorded as a finding on the operator's instruction of
+2026-09-18.
+
+`feature-specs/44-engine-7-scout-candidate-and-gate.md` step 7 (2026-09-10) told B: *"`outside_universe`
+already exists in C's `REASON_PROSE`"*. That was true of the map. But it was written as though it
+settled what engine 7 would emit, and nobody made it a check. B built engine 7 with twelve specific
+exclusion codes and never emitted the generic one. So from Phase 3 until spec 120 (C, `2beb8ba`,
+2026-09-18), the console carried operator prose for a refusal **no engine could produce**, and the
+forward walk (spec 99: every engine code has prose) could not see it, because it walks engines
+into the map and never the map back to engines.
+
+C found it deriving the orphan set **from the code rather than from the list it had been given**.
+B's spec 119 list of bad seed pairs had been one short, and this was the missing one. Nothing is
+lost: the twelve specific codes say which exclusion applied. **What was lost is the check**. A
+spec's statement that a key exists was treated as an interface, and nothing held the producer to
+it. Both directions of the walk are now assertions (spec 120), so the next key with no producer
+goes red.
+
+**The general form**, since it has now appeared twice in one day: a claim a document makes about
+the code, whether a helper's value or a spec's key, is a description rather than evidence. It stays
+true only while something re-checks it (`code-standards.md`, "a description of the code is not the
+code").
 
 ## Locked Decisions
 

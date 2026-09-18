@@ -1,6 +1,70 @@
 # Phase 6 — shared task list
 
-## HANDOFF 8, 2026-09-18 08:50 local — the nine criteria are green and the follow-up work is done. The phase is NOT closed.
+## HANDOFF 9, 2026-09-18 — close preparation done; two rulings stopped; the phase is NOT closed
+
+**Read this first. HANDOFF 8 and earlier are history.** Written for a session that has read the
+documents and nothing else.
+
+### State
+
+Phases 0 to 6 re-gated in order on a quiet tree at `98c0485` — every phase exit 0: phase 0 7/7, 1 10/10, 2 9/9, 3 9/9, 4 10/10, 5 14/14, 6 14/14, each with `toolchain_green` at 3314 passed, 2 skipped. Logs are
+`logs/verify/phase{0..6}-20260918-close-prep-lead-verify.log`, with the summary and the
+mypy/ruff logs beside them (`regate-20260918-close-prep-lead-*`). Everything below is committed
+and pushed. **Phase 6 is not marked green and not closed. Phase 7 is not started.** The operator
+sees the first paper trade, then rules.
+
+### What the operator ruled before sleeping, and what happened
+
+The night's one decision list is `docs/build-log/phase-6/overnight-decisions-2026-09-18-night.md`.
+
+- **Q1** (invariant 14's retained balance): invariant 14 **not** amended, as ruled. **Engine 22
+  unchanged — STOPPED (S1)**, because reading the balance changes behaviour: a paper liquidation
+  would sell nothing, and the paper broker's retained balance is the *real* account's.
+- **Q2** (spec 118's premise): **STOPPED (S2)**. `asset_pairs.json` was never cut from an archive.
+  It is the Phase 0 fake's invented test data, and no provenance block was written.
+- **Q3** (spec 118 covers 1 pair of 5): recorded in the tracker as ruled. The re-cut is scheduled,
+  **not started**, and after S2 it should land with Q2's answer.
+- **Q4** (the trade): **done**. `docs/build-log/phase-6/first-paper-trade.md` is the criterion's
+  own round trip with its database kept, every number from the rows.
+
+### Found tonight, all waiting on the operator
+
+- **S3.** Every trade criterion's message quotes 0.65% friction / 1.625% hurdle. The run's were
+  0.308% / 0.462%, because the fake's tier 3 is 0.11% / 0.19%. And the fake's own tier 1 is **not**
+  a no-trade regime.
+- **F-new-1.** An approved trade leaves no record of why it was approved. The economics columns
+  exist only on `rejections`.
+- **F-new-2.** `orders.cycle_id` and `positions.cycle_id` record the last writing tick, not the
+  placing one.
+- **F-new-3.** The console sentence for `exits_placed` says exits are "resting"; every exit is a
+  market sell.
+- **F-new-4.** `docs/PROJECT-STATE.md` is a 2026-09-12 snapshot nothing keeps true.
+
+### Done tonight (close preparation, as ordered)
+
+- The re-gate of phases 0 to 6, above.
+- `docs/build-log/phase-6.md`: an examiner-readable summary, then every per-agent log and decision
+  file verbatim.
+- The teammate progress files merged into the tracker as "Phase 6 — merged for the close, NOT
+  closed". The teammates' own stale status lines are listed there by line number, **not edited**
+  (their files).
+- `docs/build-log/phase-7/`, four empty files.
+- Two FINDINGS in the tracker:
+  - the `cash_source` test that passed asserting nothing
+  - `outside_universe` never having a producer
+
+### What is left in Phase 6
+
+1. The operator reads the walk-through and the gates, then rules on the close.
+2. Rulings on S1, S2, S3 and F-new-1 to 4, and on Q3's timing given S2.
+3. The close itself, on the operator's word: Phase 6 marked green in the tracker, the phase status
+   row, and `phase-6.md`'s summary header updated from "not closed".
+
+### Standing rules
+
+HANDOFF 8's list stands unchanged.
+
+## HANDOFF 8 (history), 2026-09-18 08:50 local — the nine criteria are green and the follow-up work is done. The phase is NOT closed.
 
 **Read this first. HANDOFF 7 and earlier are history.** Written for a session that has read the
 documents and nothing else.
