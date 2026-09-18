@@ -231,6 +231,45 @@ line wider and a real code under the wrong engine passes everything. Also: B's f
 five bad pairs rather than six, because its sampled draw never picked the `order_book` row, which
 is why the second test walks the constant rather than the written rows.
 
+### SPEC 120 (C): the seed-vocabulary finding is closed, and both directions are now asserted
+
+Five orphaned `REASON_PROSE` keys retired — `insufficient_depth`, `meta_label_veto`,
+`no_candidate_cleared`, `outlier_market_state`, `outside_universe` — **derived from the code, not
+taken from the spec**, which is the lesson of B's finding 1. The producer set is every
+`REASON_*`/`HOLD_*` constant across `acsoe.engines.*` plus every code `clients/store/seed.py`
+writes; `REASON_PROSE` is now 65 entries and the two sets are exactly equal. **The inverse walk is
+an assertion rather than a warning** — reporting orphans as a warning is why five keys sat there
+unnoticed — and its docstring records why both directions are needed: one catches a silent "No
+reason was recorded.", the other catches prose for a refusal the system cannot make.
+
+**Engine 7's twelve codes are kept, correcting B's finding 2 in one respect.** They cannot reach
+`rejections`, but they *are* produced: engine 7 publishes them as a per-pair tally and the
+console's empty state renders it. **Unreachable-as-a-rejection and unproduced are different
+properties, and only the second is what a prose retirement is about.**
+
+**Three more findings.**
+1. **`outside_universe` never had a producer at all** — it was not a retired code. `feature-specs/44`
+   step 7 told B "it already exists in C's `REASON_PROSE`"; B then built engine 7 with twelve
+   specific exclusion codes and emitted no generic one, and **nothing ever checked that the key got
+   used.** Nothing is lost, but a spec asserted a key was in place and no test held it to that.
+2. **The seed half of the producer set is currently unfalsifiable**: since spec 119 every seeded
+   code is also an engine code, so removing that half changes nothing an orphan test can see. It is
+   guarded by a vacuity test rather than left implicit, because the failure it hides is a **false
+   orphan** — a key proposed for retirement that the console still needs.
+3. **Four pieces of C's own prose and one test rested on the retired keys** (each justified by "it
+   is already on seeded rows", which B's spec 119 made false that morning) and moved with the
+   retirement. The test had asserted `meta_label_veto` **in** the map for that dead reason and now
+   asserts it **out**. **A test that pins a justification has to move when the justification does,
+   or it pins the wrong thing while staying green.**
+
+**And the same control shape as B's M3:** C's N3 widened the producer set by one line and a key
+nobody produces passed everything. In both halves of this work, **the scope of the enumeration is
+the single clause doing the work.** The premise itself is now tested too: `operator_reason` prefers
+a row's stored sentence over the map — the mechanism that hid five phases of drift — so the
+retirement no longer rests on it silently, and the cost is written down (a row carrying a retired
+code with *no* sentence renders "no reason recorded", which no producer writes today and the
+forward walk would catch first).
+
 ### PHASE 6's NINE CRITERIA ARE GREEN, 2026-09-18 02:40 local
 
 `verify.py --phase 6`: **13 criteria, 13 PASS, 0 FAIL, 0 PENDING, exit 0** —

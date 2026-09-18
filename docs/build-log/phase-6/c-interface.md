@@ -3942,3 +3942,183 @@ reaches for a heredoc on a large file.
   disk: the `_console_rule_4` replacement aborted on `assert text.count(whole) == 1`
   because the two anchor halves needed the blank line between them, and the file was left
   untouched rather than mangled.
+
+
+### Spec 120, diagnosis — the five orphaned keys, derived rather than taken from the list
+
+**Agent:** C · **Task:** spec 120 · **Date:** 2026-09-18
+
+**What happened.** `REASON_PROSE` carries five keys that nothing can now emit:
+`insufficient_depth`, `meta_label_veto`, `no_candidate_cleared`, `outlier_market_state`,
+`outside_universe`. Each is a sentence on the operator's screen describing a refusal the
+system cannot make.
+
+**Derived, not believed.** The spec, the tracker and my own warning test all name the same
+five, and B's finding 1 is exactly what happens when a list in a document is trusted — the
+2026-09-16 finding named five bad pairs and there were six. So the set was recomputed from
+the code in one pass: every `REASON_*` / `HOLD_*` string constant in every
+`acsoe.engines.*.contracts` module, minus the three pinned state-field constants, **plus**
+every code `clients/store/seed.py` writes, subtracted from `set(REASON_PROSE)`. 65 engine
+codes, 12 distinct seed codes, all 12 of them already engine codes after B's spec 119, and
+the difference is the five above. The independent derivation and the document agree this
+time, which is a result rather than a formality.
+
+**Why the seed is now part of the producer set, and why that is a smaller change than it
+looks.** Before spec 119 the seed was a *second* vocabulary — it kept five of the six
+invented codes alive, and retiring them would have blanked real rows. After spec 119 every
+code it writes is picked out of the named engine's own module, so the seed adds nothing to
+the producer set that the engine walk did not already have. That is not a reason to leave
+it out: the day somebody adds a seeded row for a code that exists only in a fixture, the
+seed is the producer and the walk has to know it.
+
+**What each retired key was, checked one at a time in the code.** `insufficient_depth` is
+the Phase 0 spelling of engine 9's `book_too_thin`, and engine 9 has no refusal path at all
+— one `EngineStatus.OK` in the module — so the entry describes a refusal by an engine
+structurally incapable of making one. This is the case I raised with the lead on 2026-09-16
+and could not fix then, because `seed.py` is B's and the row had to keep rendering.
+`meta_label_veto` and `outlier_market_state` are the seed's spellings of `skeptic_veto` and
+`market_anomalous`; the engines' own codes are mapped beside them and always were.
+`no_candidate_cleared` describes engine 16 as "it combines their outputs", which is the
+reading the 2026-09-16 gate ruling retired — engine 16 is a coherence gate with five
+specific codes and never decides. `outside_universe` is the one with no seed row behind it
+at all: it predates engine 7, spec 44 step 7 says in as many words *"`outside_universe`
+already exists in C's `REASON_PROSE`"* — and B then built engine 7 with twelve specific
+exclusion codes and never emitted the generic one. Nothing was lost by that; the specific
+codes say which exclusion, and a per-pair tally keyed on a generic bucket would have been
+worse.
+
+**Why the warning was never going to catch this, which is the actual defect.** The inverse
+walk has existed since spec 99 and has been printing these five names on every run of
+`tests/console/` for two days. A warning in a suite that ends `365 passed, 1 warning` is
+read as the shape of the tree, not as a finding. The forward walk (engines to map) is a
+hard assertion and goes red the same afternoon a code lands — twice in one day for engines
+16, 18 and 21. The two directions catch different defects: forward catches a silent
+`"No reason was recorded."`, inverse catches prose describing a refusal nobody can make.
+Only one of them was load-bearing, and the unenforced one is the one that sat.
+
+**The justification that died with spec 119, and now reads as a live claim.** Three places
+say these keys "stay because they are already on seeded rows": the comments beside
+`meta_label_veto` and `outlier_market_state` in `format.py`, and
+`test_the_two_skeptic_codes_and_the_seeded_one_are_three_sentences`. A fourth,
+`test_the_seed_generators_older_di_spelling_still_renders_because_it_carries_prose`, says
+*"`clients/store/seed.py` still writes `dissimilarity_index` on its seeded rows"* — false
+since B's spec 119 this morning. All four are mine, all four have a decision entry behind
+them (B's, today), and all four go with the retirement rather than being left as prose
+describing a repaired defect.
+
+
+### Spec 120, fix — five sentences retired, and the inverse walk is an assertion
+
+**Agent:** C · **Task:** spec 120 · **Date:** 2026-09-18
+
+**Fix.** Five keys left `REASON_PROSE`: `insufficient_depth`, `meta_label_veto`,
+`no_candidate_cleared`, `outlier_market_state`, `outside_universe`. The map is 65 entries
+and every one of them is a code some producer emits. `test_the_inverse_is_reported_as_a_
+warning_and_never_as_a_failure` is gone and
+`test_no_prose_entry_describes_a_refusal_no_producer_can_make` stands in its place: the
+same walk, asserted, with the producer set widened from *the engines* to *the engines plus
+`clients/store/seed.py`*.
+
+**The red, verbatim, on the unretired map** — the assertion written first and the
+retirement second, so the five were named by the mechanism rather than by the spec:
+
+```
+E       AssertionError: REASON_PROSE carries sentences no engine and no fixture can
+produce, so each is prose for a refusal this system cannot make: insufficient_depth,
+meta_label_veto, no_candidate_cleared, outlier_market_state, outside_universe.
+FAILED tests/console/test_reason_prose.py::test_no_prose_entry_describes_a_refusal_no_producer_can_make
+1 failed, 180 passed in 0.53s
+```
+
+After the retirement: `tests/console/ 362 passed`, no warnings, from a baseline of
+`365 passed, 1 warning`. The arithmetic of that difference is worth stating because it
+looks like a loss: the warning test became two tests (+1), the DI-spelling test became a
+narrower one (0), the skeptic seeded-spelling test was turned around (0), the retired
+spellings gained six parametrized cases (+6) — and the two tests parametrized over
+`sorted(REASON_PROSE)` lost five cases each (−10). 365 + 7 − 10 = 362.
+
+**Three pieces of prose that rested on the retired keys went with them, and they are the
+reason this is a spec and not a deletion.** Two comments in `format.py` said each seeded
+spelling "stays because it is already on seeded rows", which was true until B's spec 119
+this morning; `test_the_two_skeptic_codes_and_the_seeded_one_are_three_sentences` asserted
+`meta_label_veto` **in** the map for the same dead reason and is now
+`test_the_two_skeptic_codes_are_two_sentences_and_the_seeded_spelling_is_gone`, asserting
+it out. A test that pins a justification has to move when the justification does, or it
+pins the wrong thing while staying green.
+
+**The `operator_reason` question spec 120 left open: yes, and here is the argument.** The
+preference for the row's own sentence is what let the invented vocabulary render correctly
+for five phases, and it is also the thing that makes this retirement safe — every row a
+producer ever wrote carries a sentence, so removing the key costs those rows nothing. A
+premise that load-bearing should not be left to be inferred from behaviour, and it had
+exactly one test: the `dissimilarity_index` case, whose docstring was already false.
+`test_a_row_carrying_a_retired_code_still_renders_its_own_sentence` now runs all six
+retired spellings through both halves — the sentence is preferred, and a row with *no*
+sentence renders `NO_REASON_RECORDED`. The second half is the cost of the retirement
+written down rather than discovered later. A general test of `operator_reason`'s ordering
+for its own sake would belong in `test_format.py` and not here; this one is in this file
+because it is this spec's premise.
+
+**Mutations.** `PYTHONDONTWRITEBYTECODE=1`, one mutant at a time, each target byte-copied
+and restored in a `finally` with the sha256 compared in the same statement, every anchor
+asserted to occur exactly once before writing, no mutant left on disk. Targets
+`src/acsoe/console/format.py` = `9efd4601329fb551` and
+`tests/console/test_reason_prose.py` = `23274bf6a600f422`, both confirmed identical after
+the sweep. Baseline `177 passed`.
+
+| # | Mutation | Verdict | Killed by |
+|---|---|---|---|
+| N1 | A key nobody produces added to the map (`quote_halted_mid_tick`) | `1 failed, 178 passed` — **KILLED** | `test_no_prose_entry_describes_a_refusal_no_producer_can_make`, alone |
+| N2 | `meta_label_veto` put back exactly as it was | `3 failed, 176 passed` — **KILLED** | the inverse assertion, the skeptic test, and the retired-spelling case for that code |
+| N3 | **Control.** N1, plus the producer set widened to subtract `set(REASON_PROSE)` | `179 passed` — **SURVIVED**, and re-run against the whole of `tests/console/`: `364 passed` | nothing |
+| N4 | The seed half of the producer set replaced with `set()` | `1 failed, 176 passed` — killed by the **vacuity guard only**, not by the orphan test | `test_the_seed_walk_collects_codes_and_not_merely_a_tuple` |
+| N5 | `operator_reason` stops preferring the row's own sentence | `6 failed, 171 passed` — **KILLED** | all six cases of `test_a_row_carrying_a_retired_code_still_renders_its_own_sentence` |
+
+**N1's first run was a kill for the wrong reason and I nearly kept it.** The fabricated
+code I reached for was `quote_delisted_mid_tick` — which is the string
+`test_the_enumeration_catches_a_code_nobody_mapped` and
+`test_an_unmapped_code_really_does_render_as_silence` already use as *their* fixture, so
+the arm reported `3 failed` with two of the three failures having nothing to do with the
+walk. Re-run with `quote_halted_mid_tick` it is a single clean kill. Asking *which* test
+killed it is what caught it; the verdict alone looked stronger, not weaker.
+
+**N3 is the arm worth keeping**, the same shape as B's M3 on the other side of this seam:
+with the producer set widened by one line, a key nothing can emit passes every test in the
+console lane. The assertion is about the *derivation*, not about the map, and the
+derivation is the single clause doing the work.
+
+**N4 is a checked negative and a finding rather than a survivor.** Every code the seed
+writes is, since spec 119, also an engine code, so removing the seed half of the producer
+set changes nothing the orphan test can see — an equivalent mutant *today*, and only
+today. That is precisely the case the vacuity guard was written for, and it is the one
+that killed it: `test_the_seed_walk_collects_codes_and_not_merely_a_tuple` fails because
+the walk collected nothing. Without that guard the seed half would be unfalsifiable, and
+the failure it hides is not a false pass but a **false orphan** — a key reported for
+retirement that the console still needs.
+
+**One run that was not a result.** The first `pytest tests/console/` after the retirement
+printed eight dots and stopped: no summary line, no failures, exit status never seen. Per
+the standing rule a verdict with no summary line is a run that did not happen, so it was
+re-run rather than interpreted; the second run gave `362 passed in 66.31s`, exit 0. Noted
+because the temptation was to read the eight dots as a hang in my own change.
+
+**The numbers, for whoever reads this next.** 74 `REASON_*`/`HOLD_*` constants across
+the engines, 71 once the three pinned state-field constants are removed, 65 distinct
+code values (six spellings are deliberately shared between engines), and 12 distinct
+codes in the seed, all 12 of them engine codes since spec 119. `REASON_PROSE` is now 65
+entries and the two sets are **equal**: no engine code without a sentence, no sentence
+without a producer. That equality is a fact about today rather than a rule - a seeded
+code that no engine declares would be a legitimate sixty-sixth entry, which is why the
+test subtracts the seed rather than comparing the two sets directly.
+
+**And the fourth heredoc, recorded because it did not fail.** The paragraph above was
+appended through `python - <<'PYEOF'` carrying `\n` escapes inside Python string literals
+- the exact transport my own entry two sections up says never to use again. It landed
+intact and the bytes check out (LF only, no NUL, text verbatim), which is the reason it is
+worth an entry rather than a shrug: three previous occurrences failed in three different
+places and this one failed nowhere, so the habit gets reinforced by the run that happens to
+work. What made it survive is luck about the layer the escape sits in - inside a Python
+string literal, a prematurely decoded `\n` would have been a real newline inside a quoted
+string and a `SyntaxError`, which is loud. The occurrences that hurt put the escape
+somewhere a decoded version is still valid. The rule stands as written: file tool or a
+script written to disk first, and no exception for a small append.

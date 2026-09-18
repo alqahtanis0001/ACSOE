@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
-import warnings
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Final
@@ -180,26 +179,16 @@ def test_the_two_load_failures_and_the_incomplete_inputs_do_not_share_a_sentence
     assert len(sentences) == 3
 
 
-def test_the_seed_generators_older_di_spelling_still_renders_because_it_carries_prose() -> None:
-    """`dissimilarity_index` was retired from the map with spec 71 and nothing regressed.
+def test_the_retired_di_spelling_is_gone_from_the_map() -> None:
+    """`dissimilarity_index` was retired with spec 71 and `di_refused` is the code.
 
-    `engine-contracts.md` fixes the code as `di_refused` and engine 8 emits that;
-    `clients/store/seed.py` still writes `dissimilarity_index` on its seeded rows. Mapping
-    both gave one sentence to two codes, which the test below refuses for good reason. The
-    seeded rows are unharmed because they carry their own prose and `operator_reason`
-    prefers it — asserted here rather than claimed, because "it renders fine" is exactly the
-    kind of thing that is true until it is not.
-
-    The spelling in `seed.py` is B's file and is raised with the lead.
+    `engine-contracts.md` fixes the spelling and engine 8 emits it. Mapping both gave one
+    sentence to two codes, which `test_no_two_codes_share_a_sentence` refuses for good
+    reason. What happened to rows already carrying the old spelling is
+    `test_a_row_carrying_a_retired_code_still_renders_its_own_sentence`, at the foot of
+    this file with the five spec 120 retired beside it.
     """
     assert "dissimilarity_index" not in REASON_PROSE
-    assert (
-        operator_reason(
-            "dissimilarity_index", "Conditions unlike anything in training (DI 0.97)"
-        )
-        == "Conditions unlike anything in training (DI 0.97)"
-    )
-    assert operator_reason("dissimilarity_index", "") == NO_REASON_RECORDED
 
 
 def test_the_percentile_mismatch_points_at_the_setting_not_at_a_missing_model() -> None:
@@ -284,17 +273,23 @@ def test_the_skeptic_veto_reads_as_a_refusal_and_never_as_an_approval() -> None:
         assert approving not in sentence, (approving, sentence)
 
 
-def test_the_two_skeptic_codes_and_the_seeded_one_are_three_sentences() -> None:
-    """`meta_label_veto` is the seed generator's spelling and `skeptic_veto` is the engine's.
+def test_the_two_skeptic_codes_are_two_sentences_and_the_seeded_spelling_is_gone() -> None:
+    """Engine 15 declares one veto and one unavailability, and they mean different things.
 
-    They are kept apart rather than sharing a line, the way `di_refused` and the retired
-    `dissimilarity_index` could not be: a shared sentence makes two codes one code as far as
-    the operator is concerned, which `test_no_two_codes_share_a_sentence` refuses.
+    This test used to hold a third: `meta_label_veto`, the seed generator's Phase 0
+    spelling for the veto, asserted to be *in* the map and to carry a sentence of its own
+    so that seeded rows rendered. B's spec 119 repointed those rows to `skeptic_veto` and
+    spec 120 retired the spelling, so the assertion had to be turned around — the map must
+    now **not** carry it, for the same reason it had to before: what is on the screen has
+    to be something the system can say.
     """
     from acsoe.engines.skeptic import contracts as skeptic_contracts
 
-    assert "meta_label_veto" in REASON_PROSE
-    assert REASON_PROSE["meta_label_veto"] != REASON_PROSE[skeptic_contracts.REASON_VETO]
+    assert "meta_label_veto" not in REASON_PROSE
+    assert (
+        REASON_PROSE[skeptic_contracts.REASON_VETO]
+        != REASON_PROSE[skeptic_contracts.REASON_UNAVAILABLE]
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -877,37 +872,122 @@ def test_the_walk_catches_a_code_nobody_mapped() -> None:
     }
 
 
-def prose_keys_no_engine_publishes() -> set[str]:
-    """Map entries nothing in `engines/` emits. A warning, deliberately not a failure.
+def seed_rejection_codes() -> set[str]:
+    """Every `reason_code` `clients/store/seed.py` can write onto a seeded rejection row.
 
-    Most of these are legitimate: `clients/store/seed.py` writes its own older spellings
-    onto seeded rows — `meta_label_veto`, `outlier_market_state` — and those rows still
-    have to render. The list is worth *seeing* so a code retired from an engine is
-    noticed rather than left as a sentence nothing can reach, and it is worth not failing
-    on, because the day a real orphan appears is not the day to turn somebody else's
-    suite red over a cosmetic finding.
+    **The seed is a producer, not only the engines.** Before B's spec 119 it was a second
+    vocabulary — codes invented in Phase 0 before any engine existed — and those keys had
+    to stay mapped or real rows would have rendered as silence. Since spec 119 every code
+    it writes is taken out of the named engine's own module, so today this set adds
+    nothing the engine walk has not already found. It is read anyway, because the day
+    somebody seeds a code that lives only in a fixture, the seed is the producer and the
+    inverse walk has to know that before it calls the key an orphan.
+
+    Read from the module constant rather than from a seeded database, on B's evidence:
+    `_write_rejections` draws one triple per bar at random, and under one of the four
+    threshold sets B tried the worst row in the list never reached a table at all. A draw
+    that missed a row here would report a produced code as an orphan and send somebody to
+    retire a key the console still needs — the expensive direction of this test's two
+    failure modes.
     """
-    return set(REASON_PROSE) - set(published_codes().values())
+    from acsoe.clients.store.seed import _REJECTION_REASONS
+
+    return {code for _engine, code, _sentence in _REJECTION_REASONS}
 
 
-def test_the_inverse_is_reported_as_a_warning_and_never_as_a_failure() -> None:
-    """Spec 99 step 4.
+def prose_keys_no_producer_emits() -> set[str]:
+    """Map entries nothing in the system can reach. Empty is the passing state."""
+    return set(REASON_PROSE) - set(published_codes().values()) - seed_rejection_codes()
 
-    Runs the real inverse and warns. The assertion is on the comparison being against
-    the right set rather than on the list being empty, because the list is legitimately
-    non-empty today and a test that pinned it would fail every time a seeded spelling
-    changed.
+
+def test_the_seed_walk_collects_codes_and_not_merely_a_tuple() -> None:
+    """The vacuity guard for the producer set's second half.
+
+    `prose_keys_no_producer_emits()` subtracts this set, so an empty one is invisible in
+    the passing direction and only ever shows up as a *false orphan* — which reads as a
+    key to retire rather than as a broken walk. Three codes the seed demonstrably writes,
+    spelled as the values they are and none of them derived from the walk itself.
     """
-    orphans = prose_keys_no_engine_publishes()
-    if orphans:
-        warnings.warn(
-            "REASON_PROSE carries sentences no engine publishes. Expected for the seed "
-            "generator's older spellings; a retired engine code would look the same: "
-            + ", ".join(sorted(orphans)),
-            UserWarning,
-            stacklevel=1,
-        )
+    collected = seed_rejection_codes()
+    for certain in ("net_edge_below_hurdle", "cost_inputs_unavailable", "skeptic_veto"):
+        assert certain in collected, certain
+
+
+def test_no_prose_entry_describes_a_refusal_no_producer_can_make() -> None:
+    """The inverse of `test_every_code_every_engine_publishes_has_operator_prose`, and
+    **both directions are needed because they catch opposite defects.**
+
+    Forward — engines to map — catches a code with no sentence, which renders
+    `NO_REASON_RECORDED` with no exception, no log line and nothing degraded on screen.
+    Inverse — map to producers — catches a sentence with no code: prose describing a
+    refusal the system cannot make, which is worse than silence because it is confident.
+    A sentence that reaches nobody is invisible from the forward direction by
+    construction, and the console is where it would be read as fact.
+
+    **This was a warning until spec 120 and that is why five of them sat here.** Spec 99
+    left the inverse reporting `insufficient_depth`, `meta_label_veto`,
+    `no_candidate_cleared`, `outlier_market_state` and `outside_universe` on every run of
+    this suite, correctly, for two days — and a suite that ends `365 passed, 1 warning`
+    reads as the shape of the tree rather than as a finding. The forward walk, which is
+    an assertion, went red the same afternoon a code landed, three times in one day. The
+    two halves were written together and only one of them was load-bearing.
+
+    The warning's stated reason for not failing — that the seed writes its own older
+    spellings and those rows must render — was true when it was written and stopped being
+    true with B's spec 119. The seed is now read as a producer instead (see
+    `seed_rejection_codes`), which is the honest version of that exemption: a seeded code
+    keeps its sentence because something writes it, not because failing would be awkward.
+    """
+    orphans = prose_keys_no_producer_emits()
+    assert orphans == set(), (
+        "REASON_PROSE carries sentences no engine and no fixture can produce, so each is "
+        "prose for a refusal this system cannot make: "
+        + ", ".join(sorted(orphans))
+        + ". Retire the entry from REASON_PROSE in src/acsoe/console/format.py, or, if "
+        "it reads like a refusal that ought to exist, report it rather than deleting it."
+    )
     assert "empty_universe" not in orphans, (
         "a code an engine demonstrably publishes was reported as an orphan, so the "
         "inverse is comparing against the wrong set"
     )
+
+
+#: The six spellings retired from `REASON_PROSE` because no producer emits them:
+#: `dissimilarity_index` with spec 71, the other five with spec 120 once B's spec 119 had
+#: repointed the seeded rows off them. Listed by hand on purpose — a historical fact about
+#: rows already written, not a set anything derives, and a seventh retirement belongs here
+#: only if somebody decides it does.
+RETIRED_SPELLINGS: Final = (
+    "dissimilarity_index",
+    "insufficient_depth",
+    "meta_label_veto",
+    "no_candidate_cleared",
+    "outlier_market_state",
+    "outside_universe",
+)
+
+
+@pytest.mark.parametrize("code", RETIRED_SPELLINGS)
+def test_a_row_carrying_a_retired_code_still_renders_its_own_sentence(code: str) -> None:
+    """**The premise the retirement rests on, asserted rather than assumed.**
+
+    `operator_reason` prefers the row's own `reason` when it is prose and only consults
+    `REASON_PROSE` when the stored text is empty or is itself a bare code. That ordering
+    is why retiring a key costs nothing for the rows a producer actually wrote: a seeded
+    row and an engine rejection both carry a sentence, and the sentence is the more
+    specific text anyway. It is also the mechanism that hid five phases of drift — the
+    console rendered correctly whatever the code said, so nothing ever needed the codes to
+    be real — which is precisely why a retirement should not be left resting on it
+    silently.
+
+    The second half is the cost, stated rather than left to be discovered: a row carrying
+    one of these codes and **no** sentence now renders `NO_REASON_RECORDED` where it used
+    to render prose. That is accepted, because no producer writes such a row; if one ever
+    does, the forward walk goes red first and this is the sentence it would have lost.
+    """
+    assert code not in REASON_PROSE, (
+        f"{code!r} was retired because nothing emits it; putting it back needs a producer"
+    )
+    stored = "Conditions unlike anything in training (DI 0.97)"
+    assert operator_reason(code, stored) == stored
+    assert operator_reason(code, "") == NO_REASON_RECORDED

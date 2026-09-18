@@ -88,6 +88,14 @@ _DAYS = 24 * _HOURS
 #: Every entry is a plain restatement of what the code already says. **Nothing
 #: here adds a number, a threshold or a cause the row did not carry**, because a
 #: sentence invented in the view layer is a sentence nothing verifies.
+#:
+#: **Every key is a code some producer emits, and both directions are asserted**
+#: in `tests/console/test_reason_prose.py`: an engine's code with no sentence
+#: here renders "No reason was recorded." silently, and a sentence here with no
+#: producer is prose describing a refusal this system cannot make. Spec 120
+#: retired five of the second kind, which had survived because the inverse walk
+#: only warned. A producer is any engine's `contracts.py` code, any `hold_reason`
+#: value, or a code `clients/store/seed.py` writes.
 REASON_PROSE: Final[Mapping[str, str]] = {
     "net_edge_below_hurdle": "Net edge did not clear the hurdle after fees",
     # The two fail-closed paths, deliberately not variants of the lines around
@@ -133,7 +141,12 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # thing from the producing end.
     "position_open_on_pair": "This pair already holds an open position",
     "entry_resting_on_pair": "This pair already has an entry order resting on the book",
-    "outside_universe": "Pair is outside the tradable universe at this balance",
+    # `outside_universe` sat here until spec 120, and it never had a producer. It
+    # predates engine 7: spec 44 step 7 told B the key *already existed*, and B then
+    # built the engine with twelve specific exclusion codes and emitted no generic
+    # one. Nothing is lost — the codes below say which exclusion, and a tally keyed on
+    # a bucket would have said less.
+    #
     # Engine 7 `scout`, spec 46. The six per-exclusion codes, requested by B on
     # 2026-09-10 with B's own wording, kept verbatim so the producer and the consumer
     # cannot drift — the same arrangement as engines 4, 10 and 11. `below_ordermin`,
@@ -183,18 +196,17 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # suggestion that anything is wrong.
     "empty_universe": "No pair was tradable on this bar",
     "barriers_below_tick_size": "This pair's price steps are too coarse for a stop",
-    "meta_label_veto": "The skeptic vetoed this entry",
-    "outlier_market_state": "Market state is an outlier",
-    # Engine 13 `anomaly`, spec 72. Deliberately not variants of each other, and
-    # deliberately not variants of `outlier_market_state` above, which is the seed
-    # generator's spelling for the same fact and stays because it is already on seeded rows.
-    # The engine's own code is `market_anomalous`, and its sentence says **market** because
-    # this gate has no opinion about the trade and could not form one.
+    # Engine 13 `anomaly`, spec 72. Its sentence says **market** because this gate has no
+    # opinion about the trade and could not form one.
+    #
+    # `outlier_market_state` stood above this line until spec 120: the seed generator's
+    # Phase 0 spelling for the same fact, kept because seeded rows carried it. B's spec 119
+    # repointed those rows to `market_anomalous`, so the older spelling has no producer and
+    # its sentence described a refusal nothing could make.
     "market_anomalous": "Trading conditions on this pair look broken",
-    # Engine 15 `skeptic`, spec 73. `meta_label_veto` above is the seed generator's spelling
-    # for the same fact and stays because it is already on seeded rows; the engine's own code
-    # is `skeptic_veto`, so the two get different sentences rather than one shared — the
-    # engine's names the model, the seed's names the act.
+    # Engine 15 `skeptic`, spec 73. `meta_label_veto` was the seed's spelling for the same
+    # fact and went with spec 120 for the same reason as `outlier_market_state` above; the
+    # seeded rows now carry the engine's own `skeptic_veto`.
     "skeptic_veto": "A second model expects this entry to fail",
     # Engine 20 `tournament`, spec 74. Offline: an operator meets these in a research run's
     # output rather than on the live screen, and they still go through the same table because
@@ -215,10 +227,12 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # The code fixed by `engine-contracts.md` and emitted by the engine is `di_refused`;
     # `dissimilarity_index` was the seed generator's older spelling for the same fact and
     # mapping both gave two codes one sentence, which `test_no_two_codes_share_a_sentence`
-    # correctly refuses — an operator cannot tell two identical lines apart. Seeded rows are
-    # unaffected because `seed.py` writes prose and `operator_reason` prefers a row's own
-    # text over this table; `clients/store/seed.py` still spells the code the old way and
-    # that is raised with the lead, because it is B's file.
+    # correctly refuses — an operator cannot tell two identical lines apart. It was the
+    # first of the invented spellings to be retired and for two phases it was the only
+    # seeded code with no entry here; the rows rendered anyway, because `seed.py` writes
+    # prose and `operator_reason` prefers a row's own text over this table. That is the
+    # mechanism spec 119 found had hidden the whole invented vocabulary, and B's spec 119
+    # repointed the seeded rows to `di_refused`.
     "di_refused": "Conditions are unlike anything in training",
     # Deliberately not a variant of each other. The first is a data problem somebody must
     # fix — there is no model to predict with at all, which is the state a fresh clone is
@@ -233,8 +247,16 @@ REASON_PROSE: Final[Mapping[str, str]] = {
         "The refusal threshold setting does not match the loaded model, so it was not used"
     ),
     "prediction_inputs_incomplete": "Some inputs the model needs were missing for this pair",
-    "insufficient_depth": "Order book is too thin to fill without slippage",
-    "no_candidate_cleared": "Nothing cleared the gates on this bar",
+    # Two more retired by spec 120, and these two were the sharp ones. `insufficient_depth`
+    # said the order book was "too thin to fill without slippage" as though engine 9 had
+    # refused the trade; engine 9 has one return point and one status, publishes no
+    # estimate, and engine 10 `cost` is what refuses on the absence — so the screen named
+    # a gate that does not exist, past the gate that actually stopped the trade. Engine 9's
+    # own `book_too_thin` is below and says what is not known instead. `no_candidate_cleared`
+    # said "nothing cleared the gates on this bar", which is the "engine 16 combines their
+    # outputs" reading the 2026-09-16 gate ruling retired: engine 16 checks coherence, has
+    # five specific codes, and never decides. Neither had a producer.
+    #
     # Engine 4 `data_guard`, requested by A on 2026-09-09. Codes fixed by A so the
     # producer and the consumer cannot drift; prose is mine, and A's wording is kept
     # almost verbatim because it was already right.

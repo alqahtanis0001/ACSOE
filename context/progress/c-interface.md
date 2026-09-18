@@ -2676,3 +2676,58 @@ stdout redirected and `PYTHONIOENCODING=cp1252`: without the fix, exit 1 and no 
 line; with it, exit 0 and the minus sign in the file. Log
 `logs/verify/c101-encoding-proof.log`. Nothing else changed — the criterion message the
 operator settled is untouched.
+
+
+### Spec 120 done — five orphaned sentences retired, the inverse walk now fails, 2026-09-18
+
+**Claimed and finished.** `REASON_PROSE` carries 65 entries and every one has a producer.
+
+**The five, derived from the code and not taken from the list:** `insufficient_depth`,
+`meta_label_veto`, `no_candidate_cleared`, `outlier_market_state`, `outside_universe`.
+Recomputed as `set(REASON_PROSE)` minus every `REASON_*`/`HOLD_*` constant in every
+`acsoe.engines.*.contracts` (65 codes, less the three pinned state-field constants) minus
+every code `clients/store/seed.py` writes (12, all of them engine codes since B's spec
+119). The derivation and the document agree — which was not guaranteed, since B's finding
+1 is a list in a document that was one short.
+
+**The warning is now an assertion.** `test_no_prose_entry_describes_a_refusal_no_producer_
+can_make` replaces `test_the_inverse_is_reported_as_a_warning_and_never_as_a_failure`, and
+its docstring says why both directions are needed: forward catches a silent "No reason was
+recorded.", inverse catches prose describing a refusal the system cannot make. Observed red
+on the unretired map, naming exactly the five; `tests/console/` went `365 passed, 1 warning`
+to `362 passed`, and the −3 is arithmetic on the two tests parametrized over the map.
+
+**`operator_reason`'s preference got its own test, and the reason is that it is this
+spec's premise** — the retirement is safe only because a stored sentence is preferred over
+the map. Six retired spellings, both halves each: the sentence is preferred, and a row with
+no sentence now renders `NO_REASON_RECORDED`. That second half is the cost of the
+retirement, written down rather than found later.
+
+**Five mutations, table in the build log.** N3 is the control and the one that matters:
+widen the producer set by one line and a key nothing can emit passes the whole console
+lane, so the assertion is about the derivation and not about the map. N1's first run was a
+kill for the wrong reason — my fabricated code collided with an existing fixture string —
+and asking which test killed it is what caught that.
+
+**Two findings for the lead, neither fixed here.**
+
+1. **`outside_universe` never had a producer at all**, and it is not a retired engine code:
+   spec 44 step 7 told B *"`outside_universe` already exists in C's `REASON_PROSE`"*, B
+   built engine 7 with twelve specific exclusion codes, and the generic one was never
+   emitted. Nothing is lost — the specific codes say which exclusion — but a spec told an
+   agent a key was already there and nothing ever checked that it got used.
+2. **The seed half of the producer set is currently unfalsifiable** (mutation N4): every
+   code the seed writes is also an engine code after spec 119, so removing it changes
+   nothing an orphan test can see. It is guarded by a vacuity test rather than left
+   implicit, because the failure it would otherwise hide is a *false orphan* — a key
+   reported for retirement that the console still needs.
+
+**Engine 7's own codes stay mapped, deliberately.** B's finding 2 says none of them can
+reach the `rejections` table; they are still produced — engine 7 publishes them as a
+per-pair tally and the empty state renders it — so they have a producer and are not
+orphans. Unreachable-as-a-rejection is a different property from unproduced, and only the
+second is what this spec retires.
+
+**Narrow runs:** `tests/console/ 362 passed`
+(`logs/verify/phase6-20260918-spec120-c-console-green.log`), `ruff check src/ tests/
+scripts/` clean, `mypy --strict src/ scripts/` clean on 153 files. No full gate from me.
