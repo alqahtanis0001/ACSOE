@@ -4122,3 +4122,259 @@ string literal, a prematurely decoded `\n` would have been a real newline inside
 string and a `SyntaxError`, which is loud. The occurrences that hurt put the escape
 somewhere a decoded version is still valid. The rule stands as written: file tool or a
 script written to disk first, and no exception for a small append.
+
+
+### Spec 118: the two fixtures were not "frozen together", and the criterion says so instead
+
+**Agent:** C · **Task:** spec 118 · **Date:** 2026-09-18
+
+**What happened.** Spec 118's rationale says the criterion "can never go red because the
+exchange changed its own settings" because "both sides are recordings frozen together".
+Before writing the check I went looking for the freeze. There is not one.
+`tests/fixtures/kraken/asset_pairs.json` entered the repository in `afaf2f5`, **2026-09-08**;
+`tests/fixtures/book_sample.jsonl` was cut from the 2026-09-16 archive and committed in
+`a089bc7`, **2026-09-16**. Eight days apart, and neither file records when its response was
+fetched — the book sample's header block names its archive window, the `AssetPairs` recording
+carries no provenance block at all.
+
+**Why it matters, and why it is small.** The strong form of the rationale — *a red here is
+never news about Kraken* — rests on the two recordings being simultaneous. They are not, so a
+`pair_decimals` Kraken changed between those two dates would show up here as a red. It did not:
+BTC/USD is declared at 1 decimal and all 783 recorded BTC/USD prices carry exactly 1. So the
+claim is unsound as an argument and true as a fact about today's two files, which is a
+different thing and the criterion must not pretend otherwise.
+
+**Fix.** None in the fixtures — they are not mine and re-cutting to align them is a what-choice.
+The criterion's prose states the two dates and says what a red would actually mean: *these two
+recordings disagree*, which is either a re-cut fixture landing beside a stale declaration (the
+case spec 118 was written for) or, if the recordings are far enough apart, a change the exchange
+made in between. Both are worth a human look; neither is a reason to soften the check. Reported
+to the lead as a finding against the spec's wording rather than corrected silently.
+
+### Spec 118: where the invented ADA/USD precision sits, and why the criterion cannot see it
+
+**Agent:** C · **Task:** spec 118 · **Date:** 2026-09-18
+
+**What happened.** ADA/USD is the pair spec 118's condition 1 exists for: it is in the book
+sample and has no entry in the recorded `AssetPairs`. But `scripts/verify.py` already holds a
+`pair_decimals` for it — `BOOK_THIN_PAIR_RULE`, six decimals, fed to the fake exchange by
+`order_book_slippage_on_recorded_book` and labelled in its own comment as *"Invented exchange
+data for the fake"*. It sits about 1,400 lines above where this criterion now lives, in the same
+file, and ADA/USD's recorded prices run to 4, 5 and 6 places — so the invented value would have
+"worked".
+
+**Why that is the trap and not the convenience.** A constant in this file is not a declaration
+by the exchange. Reaching for it would have turned "I cannot tell" into a plausible number
+derived from a value somebody in this project chose, which is the fabricated exchange value
+`AGENTS.md` forbids in its first paragraph and the exact behaviour the tracker's ADA/USD entry
+records as the one to keep.
+
+**Fix.** The criterion reads the two committed fixtures and nothing else, and its docstring names
+`BOOK_THIN_PAIR_RULE` explicitly as the thing it must not read — a near-miss is worth naming,
+because the next reader will find it two screens away and wonder why the criterion is
+"incomplete".
+
+### Decision: the recorded prices are measured on the grid point, not on the JSON spelling
+
+**Agent:** C · **Date:** 2026-09-18
+
+**Options.** Count the digits a price is *written* with — `75731.0` is 1 decimal place — or
+strip trailing zeros first and count the digits the *value* needs — `75731.0` is 0.
+
+**Chose.** The value, via `Decimal.normalize()`.
+
+**Because.** `75731.0` and `75731` and `75731.00` are one point on a 1-decimal grid. A
+criterion that went red because Kraken serialised a trailing zero would be firing on how the
+exchange formats JSON, which is exactly the "fires on somebody else's decision, therefore gets
+ignored" shape spec 118 is written to avoid. It matters in this fixture and not
+hypothetically: **50 of the 783 recorded BTC/USD prices are written `x.0`**, and the other 733
+carry a digit. Both are on the declared 1-decimal grid; only the spelling differs.
+
+**Cost.** The number in spec 101's hand measurement — *"783 prices, every one at exactly 1
+decimal place"* — is a statement about the spelling, and this criterion's message reports the
+grid instead. The block comment beside the criterion states both readings and the 733/50 split
+so the two records do not look like a contradiction.
+
+**And it gave the mutation proof its control.** The equivalent arm writes one price as
+`75733.60` where the fixture has `75733.6`: a genuinely different byte string, the same grid
+point, and the verdict must not move. Under the rejected option that arm would be red, which
+is what makes it a control and not decoration.
+
+### Spec 118: the criterion, and the four verdicts it was watched to produce
+
+**Agent:** C · **Task:** spec 118 · **Date:** 2026-09-18
+
+**Fix.** `recorded_book_agrees_with_recorded_pair_decimals`, registered last in phase 6 and
+reading `tests/fixtures/book_sample.jsonl` and `tests/fixtures/kraken/asset_pairs.json` and
+nothing else. For every pair both fixtures carry, no recorded price may sit off that pair's
+declared `pair_decimals` grid. Pairs only one fixture carries are named, counted, and compared
+against nothing.
+
+**PASS, verbatim** (`python scripts/verify.py --phase 6`, and the same string from a direct
+run against the repository root):
+
+    every recorded price sits at or inside its recorded pair_decimals - BTC/USD 783
+    recorded prices, the widest at 1dp, against the recorded pair_decimals 1. Coverage: 1
+    compared of the 5 pairs the two fixtures carry between them, 4 not compared - ADA/USD
+    (881 recorded prices, recorded in book_sample.jsonl, not declared in
+    asset_pairs.json); ETH/BTC (declared in asset_pairs.json, not recorded in
+    book_sample.jsonl); ETH/USD (declared in asset_pairs.json, not recorded in
+    book_sample.jsonl); SOL/USD (declared in asset_pairs.json, not recorded in
+    book_sample.jsonl). Read from the two committed fixtures alone, and no precision is
+    inferred from a price. book_sample.jsonl was cut from kraken_v2__msi__2026-09-16.jsonl
+    over [2026-09-16T00:17:06.100000Z, 2026-09-16T00:17:36.100000Z).
+
+The archive name and the window are read out of the fixture's own header block rather than
+written into `verify.py`, so the criterion's claim about its subject's provenance cannot drift
+from the subject.
+
+**PENDING, both of them.** A tree with no `tests/fixtures/` reports *"book_sample.jsonl has
+not been deposited yet"*; a tree carrying the book and no recorded `AssetPairs` reports the
+same about `asset_pairs.json`. The second is the ADA/USD case at whole-fixture scale — prices
+and no declaration — and it must not be a PASS. A deposited but **empty** `asset_pairs.json`
+is a FAIL, not a PENDING, the same distinction `_phase6_fixture` already draws for the book.
+
+**The mutation proof.** Four arms, all applied to a **copy** of the two fixtures in a temp
+tree and never to the repository's; each anchor asserted to occur exactly once before it was
+used; the copy restored from a byte copy taken beforehand; both real fixtures hashed on the
+way in and the way out and compared in one statement.
+
+    real book_sample.jsonl  sha256 before and after:
+      223aafec0eb3349b09512ac07618ca5717f02559d7f446763ee7ce3a0c8c4ef1
+    real asset_pairs.json   sha256 before and after:
+      6711d1d720bda594cdbdefa881831bf32e0dd8e0d4eac5730aaad77039351ecb
+
+| Arm | Break | Verdict |
+|---|---|---|
+| M1 | one recorded BTC/USD price `75732.4` → `75732.45` | **FAIL** |
+| M2 | the declaration narrowed, `"pair_decimals": 1` → `0`, book untouched | **FAIL** |
+| M3 | the only shared pair renamed out of the declaration (`BTC/USD` → `BTC/USDX`) | **FAIL** |
+| C1 | **control** — `75733.6` → `75733.60`: same grid point, different bytes | **PASS** |
+
+M1's FAIL, verbatim and trimmed after the clause that names the figure:
+
+    the recorded book disagrees with the recorded AssetPairs declaration, so the two
+    fixtures are not internally consistent - BTC/USD declares pair_decimals 1; off that
+    grid: 1 of 783 recorded prices - 1 at 2dp (for instance 75732.45). This is not a
+    verdict on Kraken: both sides are committed recordings, and a disagreement means a
+    re-cut fixture landed beside a stale declaration. Coverage: 1 compared of the 5 pairs
+    ...
+
+**M2 and M3 are the two arms worth having beyond the one the spec names.** M2 breaks the
+*declaration* rather than the book, which is the only thing separating this criterion from one
+that has a precision written into it: a criterion holding `1` as a constant passes M2. M3
+removes the last shared pair, and the answer is a FAIL saying *"no pair is carried by both
+fixtures, so this criterion compared nothing"* — without it, a fixture pair that drifted apart
+entirely would report a green PASS over zero comparisons, which is the vacuous pass this
+project has been burned by three times.
+
+**One more arm, and it is about the message rather than the verdict.** A price rewritten as the
+string `"75732.4"` is a FAIL naming the malformed price, not `criterion raised`. This criterion
+is the only reader of these two files, so a stack trace from it judges nothing and tells nobody
+which file is wrong.
+
+**What the tests hold that the hand proof does not.** `test_the_criterion_reads_the_two_fixtures
+_and_nothing_else` wraps `Path.open` and `Path.read_text` for the duration of one run and
+asserts the set of paths opened is exactly the two fixtures. The AST sweep earlier in that file
+already reads the Phase 6 *source* for a path into `data/`, `models/` or `logs/`; this reads the
+*run*, so a third input reached through any helper anywhere in the call graph fails here naming
+it. The fabricated tree for these tests carries the two JSON files and nothing else at all —
+no `acsoe`, no config — which is itself the assertion.
+
+### Spec 118, addendum: two more arms, and the two branches they were written to execute
+
+**Agent:** C · **Task:** spec 118 · **Date:** 2026-09-18
+
+**What happened.** Re-reading the criterion after the four-arm proof above, two branches had
+never executed. Both were written on purpose and both would have read as comments.
+
+**M4 — the shared pair declared with no `pair_decimals` field.** `_recorded_pair_decimals`
+returns those pairs separately from the ones it could read, and the message calls them *"its
+asset_pairs.json entry carries no pair_decimals"* rather than *"not declared in
+asset_pairs.json"*. The distinction is not pedantry: the second sentence sends somebody to add
+an entry that is already there. Arm: delete BTC/USD's `"pair_decimals": 1` line from the copied
+declaration. Verdict **FAIL**, naming BTC/USD with its 783 prices and that reason, and the
+coverage drops to 0 compared of 5.
+
+**M5 — a compared pair whose frames carry no price.** The other arms all break an *agreement*;
+this one removes the *evidence*. SOL/USD is declared at 3 decimals and the book carries no
+frames for it, so appending one frame with empty `bids` and `asks` puts it in both fixtures
+with nothing to measure. Without the guard the criterion would report "no price was off the
+grid" about a pair it never looked at — the vacuous pass, per pair rather than per file — and
+`max()` over an empty mapping would raise on the way there. Verdict **FAIL**: *"SOL/USD is in
+book_sample.jsonl and carries no price at all"*, with BTC/USD still measured and the coverage
+now 2 of 5. It is appended rather than substituted because no anchor in the committed book
+produces that state: every recorded frame carries levels, which is exactly why the branch was
+unexecuted.
+
+**One change to the FAIL text while proving M5.** A FAIL used to list only the breaches. It now
+also names the pairs that agreed, because "one pair of two is wrong" and "the fixture is wrong
+throughout" are different situations with different responses, and the first FAIL a reader sees
+should distinguish them. `tests/verify/test_phase6_criteria.py` now holds six arms for this
+criterion, five of them red and one — the trailing zero — the control that must stay green.
+
+### Spec 118: a new criterion is pinned in two places, and only one of them is obvious
+
+**Agent:** C · **Task:** spec 118 · **Date:** 2026-09-18
+
+**What happened.** The first full `pytest tests/verify/` after the criterion landed came back
+`1 failed, 442 passed in 626.99s`, and the failure was
+`test_runner.py::test_each_phase_registers_its_own_criteria_and_no_others` — not any of the
+sixteen tests written for the new criterion, all of which were green.
+
+**Why.** The registry is pinned twice, by two files with different jobs.
+`test_phase6_criteria.py` pins Phase 6's criteria **as an ordered list**, because the report is
+read top to bottom; `test_runner.py` pins **every phase's set at once**, because a criterion
+registered into the wrong phase is silent — it simply never runs, or runs a phase too early.
+Updating the first and not the second leaves a red that looks unrelated to what you changed, and
+the useful part is that the second is the one that would have caught the real mistake: had I
+registered this into phase 7, the phase-6 list test would have gone red saying a name was
+missing, and only the runner's `for phase in range(7, MAX_PHASE + 1)` loop would have said where
+it went.
+
+**Fix.** Added the name to the Phase 6 set in `test_runner.py` with a comment saying what makes
+it unlike its neighbours — its subject is two committed fixtures rather than an engine or the
+chain. `tests/verify/test_runner.py` 25 passed. The full suite was then re-run from a clean
+start rather than reasoned about, because the earlier 442 was measured against a tree I had
+edited while it ran.
+
+**Consequence.** Worth knowing before the next criterion is registered: the two pins are
+deliberate, they are not redundant, and a new criterion needs both. Ten minutes of suite per
+discovery is the cost of finding it the other way.
+
+### Spec 118: one pair of five is thin coverage — whose question it is, and what it would cost
+
+**Agent:** C · **Task:** spec 118 · **Date:** 2026-09-18 · **Raised by:** the lead, at hand-off
+
+**What happened.** The criterion compares **1 pair of the 5** the two fixtures carry between
+them. The message says so, which is what the operator asked for, but a check with one subject is
+a thin check and the question of widening it needs an owner rather than a shrug.
+
+**Whose it is.** **Not A's cutter.** `scripts/cut_book_fixture.py`'s own docstring opens with
+*"It chooses nothing. Not the pairs, not the window, not where the result goes"* — the pairs
+arrive as `--pairs` on the command line, and the seam table records the split as *A cuts, C
+deposits and owns*. So widening the fixture is a **re-cut with a longer `--pairs`, run by C**,
+and A's code does not change.
+
+**And the archive already holds what it would take.** A read-only sample of
+`data/raw/kraken_v2__msi__2026-09-16.jsonl` — the archive this fixture was cut from — carries
+frames for ADA/USD, BTC/USD, **ETH/USD**, **SOL/USD**, XRP/USD, ZEC/USD, HYPE/USD, EUR/USD,
+USDC/USD and USDT/USD. Two of those, ETH/USD and SOL/USD, are declared in the recorded
+`AssetPairs` at 2 and 3 decimals. So coverage could go from **1 of 5 to 3 of 5 with no new
+recording and no change to anybody's code** — only a re-cut of the committed fixture.
+
+**ETH/BTC cannot be covered from this archive.** It is not recorded, and it is crypto-quoted,
+which invariant 7 disables by default. It would stay in the "declared, not recorded" bucket.
+
+**Why I did not do it, and what it would cost.** Re-cutting changes a committed fixture's
+content, which is a what-choice and the operator's. It is also not free: `book_sample.jsonl` is
+the subject of `order_book_slippage_on_recorded_book`, which streams ADA/USD first so engine 7
+chooses the thin pair and takes BTC/USD as the deep one (`BOOK_THIN_PAIR`, `BOOK_DEEP_PAIR`,
+`BOOK_THIN_UNIVERSE`). Two more pairs in the file changes what that drive sees, so the re-cut
+and that criterion have to be looked at together — which is an argument for doing it
+deliberately rather than as a tidy-up.
+
+**The honest summary for the operator.** Widening is cheap, available today, owned by C, and
+needs one ruling: whether a committed recording may be re-cut. Until then the criterion covers
+one pair and says which one, which is the behaviour the ADA/USD entry in the tracker asks for —
+a tool that reports what it could not do beats one that looks complete.

@@ -44,6 +44,7 @@ import pytest
 from tests.verify.conftest import fabricate_package
 from tests.verify.test_phase2_criteria import (
     assert_fail,
+    assert_pass,
     assert_pending,
     run,
 )
@@ -69,6 +70,13 @@ EQUITY_ACROSS_FILL = "paper_equity_continuous_across_fill"
 
 #: The operator's criterion of 2026-09-17, registered last. Its FAIL is today's code.
 EQUITY_ROWS = "equity_row_never_values_positions_it_does_not_hold"
+
+#: Spec 118, operator ruling 2026-09-18. Registered after the nine were green and kept
+#: out of `PHASE6_CRITERIA` for the same reason the two above are: it judges neither an
+#: engine nor the chain, so the clauses of spec 100 — the tier sentence, the PENDING that
+#: names an absent engine — are not statements about it. Its own tests are at the end of
+#: this file.
+FIXTURES_AGREE = "recorded_book_agrees_with_recorded_pair_decimals"
 
 #: The seven that drive a trade through the gates. Ruling 8 of the Phase 6 task list:
 #: each names its fee regime in its own message.
@@ -153,6 +161,7 @@ def test_all_nine_criteria_are_registered_for_phase_6(verify_module: ModuleType)
         *PHASE6_CRITERIA,
         EQUITY_ACROSS_FILL,
         EQUITY_ROWS,
+        FIXTURES_AGREE,
     ]
 
 
@@ -1068,3 +1077,271 @@ def test_a_tree_whose_training_differs_is_judged_on_its_own_subject(
     assert_fail(outcome, verify_module)
     assert "criterion raised" not in outcome.message, outcome.message
     assert "fitted no skeptic.txt" in outcome.message, outcome.message
+
+
+# --------------------------------------------------------------------------- #
+# recorded_book_agrees_with_recorded_pair_decimals — spec 118
+# --------------------------------------------------------------------------- #
+#
+# The subject is two committed fixtures and nothing else: no engine, no chain, no
+# `acsoe` import at all. So every break below is made in a **copy of the fixtures** and
+# the real pair is hashed on both sides, the same discipline the engine mutations above
+# follow, and the tree is built from the two files rather than from `phase6_tree` —
+# copying the package to judge two JSON files would hide which inputs the criterion
+# actually reads.
+
+#: `tests/fixtures/book_sample.jsonl` and the recorded `AssetPairs`, by path segment.
+BOOK_REL = ("tests", "fixtures", "book_sample.jsonl")
+RULES_REL = ("tests", "fixtures", "kraken", "asset_pairs.json")
+
+
+@pytest.fixture
+def fixtures_tree(tmp_path: Path, repo_root: Path) -> Path:
+    """A tree carrying the two committed fixtures and nothing else.
+
+    That is the whole input surface of this criterion, and building the tree this way is
+    itself an assertion: a criterion that reached for an engine, for `data/raw/`, or for
+    the invented ADA/USD rule two thousand lines up in `verify.py` could not report PASS
+    here.
+    """
+    tree = tmp_path / "fixtures-only"
+    (tree / "tests" / "fixtures" / "kraken").mkdir(parents=True)
+    for relative in (BOOK_REL, RULES_REL):
+        shutil.copyfile(repo_root.joinpath(*relative), tree.joinpath(*relative))
+    return tree
+
+
+def test_fixtures_agree_is_pending_before_either_fixture_is_deposited(
+    verify_module: ModuleType, unbuilt_tree: Path, tmp_path: Path, repo_root: Path
+) -> None:
+    """Two absences, two PENDINGs, and each names the file that is missing.
+
+    A criterion whose subject is a committed file has no engine to wait for, so its
+    PENDING is the deposit and not a schedule of somebody else's work. The second half
+    matters more than it looks: with only the book present the criterion has prices and
+    no declaration, which is the exact shape of the ADA/USD case it is required to report
+    rather than guess — at whole-fixture scale, where guessing would be a PASS over
+    nothing.
+    """
+    outcome = run(verify_module, FIXTURES_AGREE, unbuilt_tree)
+    assert_pending(outcome, verify_module)
+    assert "book_sample.jsonl has not been deposited yet" in outcome.message, outcome.message
+
+    half = tmp_path / "book-only"
+    (half / "tests" / "fixtures").mkdir(parents=True)
+    shutil.copyfile(repo_root.joinpath(*BOOK_REL), half.joinpath(*BOOK_REL))
+    outcome = run(verify_module, FIXTURES_AGREE, half)
+    assert_pending(outcome, verify_module)
+    assert "asset_pairs.json has not been deposited yet" in outcome.message, outcome.message
+
+
+def test_a_deposited_but_empty_declaration_fails_rather_than_pending(
+    verify_module: ModuleType, fixtures_tree: Path
+) -> None:
+    """Absent is a schedule fact; empty is a broken deposit. The same distinction
+    `_phase6_fixture` draws for the book, drawn for the file beside it."""
+    fixtures_tree.joinpath(*RULES_REL).write_bytes(b"")
+    outcome = run(verify_module, FIXTURES_AGREE, fixtures_tree)
+    assert_fail(outcome, verify_module)
+    assert "asset_pairs.json is empty" in outcome.message, outcome.message
+
+
+def test_the_real_fixtures_agree_and_the_message_states_its_coverage(
+    verify_module: ModuleType, repo_root: Path
+) -> None:
+    """The PASS, and the four things the operator required it to say.
+
+    The counts are asserted as text because the coverage is the point: a reader must take
+    it from the message rather than infer it from the PASS. One pair compared of five, and
+    the four that could not be are named — ADA/USD because the recorded `AssetPairs` has
+    no entry for it, the other three because the book sample carries no frames for them.
+
+    `1dp` and `pair_decimals 1` are both pinned: a criterion that stopped measuring and
+    only counted would still report the coverage correctly.
+    """
+    outcome = run(verify_module, FIXTURES_AGREE, repo_root)
+    assert_pass(outcome, verify_module)
+    message = outcome.message
+    assert "criterion raised" not in message, message
+    assert "BTC/USD 783 recorded prices, the widest at 1dp" in message, message
+    assert "recorded pair_decimals 1" in message, message
+    assert "Coverage: 1 compared of the 5 pairs" in message, message
+    assert "4 not compared" in message, message
+    for pair in ("ADA/USD", "ETH/BTC", "ETH/USD", "SOL/USD"):
+        assert pair in message, (pair, message)
+    assert "not declared in asset_pairs.json" in message, message
+    assert "not recorded in book_sample.jsonl" in message, message
+    # Named from the fixture's own header, never written into verify.py.
+    assert "kraken_v2__msi__2026-09-16.jsonl" in message, message
+
+
+#: `(label, fixture, anchor, replacement, expected result, fragment)`.
+#:
+#: The last arm is the **control**, and it is why the other three are worth anything: a
+#: trailing zero is the same point on a 1-decimal grid, so a criterion counting the digits
+#: as written rather than the value would go red on it. It is a checked negative, not a
+#: survivor — nothing can kill it, because there is nothing there to kill.
+FIXTURE_MUTATIONS: dict[str, tuple[tuple[str, ...], bytes, bytes, str, str]] = {
+    "a_recorded_price_off_the_declared_grid": (
+        BOOK_REL,
+        b'{"price":75732.4,"qty":0.91087196}',
+        b'{"price":75732.45,"qty":0.91087196}',
+        "FAIL",
+        "off that grid: 1 of 783 recorded prices - 1 at 2dp (for instance 75732.45)",
+    ),
+    "the_declaration_narrowed_and_the_book_untouched": (
+        RULES_REL,
+        b'"pair_decimals": 1',
+        b'"pair_decimals": 0',
+        "FAIL",
+        "BTC/USD declares pair_decimals 0; off that grid: 733 of 783",
+    ),
+    "the_only_shared_pair_renamed_out_of_the_declaration": (
+        RULES_REL,
+        b'    "BTC/USD": {\n      "base": "BTC",',
+        b'    "BTC/USDX": {\n      "base": "BTC",',
+        "FAIL",
+        "no pair is carried by both fixtures, so this criterion compared nothing",
+    ),
+    "the_shared_pair_declared_with_no_pair_decimals_field": (
+        RULES_REL,
+        b'      "lot_decimals": 8,\n      "pair_decimals": 1\n',
+        b'      "lot_decimals": 8\n',
+        "FAIL",
+        "BTC/USD (783 recorded prices, its asset_pairs.json entry carries no pair_decimals)",
+    ),
+    "CONTROL_a_trailing_zero_is_the_same_grid_point": (
+        BOOK_REL,
+        b'{"price":75733.6,"qty":0.52596}',
+        b'{"price":75733.60,"qty":0.52596}',
+        "PASS",
+        "the widest at 1dp",
+    ),
+}
+
+
+@pytest.mark.parametrize("mutation", sorted(FIXTURE_MUTATIONS))
+def test_the_fixture_agreement_is_observed_to_fail_and_to_hold(
+    verify_module: ModuleType, fixtures_tree: Path, repo_root: Path, mutation: str
+) -> None:
+    """Break the agreement in the copy, and watch the criterion say which pair and which
+    figure. The control is broken too, in a way that changes no grid point, and must not
+    move the verdict.
+
+    Both real fixtures are hashed before and after: this file runs inside
+    `toolchain_green` and other pytest runs share the checkout, and invariant 11 makes a
+    recording append-only, so a mutation that escaped into `tests/fixtures/` would be a
+    defect of a different order from a red test.
+    """
+    relative, anchor, replacement, expected, fragment = FIXTURE_MUTATIONS[mutation]
+    real = [repo_root.joinpath(*rel) for rel in (BOOK_REL, RULES_REL)]
+    before = [hashlib.sha256(path.read_bytes()).hexdigest() for path in real]
+    target = fixtures_tree.joinpath(*relative)
+    source = target.read_bytes()
+    assert source.count(anchor) == 1, f"{mutation}: the anchor moved; the break would not apply"
+    target.write_bytes(source.replace(anchor, replacement))
+
+    outcome = run(verify_module, FIXTURES_AGREE, fixtures_tree)
+
+    assert [hashlib.sha256(path.read_bytes()).hexdigest() for path in real] == before
+    assert outcome.result is getattr(verify_module.Result, expected), outcome
+    assert "criterion raised" not in outcome.message, outcome.message
+    assert fragment in outcome.message, (fragment, outcome.message)
+
+
+def test_a_price_that_is_not_a_number_is_a_fail_and_never_a_crash(
+    verify_module: ModuleType, fixtures_tree: Path, repo_root: Path
+) -> None:
+    """A malformed recording is the criterion's verdict, not a stack trace.
+
+    `criterion raised` names the file and the exception and judges nothing, which is the
+    least useful thing a gate can print about a fixture it is the only reader of.
+    """
+    real = repo_root.joinpath(*BOOK_REL)
+    before = hashlib.sha256(real.read_bytes()).hexdigest()
+    target = fixtures_tree.joinpath(*BOOK_REL)
+    source = target.read_bytes()
+    anchor = b'{"price":75732.4,"qty":0.91087196}'
+    assert source.count(anchor) == 1, "the anchor moved; the break would not apply"
+    target.write_bytes(source.replace(anchor, b'{"price":"75732.4","qty":0.91087196}'))
+
+    outcome = run(verify_module, FIXTURES_AGREE, fixtures_tree)
+
+    assert hashlib.sha256(real.read_bytes()).hexdigest() == before
+    assert_fail(outcome, verify_module)
+    assert "criterion raised" not in outcome.message, outcome.message
+    assert "is not a finite decimal number" in outcome.message, outcome.message
+
+
+def test_the_criterion_reads_the_two_fixtures_and_nothing_else(
+    verify_module: ModuleType, fixtures_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every path it opens, recorded, and compared with the two it is allowed.
+
+    The fresh-clone rule is checked over the whole Phase 6 section by the AST sweep
+    earlier in this file, which reads the source. This reads the run: `Path.open` and
+    `Path.read_text` are wrapped for the duration, so a criterion that grew a third input
+    — a `data/raw/` archive, a config file, the invented ADA/USD rule read from disk —
+    fails here naming the path, wherever in the call graph it was opened.
+    """
+    opened: list[Path] = []
+    real_open = Path.open
+    real_read_text = Path.read_text
+
+    def spy_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        opened.append(self)
+        return real_open(self, *args, **kwargs)
+
+    def spy_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        opened.append(self)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", spy_open)
+    monkeypatch.setattr(Path, "read_text", spy_read_text)
+    outcome = run(verify_module, FIXTURES_AGREE, fixtures_tree)
+    monkeypatch.undo()
+
+    assert_pass(outcome, verify_module)
+    allowed = {fixtures_tree.joinpath(*rel).resolve() for rel in (BOOK_REL, RULES_REL)}
+    assert opened, "nothing was opened at all, so this sweep would pass vacuously"
+    assert {path.resolve() for path in opened} == allowed, sorted(str(p) for p in opened)
+
+
+def test_a_compared_pair_whose_frames_carry_no_price_is_a_fail(
+    verify_module: ModuleType, fixtures_tree: Path, repo_root: Path
+) -> None:
+    """A pair recorded with an empty book is a fixture fault, not zero breaches.
+
+    The other arms all break an agreement. This one removes the *evidence*: SOL/USD is
+    declared at 3 decimals and carries no frames, so appending one frame whose book is
+    empty puts it in both fixtures with nothing to measure. A criterion that reported
+    "no price was off the grid" there would be saying its loudest thing about a pair it
+    never looked at, which is the vacuous pass per pair rather than over the whole file.
+
+    Appended rather than substituted, because no anchor in the committed book produces
+    this state: every recorded frame carries levels, which is what makes the branch
+    otherwise unexecuted.
+    """
+    real = repo_root.joinpath(*BOOK_REL)
+    before = hashlib.sha256(real.read_bytes()).hexdigest()
+    target = fixtures_tree.joinpath(*BOOK_REL)
+    source = target.read_bytes()
+    empty_frame = (
+        b'{"v":1,"kind":"tick","pair":"SOL/USD","channel":"book",'
+        b'"ts_exchange":"2026-09-16T00:17:36.000000Z",'
+        b'"ts_recv":"2026-09-16T00:17:36.000000Z",'
+        b'"payload":{"channel":"book","type":"snapshot",'
+        b'"data":[{"symbol":"SOL/USD","bids":[],"asks":[]}]}}\n'
+    )
+    target.write_bytes(source + empty_frame)
+
+    outcome = run(verify_module, FIXTURES_AGREE, fixtures_tree)
+
+    assert hashlib.sha256(real.read_bytes()).hexdigest() == before
+    assert_fail(outcome, verify_module)
+    assert "criterion raised" not in outcome.message, outcome.message
+    assert "SOL/USD is in book_sample.jsonl and carries no price at all" in outcome.message, (
+        outcome.message
+    )
+    # The pair that does have both halves is still measured and still reported.
+    assert "Coverage: 2 compared of the 5 pairs" in outcome.message, outcome.message

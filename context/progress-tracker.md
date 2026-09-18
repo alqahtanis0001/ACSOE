@@ -231,6 +231,31 @@ line wider and a real code under the wrong engine passes everything. Also: B's f
 five bad pairs rather than six, because its sampled draw never picked the `order_book` row, which
 is why the second test walks the constant rather than the written rows.
 
+### SPEC 118 (C): the recorded book is checked against the recorded declaration — and the ruling's own premise was wrong
+
+`recorded_book_agrees_with_recorded_pair_decimals`, the 14th Phase 6 criterion: every recorded
+price in `tests/fixtures/book_sample.jsonl` sits at or inside that pair's `pair_decimals` in
+`tests/fixtures/kraken/asset_pairs.json`. **Coverage is stated, not implied** — 1 pair compared
+(BTC/USD, 783 prices, widest 1dp against a declared 1), 4 not, each named with its direction:
+ADA/USD recorded but undeclared, ETH/BTC, ETH/USD and SOL/USD declared but not in the sample. Five
+FAIL arms on a copied tree and a control that changes bytes without changing the grid point
+(`75733.6` → `75733.60`, still PASS), so the criterion is measuring the grid and not the spelling;
+a further test wraps `Path.open` to prove it reads those two files and nothing else. **No precision
+is ever inferred from a price** — that is the ADA/USD case, and inventing one would be the
+fabricated exchange value `AGENTS.md` forbids.
+
+**The correction that matters: the two fixtures are not "frozen together".** That was the ruling's
+stated reason a red could never be news about Kraken. `asset_pairs.json` landed 2026-09-08,
+`book_sample.jsonl` was cut from the 2026-09-16 archive, and the `AssetPairs` recording carries no
+provenance block at all. The conclusion holds for today's files; the argument does not. C kept the
+check, put both dates in the criterion's prose, and stopped rather than aligning them — a
+what-choice. **Q2 in `docs/build-log/phase-6/overnight-decisions-2026-09-18.md`**, with Q3
+(coverage could reach 3 of 5 by a re-cut **C** runs, not A — the cutter "chooses nothing", and the
+archive already holds ETH/USD and SOL/USD — but it shares the fixture with
+`order_book_slippage_on_recorded_book`, so the two must be looked at together) and F1 (an invented
+ADA/USD `pair_decimals` for the fake client sits two screens away; not a defect, and the new
+criterion's docstring names it as the thing it must not read).
+
 ### SPEC 109 (A): the last of the stale fallback prose, and three findings
 
 Eight sites rewritten across six files — the five spec 109 named, plus `clients/kraken/rest.py`,

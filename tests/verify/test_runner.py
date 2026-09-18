@@ -218,6 +218,10 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
         "paper_equity_continuous_across_fill",
         # Operator ruling 2026-09-17 on the exit-tick equity row.
         "equity_row_never_values_positions_it_does_not_hold",
+        # Spec 118, operator ruling 2026-09-18. The only Phase 6 criterion whose
+        # subject is neither an engine nor the chain: it compares the two committed
+        # fixtures with each other, which every criterion that reads them assumed.
+        "recorded_book_agrees_with_recorded_pair_decimals",
     }
     for phase in range(7, verify_module.MAX_PHASE + 1):
         assert {c.name for c in verify_module._REGISTRY[phase]} == every_phase

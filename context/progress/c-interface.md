@@ -2731,3 +2731,84 @@ second is what this spec retires.
 **Narrow runs:** `tests/console/ 362 passed`
 (`logs/verify/phase6-20260918-spec120-c-console-green.log`), `ruff check src/ tests/
 scripts/` clean, `mypy --strict src/ scripts/` clean on 153 files. No full gate from me.
+
+## C — spec 118, the recorded prices against the recorded declaration — 2026-09-18
+
+**CLAIM and DONE in one session, not committed.** Assigned by the lead from the operator's
+ruling of 2026-09-18, after the nine Phase 6 criteria went green at `adbce06`. Wrote
+`scripts/verify.py`, `tests/verify/test_phase6_criteria.py`, this file and
+`docs/build-log/phase-6/c-interface.md`, and nothing else. No fixture was edited: the FAIL
+proof mutates a **copy** of the two files in a temp tree, and both real fixtures are hashed on
+both sides of every arm.
+
+**The criterion.** `recorded_book_agrees_with_recorded_pair_decimals`, registered last in phase
+6. For every pair carried by both `tests/fixtures/book_sample.jsonl` and
+`tests/fixtures/kraken/asset_pairs.json`, no recorded price sits off that pair's declared
+`pair_decimals` grid. One pair is compared today (BTC/USD, 783 prices, widest 1dp, declared 1);
+four cannot be and are named in the message with the reason — ADA/USD because the recorded
+`AssetPairs` has no entry for it, and ETH/BTC, ETH/USD and SOL/USD because the book sample
+carries no frames for them. The PASS, both PENDINGs, the empty-fixture FAIL and six mutation
+arms — five red, one the control that must stay green — are quoted in the build log.
+
+**Three how-choices, each with what it rejected.**
+
+1. **Measured on the grid point, not on the JSON spelling** (`Decimal.normalize()` before
+   counting digits). Rejected: counting the digits as written, which would go red on a trailing
+   zero — and **50 of the 783 BTC/USD prices are written `x.0`**. A check that fires on how
+   Kraken formats JSON is a check that gets ignored. Decision entry in the build log; the
+   rejected reading is what the control arm of the mutation proof now tests.
+2. **The helpers live in `scripts/verify.py`'s Phase 6 section, beside the criterion.**
+   Rejected: `tests/harness/`, which is importable by the engine tests and would have made a
+   criterion's private reader into a seam three other lanes could grow a dependency on. This
+   criterion has exactly one caller.
+3. **The message names the archive by reading the fixture's own header block**, not by holding
+   the name in `verify.py`. Rejected: writing `kraken_v2__msi__2026-09-16.jsonl` into the
+   source, which is a claim about the subject that a re-cut fixture makes silently false —
+   the same shape as a record written beside a call not being a check on that call.
+
+**Two findings for the lead, neither fixed here.**
+
+1. **The two fixtures are not "frozen together", and spec 118's rationale rests on their being
+   so.** `tests/fixtures/kraken/asset_pairs.json` landed in `afaf2f5` on **2026-09-08**;
+   `book_sample.jsonl` was cut from the 2026-09-16 archive and landed in `a089bc7` on
+   **2026-09-16**. The `AssetPairs` recording carries no provenance block, so nothing narrows
+   it further. The strong claim — *a red here is never news about Kraken* — is therefore
+   unsound as an argument, while remaining true as a fact about today's two files. The
+   criterion's prose states the dates and says a red means the two recordings disagree, which
+   is worth a human look whichever cause it has. Nothing in the fixtures is mine to change, and
+   re-cutting them to align is a what-choice.
+2. **An invented ADA/USD `pair_decimals` already sits in `scripts/verify.py`** —
+   `BOOK_THIN_PAIR_RULE`, six decimals, fed to the fake exchange by
+   `order_book_slippage_on_recorded_book` and labelled *"Invented exchange data for the fake"*
+   in its own comment. ADA/USD's recorded prices stop at six places, so it would have "worked",
+   and it is about two thousand lines from the new criterion in the same file. Using it would
+   have been the fabricated exchange value `AGENTS.md` forbids in its first paragraph. The
+   criterion names it in its docstring as the thing it must not read, because the next reader
+   will find it and wonder why the coverage is one pair out of five. Not a defect — the fake
+   needs *some* rule and the comment is honest — but a constant that looks like a declaration,
+   two screens from a criterion whose whole subject is declarations, is worth the lead knowing
+   about.
+
+**What the criterion is not.** It judges no engine and drives no chain, so it carries no fee
+tier sentence and its PENDING names a missing file rather than a missing engine. It is kept out
+of `PHASE6_CRITERIA` in the test file for that reason, beside spec 105's and the operator's
+2026-09-17 criterion, which are out for the same one.
+
+**One red found by the suite and fixed.** A new criterion is pinned in **two** places:
+`tests/verify/test_phase6_criteria.py` pins Phase 6's criteria as an ordered list, and
+`tests/verify/test_runner.py` pins every phase's set at once. I updated the first and not the
+second, and the first full run came back `1 failed, 442 passed`. They are not redundant — the
+runner's is what tells you a criterion landed in the *wrong* phase, which is otherwise silent.
+Build log has the entry.
+
+**Coverage is 1 pair of 5, and widening it is C's, not A's.** `cut_book_fixture.py` chooses no
+pairs — they are `--pairs` on the command line — so a wider fixture is a re-cut, not a code
+change in A's lane. The 2026-09-16 archive already holds ETH/USD and SOL/USD, both declared, so
+coverage could reach 3 of 5 with no new recording. It is a what-choice (a committed recording's
+content) and therefore the operator's, and it is not free: `order_book_slippage_on_recorded_book`
+drives this same fixture on a thin pair and a deep one. Build log has the entry.
+
+**Narrow runs:** `tests/verify/` —
+`logs/verify/phase6-20260918-spec118-c-verify-tests.log`; `ruff check src/ tests/ scripts/`
+clean; `mypy --strict src/ scripts/` clean on 153 source files. No full gate from me.
+Phase 6 now registers **14** criteria.

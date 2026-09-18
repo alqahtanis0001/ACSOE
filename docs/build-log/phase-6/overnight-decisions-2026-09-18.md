@@ -79,3 +79,48 @@ invariant will no longer authorise the retention it depends on.
 
 **Not touched.** A left the prose unwritten rather than choose which correct fact to state, which
 was right: writing either sentence would have answered the question.
+
+### Q2 — The two fixtures spec 118 compares are not "frozen together", which was the ruling's own premise
+
+**Found by C during spec 118, and it corrects the operator's stated rationale.** The ruling said a
+red can never be news about Kraken **because both sides are recordings frozen together**. They are
+not: `tests/fixtures/kraken/asset_pairs.json` landed in `afaf2f5` on **2026-09-08**, and
+`tests/fixtures/book_sample.jsonl` was cut from the 2026-09-16 archive and landed in `a089bc7` on
+**2026-09-16**. The `AssetPairs` recording carries **no provenance block**, so nothing in the
+repository dates it except its commit.
+
+**The conclusion still holds for today's files** — the two agree, and BTC/USD's declaration matches
+783 recorded prices — but the *argument* does not: a red could mean a re-cut fixture beside a stale
+declaration **or** a setting Kraken changed between the 8th and the 16th. C kept the check, stated
+both dates in the criterion's prose, and wrote that a red means the two recordings disagree and
+wants a human either way. **Aligning them is a what-choice, so C stopped.**
+
+**Options.** (a) Leave it: the check is honest and its prose no longer over-claims. (b) Re-record
+`asset_pairs.json` from the same archive day as the book sample, so the premise becomes true and a
+red really can only mean an inconsistent re-cut. (c) Give `asset_pairs.json` a provenance block so
+its date is readable from the file rather than from git. **Recommendation: (c) then (b) when a
+recording is next cut** — provenance is cheap and makes the gap visible; re-recording is a change
+to committed evidence other criteria read. **Case against:** (b) touches a fixture the Phase 2
+candle criterion also reads, so it is not free.
+
+### Q3 — Spec 118 compares 1 pair of 5, and widening it is C's re-cut, not A's cutter
+
+Coverage is **1 compared (BTC/USD), 4 not** — ADA/USD is recorded but undeclared; ETH/BTC, ETH/USD
+and SOL/USD are declared but not in the book sample. **Owner, since the operator asked for one:**
+not A. `scripts/cut_book_fixture.py` "chooses nothing. Not the pairs, not the window" — pairs
+arrive as `--pairs`, so widening is a **re-cut run by C**, with no change in A's lane. C checked the
+archive read-only: `data/raw/kraken_v2__msi__2026-09-16.jsonl` already carries **ETH/USD and
+SOL/USD**, both declared, so coverage could go **1 of 5 → 3 of 5 with no new recording and no code
+change**. ETH/BTC is absent from the archive and is crypto-quoted (invariant 7), so it stays
+uncomparable. **The cost, and why it is not a tidy-up:** `order_book_slippage_on_recorded_book`
+drives this same fixture, picking ADA/USD as the thin book and BTC/USD as the deep one, so a re-cut
+and that criterion have to be looked at together. **Operator's ruling; owner named.**
+
+### F1 — An invented ADA/USD `pair_decimals` sits two screens from the criterion about declarations
+
+`BOOK_THIN_PAIR_RULE` in `scripts/verify.py` carries six decimals for ADA/USD, labelled "Invented
+exchange data for the fake" in its own comment. **Not a defect** — the fake client needs a rule, and
+inventing one for a fake is legitimate where inventing one for a *declaration* is not. It is
+recorded because ADA/USD's recorded prices stop at six places, so it would have "worked" as a
+declaration, and it sits ~2,200 lines from a criterion whose whole subject is declarations. The new
+criterion's docstring names it as the thing it must not read.
