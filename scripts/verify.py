@@ -3671,9 +3671,11 @@ OHLC_FIXTURE = Path("tests") / "fixtures" / "kraken" / "ohlc.json"
 #: Three pairs, per the phase row in `ai-workflow-rules.md`.
 OHLC_MIN_PAIRS = 3
 
-#: Volume tolerance, as the phase row states it. Prices are compared against the
-#: pair's own `tick_size` **as reported by `AssetPairs`** and never against a
-#: constant; there is deliberately no price tolerance named here.
+#: Volume tolerance, as the phase row states it. Prices are compared within the pair's
+#: `tick_size` as the **fake** exchange's `AssetPairs` serves it, which is invented Phase 0
+#: test data (`tests/fixtures/kraken/asset_pairs.json`, whose `provenance` says so), not
+#: Kraken's. There is deliberately no price tolerance named here, but the one read is a
+#: chosen number all the same. Operator ruling S2, 2026-09-18.
 VOLUME_TOLERANCE = Decimal("0.001")
 
 OHLC_FIELDS = ("open", "high", "low", "close")
@@ -3715,13 +3717,16 @@ def _decimal_or_none(value: Any) -> Decimal | None:
 
 
 def _pair_tick_sizes(root: Path) -> tuple[dict[str, Decimal] | None, Outcome | None]:
-    """`tick_size` per pair, **as `AssetPairs` reports it**.
+    """`tick_size` per pair, as the **fake** exchange's `AssetPairs` serves it.
 
-    Read through the fake Kraken client rather than out of the JSON directly. The
-    phase row says "as reported by `AssetPairs`", and the point of that wording is
-    that the tolerance is an exchange value the system fetches, not a number a test
-    knows. Going through the client keeps the criterion reading it the same way the
-    engines do, so a change in how a pair rule is parsed reaches this gate too.
+    Read through the fake Kraken client rather than out of the JSON directly, so the
+    criterion reads a pair rule the same way the engines do and a change in how one is
+    parsed reaches this gate too. **That is all going through the client buys.** The
+    phase row says "as reported by `AssetPairs`", meaning an exchange value; what the
+    fake serves is invented Phase 0 test data (the fixture's `provenance`), so this is a
+    number somebody here chose, reached by the same path a fetched one would take. An
+    earlier docstring said the tolerance was "an exchange value the system fetches" and
+    that was never true. Operator ruling S2, 2026-09-18.
     """
     fixture = root / "tests" / "fixtures" / "kraken" / "asset_pairs.json"
     if not fixture.is_file():
@@ -3750,13 +3755,28 @@ def _candle_builder() -> tuple[Any, Outcome | None]:
 
 
 def check_candles_match_kraken_ohlc(ctx: VerifyContext) -> Outcome:
-    """Built 15-minute candles against Kraken's own OHLC, for three pairs.
+    """Built 15-minute candles against an independent reduction of real Kraken trades.
 
-    Every OHLC field within one `tick_size` **for that pair as `AssetPairs` reports
-    it**, and volume within 0.1%. The tolerance is fetched, never hardcoded: rule 2
-    of `trading-invariants.md` says any tick size an agent remembers is stale, and a
-    criterion carrying its own copy of one would be asserting against a number the
-    exchange has already moved.
+    **What it checks.** `tests/fixtures/kraken/ohlc.json` holds real Kraken v2 `trade`
+    frames taken verbatim from the recording, and expected bars computed from those same
+    trades by the deliberately naive pure-Python reduction in `scripts/ohlc_fixture.py`,
+    which shares no code with the `polars` builder under test. **The expected bars are not
+    Kraken's published OHLC**: the archive has no OHLC channel (A's spec 28 decision,
+    `docs/build-log/phase-2.md`). Every OHLC field must be within one `tick_size` and
+    volume within 0.1%. Confirming the bars against Kraken's published OHLC is a
+    `--live` task.
+
+    **The tolerance is a chosen number, not a fetched one.** It is read through the fake
+    client out of `asset_pairs.json`, which is invented Phase 0 test data. It is also
+    never engaged on the committed fixture: open, high, low and close are each *selected*
+    from the trades, not computed, so two correct reductions agree to the digit, and on
+    2026-09-18 all 9 bars did. The PASS reports the largest difference it saw so that
+    stays visible rather than implied.
+
+    Until 2026-09-18 this docstring said the tolerance was "fetched, never hardcoded" and
+    the messages compared against "Kraken's own OHLC". Both were false from the day it was
+    written, and the tests asserted that the word `tick_size` appeared rather than that
+    the message was true. Operator ruling S2 and the tracker's FINDING of that date.
     """
     fixture_path = ctx.root / OHLC_FIXTURE
     if not fixture_path.is_file():
@@ -3789,12 +3809,13 @@ def check_candles_match_kraken_ohlc(ctx: VerifyContext) -> Outcome:
             return early or pending("no candle builder yet - " + CANDLES_CONTRACT)
 
         checked = 0
+        widest = Decimal(0)
         for pair, payload in pairs.items():
             if pair not in tick_sizes:
                 return failed(
-                    f"{pair} is in ohlc.json and not in asset_pairs.json, so its "
-                    "tick_size cannot be read from AssetPairs and the tolerance would "
-                    "have to be invented"
+                    f"{pair} is in ohlc.json and not in asset_pairs.json, so the fake "
+                    "exchange serves no tick_size for it and this criterion will not "
+                    "have one invented"
                 )
             tick = tick_sizes[pair]
             if not isinstance(payload, Mapping):
@@ -3820,18 +3841,21 @@ def check_candles_match_kraken_ohlc(ctx: VerifyContext) -> Outcome:
                 candle = by_ts.get(ts)
                 if candle is None:
                     return failed(
-                        f"the builder produced no {pair} candle at ts={ts}, which Kraken's "
-                        "own OHLC has. A dropped bar is a missing decision bar."
+                        f"the builder produced no {pair} candle at ts={ts}, which the "
+                        "reference reduction of the recorded trades has. A dropped bar is "
+                        "a missing decision bar."
                     )
                 for name in OHLC_FIELDS:
                     want = _decimal_or_none(_field(expected, name))
                     got = _decimal_or_none(_field(candle, name))
                     if want is None or got is None:
                         return failed(f"{pair} at ts={ts}: `{name}` is missing or not a number")
+                    widest = max(widest, abs(got - want))
                     if abs(got - want) > tick:
                         return failed(
-                            f"{pair} at ts={ts}: {name} {got} vs Kraken {want}, which is "
-                            f"more than one tick_size ({tick}) from AssetPairs"
+                            f"{pair} at ts={ts}: {name} {got} vs the reference reduction's "
+                            f"{want}, more than one tick_size ({tick}, from the fake "
+                            "exchange's invented AssetPairs)"
                         )
                 want_vol = _decimal_or_none(_field(expected, "volume"))
                 got_vol = _decimal_or_none(_field(candle, "volume"))
@@ -3840,13 +3864,17 @@ def check_candles_match_kraken_ohlc(ctx: VerifyContext) -> Outcome:
                 allowed = abs(want_vol) * VOLUME_TOLERANCE
                 if abs(got_vol - want_vol) > allowed:
                     return failed(
-                        f"{pair} at ts={ts}: volume {got_vol} vs Kraken {want_vol}, outside 0.1%"
+                        f"{pair} at ts={ts}: volume {got_vol} vs the reference reduction's "
+                        f"{want_vol}, outside 0.1%"
                     )
                 checked += 1
 
     return passed(
-        f"{len(pairs)} pairs, {checked} bar(s): every OHLC field within one tick_size as "
-        "AssetPairs reports it, volume within 0.1%"
+        f"{len(pairs)} pairs, {checked} bar(s): the builder matches an independent reduction "
+        "of real recorded Kraken trades (scripts/ohlc_fixture.py - not Kraken's published "
+        f"OHLC), largest OHLC difference {widest}, inside the one-tick_size tolerance taken "
+        "from the fake exchange's invented AssetPairs; volume within 0.1%. Confirming against "
+        "Kraken's published OHLC is a --live task"
     )
 
 
@@ -10785,13 +10813,15 @@ def _leaderboard_rows(db_path: Path) -> list[dict[str, Any]]:
 # Three rules govern all nine, and the first is this phase's own.
 #
 # * **Everything that drives a trade runs at fee tier 3, and says so in its own
-#   message.** Ruling 8 of the Phase 6 task list. At tier 1 the cost gate is
-#   unreachable by construction: `hurdle_multiple` 1.5 makes the bar 2.5x friction,
-#   tier-1 reference friction is about 1.25% round trip, and the resulting 3.125% is
-#   above the 3.0% target barrier - so *no* candidate clears and a criterion that
-#   reported PASS there would be reporting the thresholds interacting rather than
-#   anything about the engines. A verdict that does not name its fee regime claims
-#   more than it proves. `hurdle_multiple` is not changed and the cost gate is not
+#   message.** Ruling 8 of the Phase 6 task list. At *Kraken's reference* tier 1
+#   (invariant 5) the cost gate is unreachable: `hurdle_multiple` 1.5 makes the bar 2.5x
+#   friction, reference tier-1 friction is about 1.25%, and 3.125% is above the 3.0%
+#   target. **That is not true of the fake exchange's tier 1**, which these criteria
+#   could run at: measured 2026-09-18, it clears (friction 0.708%, hurdle 1.062%). The
+#   tier is named because the regime is part of what a verdict proves, and since operator
+#   ruling S3 each message states the friction and hurdle engine 10 computed in its own
+#   run (`_run_regime`), never a quoted figure. A verdict that does not name its fee
+#   regime claims more than it proves. `hurdle_multiple` is not changed and the cost gate is not
 #   weakened; the tier is what moves, and it moves through the **named** profile in
 #   `tests/fixtures/kraken/fee_tiers.json` so two criteria cannot mean two different
 #   things by "tier 3".
@@ -10993,12 +11023,95 @@ def _awaiting(problem: Outcome | None, tier: str, leg: str = "") -> Outcome:
     return pending(problem.message + "; " + where + tier)
 
 
+# --- what engine 10 computed in this criterion's run: operator ruling S3 --- #
+#
+# Every trade-driving criterion used to end its message with a fixed quotation of invariant
+# 5's reference figures ("reference friction about 0.65% ... a hurdle of 1.625%; tier 1 is a
+# no-trade regime"). Its run was at the fake exchange's invented tier-3 rates, where engine
+# 10 computed friction 0.308% and a hurdle of 0.462% - so every PASS appended numbers its
+# run did not use. Ruled 2026-09-18: a message states the figures its own run computed.
+#
+# Collected, not recomputed: every tick a criterion drives passes its finished `state`
+# through `_note_engine10`, which keeps what engine 1 and engine 10 **published** - never
+# a figure this file derives - and the message reports those. A criterion whose drives
+# never reached engine 10 says so rather than inventing a regime.
+
+#: The engine 10 verdicts the current criterion's drives saw, first-seen order, no
+#: repeats: `(pair, maker, taker, friction, hurdle)`, each exactly as published. Reset
+#: by `_regime_begin` at the start of every criterion that drives the chain.
+_ENGINE10_SEEN: list[tuple[str, str, str, str, str]] = []
+
+#: Kraken's own reference schedule, **quoted from invariant 5 and never computed here**:
+#: that invariant gives its reference figures "for sanity-checking only - never for use
+#: in code", so the sentence is prose. It is true only while `trading.hurdle_multiple` and
+#: `barriers.target_pct` keep the quoted bar above the target;
+#: `tests/verify/test_phase6_criteria.py` holds that relationship against the committed
+#: config and fires if either moves, the same tripwire shape as spec 112.
+KRAKEN_REFERENCE_TIER_1: Final = (
+    "Kraken's own schedule is a separate question, quoted from invariant 5 rather than "
+    "measured here: at its reference tier-1 fees (friction about 1.25% round trip) a "
+    "candidate needs an expected move above 3.125% against the 3.0% target, so Kraken's "
+    "tier 1 is a no-trade regime at the current barriers"
+)
+
+
+def _regime_begin() -> None:
+    """Forget the previous criterion's engine 10 verdicts."""
+    _ENGINE10_SEEN.clear()
+
+
+def _note_engine10(state: Mapping[str, Any]) -> None:
+    """Keep what engine 1 and engine 10 published on this tick, if engine 10 ran."""
+    cost = state.get("cost")
+    if not isinstance(cost, Mapping) or cost.get("friction_pct") is None:
+        return
+    fee_tier = (state.get("exchange") or {}).get("fee_tier") or {}
+    row = (
+        str(cost.get("pair")),
+        str(fee_tier.get("maker_fee_pct")),
+        str(fee_tier.get("taker_fee_pct")),
+        str(cost.get("friction_pct")),
+        str(cost.get("hurdle_pct")),
+    )
+    if row not in _ENGINE10_SEEN:
+        _ENGINE10_SEEN.append(row)
+
+
+def _pct(value: str) -> str:
+    """An exact decimal fraction as a percentage, to three places, for reading."""
+    try:
+        return f"{Decimal(value) * 100:.3f}%"
+    except (InvalidOperation, ValueError):
+        return value
+
+
+def _run_regime(tier: str) -> str:
+    """The fee-regime clause for a run that happened: the tier, then engine 10's own
+    figures from this run, then Kraken's reference schedule as a separate sentence.
+
+    The exact published strings are given beside the rounded percentages, so a reader
+    can check the message against the run's `state` digit for digit.
+    """
+    if not _ENGINE10_SEEN:
+        measured = "engine 10 published no friction in this run"
+    else:
+        measured = "; ".join(
+            f"engine 10 computed friction {friction} ({_pct(friction)}) and hurdle "
+            f"{hurdle} ({_pct(hurdle)}) on {pair} in this run, at maker {maker} and taker "
+            f"{taker} as engine 1 published them"
+            for pair, maker, taker, friction, hurdle in _ENGINE10_SEEN
+        )
+    return f"{tier}; {measured}. {KRAKEN_REFERENCE_TIER_1}"
+
+
 # --- the trade-producing subject, spec 100 step 2 -------------------------- #
 #
 # The hardest requirement in the spec, and the one that could have ended in a finding
 # rather than in code: **a candidate has to be a real BUY with an expected move above
-# the tier-3 bar of 1.625%, produced by the real predictor, not refused by the DI and
-# not vetoed.** Spec 100 is explicit that if that cannot be done honestly it is raised
+# the tier-3 bar, produced by the real predictor, not refused by the DI and not
+# vetoed.** (Spec 100 wrote the bar as 1.625%, quoting invariant 5's reference tier 3;
+# at the fake exchange's tier-3 rates engine 10's bar on this subject is 2.5 x 0.308% =
+# 0.770%. Operator ruling S3, 2026-09-18.) Spec 100 is explicit that if that cannot be done honestly it is raised
 # to the lead rather than routed around with a hand-built `state`.
 #
 # It can be done, and the measurement is in `docs/build-log/phase-6/c-interface.md`.
@@ -11484,13 +11597,15 @@ def _judge_fill(
 
     def tick(at: int) -> dict[str, Any]:
         clock.set(datetime.fromtimestamp(at, tz=UTC))
-        return dict(orchestrator.tick())
+        state = dict(orchestrator.tick())
+        _note_engine10(state)
+        return state
 
     quiet = tick(entry_at - tick_s)
     if "trading_blocked_by" in quiet:
         return failed(
             f"the quiet tick before the entry was blocked by {quiet['trading_blocked_by']}: "
-            f"{quiet.get('block_reason')}; {tier}"
+            f"{quiet.get('block_reason')}; {_run_regime(tier)}"
         )
     entry = tick(entry_at)
     execution = entry.get("execution") or {}
@@ -11499,7 +11614,7 @@ def _judge_fill(
             "the subject placed no entry, so there was no fill to judge: blocked by "
             f"{entry.get('trading_blocked_by')!r} ({entry.get('block_reason')!r}), "
             f"engine 18 said {execution.get('reason_code')!r}. A's spec 87 probe placed one "
-            f"on this window; {tier}"
+            f"on this window; {_run_regime(tier)}"
         )
     userref = int(execution["userref"])
     pair = str(execution.get("pair"))
@@ -11507,7 +11622,7 @@ def _judge_fill(
     if resting is None or resting.limit_price is None:
         return failed(
             f"engine 18 placed entry {userref} and engine 19 recorded no resting row with a "
-            f"limit price for it; {tier}"
+            f"limit price for it; {_run_regime(tier)}"
         )
     # One trade strictly below the limit, between the entry tick and the next: a resting
     # post-only buy fills at its own price (spec 88).
@@ -11522,12 +11637,12 @@ def _judge_fill(
     if order is None or str(order.status.value) != "filled":
         return failed(
             f"a trade below the limit of entry {userref} did not fill it: the stored order is "
-            f"{None if order is None else order.status.value!r}; {tier}"
+            f"{None if order is None else order.status.value!r}; {_run_regime(tier)}"
         )
     if order.avg_fill_price is None or order.fee is None:
         return failed(
             f"entry {userref} is recorded filled without a fill price or a fee, so its own "
-            f"cost cannot be computed; {tier}"
+            f"cost cannot be computed; {_run_regime(tier)}"
         )
     run_id = orchestrator.run_id
     series = [row for row in store.equity_series() if row.run_id == run_id]
@@ -11538,13 +11653,13 @@ def _judge_fill(
             f"the fill tick (cycle {order.cycle_id}) has {len(at_fill)} equity row(s) with "
             f"{at_fill[0] if at_fill else 0} before it; engine 19 said "
             f"{memory.get('equity_skipped_reason')!r}. A fill tick with no equity row is a "
-            f"gap in the series engine 17 reads; {tier}"
+            f"gap in the series engine 17 reads; {_run_regime(tier)}"
         )
     before, after = series[at_fill[0] - 1], series[at_fill[0]]
     if before.cycle_id != order.cycle_id - 1:
         return failed(
             f"the equity row before the fill tick is from cycle {before.cycle_id}, not "
-            f"{order.cycle_id - 1}, so the entry tick wrote none; {tier}"
+            f"{order.cycle_id - 1}, so the entry tick wrote none; {_run_regime(tier)}"
         )
     position_ids = [
         str(found[0])
@@ -11556,7 +11671,7 @@ def _judge_fill(
     if position is None:
         return failed(
             f"entry {userref} filled and the store holds {len(position_ids)} position(s) "
-            "for it, not one; " + tier
+            "for it, not one; " + _run_regime(tier)
         )
     qty, price, fee = order.filled_qty, order.avg_fill_price, order.fee
     if position.qty != qty or after.open_position_count != 1:
@@ -11564,7 +11679,7 @@ def _judge_fill(
             f"the position holds {position.qty}, the fill recorded {qty}, and the fill "
             f"tick's equity row counts {after.open_position_count} open position(s); "
             "the fill's cost can only be read off one position that matches its fill; "
-            + tier
+            + _run_regime(tier)
         )
     # The mark, from the stored row only. Since spec 106 engine 21 stores a position
     # opened by this tick's fill with `last_price` at the fill price. A NULL mark is
@@ -11577,13 +11692,13 @@ def _judge_fill(
             f"entry {userref}'s position is stored with no mark (last_price NULL) on its "
             f"fill tick, cycle {order.cycle_id}. Engine 21 stores the fill price as the mark "
             "of a position this tick's fill opened (spec 106), so the mark-to-bid part of "
-            "the fill's cost cannot be read from the store; " + tier
+            "the fill's cost cannot be read from the store; " + _run_regime(tier)
         )
     mark = position.last_price
     if after.positions_value != qty * mark:
         return failed(
             f"the fill tick's equity row values the position at {after.positions_value}, "
-            f"not {qty} x its mark {mark}; " + tier
+            f"not {qty} x its mark {mark}; " + _run_regime(tier)
         )
     mark_gap = qty * abs(mark - price)
     tolerance = fee + mark_gap
@@ -11595,12 +11710,12 @@ def _judge_fill(
         f"{pair} entry {userref} (notional {qty * price})"
     )
     if abs(moved) <= tolerance:
-        return passed(detail + "; " + tier)
+        return passed(detail + "; " + _run_regime(tier))
     return failed(
         detail + ". Equity moved by more than the fill cost, so the cash and the position "
         "disagree about when the fill happened. The paper ledger must count every fill the "
         "broker has executed, recorded or not (invariant 2, spec 103); otherwise the notional "
-        "is counted twice and peak_equity carries it into engine 17's drawdown; " + tier
+        "is counted twice and peak_equity carries it into engine 17's drawdown; " + _run_regime(tier)
     )
 
 
@@ -11633,6 +11748,7 @@ def check_paper_equity_continuous_across_fill(ctx: VerifyContext) -> Outcome:
         subject, problem = _fill_subject_model(ctx)
         if subject is None:
             return _awaiting(problem, tier)
+        _regime_begin()
         return _equity_across_fill(subject, tier)
 
 
@@ -11808,6 +11924,7 @@ class Drive:
         self.clock.set(datetime.fromtimestamp(at, tz=UTC))
         state = dict(self.orchestrator.tick())
         state["system"] = dict(state["system"])
+        _note_engine10(state)
         return state
 
     def pin(self, bid: Decimal, *, pairs: Sequence[str] | None = None) -> None:
@@ -12389,10 +12506,11 @@ def _driven_verdict(
             assert problem is not None
             return problem
         tier, tools, polars, subject = ready
+        _regime_begin()
         try:
-            return passed(body(tier, tools, polars, subject) + "; " + tier)
+            return passed(body(tier, tools, polars, subject) + "; " + _run_regime(tier))
         except DriveError as failure:
-            return failed(f"{what}: {failure}; {tier}")
+            return failed(f"{what}: {failure}; {_run_regime(tier)}")
 
 
 # --- paper_trade_round_trip_target / _stop / _timeout ----------------------- #
@@ -13893,32 +14011,46 @@ def check_equity_row_never_values_positions_it_does_not_hold(ctx: VerifyContext)
 #     digit after the point and the other 50 are written `x.0`, which is the same point on
 #     the grid. The exchange publishes on its own grid.
 #   * **ADA/USD** - 881 recorded prices at 4, 5 and 6 places, and **no entry at all** in
-#     the recorded `AssetPairs`. Nothing to compare against, so nothing is claimed.
+#     `asset_pairs.json`. Nothing to compare against, so nothing is claimed.
 #
-# That is an observation about *these two recordings* and not a standing fact about
-# Kraken, which is why it says which files and which day. This criterion is the same
-# comparison, made every run, so a re-cut fixture that no longer agrees says so.
+# **Only one side is a recording.** The book sample is a recording. `asset_pairs.json` is
+# **invented Phase 0 test data** for the fake exchange (committed `afaf2f5`, 2026-09-08;
+# its own `provenance` block, and `tests/harness/fake_kraken.py`'s docstring, say so), and
+# it was never cut from any archive. This comment and the criterion's messages called it
+# "the recorded AssetPairs" until 2026-09-18, and so did the spec; the lead found it
+# answering the operator's Q2, and the operator ruled (S2) that the messages say the
+# declaration is invented. BTC/USD's declared `pair_decimals: 1` happens to agree with the
+# 783 prices Kraken sent, but that is agreement with a value somebody here typed, not with
+# a declaration Kraken made.
 #
-# **The two are not frozen together, and the prose here does not pretend they are.**
-# `asset_pairs.json` entered the repository on 2026-09-08 and the book sample was cut from
-# the 2026-09-16 archive: eight days, and the `AssetPairs` recording carries no provenance
-# block to narrow it. So a red here means *these two recordings disagree* - a new book
-# sample landing beside a stale declaration, which is the case spec 118 was written for,
-# or a setting the exchange changed in between. Both want a human; neither is answered by
-# softening the check. Reported to the lead as a finding against the spec's wording.
+# So a red here means *the recorded book no longer fits the fake exchange's chosen grid*:
+# a re-cut book sample that no longer agrees with the invented declaration beside it. It
+# is not news about Kraken either way. A genuine `AssetPairs` recording lands alongside the
+# next book re-cut (operator ruling S2/Q3); until then this criterion compares a recording
+# with a choice, and says so.
+#
+# **The criterion's name** still says `..._recorded_pair_decimals`. The messages were
+# corrected under the ruling; renaming a registered criterion reaches the registry, two
+# test files and the tracker, and is left to the operator.
 #
 # **What it must not read.** `BOOK_THIN_PAIR_RULE`, about 2,200 lines above, holds
-# `pair_decimals: 6` for ADA/USD and its own comment calls it *invented exchange data for
-# the fake*. It would have "worked" - ADA/USD's recorded prices stop at 6 places - and
-# using it would turn "I cannot tell" into a plausible number derived from a value
-# somebody in this project chose, which is the fabricated exchange value `AGENTS.md`
-# forbids in its first paragraph. A pair with no recorded declaration is reported by name
-# and compared against nothing.
+# `pair_decimals: 6` for ADA/USD, a second invented value that is not even in the fixture
+# the fake exchange serves. It would have "worked" - ADA/USD's recorded prices stop at 6
+# places - and using it would turn "I cannot tell" into a plausible number derived from a
+# value chosen for a different purpose. A pair with no declaration in `asset_pairs.json` is
+# reported by name and compared against nothing.
 
 #: What a pair's absence from the other fixture is called in the message. Two directions,
 #: because "reported by name, never skipped silently" is a rule about both of them: a
 #: recording with no declaration is the ADA/USD case, and a declaration with no recording
 #: is every other pair the fake exchange serves.
+#: Said in every verdict, PASS and FAIL alike (operator ruling S2, 2026-09-18). Without
+#: it the message reads as a recording checked against a recording, which it is not.
+_INVENTED_DECLARATION: Final = (
+    "The declaration is invented: asset_pairs.json is Phase 0 test data for the fake "
+    "exchange, not a recording of Kraken's AssetPairs (its provenance block), so an "
+    "agreement says the recorded book fits a chosen grid, not that Kraken's grid is known."
+)
 _NO_DECLARATION: Final = "recorded in book_sample.jsonl, not declared in asset_pairs.json"
 _NO_RECORDING: Final = "declared in asset_pairs.json, not recorded in book_sample.jsonl"
 
@@ -13971,7 +14103,8 @@ def _recorded_price_places(path: Path) -> dict[str, dict[int, tuple[int, str]]]:
 def _recorded_pair_decimals(path: Path) -> tuple[dict[str, int], list[str]]:
     """`(pair -> declared pair_decimals, the pairs that declare none)`.
 
-    A pair in the recorded `AssetPairs` whose entry carries no usable `pair_decimals` is
+    A pair in the fake exchange's (invented) `AssetPairs` whose entry carries no usable
+    `pair_decimals` is
     the same case as a pair that is not there at all - there is no declaration to compare
     against - and it is returned by name rather than dropped, for the same reason.
     """
@@ -14009,11 +14142,12 @@ def _pair_decimals_coverage(
 
 
 def check_recorded_book_agrees_with_recorded_pair_decimals(ctx: VerifyContext) -> Outcome:
-    """The recorded book prices sit on the recorded `pair_decimals` declaration.
+    """The recorded book prices sit on the fake exchange's invented `pair_decimals`.
 
-    Spec 118. For every pair carried by **both** `tests/fixtures/book_sample.jsonl` and
-    `tests/fixtures/kraken/asset_pairs.json`, no recorded price sits off the grid that
-    pair's recorded `pair_decimals` declares. Those two committed files and nothing else,
+    Spec 118. For every pair carried by **both** `tests/fixtures/book_sample.jsonl` (a
+    recording) and `tests/fixtures/kraken/asset_pairs.json` (invented Phase 0 test data,
+    not a recording - see the block comment above), no recorded price sits off the grid
+    that pair's declared `pair_decimals` gives. Those two committed files and nothing else,
     so it runs on a fresh clone like every other criterion.
 
     **It is not a check on Kraken**, and it is not a check on any engine. Every other
@@ -14037,8 +14171,8 @@ def check_recorded_book_agrees_with_recorded_pair_decimals(ctx: VerifyContext) -
     if not rules_path.is_file():
         return pending(
             "tests/fixtures/kraken/asset_pairs.json has not been deposited yet - it is the "
-            "recorded AssetPairs response tests/harness/fake_kraken.py serves, and it is "
-            "the only pair_decimals in the repository that nobody here chose"
+            "AssetPairs response tests/harness/fake_kraken.py serves, invented Phase 0 "
+            "test data rather than a recording"
         )
     if rules_path.stat().st_size == 0:
         return failed("tests/fixtures/kraken/asset_pairs.json is empty, so it proves nothing")
@@ -14103,7 +14237,7 @@ def check_recorded_book_agrees_with_recorded_pair_decimals(ctx: VerifyContext) -
         widest = max(by_places)
         said.append(
             f"{pair} {total} recorded prices, the widest at {widest}dp, against the "
-            f"recorded pair_decimals {limit}"
+            f"invented pair_decimals {limit}"
         )
 
     archive = _book_fixture_archive(book_path)
@@ -14113,19 +14247,20 @@ def check_recorded_book_agrees_with_recorded_pair_decimals(ctx: VerifyContext) -
         # throughout, and those want different responses.
         agreed = (" The pairs that agree: " + "; ".join(said) + ".") if said else ""
         return failed(
-            "the recorded book disagrees with the recorded AssetPairs declaration, so the "
-            "two fixtures are not internally consistent - "
+            "the recorded book disagrees with the fake exchange's AssetPairs declaration, "
+            "so the two fixtures are not consistent - "
             + "; ".join(breaches)
-            + ". This is not a verdict on Kraken: both sides are committed recordings, and "
-            "a disagreement means a re-cut fixture landed beside a stale declaration. "
+            + ". " + _INVENTED_DECLARATION
+            + " This is not a verdict on Kraken: a disagreement means a re-cut book no "
+            "longer fits the chosen grid beside it. "
             + coverage
             + agreed
             + " " + archive
         )
     return passed(
-        "every recorded price sits at or inside its recorded pair_decimals - "
+        "every recorded price sits at or inside its declared pair_decimals - "
         + "; ".join(said)
-        + ". " + coverage
+        + ". " + _INVENTED_DECLARATION + " " + coverage
         + " Read from the two committed fixtures alone, and no precision is inferred from "
         "a price. " + archive
     )

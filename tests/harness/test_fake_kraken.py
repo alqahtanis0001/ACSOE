@@ -288,9 +288,9 @@ async def test_use_fee_tier_reaches_the_client_through_trade_volume(
 def test_an_unnamed_tier_raises_rather_than_falling_back_to_tier_1() -> None:
     """A fake kinder than reality hides fail-closed bugs — the harness's own rule.
 
-    Silently answering tier 1 for `use_fee_tier(2)` would give a criterion a
-    no-trade regime while its message said tier 2, which is the exact class of
-    wrong claim the tier sentences exist to prevent.
+    Silently answering tier 1 for `use_fee_tier(2)` would run a criterion at tier 1's
+    fees while its message said tier 2, which is the exact class of wrong claim the
+    tier sentences exist to prevent.
     """
     from tests.harness.fake_kraken import fee_tier_profile, tier_sentence
 
@@ -300,20 +300,27 @@ def test_an_unnamed_tier_raises_rather_than_falling_back_to_tier_1() -> None:
         tier_sentence(2)
 
 
-def test_the_two_tier_sentences_say_which_regime_and_are_not_interchangeable() -> None:
-    """Ruling 8: every criterion that drives a trade says tier 3 in its own message.
+def test_the_two_tier_sentences_name_the_tier_and_state_no_figure() -> None:
+    """Ruling 8: every criterion that drives a trade names its tier. Ruling S3
+    (2026-09-18): the sentence carries **no friction, no hurdle and no regime claim**.
 
-    A sentence that did not name the tier, or that read the same for both, would
-    let a PASS at tier 1 — where no trade is possible — be mistaken for a PASS that
-    proved something about the engines.
+    Until then these sentences quoted invariant 5's reference figures for Kraken's own
+    schedule — 0.65% and 1.625% at tier 3, "unreachable by construction" at tier 1 — while
+    every criterion ran at this fixture's invented rates, where engine 10 computed 0.308%
+    and 0.462%, and where tier 1 is not a no-trade regime at all. This test pinned those
+    words in; it now pins them out. Only the criterion that drove a run knows what engine
+    10 computed in it, so the figures come from `scripts/verify.py`, not from here.
     """
     from tests.harness.fake_kraken import TIER_1, TIER_3, tier_sentence
 
     one, three = tier_sentence(TIER_1), tier_sentence(TIER_3)
     assert one != three
-    assert "tier 1" in one and "tier 3" in three
-    assert "no-trade regime" in three, three
-    assert "unreachable by construction" in one, one
+    assert "fee tier 1" in one and "fee tier 3" in three
+    for sentence in (one, three):
+        assert "fake exchange" in sentence and "invented" in sentence, sentence
+        assert "%" not in sentence, sentence
+        for claim in ("no-trade regime", "unreachable", "friction", "hurdle"):
+            assert claim not in sentence, (claim, sentence)
 
 
 def test_the_tier_3_fees_are_lower_than_tier_1s_on_both_sides() -> None:
@@ -321,9 +328,11 @@ def test_the_tier_3_fees_are_lower_than_tier_1s_on_both_sides() -> None:
 
     Not the friction and not the hurdle: those are engine 10's arithmetic and a
     criterion that recomputed them here would be checking its own sum. What the
-    fixture has to get right is the direction — a tier-3 profile with tier-1 fees
-    would leave every Phase 6 criterion in the no-trade regime while reporting that
-    it was not, and every one of them would simply find no candidate.
+    fixture has to get right is the direction — a tier-3 profile carrying tier-1 fees
+    would run every Phase 6 criterion at the higher fees while each message named tier
+    3. (It would not stop them trading: the fixture's tier 1 puts the bar near 1.77%,
+    under the 3.0% target. That is Kraken's reference schedule's property, not this
+    file's - operator ruling S3, 2026-09-18.)
     """
     from tests.harness.fake_kraken import TIER_1, TIER_3, fee_tier_profile
 

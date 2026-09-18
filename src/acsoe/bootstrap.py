@@ -167,8 +167,10 @@ GUARD_CHAIN: tuple[BaseEngine, ...] = (
 #: (``test_trade_chain_rehearsal.py``, every upstream engine real). Those rehearsals found
 #: two defects between engines, both fixed before this registration: a paper fill counted
 #: twice in equity (spec 103) and an errored opportunity-chain tick left unrecorded
-#: (spec 104). Every trade the chain can produce is at a fee tier the fake client supplies;
-#: at tier 1 the cost gate is unreachable by construction at the current barriers.
+#: (spec 104). Every trade the chain can produce in a test is at a fee tier the fake client
+#: supplies. At Kraken's *reference* tier 1 (invariant 5) the cost gate is unreachable at
+#: the current barriers; the fake's own tier 1 is not (measured 2026-09-18, operator
+#: ruling S3).
 OPPORTUNITY_CHAIN: tuple[BaseEngine, ...] = (
     FeatureEngine(),
     MacroContextEngine(),

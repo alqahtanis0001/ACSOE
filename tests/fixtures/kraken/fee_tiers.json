@@ -7,12 +7,16 @@
     "is blocked.",
     "Tier 1 is the same fact as trade_volume.json's result and is pinned equal to",
     "it by test_the_tier_1_profile_is_the_default_envelope, so the two cannot drift.",
-    "Tier 3 is the profile every Phase 6 criterion that drives a trade runs at. At",
-    "tier 1 the cost gate is unreachable by construction: hurdle_multiple 1.5 makes",
-    "the bar 2.5x friction, tier-1 reference friction is about 1.25% round trip, and",
-    "the resulting 3.125% is above the 3.0% target barrier. Tier 3's reference",
-    "friction is about 0.65% and the bar is 1.625%, which a real expected move can",
-    "clear. Do not change hurdle_multiple to produce a trade; change the tier."
+    "Tier 3 is the profile every Phase 6 criterion that drives a trade runs at.",
+    "NEITHER TIER HERE IS INVARIANT 5'S REFERENCE SCHEDULE, AND NEITHER IS A",
+    "NO-TRADE REGIME. Measured 2026-09-18 on the committed subject (BTC/USD, expected",
+    "move 3.0%): at tier 3 engine 10 computed friction 0.308% and hurdle 0.462%; at",
+    "tier 1 it computed friction 0.708% and hurdle 1.062%, cleared, and engine 18",
+    "placed the entry. The no-trade finding belongs to Kraken's reference schedule",
+    "(invariant 5: tier-1 friction about 1.25%, bar 3.125% against the 3.0% target),",
+    "not to this file. This comment said otherwise until operator ruling S3, and every",
+    "trade criterion's message now states the friction its own run computed.",
+    "Do not change hurdle_multiple to produce a trade."
   ],
   "tiers": {
     "1": {

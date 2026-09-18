@@ -1,6 +1,59 @@
 # Phase 6 — shared task list
 
-## HANDOFF 9, 2026-09-18 — close preparation done; two rulings stopped; the phase is NOT closed
+## HANDOFF 10, 2026-09-18 evening — rulings S1–S3 carried out; the phase is NOT closed
+
+**Read this first. HANDOFF 9 and earlier are history.** The operator is awake and reading the
+walk-through (`docs/build-log/phase-6/first-paper-trade.md`); nothing is waiting on the lead.
+
+### State
+
+`verify.py --phase 2` → **9/9, exit 0** and `--phase 6` → **14 criteria, 14 PASS, 0 FAIL, 0 PENDING, exit 0**, on the corrected tree, with `mypy --strict` and `ruff` clean first; the code delta's sha256 identical at the start and end of the gates, so the tree did not move. Logs: `logs/verify/phase{2,6}-20260918-rulings-s2s3-lead-verify.log` and
+`regate-20260918-rulings-s2s3-lead-summary.txt`. Committed and pushed. **Phase 6 is not marked
+green and not closed; Phase 7 is not started; Q3's re-cut is not started.**
+
+### What the operator ruled, and what landed
+
+- **S1.** Engine 22 as built. Invariant 14 records why its balance authorisation is deliberately
+  wider than the code: in paper mode the retained balance is the real account's, and the paper
+  ledger holds no base currency.
+- **S2.** `asset_pairs.json` carries an honest provenance block (invented Phase 0 data, never cut
+  from an archive).
+  - `candles_match_kraken_ohlc`'s prose and messages now say what it compares against: a local
+    reduction of recorded trades, with an invented tolerance. Its PASS reports the largest
+    difference it measured, which is 0.
+  - Spec 118 says its declaration is invented.
+  - **Assertions unchanged.** Recorded as a FINDING in the tracker.
+- **S3.** Every trade criterion states what engine 10 computed in its own run (`_run_regime`), and
+  Kraken's reference tier 1 is a separate sentence, held by a tripwire test. Measured: the fake's
+  tier 1 clears the gate (friction 0.708%, hurdle 1.062%).
+- **F-new-1 and F-new-2** are Phase 7 prerequisites 7 and 8. F-new-3 and F-new-4 are recorded.
+- **Mutation proof** is in `docs/build-log/phase-6/lead.md`, arms M1 to M10. M9 survived the
+  real-tree tests and was killed by a unit test written for it.
+
+### For the operator, not decided
+
+- **D11 (REVIEW).** Two criteria's *names* still claim what they do not check:
+  `candles_match_kraken_ohlc` and `recorded_book_agrees_with_recorded_pair_decimals`. A rename
+  reaches the registry, two test files and the tracker.
+- **D15.** The same false tier-1 claim sits in three test comments in B's and C's lanes, reported
+  and not edited:
+  - `tests/engines/test_decision.py:79`
+  - `tests/engines/test_feature_chain_rehearsal.py:1825`
+  - `tests/engines/test_order_book.py:973`
+- **Engine 22's contract comment** (`engines/exit/contracts.py:159-166`) still ends "Escalated to
+  the lead rather than decided here". The escalation was ruled on 2026-09-18 (S1); B's lane.
+
+### What is left in Phase 6
+
+1. The operator rules on the close after reading the walk-through.
+2. The close itself: Phase 6 marked green in the tracker, and `phase-6.md`'s header updated.
+
+### Standing rules
+
+HANDOFF 8's list stands. Add one of tonight's: **a message is a claim about evidence, and needs a
+test that it is true, not a test that it is present.**
+
+## HANDOFF 9 (history), 2026-09-18 — close preparation done; two rulings stopped; the phase is NOT closed
 
 **Read this first. HANDOFF 8 and earlier are history.** Written for a session that has read the
 documents and nothing else.
@@ -625,7 +678,9 @@ idle-looking tree — three of us share this checkout. Say what you are about to
 restart or reconfigure any of them.** Order-book history cannot be recovered retroactively.
 
 **8. Everything that drives a trade runs against the fake client at tier 3** (friction ≈ 0.65%,
-bar 1.625%). At tier 1 the cost gate is unreachable by construction — `hurdle_multiple` 1.5 needs
+bar 1.625% — **invariant 5's reference figures, not the fake's: corrected by operator ruling S3,
+2026-09-18.** At the fake's tier 3 engine 10 computes 0.308% and 0.462%, the fake's tier 1
+clears too, and every message states its own run's figures; see the tracker). At tier 1 the cost gate is unreachable by construction — `hurdle_multiple` 1.5 needs
 an expected move above 3.125% against a 3.0% target — and with an empty `.env` every pair blocks
 at the cost gate. **Every criterion that drives a trade says tier 3 in its own message.** Do not
 change `hurdle_multiple` and do not weaken the cost gate.

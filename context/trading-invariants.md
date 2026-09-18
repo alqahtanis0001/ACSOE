@@ -251,6 +251,19 @@ When `close_intent` is set the liquidation proceeds regardless of:
 - **A `data_guard` block.** The manage chain normally holds when the guard rejects the tick's data, placing no target, stop or timeout exit. A liquidation is not held. The system stops reasoning about price quality and gets flat.
 - **A failed fetch, in any mode.** This is the case that matters most and is the easiest to miss: a feed outage is what triggers the escalation, and the same outage is likely failing the balance and order-book fetches. If rule 2's live-mode block applied here, `close_all` would be blocked by the exact condition it exists to answer. During a liquidation, engines 21 and 22 may use the last known good balances and the cached `AssetPairs` metadata **past its TTL**. This is the only place in the system where a stale cache is acceptable.
 
+  **The balance half of that authorisation is deliberately wider than the code.** Ruled by
+  the operator 2026-09-18 (S1 of `docs/build-log/phase-6/overnight-decisions-2026-09-18-night.md`).
+  Neither engine reads the retained balance: engine 22 sizes a liquidation from the
+  `positions` row and reads only the retained `AssetPairs`, and engine 21 reads neither.
+  The grant is kept anyway, so that an exit path which does need cash later — a
+  quote-currency sweep, say — is already covered, and removing it can never happen
+  invisibly to whoever needs it. **Reading it today would change what the liquidation
+  does**, for two reasons the first reader must know. The paper ledger holds no base
+  currency (`clients/paper/fills.py`, quote side only), so a liquidation capped at the
+  account's base holding would sell nothing and retry forever, and `close_intent` would
+  never clear. And in paper mode the retained balance is **the real exchange account's**,
+  forwarded by the paper broker from the wrapped Kraken client, not the paper ledger's.
+
 Constraints that still hold during a liquidation:
 
 - Quantities are still rounded **down** using the cached `lot_decimals`. Rounding down leaves dust; rounding up produces an order Kraken rejects, and a rejected order during an emergency is worse than dust.

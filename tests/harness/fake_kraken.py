@@ -218,10 +218,13 @@ def unwrap(envelope: Mapping[str, Any], call: str) -> Any:
 # --------------------------------------------------------------------------- #
 #
 # Spec 100 step 1. The Phase 6 criteria all have to say which fee tier they ran at,
-# because the answer changes whether a trade is possible at all: at tier 1 the cost
-# gate is unreachable by construction and a criterion that produced no trade there
-# would be reporting the thresholds interacting rather than anything about the
-# engines. Naming the tiers rather than spelling two decimal strings at each call
+# because the fee regime is part of what a verdict proves. **Neither profile here is
+# Kraken's schedule, and neither is a no-trade regime**: measured 2026-09-18 on the
+# committed subject, both clear the cost gate (the fixture's `_comment` gives the
+# figures). The no-trade finding is about invariant 5's reference schedule for Kraken,
+# which these criteria do not run at.
+#
+# Naming the tiers rather than spelling two decimal strings at each call
 # site is what stops "tier 3" meaning two different things in two criteria - which
 # it already nearly did, with `0.0011`/`0.0019` copied by hand into four test files.
 #
@@ -232,20 +235,26 @@ def unwrap(envelope: Mapping[str, Any], call: str) -> Any:
 TIER_1 = 1
 TIER_3 = 3
 
-#: What tier-1 and tier-3 friction mean for the hurdle, as one sentence a criterion
-#: can put in its own message. Not computed here: `friction` is fees plus the
-#: measured spread plus estimated slippage, and engine 10 is the only thing entitled
-#: to compute it. These are the reference round-trip figures the phase documents
-#: carry, quoted so a reader of a PASS line knows what regime produced it.
+#: Which of the fake exchange's fee profiles a criterion ran at, as one clause for its
+#: message. **It carries no friction and no hurdle, and it must not.** `friction` is fees
+#: plus the measured spread plus estimated slippage, engine 10 is the only thing entitled to
+#: compute it, and only the criterion that drove a run knows what engine 10 computed in it.
+#:
+#: Until 2026-09-18 these sentences quoted invariant 5's *reference* figures for Kraken's
+#: own schedule - "reference friction about 0.65% ... a hurdle of 1.625%; tier 1 is a
+#: no-trade regime" - into every trade criterion's PASS, while those criteria ran at this
+#: fixture's invented rates and engine 10 computed friction 0.308% and a hurdle of 0.462%.
+#: At the fixture's own tier-1 rates the bar sits near 1.77%, under the 3.0% target, so
+#: "no-trade regime" was not even true of the fake. Operator ruling S3: a message states
+#: its own run's figures, and `scripts/verify.py` appends them from engine 10's payload.
 _TIER_SENTENCES = {
     TIER_1: (
-        "at fee tier 1, where the cost gate is unreachable by construction: the bar "
-        "is 2.5x friction, tier-1 reference friction is about 1.25% round trip, and "
-        "3.125% is above the 3.0% target barrier"
+        "at the fake exchange's fee tier 1 (invented maker and taker rates from "
+        "tests/fixtures/kraken/fee_tiers.json)"
     ),
     TIER_3: (
-        "at fee tier 3, reference friction about 0.65% round trip and a hurdle of "
-        "1.625%; tier 1 is a no-trade regime at the current barriers"
+        "at the fake exchange's fee tier 3 (invented maker and taker rates from "
+        "tests/fixtures/kraken/fee_tiers.json)"
     ),
 }
 

@@ -467,6 +467,48 @@ def test_candles_pass_when_the_builder_reproduces_the_fixture(
     assert "tick_size" in outcome.message
 
 
+def test_the_candle_pass_says_what_it_compared_against_and_what_it_measured(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """The message states what is true, not the word `tick_size` alone. Operator ruling S2,
+    2026-09-18.
+
+    Until then the PASS said every field was "within one tick_size as AssetPairs reports
+    it" and the FAILs said "vs Kraken", while the expected bars were a pure-Python
+    reduction of recorded trades and the tick size was invented Phase 0 test data. The
+    test above asserted only that `tick_size` appeared, so both false claims passed it for
+    six phases. This one pins each claim to the fact it rests on. The fabricated builder
+    reproduces the fixture exactly, so the largest difference is `0`, and the message
+    must say so rather than imply it.
+    """
+    ohlc_fixture(tree_with_harness)
+    fabricate_builder(tree_with_harness)
+    outcome = run(verify_module, "candles_match_kraken_ohlc", tree_with_harness)
+    assert_pass(outcome, verify_module)
+    message = outcome.message
+    assert "criterion raised" not in message, message
+    assert "independent reduction of real recorded Kraken trades" in message, message
+    assert "not Kraken's published OHLC" in message, message
+    assert "largest OHLC difference 0," in message, message
+    assert "fake exchange's invented AssetPairs" in message, message
+    assert "--live task" in message, message
+    for false_claim in ("as AssetPairs reports it", "Kraken's own OHLC", "vs Kraken"):
+        assert false_claim not in message, (false_claim, message)
+
+
+def test_a_candle_fail_names_the_reference_reduction_and_not_kraken(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """The FAIL half of the same ruling: a deviation is from the reference reduction."""
+    ohlc_fixture(tree_with_harness)
+    fabricate_builder(tree_with_harness, offsets=(("BTC/USD", "close", 0.5),))
+    outcome = run(verify_module, "candles_match_kraken_ohlc", tree_with_harness)
+    assert_fail(outcome, verify_module)
+    assert "vs the reference reduction's" in outcome.message, outcome.message
+    assert "invented AssetPairs" in outcome.message, outcome.message
+    assert "Kraken" not in outcome.message, outcome.message
+
+
 def test_a_close_outside_the_pairs_own_tick_size_is_a_fail(
     verify_module: ModuleType, tree_with_harness: Path
 ) -> None:

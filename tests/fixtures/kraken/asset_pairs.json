@@ -1,4 +1,19 @@
 {
+  "provenance": [
+    "INVENTED TEST DATA, not a recording. Hand-written for the Phase 0 fake Kraken client",
+    "(spec 15) and committed in afaf2f5 on 2026-09-08. It was never cut from any archive:",
+    "the recorder archives WebSocket v2 frames and AssetPairs is a REST call.",
+    "tests/harness/fake_kraken.py's own docstring calls every file in this directory",
+    "invented numbers for a fake exchange and says they would be replaced with genuine",
+    "redacted recordings in Phase 2; that replacement never happened.",
+    "So the ordermin, costmin, tick_size, lot_decimals and pair_decimals below are",
+    "values somebody in this project chose, not Kraken's. Any criterion that reads them",
+    "reads a chosen number: candles_match_kraken_ohlc takes its tick_size tolerance",
+    "from here, and recorded_book_agrees_with_recorded_pair_decimals compares recorded",
+    "book prices against the pair_decimals here.",
+    "A genuine AssetPairs recording lands alongside the next book re-cut (operator",
+    "ruling S2, 2026-09-18)."
+  ],
   "error": [],
   "result": {
     "BTC/USD": {

@@ -41,6 +41,7 @@ from typing import Any
 
 import pytest
 
+from tests.harness.doubles import load_default_config
 from tests.verify.conftest import fabricate_package
 from tests.verify.test_phase2_criteria import (
     assert_fail,
@@ -242,20 +243,123 @@ def test_the_real_tree_verdict_and_what_it_says(
     assert fragment in outcome.message, (fragment, outcome.message)
 
 
-@pytest.mark.parametrize("name", PHASE6_CRITERIA)
-def test_every_phase_6_criterion_names_fee_tier_3_in_its_own_message(
-    real_tree_outcomes: dict[str, Any], name: str
-) -> None:
-    """Ruling 8, checked on the text the operator actually sees.
+#: The clause `_run_regime` writes for each engine 10 verdict a run saw, parsed rather
+#: than searched so a message that merely mentions the words cannot pass.
+_ENGINE10_FIGURES = re.compile(
+    r"engine 10 computed friction (\S+) \([^)]*\) and hurdle (\S+) \([^)]*\) on (\S+) "
+    r"in this run, at maker (\S+) and taker (\S+) as engine 1 published them"
+)
 
-    At tier 1 the cost gate is unreachable by construction. The bar is 2.5x friction,
-    tier-1 reference friction is about 1.25% round trip, and 3.125% is above the 3.0%
-    target barrier, so nothing clears and a verdict from that regime says nothing about
-    the engines. All nine drive the registered chain at tier 3, so all nine say so.
+
+def assert_states_its_own_regime(message: str, verify_module: ModuleType) -> None:
+    """Operator ruling S3, 2026-09-18: the figures are the run's own, not a quotation.
+
+    Until then every one of these messages ended "at fee tier 3, reference friction about
+    0.65% round trip and a hurdle of 1.625%; tier 1 is a no-trade regime", a fixed string
+    quoting invariant 5's reference figures, while engine 10 computed 0.308% and 0.462% in
+    the same run - and the test here asserted the words "no-trade regime" were present, so
+    it held the criteria *to* the false quotation.
+
+    Now: the tier is named; neither quoted figure appears; Kraken's reference schedule is
+    its own sentence; and at least one engine 10 verdict is stated, **checked against the
+    arithmetic engine 10 is required to do** - the hurdle exactly `trading.hurdle_multiple`
+    times the friction, and the friction at least the maker plus taker engine 1 published.
+    A fixed quotation cannot satisfy both for a run whose fees it did not see.
     """
-    message = real_tree_outcomes[name].message
-    assert "tier 3" in message, message
-    assert "no-trade regime" in message, message
+    assert "criterion raised" not in message, message
+    assert "fee tier 3" in message, message
+    for quoted in ("reference friction about 0.65%", "a hurdle of 1.625%"):
+        assert quoted not in message, (quoted, message)
+    assert verify_module.KRAKEN_REFERENCE_TIER_1 in message, message
+    found = _ENGINE10_FIGURES.findall(message)
+    assert found, "no engine 10 verdict stated: " + message
+    multiple = Decimal(str(load_default_config().get("trading.hurdle_multiple")))
+    for friction, hurdle, pair, maker, taker in found:
+        assert Decimal(hurdle) == multiple * Decimal(friction), (pair, friction, hurdle)
+        assert Decimal(friction) >= Decimal(maker) + Decimal(taker), (pair, friction)
+
+
+@pytest.mark.parametrize("name", PHASE6_CRITERIA)
+def test_every_phase_6_criterion_states_its_own_runs_fee_regime(
+    real_tree_outcomes: dict[str, Any], verify_module: ModuleType, name: str
+) -> None:
+    """Ruling 8 (name the tier), as amended by ruling S3 (state the run's own figures).
+
+    Every one of the nine drives the registered chain at the fake exchange's tier 3 and
+    reaches engine 10, so every one states what engine 10 computed.
+    """
+    assert_states_its_own_regime(real_tree_outcomes[name].message, verify_module)
+
+
+@pytest.mark.parametrize("name", [EQUITY_ACROSS_FILL, EQUITY_ROWS])
+def test_the_two_later_drive_criteria_state_their_own_runs_fee_regime(
+    real_tree_outcomes: dict[str, Any], verify_module: ModuleType, name: str
+) -> None:
+    """Spec 105's criterion drives its own chain (`_judge_fill`), not `_driven_verdict`, so
+    it is the one place the S3 clause could have been missed by construction; the exit-cycle
+    criterion is listed with it so the pair registered after spec 100 is covered as one."""
+    assert_states_its_own_regime(real_tree_outcomes[name].message, verify_module)
+
+
+def test_one_criterions_engine_10_figures_never_reach_the_next_criterions_message(
+    verify_module: ModuleType,
+) -> None:
+    """`_regime_begin` forgets; `_note_engine10` keeps what was published, and only that.
+
+    The real-tree tests above cannot see a missing reset: every criterion drives the same
+    subject at the same fees, so a carried-over verdict is identical to the new one and the
+    de-duplication hides it (mutation M9 survived them, 2026-09-18). A later criterion at
+    different fees would then report another run's figures as its own - the exact defect
+    ruling S3 removed, arriving by the back door. So this drives the collector directly with
+    two different runs.
+    """
+    tier = "at the fake exchange's fee tier 3"
+
+    def state(pair: str, friction: str, hurdle: str) -> dict[str, Any]:
+        return {
+            "exchange": {"fee_tier": {"maker_fee_pct": "0.0011", "taker_fee_pct": "0.0019"}},
+            "cost": {"pair": pair, "friction_pct": friction, "hurdle_pct": hurdle},
+        }
+
+    verify_module._regime_begin()
+    verify_module._note_engine10(state("AAA/USD", "0.003", "0.0045"))
+    first = verify_module._run_regime(tier)
+    assert "engine 10 computed friction 0.003 (0.300%) and hurdle 0.0045" in first, first
+    assert "on AAA/USD in this run, at maker 0.0011 and taker 0.0019" in first, first
+
+    verify_module._regime_begin()
+    assert "engine 10 published no friction in this run" in verify_module._run_regime(tier)
+    verify_module._note_engine10({"cost": {"pair": "BBB/USD"}})  # engine 10 did not price it
+    verify_module._note_engine10(state("CCC/USD", "0.007", "0.0105"))
+    second = verify_module._run_regime(tier)
+    assert "AAA/USD" not in second and "0.003" not in second, second
+    assert "BBB/USD" not in second, second
+    assert "friction 0.007 (0.700%) and hurdle 0.0105 (1.050%) on CCC/USD" in second, second
+    verify_module._regime_begin()
+
+
+def test_the_kraken_reference_sentence_is_true_at_the_committed_config(
+    verify_module: ModuleType,
+) -> None:
+    """A tripwire, the shape of spec 112: it forbids nothing and fires when a value moves.
+
+    `KRAKEN_REFERENCE_TIER_1` quotes invariant 5 - reference tier-1 friction about 1.25%,
+    so a bar of 3.125% against the 3.0% target. It is prose in `verify.py` because that
+    invariant gives its reference figures "for sanity-checking only - never for use in
+    code". The figure lives **here**, in a test, which is where a sanity check belongs:
+    if `trading.hurdle_multiple` or `barriers.target_pct` moves, the sentence's arithmetic
+    stops holding and this goes red, as notice that the sentence has become untrue.
+    """
+    config = load_default_config()
+    multiple = Decimal(str(config.get("trading.hurdle_multiple")))
+    target = Decimal(str(config.get("barriers.target_pct")))
+    reference_tier_1_friction = Decimal("0.0125")  # invariant 5, reference only
+    bar = (1 + multiple) * reference_tier_1_friction
+    sentence = verify_module.KRAKEN_REFERENCE_TIER_1
+    assert bar > target, (bar, target)
+    assert f"above {bar * 100:.3f}%" in sentence, (bar, sentence)
+    assert f"the {target * 100:.1f}% target" in sentence, (target, sentence)
+    assert "no-trade regime" in sentence, sentence
 
 
 @pytest.mark.parametrize("name", NOT_TRADE_DRIVING)
@@ -470,7 +574,9 @@ def test_the_planted_market_produces_a_real_buy_above_the_tier_3_bar(
     """The one thing in spec 100 that could have been a finding instead of code.
 
     Step 2 asks for a candidate that is *a real BUY with an expected move above the
-    tier-3 bar of 1.625%*, produced by the real predictor, not refused by the DI and not
+    tier-3 bar of 1.625%* (the spec quoting invariant 5's reference tier 3; at the fake
+    exchange's tier-3 rates the bar on this subject is 0.770%, operator ruling S3),
+    produced by the real predictor, not refused by the DI and not
     vetoed — and says in as many words that if that cannot be produced honestly it is
     raised to the lead rather than routed around with a hand-built `state`. So the claim
     is checked rather than asserted in a comment.
@@ -587,9 +693,15 @@ def moved_and_bound(outcome: object) -> tuple[Decimal, Decimal, Decimal]:
 
 
 def assert_names_tier_3(outcome: object) -> None:
+    """The tier is named and the old fixed quotation is gone (operator ruling S3).
+
+    Used on PENDINGs too, where no run happened and there are no figures to state; the
+    PASS of this criterion is held to its own figures by
+    `test_equity_across_fill_states_its_own_runs_fee_regime`.
+    """
     message = str(getattr(outcome, "message", outcome))
-    assert "at fee tier 3" in message, message
-    assert "no-trade regime" in message, message
+    assert "fee tier 3" in message, message
+    assert "0.65%" not in message and "1.625%" not in message, message
 
 
 def test_equity_across_fill_is_pending_on_a_tree_with_nothing_built(
@@ -1153,18 +1265,26 @@ def test_the_real_fixtures_agree_and_the_message_states_its_coverage(
 
     The counts are asserted as text because the coverage is the point: a reader must take
     it from the message rather than infer it from the PASS. One pair compared of five, and
-    the four that could not be are named — ADA/USD because the recorded `AssetPairs` has
-    no entry for it, the other three because the book sample carries no frames for them.
+    the four that could not be are named — ADA/USD because the fake exchange's
+    `AssetPairs` has no entry for it, the other three because the book sample carries no
+    frames for them.
 
     `1dp` and `pair_decimals 1` are both pinned: a criterion that stopped measuring and
     only counted would still report the coverage correctly.
+
+    **The declaration is named as invented** (operator ruling S2, 2026-09-18). Until then
+    this test pinned "recorded pair_decimals 1", so it held the criterion *to* the false
+    claim that `asset_pairs.json` is a recording; it is Phase 0 test data for the fake.
     """
     outcome = run(verify_module, FIXTURES_AGREE, repo_root)
     assert_pass(outcome, verify_module)
     message = outcome.message
     assert "criterion raised" not in message, message
     assert "BTC/USD 783 recorded prices, the widest at 1dp" in message, message
-    assert "recorded pair_decimals 1" in message, message
+    assert "against the invented pair_decimals 1" in message, message
+    assert verify_module._INVENTED_DECLARATION in message, message
+    for false_claim in ("recorded pair_decimals", "recorded AssetPairs"):
+        assert false_claim not in message, (false_claim, message)
     assert "Coverage: 1 compared of the 5 pairs" in message, message
     assert "4 not compared" in message, message
     for pair in ("ADA/USD", "ETH/BTC", "ETH/USD", "SOL/USD"):
@@ -1247,6 +1367,11 @@ def test_the_fixture_agreement_is_observed_to_fail_and_to_hold(
     assert outcome.result is getattr(verify_module.Result, expected), outcome
     assert "criterion raised" not in outcome.message, outcome.message
     assert fragment in outcome.message, (fragment, outcome.message)
+    # Every verdict that compared anything says the declaration is invented, the FAIL as
+    # much as the PASS (operator ruling S2). "Compared nothing" judged no declaration.
+    if "compared nothing" not in outcome.message:
+        assert verify_module._INVENTED_DECLARATION in outcome.message, outcome.message
+        assert "recorded AssetPairs" not in outcome.message, outcome.message
 
 
 def test_a_price_that_is_not_a_number_is_a_fail_and_never_a_crash(

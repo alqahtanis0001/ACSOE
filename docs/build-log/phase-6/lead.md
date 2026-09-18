@@ -397,3 +397,130 @@ not take it — a command whose purpose is "enumerate what broke" cannot be sati
 
 **Fix.** Re-run redirected whole to `logs/verify/lead-cashsource-red2.log`, and read the file. For
 the rest of this task every measurement lands in a file first and is filtered afterwards.
+
+### A criterion described itself as checking against Kraken, with a tolerance fetched from the exchange; it checked neither
+
+**Agent:** Lead · **Task:** operator rulings S2/S3 of 2026-09-18 · **Date:** 2026-09-18
+
+**What happened.** The operator asked whether Phase 2's `candles_match_kraken_ohlc` depends on
+`tests/fixtures/kraken/asset_pairs.json` being real. It does not, and it also does not check what it
+says it checks. Its docstring: "The tolerance is fetched, never hardcoded". It reads `tick_size`
+through the fake client, out of Phase 0 test data the fake's own docstring calls invented. Its PASS
+and FAIL messages say "vs Kraken" and "Kraken's own OHLC", but the fixture's own `provenance` says
+the expected bars are a pure-Python reduction of recorded trades (`scripts/ohlc_fixture.py`), not
+Kraken's published figures. Measured: all 9 bars across BTC/USD, ETH/USD and SOL/USD agree with the
+builder **to the digit**, so the tolerance is never engaged and the verdict holds at any
+non-negative tolerance.
+
+**Why.** Both claims were false from the day the criterion was written, and nothing could catch
+them. The tests assert that the word `tick_size` appears in the message, not that the message is
+true. A's Phase 2 decision entry had already stated the limitation ("its expected bars are not
+Kraken's … stated as such in three places so nobody mistakes a PASS for more than it is"). The
+criterion's own message was never one of the three places.
+
+**The same shape in three more places, found by the same question.** Spec 118's messages and PENDING
+call the same invented file "the recorded AssetPairs". The harness's `tier_sentence` quotes invariant
+5's reference friction (0.65% / 1.625%, and "tier 1 is a no-trade regime") into every trade
+criterion's message, while the run's own engine 10 computed 0.308% / 0.462% at the fake's tier-3
+rates. And `fee_tiers.json`'s `_comment` presents those same reference figures as describing the
+fake's tiers.
+
+**Fix.** Ruled by the operator: correct the prose, not the assertions. Recorded below once done.
+
+**Fix (the diagnosis above; operator rulings S2 and S3, 2026-09-18).** Prose and messages only;
+**no assertion of any criterion changed**, and no config, threshold or barrier.
+
+- `tests/fixtures/kraken/asset_pairs.json` carries a `provenance` block: invented Phase 0 test
+  data, `afaf2f5`, never cut from any archive, the Phase 2 replacement promised and never made.
+  No archive is named.
+- `candles_match_kraken_ohlc`: docstring, comments and every message now say what is true — the
+  builder matches an independent reduction of real recorded trades, the tolerance is the fake's
+  invented `tick_size`, confirming against Kraken's published OHLC is a `--live` task — and the
+  PASS reports the **largest difference it measured** (0), so "matches exactly" is measured by
+  each run rather than asserted by the text. A's Phase 2 decision entry (`phase-2.md:887`) had
+  already limited the claim, so this corrects the criterion *toward* a recorded decision, not
+  against one.
+- Spec 118: every verdict that compared anything carries `_INVENTED_DECLARATION`; the PENDING and
+  the per-pair phrase no longer say "recorded". Its registered **name** still says
+  `recorded_pair_decimals`; renaming is left to the operator.
+- S3: `tier_sentence` names the fake's tier and states no figure. `_note_engine10` keeps what
+  engines 1 and 10 **published** on every driven tick, and `_run_regime` appends those to every
+  post-drive message, then `KRAKEN_REFERENCE_TIER_1` as a separate sentence quoting invariant 5
+  (prose, because that invariant's figures are "never for use in code"; a tripwire test holds its
+  arithmetic against the committed config). `fee_tiers.json`'s `_comment`, the harness header, two
+  `verify.py` comments, a test docstring and `bootstrap.py`'s comment corrected likewise.
+
+**Measured rather than argued.** A scratch probe ran the criterion's own target drive with the
+fake's tier forced to 1: engine 10 computed friction 0.708% and hurdle 1.062%, `clears_hurdle`
+true, engine 18 `entry_placed`. The fake's tier 1 trades. The old sentence was false about the
+fake, true only of Kraken's reference schedule.
+
+**Mutation proof** (byte-copy restore, sha256 compared, `PYTHONDONTWRITEBYTECODE=1`, summary line
+required; `logs/verify/s2-mutation-m*.log`):
+
+| Arm | What it restores | Result | Killed by |
+|---|---|---|---|
+| M1 | the original false PASS sentence, verbatim | 1 failed, 53 passed | `test_the_candle_pass_says_what_it_compared_against_and_what_it_measured` **only** |
+| M2 | report the tolerance in place of the measured difference | 1 failed, 53 passed | the same test |
+| M3 | "vs Kraken" in the tolerance FAIL | 1 failed, 53 passed | `test_a_candle_fail_names_the_reference_reduction_and_not_kraken` |
+| M4 | "recorded pair_decimals" in spec 118's PASS | 1 failed, 14 passed | `test_the_real_fixtures_agree_and_the_message_states_its_coverage` |
+| M5 | drop the invented-declaration sentence from spec 118's FAIL | 2 failed, 13 passed | the two FAIL arms that compare something |
+
+**M1 is the finding measured**: it is the code as it stood for six phases, and the 52 tests that
+existed before tonight all pass against it. Only the new test goes red.
+
+**Not edited, reported:** the same "at tier 1 the cost gate is unreachable by construction" claim,
+about the fake, as a justifying comment in `tests/engines/test_decision.py:79` and
+`tests/engines/test_feature_chain_rehearsal.py:1825` (B) and `tests/engines/test_order_book.py:973`
+(C). They are prose in other lanes and outside the messages the ruling named.
+
+**S3 mutation proof** (same harness; `logs/verify/s3-mutation-*.log`). The real-tree arms run
+all eleven Phase 6 drive criteria once per arm, about two minutes each.
+
+| Arm | What it breaks | Result | Killed by |
+|---|---|---|---|
+| M6 | `_run_regime` returns the old fixed quotation | 11 failed | all eleven `..._states_its_own_runs_fee_regime` cases |
+| M7 | `_note_engine10` collects nothing | 11 failed (re-run) | the same eleven; and the unit test below |
+| M8 | spec 105's PASS appends the bare tier, not the run's figures | 1 failed, 10 passed | `..._later_drive_criteria_...[paper_equity_continuous_across_fill]` only |
+| M9 | `_regime_begin` stops clearing between criteria | **survived the real-tree tests** (11 passed) | then killed by `test_one_criterions_engine_10_figures_never_reach_the_next_criterions_message` |
+| M10 | the Kraken sentence's quoted bar no longer follows from the config | 1 failed | `test_the_kraken_reference_sentence_is_true_at_the_committed_config` |
+
+**M9 was a real survivor, not an equivalent mutant.** Every criterion drives the same subject at
+the same fees, so a verdict carried over from the previous criterion is identical to the new one
+and the de-duplication hides it. A future criterion at different fees would report another run's
+figures as its own — the defect S3 removed, returning by the back door. The unit test drives the
+collector with two runs at different figures and is what kills it.
+
+**M8 is killed by exactly one test, on purpose.** Spec 105's criterion drives its own chain
+(`_judge_fill`) rather than `_driven_verdict`, so it is the one place the clause could be missed by
+construction; the test that kills M8 exists for that path and says so.
+
+**M7's first run returned no pytest output at all** — no summary, no traceback, and the harness
+refused it as "not a result", as the standing rule requires. The re-run killed it (11 failed).
+The first run stays **unattributed**: one silent run on a machine with a known native fault, not
+measured either way, so neither explanation is written down as the cause. The harness now prints
+pytest's return code with a refusal, so the next empty run says at least that much.
+
+### The heredoc rule, broken by the lead on the evening it was in force — caught by the harness, cost nothing
+
+**Agent:** Lead · **Task:** S3 mutation proof · **Date:** 2026-09-18
+
+**What happened.** The S3 mutation arms were written by a Python heredoc whose path join used
+`'\\'`. The escape was decoded one layer above the shell, the heredoc received `'\'`, and the
+script died with `SyntaxError: unterminated string literal` before writing any arm file. The loop
+that followed ran `mutate.py` four times against files that did not exist; each died on
+`FileNotFoundError` **before** touching `scripts/verify.py`, so nothing was mutated and nothing
+needed restoring. The four arm anchors, then written through the file tool, each occurred exactly
+once in the untouched source, which is the confirmation.
+
+**Why it matters although it cost nothing.** This is the fourth instance of a mechanism that has
+its own rule in `code-standards.md` and in the operator's standing instructions: never write
+through a bash heredoc carrying escapes. The same session had already used heredocs safely
+several times, **all of them escape-free**, and that is how the habit slips — the tool is
+right most of the time, and the one time it carries a backslash nothing warns. What saved it is
+the harness refusing to run a mutation it could not load, and a background notification that
+arrived too fast for four real chain drives, which prompted reading the log rather than the
+verdict.
+
+**Fix.** Arms written by a script through the file tool (`make_s3_arms.py`), each anchor asserted
+to occur exactly once against the live source before writing.

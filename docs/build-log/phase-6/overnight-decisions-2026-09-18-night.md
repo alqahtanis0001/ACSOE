@@ -15,6 +15,30 @@ exists.
 `docs/build-log/` is read by no check (every hit in `scripts/verify.py`, `tests/` and `src/` is a
 comment), so this file is written as the work happens, including while the gate runs.
 
+## The operator's rulings on this list, 2026-09-18 evening
+
+Recorded inline so no marker below is left looking open. Each STOPPED entry carries its ruling.
+
+- **S1 → accepted as recommended.** Engine 22 left as built; invariant 14 not amended in its grant.
+  Invariant 14 now records that the authorisation is deliberately wider than the code, with the
+  reasons. "My condition did its job."
+- **S2 → accepted, reshaped by the lead's follow-up answer.** The Phase 2 criterion's verdict is
+  sound (tolerance never engaged; all 9 bars agree to the digit) and its assertion is unchanged;
+  its **prose** was false twice and is corrected. Honest provenance block on `asset_pairs.json`;
+  spec 118's message says the declaration is invented; a genuine `AssetPairs` recording lands
+  alongside Q3's re-cut, not now. **Recorded as a FINDING**: a criterion described itself as
+  checking against Kraken with a fetched tolerance while checking against a local reduction with
+  an invented one. The lead was to stop if Phase 2 had recorded a decision the change
+  contradicted: it had recorded one (`phase-2.md:887`, A, spec 28) and the change **agrees**
+  with it.
+- **S3 → accepted.** Every trade criterion states its own run's computed figures; the Kraken
+  tier-1 point survives only as a separate sentence about Kraken's reference schedule.
+- **F-new-1 → a Phase 7 prerequisite**, with the reasoning, in the tracker.
+- **F-new-2, 3, 4 → recorded, not fixed.** F-new-2 gets its own line: any analysis joining on
+  `cycle_id` must know it is overwritten by later ticks.
+- **D7 → right, for the right reason.**
+- **Then:** re-gate Phase 2 and Phase 6 and commit. Phase 6 not marked green, not closed.
+
 ## The gates
 
 Phases 0 to 6 re-gated in order at `98c0485`, 09:04–12:44Z, `mypy --strict src/ scripts/` (153
@@ -25,9 +49,11 @@ db` empty at both ends (`logs/verify/regate-20260918-close-prep-lead-summary.txt
 tonight (tracker, `phase-6.md`, HANDOFF 9, this file, the walk-through, `phase-7/`) are the
 docs-only delta on top, checked by `docs_vocabulary` and `tests/verify/test_docs_vocabulary.py`.
 
-## STOPPED — waiting on the operator
+## STOPPED overnight — all three ruled by the operator, 2026-09-18 evening
 
 ### S1 — Q1: engine 22 reading the retained balance changes its behaviour, so the condition fired
+
+**RULED 2026-09-18: (a) accepted.** Engine 22 as built; invariant 14 records the reasons.
 
 **The ruling:** do not amend invariant 14; change engine 22 to read the retained balance —
 *"if reading the retained balance changes engine 22's behaviour in any way, stop and tell me."*
@@ -85,6 +111,8 @@ retention paragraph so the future reader meets it.
 
 ### S2 — Q2: `asset_pairs.json` was never cut from an archive; it is invented test data
 
+**RULED 2026-09-18: provenance now; prose corrected; recording with Q3's re-cut; a FINDING.**
+
 **The ruling:** add a provenance block to `tests/fixtures/kraken/asset_pairs.json` *"naming the
 archive and the date it was cut from"*; re-record both fixtures together at the next cut.
 
@@ -138,6 +166,8 @@ which the operator may regard as weakening it; the alternative reading is that i
 it stops the criterion's name claiming a recording it does not have. Either way it is a ruling.
 
 ### S3 — Every Phase 6 criterion's tier sentence quotes friction the run did not compute (found building the Q4 walk-through)
+
+**RULED 2026-09-18: (a) accepted** — every message states its run's own figures.
 
 **What happened.** The walk-through reads one target round trip's rows (the criterion's own drive,
 database kept). Engine 10's payload on the entry tick: `friction_pct` **0.003078783581501615…**
@@ -288,7 +318,7 @@ and **lists** the stale "not committed", "CLAIMED" and "IN PROGRESS" lines in ea
 progress file by line number. **Rejected.** Correcting those lines in place: `AGENTS.md` and
 `ownership.md` rule 3 make `context/progress/<agent>.md` the agent's own file, and the lead writes
 the tracker. The cost, stated: the teammate files stay wrong until each agent moves its own markers,
-which the merge asks them to do at the start of Phase 7. **REVIEW** — a competent objection is that
+which the merge asks them to do at the start of Phase 7. **Operator 2026-09-18: right, for the right reason.** A competent objection was that
 leaving a known-wrong status line in place, for the sake of a lane rule, is how the D3/D8 marker
 survived on the night of the 17th. The difference is that tonight's marker is *moved* in the file
 that has authority over state (the tracker), and the stale copies are enumerated there rather than
@@ -321,6 +351,57 @@ every insertion to a scratchpad copy with each anchor asserted to occur exactly 
 able to fail on the new text**: `two-chain` injected into the new rulings section went red at
 `progress-tracker.md:68`, restored PASS. So the new section is inside the scanned region, not in an
 excluded one.
+
+## Evening, carrying out S1–S3 (operator awake) — how-choices, each with the option rejected
+
+### D10 — The provenance is a top-level `provenance` key in the envelope
+
+**Took.** A `provenance` list beside `error` and `result`, the precedent `ohlc.json` set. Every reader
+tolerates it: the fake's `load_envelope` and the real `parse_envelope` check `error`/`result` only,
+and spec 118's reader walks `result` only; the full suite ran green over it. **Rejected.** A sidecar
+file (the block would not travel with the data it describes), and `_comment` as in `fee_tiers.json`
+(that file is not an envelope, this one is, and `provenance` is the word the repository already uses
+for "where did this come from").
+
+### D11 — The criteria's names are left as they are
+
+**Took.** `candles_match_kraken_ohlc` and `recorded_book_agrees_with_recorded_pair_decimals` both
+still name something they do not check. The ruling said *messages* and *prose*; a rename reaches
+the registry, two test files, the tracker and every earlier gate log that quotes the name. Each
+docstring now says the name is inaccurate. **Rejected.** Renaming under the ruling's cover.
+**REVIEW** — a competent objection is that a name is the most-read prose a criterion has.
+
+### D12 — The Kraken tier-1 sentence is prose held by a tripwire, not arithmetic
+
+**Took.** `KRAKEN_REFERENCE_TIER_1` quotes invariant 5 as text; a test in `tests/verify` holds the
+reference 1.25% and fires if `hurdle_multiple` or `target_pct` moves so that the quoted 3.125% /
+3.0% stops holding. **Rejected.** Computing the sentence from a `Decimal("0.0125")` in `verify.py`:
+invariant 5 gives those figures "for sanity-checking only — never for use in code", and a test is
+where a sanity check lives.
+
+### D13 — The run's figures are collected from what engines 1 and 10 published, not recomputed
+
+**Took.** `_note_engine10` keeps `(pair, maker, taker, friction, hurdle)` from each driven tick's
+`state`, first-seen and de-duplicated, and the message quotes them digit for digit. **Rejected.**
+Recomputing friction in `verify.py` from the fee tier and the spread: that is engine 10's
+arithmetic, and a criterion that states its own sum is checking itself, not the run.
+
+### D14 — The tier-1 claim was measured before any document stated it
+
+**Took.** A scratch probe drove the criterion's own target leg with the fake's tier forced to 1:
+friction 0.708%, hurdle 1.062%, cleared, entry placed. Every document written tonight that says
+"the fake's tier 1 is not a no-trade regime" rests on that run. **Rejected.** Stating the S3
+arithmetic (≈1.77% bar) as fact in fixture comments and docstrings: that would repeat, in the
+correction, the defect being corrected — a claim no run had shown.
+
+### D15 — The same false claim in three other lanes' test comments is reported, not edited
+
+`tests/engines/test_decision.py:79`, `tests/engines/test_feature_chain_rehearsal.py:1825` (B) and
+`tests/engines/test_order_book.py:973` (C) justify tier 3 with "at tier 1 the cost gate is
+unreachable by construction", about the fake. **Took.** Report them; they are prose outside the
+messages the ruling named, in files the lead does not own. `bootstrap.py`'s identical comment
+**was** corrected: it is the lead's file. **Rejected.** Editing them under ownership rule 6: the
+ruling did not reach them, and a lane rule is cheaper to keep than to explain.
 
 ### D2 — This file, rather than appending to `overnight-decisions-2026-09-18.md`
 

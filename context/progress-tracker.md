@@ -36,10 +36,14 @@ produce both.**
    gate, so nothing either publishes may make the system more willing to trade (invariant 4), and
    making it less willing is a veto only a gate may issue.
 
-**Open, 2026-09-18 (S3, below):** item 1's "friction ≈ 0.65%, bar 1.625%" and "tier 1 is a
-no-trade regime" are the invariant's **reference** figures. The fake exchange's tier 3 charges
-0.11% / 0.19% and the first round trip's friction was 0.308%; its tier 1 would clear the gate.
-Not re-worded here, because what the criteria claim is the operator's ruling.
+**Corrected by operator ruling S3, 2026-09-18.** Item 1's "friction ≈ 0.65%, bar 1.625%" and
+"tier 1 is a no-trade regime" are invariant 5's **reference** figures for Kraken's own
+schedule, and item 1 is true of that schedule. **They are not the criteria's fees.** The
+fake exchange's tier 3 charges 0.11% / 0.19%: engine 10 computed friction 0.308% and a
+hurdle of 0.462% (a bar of 0.770% on the expected move). The fake's tier 1 charges 0.25% /
+0.45% and **clears** (measured: friction 0.708%, hurdle 1.062%, entry placed). Every trade
+criterion's message now states the figures its own run computed, and names Kraken's
+reference tier 1 as a separate sentence.
 
 ### The operator's rulings on Q1–Q4, 2026-09-18, and what acting on them found
 
@@ -50,7 +54,7 @@ the lead stopped on both** rather than choose; everything is in
 
 - **Q1 — the retained balance in invariant 14. Ruled: do not amend invariant 14; change engine 22
   to read the retained balance, stopping first if that changes behaviour. Invariant 14 is not
-  amended. The engine change STOPPED (S1): it changes behaviour.** The only decision a balance could
+  amended. The engine change STOPPED (S1): it changes behaviour.** **Ruled that evening: (a), below.** The only decision a balance could
   inform in engine 22 is the sell quantity, and the paper ledger is quote-side only
   (`clients/paper/fills.py:196`), so a cap sells nothing and a paper liquidation never completes.
   Worse, `PaperBroker.last_known_good_balances` forwards the **real** exchange client's retained
@@ -58,7 +62,7 @@ the lead stopped on both** rather than choose; everything is in
   Options and a recommendation are in S1.
 - **Q2 — spec 118's premise. Ruled: a provenance block on `asset_pairs.json` naming the archive and
   date it was cut from; re-record both fixtures together at the next cut. STOPPED (S2): there is no
-  archive.** `tests/fixtures/kraken/asset_pairs.json` has one commit (`afaf2f5`, 2026-09-08, the
+  archive.** **Ruled that evening, below: honest provenance, prose corrected, a FINDING.** `tests/fixtures/kraken/asset_pairs.json` has one commit (`afaf2f5`, 2026-09-08, the
   Phase 0 harness), and `tests/harness/fake_kraken.py`'s docstring calls every file in that
   directory **"invented test data for a fake exchange"**, promised to be replaced by recordings in
   Phase 2, which never happened. So spec 118's criterion, named for a *recorded* declaration,
@@ -80,7 +84,8 @@ the lead stopped on both** rather than choose; everything is in
   that **the database holds no record of why the trade was taken** (F-new-1), and that every
   criterion's tier sentence quotes friction the run did not compute (S3, below).
 
-**S3 — the tier sentence, found building Q4. STOPPED; an operator question.** Item 1 above, rule 8
+**S3 — the tier sentence, found building Q4. STOPPED, then RULED that evening (below): every
+message now states its own run's figures.** Item 1 above, rule 8
 of `feature-specs/PHASE-6-TASKS.md`, and every trade-driving criterion's message say the criteria
 run at "reference friction about 0.65% … a hurdle of 1.625%". **Those are the invariant's reference
 values, quoted by a fixed string** (`tests/harness/fake_kraken.py:235-249`). The fake's tier 3
@@ -89,6 +94,29 @@ hurdle of **0.462%**. And **the fake's tier 1 is not a no-trade regime**: 0.25% 
 near 1.77%, under the 3% target. So "tier 1 is a no-trade regime" is true of Kraken's reference
 schedule and is **neither measured nor tested by any criterion**. It changes no gate and no
 reconciliation. It changes what the PASS lines claim.
+
+### The operator's rulings on S1–S3, 2026-09-18 evening
+
+- **S1 → accepted.** Engine 22 as built. Invariant 14 now records that its balance authorisation
+  is deliberately wider than the code, and why reading it would change behaviour (the paper ledger
+  holds no base; the retained balance is the real account's in paper).
+- **S2 → accepted, reshaped by the lead's follow-up answer.** The Phase 2 candle criterion's
+  **verdict is sound** — its tolerance is never engaged, all 9 bars agree to the digit, and it
+  would pass at any non-negative tolerance — and its assertion is unchanged. Its **prose** was
+  false twice, and that is the FINDING recorded under Findings — Phase 6. `asset_pairs.json`
+  carries an honest provenance block; the candle criterion and spec 118 say what they compared
+  against; a genuine `AssetPairs` recording lands alongside Q3's re-cut, not now. Phase 2 had
+  recorded a decision about the reference (`docs/build-log/phase-2.md:887`, A, spec 28): it
+  limited the claim, and the correction **agrees** with it.
+- **S3 → accepted.** Every trade criterion states the friction and hurdle engine 10 computed in
+  its own run (`_run_regime` in `scripts/verify.py`, from what engines 1 and 10 published), and
+  the Kraken tier-1 point survives only as a separate sentence about invariant 5's reference
+  schedule. **Measured, not argued:** at the fake exchange's own tier 1, engine 10 computed
+  friction 0.708% and hurdle 1.062% on the committed subject, cleared, and engine 18 placed the
+  entry — so the fake's tier 1 is not a no-trade regime and no message may say it is.
+- **F-new-1 → Phase 7 prerequisite 7. F-new-2 → Phase 7 prerequisite 8**, as a fact every join
+  must carry. F-new-3 and F-new-4 recorded, not fixed.
+- **D7 → right, for the right reason.**
 
 ### Where Phase 6 stands, 2026-09-16 06:30Z
 
@@ -1325,6 +1353,40 @@ the code, whether a helper's value or a spec's key, is a description rather than
 true only while something re-checks it (`code-standards.md`, "a description of the code is not the
 code").
 
+### FINDING: a criterion described itself as checking against Kraken with a fetched tolerance; it checked a local reduction with an invented one
+
+Recorded as a finding, not a note, by operator ruling S2 of 2026-09-18. **Both claims were false
+from the day the criterion was written, and it took six phases and an unrelated question to
+surface them.**
+
+Phase 2's `candles_match_kraken_ohlc`. Its docstring said the tolerance was *"fetched, never
+hardcoded"*, *"an exchange value the system fetches"*, and its messages compared built candles
+*"vs Kraken"* and against *"Kraken's own OHLC"*. In fact:
+
+- the expected bars are a pure-Python reduction of recorded trades (`scripts/ohlc_fixture.py`),
+  not Kraken's published figures — the fixture's own `provenance` said so, and A's spec 28
+  decision entry said so, and stated the limitation "in three places so nobody mistakes a PASS
+  for more than it is". **The criterion's own message was never one of the three.**
+- the tolerance is `tick_size` read through the fake client out of `asset_pairs.json`, which is
+  **invented Phase 0 test data** that the fake's docstring promised would be replaced by
+  recordings in Phase 2, and never was.
+
+**The verdict was sound all along.** Measured: all 9 bars agree with the builder to the digit,
+so the tolerance was never engaged and the PASS holds at any non-negative tolerance. What was
+untrue was what the criterion said it had checked.
+
+**No test could have caught it**, because the tests asserted that the word `tick_size` appeared
+in the message rather than that the message was true. Measured on the correction: mutation M1
+restores the original sentence verbatim, and **all 52 pre-existing tests in that file pass
+against it**; only the test added with the correction goes red.
+
+**The same shape as rule 4** (`ui-context.md`): a claim true only by the accident of what it
+happened to be pointed at. It recurred the same evening in three more places — spec 118's
+messages calling the invented file "the recorded AssetPairs", every trade criterion's message
+quoting invariant 5's reference friction for a run at the fake's rates (S3), and
+`fee_tiers.json`'s own comment — all corrected under rulings S2 and S3. **A message is a claim
+about evidence, and it needs a test that it is true, not a test that it is present.**
+
 ## Locked Decisions
 
 Settled with evidence. Do not relitigate. Changing one requires the operator, not an agent.
@@ -1588,7 +1650,7 @@ the reason in the YAML comment and in `DatasetConfig`.
   each manifest, with the digest stating it covers 405 of 457 folds and why. The 52 missing
   folds are the 2025 test weeks. Account: `docs/build-log/phase-5/lead.md`.
 - **PHASE 7 PREREQUISITES, recorded by operator ruling 2026-09-14. Phase 7's full walk-forward
-  and its replays pay the same cost again unless all six are fixed first (the fifth added by the lead and the sixth by operator ruling, both 2026-09-15).** Found by the
+  and its replays pay the same cost again unless all six are fixed first (the fifth added by the lead and the sixth by operator ruling, both 2026-09-15). Items 7 and 8 were added by operator ruling 2026-09-18: 7 is a gap in what the store records, and 8 is a fact every Phase 7 join must carry.** Found by the
   Phase 5 full run (`docs/build-log/phase-5/lead.md`, the entries of 2026-09-13 and 2026-09-14):
   1. **Cap the skeptic's training set. RULED BY THE OPERATOR 2026-09-16: a rolling window of the
      last 13 folds**, matching the predictor's locked past-only 90-day window — it mirrors a Locked
@@ -1622,6 +1684,22 @@ the reason in the YAML comment and in `DatasetConfig`.
      do not trade every bar (26% of rows in 2017, 61% in 2023). That bounds everything
      downstream of engine 8 and it is not a threshold question.
      `docs/dataset/di-anomaly-distributions-2026-09-14.md`.
+  7. **An approved trade leaves no record of why it was approved.** Recorded by operator ruling
+     2026-09-18 (F-new-1 of `docs/build-log/phase-6/overnight-decisions-2026-09-18-night.md`).
+     Only `rejections` carries `expected_move_pct`, `friction_pct`, `net_edge_pct` and
+     `hurdle_pct` (engine 19's `ECONOMICS_FIELDS`, harvested from whichever engine blocked);
+     `trades` carries none of them, and no decision or SHAP row is written for an approval. So
+     the counterfactual dataset — this project's contribution — records the reasons for one side
+     of the decision only. **Phase 7's attribution will want to explain which trades the system
+     took and why, and as things stand it cannot.** A schema change (B) and an engine 19 change
+     (C), so a spec, not a patch.
+  8. **`cycle_id` on `orders` and `positions` rows is the last tick that wrote the row, not the
+     tick that created it.** Recorded, not fixed, by operator ruling 2026-09-18 (F-new-2). Engine
+     19 upserts both tables, so every later tick overwrites the column: the first paper trade's
+     entry was placed on cycle 2 and is stored with `cycle_id` 3; its position opened on cycle 3
+     and is stored with 7. `placed_at` and `opened_at` still say when. **Any analysis joining on
+     `cycle_id` must know this, and Phase 7 will join on it** — a join from an order to the tick
+     that placed it by `(run_id, cycle_id)` lands on the wrong tick.
   Also measured, for whoever plans Phase 7: 457 weekly folds, pairs arriving over time (14 in
   2017, 115 first appearing in 2022), folds ranging from ~25 s (2017) to ~10 min (late 2024)
   on this machine; the 22.2-hour projection assumed 234 pairs in every fold and was wrong.
