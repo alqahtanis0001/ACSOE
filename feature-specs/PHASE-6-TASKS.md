@@ -1,13 +1,60 @@
 # Phase 6 — shared task list
 
-## HANDOFF 10, 2026-09-18 evening — rulings S1–S3 carried out; the phase is NOT closed
+## HANDOFF 11, 2026-09-18 evening — spec 118's criterion removed, the candle criterion renamed; the phase is NOT closed
+
+**Read this first. HANDOFF 10 and earlier are history.** The operator is reading the walk-through
+(`docs/build-log/phase-6/first-paper-trade.md`), and the close ruling follows.
+
+### State
+
+`verify.py --phase 2` → **9/9, exit 0** (under the new name) and `--phase 6` → **13 criteria, 13 PASS, 0 FAIL, 0 PENDING, exit 0** (`toolchain_green`: `3309 passed, 2 skipped`), on this tree, with `mypy --strict` and `ruff` clean first; the code delta's sha256 identical at the gates' start and end. Logs are under `logs/verify/*-20260918-rename-remove118-lead-*`. Committed and pushed.
+**Phase 6 has 13 criteria from here**: 11 specific to the phase, plus `docs_vocabulary` and
+`toolchain_green`. **Not marked green, not closed. Phase 7 not started.**
+
+### What changed
+
+- **Spec 118's criterion is removed** by operator ruling. It proved nothing anything relied on: its
+  declaration is invented, and no other criterion reads `pair_decimals` with the recorded book. It
+  was not in the Phase 6 row, and nothing depended on it. The FINDING is in the tracker, and the
+  rule it left is in `code-standards.md`: state what a PASS will demonstrate before writing the
+  criterion. **Q3 is withdrawn. The genuine `AssetPairs` recording is Phase 7 item 9.**
+- **`candles_match_kraken_ohlc` is now `candles_match_independent_reduction_of_recorded_trades`.**
+  The name made the same false claim as its prose and is read more often. Gate logs from before
+  2026-09-18 carry the old name.
+- **Specs 121–125** send the stale prose back to its owners:
+  - 121: engine 22's "escalated" comment (B).
+  - 122 and 123: two tier comments (B).
+  - 124: one tier docstring (C).
+  - 125: engine 1's README (A). The lead added this one; it was not on the operator's list.
+
+### For the operator, not decided
+
+- **The Phase 2 row in `ai-workflow-rules.md`** still asks for "a committed Kraken OHLC fixture …
+  `tick_size` … as reported by `AssetPairs`". A's spec 28 decision could not meet that and said so,
+  and the row never moved.
+- **D17 (REVIEW).** The Phase 6 gate quotes in HANDOFFs 8–10 keep "14" with a dated note, rather
+  than being rewritten to 13.
+
+### What is left in Phase 6
+
+1. The operator's ruling on the close, after the walk-through.
+2. The close itself: Phase 6 marked green in the tracker, and `phase-6.md`'s header updated.
+
+### Standing rules
+
+HANDOFF 8's list stands, plus two from tonight:
+- **A message, and a name, is a claim about evidence.** It needs a test that it is true, not that
+  it is present.
+- **Before writing a criterion, state what its PASS will demonstrate.**
+
+## HANDOFF 10 (history), 2026-09-18 evening — rulings S1–S3 carried out; the phase is NOT closed
 
 **Read this first. HANDOFF 9 and earlier are history.** The operator is awake and reading the
 walk-through (`docs/build-log/phase-6/first-paper-trade.md`); nothing is waiting on the lead.
 
 ### State
 
-`verify.py --phase 2` → **9/9, exit 0** and `--phase 6` → **14 criteria, 14 PASS, 0 FAIL, 0 PENDING, exit 0**, on the corrected tree, with `mypy --strict` and `ruff` clean first; the code delta's sha256 identical at the start and end of the gates, so the tree did not move. Logs: `logs/verify/phase{2,6}-20260918-rulings-s2s3-lead-verify.log` and
+`verify.py --phase 2` → **9/9, exit 0** and `--phase 6` → **14 criteria, 14 PASS, 0 FAIL, 0 PENDING, exit 0** *[2026-09-18 evening: spec 118's criterion removed by operator ruling; Phase 6 has 13 criteria from then.]*, on the corrected tree, with `mypy --strict` and `ruff` clean first; the code delta's sha256 identical at the start and end of the gates, so the tree did not move. Logs: `logs/verify/phase{2,6}-20260918-rulings-s2s3-lead-verify.log` and
 `regate-20260918-rulings-s2s3-lead-summary.txt`. Committed and pushed. **Phase 6 is not marked
 green and not closed; Phase 7 is not started; Q3's re-cut is not started.**
 
@@ -21,7 +68,7 @@ green and not closed; Phase 7 is not started; Q3's re-cut is not started.**
   - `candles_match_kraken_ohlc`'s prose and messages now say what it compares against: a local
     reduction of recorded trades, with an invented tolerance. Its PASS reports the largest
     difference it measured, which is 0.
-  - Spec 118 says its declaration is invented.
+  - Spec 118 says its declaration is invented. *[Its criterion was removed later the same evening.]*
   - **Assertions unchanged.** Recorded as a FINDING in the tracker.
 - **S3.** Every trade criterion states what engine 10 computed in its own run (`_run_regime`), and
   Kraken's reference tier 1 is a separate sentence, held by a tripwire test. Measured: the fake's
@@ -34,7 +81,8 @@ green and not closed; Phase 7 is not started; Q3's re-cut is not started.**
 
 - **D11 (REVIEW).** Two criteria's *names* still claim what they do not check:
   `candles_match_kraken_ohlc` and `recorded_book_agrees_with_recorded_pair_decimals`. A rename
-  reaches the registry, two test files and the tracker.
+  reaches the registry, two test files and the tracker. *[Ruled that evening: the first renamed
+  `candles_match_independent_reduction_of_recorded_trades`, the second removed.]*
 - **D15.** The same false tier-1 claim sits in three test comments in B's and C's lanes, reported
   and not edited:
   - `tests/engines/test_decision.py:79`
@@ -60,7 +108,7 @@ documents and nothing else.
 
 ### State
 
-Phases 0 to 6 re-gated in order on a quiet tree at `98c0485` — every phase exit 0: phase 0 7/7, 1 10/10, 2 9/9, 3 9/9, 4 10/10, 5 14/14, 6 14/14, each with `toolchain_green` at 3314 passed, 2 skipped. Logs are
+Phases 0 to 6 re-gated in order on a quiet tree at `98c0485` — every phase exit 0: phase 0 7/7, 1 10/10, 2 9/9, 3 9/9, 4 10/10, 5 14/14, 6 14/14 *[2026-09-18 evening: spec 118's criterion removed by operator ruling; Phase 6 has 13 criteria from then.]*, each with `toolchain_green` at 3314 passed, 2 skipped. Logs are
 `logs/verify/phase{0..6}-20260918-close-prep-lead-verify.log`, with the summary and the
 mypy/ruff logs beside them (`regate-20260918-close-prep-lead-*`). Everything below is committed
 and pushed. **Phase 6 is not marked green and not closed. Phase 7 is not started.** The operator
@@ -73,9 +121,9 @@ The night's one decision list is `docs/build-log/phase-6/overnight-decisions-202
 - **Q1** (invariant 14's retained balance): invariant 14 **not** amended, as ruled. **Engine 22
   unchanged — STOPPED (S1)**, because reading the balance changes behaviour: a paper liquidation
   would sell nothing, and the paper broker's retained balance is the *real* account's.
-- **Q2** (spec 118's premise): **STOPPED (S2)**. `asset_pairs.json` was never cut from an archive.
+- **Q2** (spec 118's premise): **STOPPED (S2)** *[ruled that evening; spec 118's criterion then removed]*. `asset_pairs.json` was never cut from an archive.
   It is the Phase 0 fake's invented test data, and no provenance block was written.
-- **Q3** (spec 118 covers 1 pair of 5): recorded in the tracker as ruled. The re-cut is scheduled,
+- **Q3** (spec 118 covers 1 pair of 5) *[WITHDRAWN 2026-09-18 evening with the criterion]*: recorded in the tracker as ruled. The re-cut is scheduled,
   **not started**, and after S2 it should land with Q2's answer.
 - **Q4** (the trade): **done**. `docs/build-log/phase-6/first-paper-trade.md` is the criterion's
   own round trip with its database kept, every number from the rows.
@@ -125,6 +173,7 @@ documents and nothing else.
 ### State
 
 `python scripts/verify.py --phase 6` → **14 criteria, 14 PASS, 0 FAIL, 0 PENDING, exit 0**
+*[2026-09-18 evening: spec 118's criterion removed by operator ruling; Phase 6 has 13 criteria from then.]*
 (`logs/verify/phase6-20260918-cashsource2-lead-*.log`; `toolchain_green` reports `3314 passed, 2
 skipped`). The tree is clean, every agent is stopped, and everything below is committed and pushed.
 **The operator has not yet seen the first paper trade, and asked to before the phase closes. Do not
@@ -138,7 +187,7 @@ rejected, are in `docs/build-log/phase-6/overnight-decisions-2026-09-18.md`)
 | 119 | Every seeded rejection uses an `(engine, code)` pair the live system can emit | B |
 | 120 | The orphaned `REASON_PROSE` prose retired; **both** directions of the walk now asserted | C |
 | 109 | The last stale paper-mode-fallback prose, eight sites across six files | A |
-| 118 | New 14th criterion: the recorded book agrees with the recorded `pair_decimals` | C |
+| 118 | New 14th criterion: the recorded book agrees with the recorded `pair_decimals` *[removed 2026-09-18 evening]* | C |
 | — | `EquitySnapshotRow.cash_source`'s default removed, with a refusal test | Lead |
 
 ### Open questions for the operator — nothing else is blocked on them
@@ -148,7 +197,7 @@ All four are in the night's decision log with options and a recommendation:
 - **Q1.** Invariant 14 grants engines 21 and 22 a retained balance **neither reads**. Engine 22
   deliberately reads only the retained `AssetPairs`; B recorded that deviation from spec 93 and
   escalated it on 2026-09-16; the invariant never moved. Amend the invariant, or change engine 22?
-- **Q2.** Spec 118's own premise was wrong: the two fixtures are **not** frozen together
+- **Q2.** *[Ruled; spec 118's criterion removed 2026-09-18 evening.]* Spec 118's own premise was wrong: the two fixtures are **not** frozen together
   (`asset_pairs.json` 2026-09-08, `book_sample.jsonl` cut 2026-09-16, no provenance block). The
   check is honest and its prose says so; aligning them is a ruling.
 - **Q3.** That criterion compares **1 pair of 5**. Widening to 3 of 5 is a re-cut **C** runs (not
@@ -233,7 +282,7 @@ exiting 1, the code a real FAIL returns, with six criteria never run.
 2. **Spec 109 (A)** — engine 1 and the Kraken client stop describing paper-mode fallbacks that no
    longer exist.
 3. **Spec 118 (C)** — the recorded prices agree with the recorded `pair_decimals`, over the two
-   committed fixtures.
+   committed fixtures. *[Built, then removed by operator ruling 2026-09-18 evening.]*
 4. **The `cash_source` default removal (lead)** — `EquitySnapshotRow.cash_source`'s default goes,
    **landing with a test that a row lacking a source is refused**; ~8 files across three lanes, so
    it is a lead task under ownership rule 6, and B's test *of* the default is retired by it.
@@ -779,6 +828,16 @@ fixtures, the criteria, the console and the DI prerequisite are all C paths. B's
 larger. If C runs as two sessions, they take disjoint files: engines and models (95, 96, 97, 98,
 102) against verification and interface (99, 100, 101). Two sessions in one lane cost Phase 5 a
 day; disjoint files and a claim in the progress file before any code are what stop it.
+
+### Stale prose sent back to its owners — operator ruling of 2026-09-18 evening
+
+| Spec | Task | Owner |
+|---|---|---|
+| 121 | Engine 22's contract comment records that its escalation was answered (S1) | B |
+| 122 | `test_decision.py`'s tier comment; report what its reference-fee constants are for | B |
+| 123 | `test_feature_chain_rehearsal.py`'s tier comment | B |
+| 124 | `test_order_book.py`'s tier docstring | C |
+| 125 | Engine 1's README on who reads the retained values (added by the lead, flagged) | A |
 
 ## Seams agreed between agents
 

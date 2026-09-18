@@ -3664,7 +3664,7 @@ def check_recording_span_continuous(ctx: VerifyContext) -> Outcome:
     )
 
 
-# --- candles_match_kraken_ohlc --------------------------------------------- #
+# --- candles_match_independent_reduction_of_recorded_trades ------ #
 
 OHLC_FIXTURE = Path("tests") / "fixtures" / "kraken" / "ohlc.json"
 
@@ -3754,7 +3754,7 @@ def _candle_builder() -> tuple[Any, Outcome | None]:
     return None, pending("no `build_candles` exists yet (spec 28) - " + CANDLES_CONTRACT)
 
 
-def check_candles_match_kraken_ohlc(ctx: VerifyContext) -> Outcome:
+def check_candles_match_independent_reduction_of_recorded_trades(ctx: VerifyContext) -> Outcome:
     """Built 15-minute candles against an independent reduction of real Kraken trades.
 
     **What it checks.** `tests/fixtures/kraken/ohlc.json` holds real Kraken v2 `trade`
@@ -3777,6 +3777,10 @@ def check_candles_match_kraken_ohlc(ctx: VerifyContext) -> Outcome:
     the messages compared against "Kraken's own OHLC". Both were false from the day it was
     written, and the tests asserted that the word `tick_size` appeared rather than that
     the message was true. Operator ruling S2 and the tracker's FINDING of that date.
+
+    **Named `candles_match_kraken_ohlc` until 2026-09-18** and renamed by the operator the
+    same evening, because the name made the same false claim as the prose and is read more
+    often: it appears in every gate output. Gate logs before that date carry the old name.
     """
     fixture_path = ctx.root / OHLC_FIXTURE
     if not fixture_path.is_file():
@@ -13995,297 +13999,6 @@ def check_equity_row_never_values_positions_it_does_not_hold(ctx: VerifyContext)
     return _driven_verdict(ctx, _equity_rows_body, what="the equity rows of a round trip")
 
 
-# --- recorded_book_agrees_with_recorded_pair_decimals ----------------------- #
-#
-# Spec 118, operator ruling 2026-09-18, out of the hand measurement spec 101 made and
-# `_console_mark_precision`'s docstring records.
-#
-# **The measurement, dated and named.** On 2026-09-18 I counted the prices in
-# `tests/fixtures/book_sample.jsonl` - 977 Kraken v2 book frames cut byte-for-byte out of
-# the archive `kraken_v2__msi__2026-09-16.jsonl` over the 30-second window its own header
-# block names - against the declarations in `tests/fixtures/kraken/asset_pairs.json`:
-#
-#   * **BTC/USD** - declared `pair_decimals: 1`; **783 recorded prices, every one on that
-#     1-decimal grid.** Spec 101 reported them as "every one at exactly 1 decimal place",
-#     which is the same finding read off the JSON spelling: 733 are written with one
-#     digit after the point and the other 50 are written `x.0`, which is the same point on
-#     the grid. The exchange publishes on its own grid.
-#   * **ADA/USD** - 881 recorded prices at 4, 5 and 6 places, and **no entry at all** in
-#     `asset_pairs.json`. Nothing to compare against, so nothing is claimed.
-#
-# **Only one side is a recording.** The book sample is a recording. `asset_pairs.json` is
-# **invented Phase 0 test data** for the fake exchange (committed `afaf2f5`, 2026-09-08;
-# its own `provenance` block, and `tests/harness/fake_kraken.py`'s docstring, say so), and
-# it was never cut from any archive. This comment and the criterion's messages called it
-# "the recorded AssetPairs" until 2026-09-18, and so did the spec; the lead found it
-# answering the operator's Q2, and the operator ruled (S2) that the messages say the
-# declaration is invented. BTC/USD's declared `pair_decimals: 1` happens to agree with the
-# 783 prices Kraken sent, but that is agreement with a value somebody here typed, not with
-# a declaration Kraken made.
-#
-# So a red here means *the recorded book no longer fits the fake exchange's chosen grid*:
-# a re-cut book sample that no longer agrees with the invented declaration beside it. It
-# is not news about Kraken either way. A genuine `AssetPairs` recording lands alongside the
-# next book re-cut (operator ruling S2/Q3); until then this criterion compares a recording
-# with a choice, and says so.
-#
-# **The criterion's name** still says `..._recorded_pair_decimals`. The messages were
-# corrected under the ruling; renaming a registered criterion reaches the registry, two
-# test files and the tracker, and is left to the operator.
-#
-# **What it must not read.** `BOOK_THIN_PAIR_RULE`, about 2,200 lines above, holds
-# `pair_decimals: 6` for ADA/USD, a second invented value that is not even in the fixture
-# the fake exchange serves. It would have "worked" - ADA/USD's recorded prices stop at 6
-# places - and using it would turn "I cannot tell" into a plausible number derived from a
-# value chosen for a different purpose. A pair with no declaration in `asset_pairs.json` is
-# reported by name and compared against nothing.
-
-#: What a pair's absence from the other fixture is called in the message. Two directions,
-#: because "reported by name, never skipped silently" is a rule about both of them: a
-#: recording with no declaration is the ADA/USD case, and a declaration with no recording
-#: is every other pair the fake exchange serves.
-#: Said in every verdict, PASS and FAIL alike (operator ruling S2, 2026-09-18). Without
-#: it the message reads as a recording checked against a recording, which it is not.
-_INVENTED_DECLARATION: Final = (
-    "The declaration is invented: asset_pairs.json is Phase 0 test data for the fake "
-    "exchange, not a recording of Kraken's AssetPairs (its provenance block), so an "
-    "agreement says the recorded book fits a chosen grid, not that Kraken's grid is known."
-)
-_NO_DECLARATION: Final = "recorded in book_sample.jsonl, not declared in asset_pairs.json"
-_NO_RECORDING: Final = "declared in asset_pairs.json, not recorded in book_sample.jsonl"
-
-
-def _recorded_price_places(path: Path) -> dict[str, dict[int, tuple[int, str]]]:
-    """Every price in the recorded book, counted by how many decimals it carries.
-
-    `{pair: {decimal places: (how many prices, one of them)}}`. Line 1 is the cutter's
-    header and is not a recorded frame.
-
-    Parsed with `parse_float=Decimal` and `parse_int=Decimal`, because a `float` does not
-    carry what was written: binary rounding turns a decimal literal into the nearest
-    double, so `0.19479` comes back as a value whose exact expansion runs to eighteen
-    places, and the count of decimal digits is the entire subject here. `Decimal` is built
-    from the literal's own text and counts what Kraken actually sent.
-
-    **Counted on the value and not on the spelling.** `normalize()` strips trailing zeros
-    first, so the 50 BTC/USD prices recorded as `75731.0` count as 0 places rather than 1.
-    They are the same point on a 1-decimal grid, and a criterion that fired on a trailing
-    zero would be judging how Kraken formats JSON rather than what grid it quotes on -
-    which is the "fires on somebody else's decision" shape spec 118 is written to avoid.
-    The alternative, counting the digits as written, was rejected for that reason; it is
-    also the control arm of this criterion's mutation proof.
-    """
-    seen: dict[str, dict[int, tuple[int, str]]] = {}
-    with path.open("rb") as handle:
-        handle.readline()
-        for raw in handle:
-            if not raw.strip():
-                continue
-            frame = json.loads(raw, parse_float=Decimal, parse_int=Decimal)
-            pair = str(frame.get("pair"))
-            by_places = seen.setdefault(pair, {})
-            for entry in frame.get("payload", {}).get("data") or []:
-                for side in ("bids", "asks"):
-                    for level in entry.get(side) or []:
-                        price = level.get("price")
-                        if not isinstance(price, Decimal) or not price.is_finite():
-                            raise DriveError(
-                                f"{pair} carries the price {price!r} in book_sample.jsonl, "
-                                "which is not a finite decimal number"
-                            )
-                        exponent = price.normalize().as_tuple().exponent
-                        places = max(-int(exponent), 0)
-                        count, example = by_places.get(places, (0, format(price, "f")))
-                        by_places[places] = (count + 1, example)
-    return seen
-
-
-def _recorded_pair_decimals(path: Path) -> tuple[dict[str, int], list[str]]:
-    """`(pair -> declared pair_decimals, the pairs that declare none)`.
-
-    A pair in the fake exchange's (invented) `AssetPairs` whose entry carries no usable
-    `pair_decimals` is
-    the same case as a pair that is not there at all - there is no declaration to compare
-    against - and it is returned by name rather than dropped, for the same reason.
-    """
-    body = json.loads(path.read_text(encoding="utf-8"))
-    declared: dict[str, int] = {}
-    undeclared: list[str] = []
-    for pair, rules in (body.get("result") or {}).items():
-        value = rules.get("pair_decimals") if isinstance(rules, dict) else None
-        if isinstance(value, bool) or not isinstance(value, int):
-            undeclared.append(str(pair))
-            continue
-        declared[str(pair)] = value
-    return declared, sorted(undeclared)
-
-
-def _pair_decimals_coverage(
-    compared: Sequence[str], uncomparable: Sequence[tuple[str, str]]
-) -> str:
-    """The coverage sentence, in the PASS and in the FAIL alike.
-
-    Operator condition of 2026-09-18: a reader takes the coverage from the message rather
-    than inferring it from a PASS, so the counts and the names are stated either way. A
-    criterion quietly covering fewer pairs than it appears to is weaker than one that
-    says so.
-    """
-    total = len(compared) + len(uncomparable)
-    head = (
-        f"Coverage: {len(compared)} compared of the {total} pairs the two fixtures carry "
-        f"between them, {len(uncomparable)} not compared"
-    )
-    if not uncomparable:
-        return head + "."
-    named = "; ".join(f"{pair} ({why})" for pair, why in uncomparable)
-    return head + " - " + named + "."
-
-
-def check_recorded_book_agrees_with_recorded_pair_decimals(ctx: VerifyContext) -> Outcome:
-    """The recorded book prices sit on the fake exchange's invented `pair_decimals`.
-
-    Spec 118. For every pair carried by **both** `tests/fixtures/book_sample.jsonl` (a
-    recording) and `tests/fixtures/kraken/asset_pairs.json` (invented Phase 0 test data,
-    not a recording - see the block comment above), no recorded price sits off the grid
-    that pair's declared `pair_decimals` gives. Those two committed files and nothing else,
-    so it runs on a fresh clone like every other criterion.
-
-    **It is not a check on Kraken**, and it is not a check on any engine. Every other
-    criterion that reads these fixtures rests on their agreeing - `_recorded_opening_books`
-    walks the book at prices the fake exchange serves under those rules - and until now
-    nothing would have noticed a new book sample landing beside a stale declaration.
-
-    A pair in one fixture and not the other is **named** and counted, never skipped: see
-    the block comment above for ADA/USD, the case that motivates it, and for why the
-    invented `pair_decimals` two thousand lines up is not allowed to fill the gap.
-
-    `<=` and not `==` on purpose. A price at fewer decimals than declared is on the grid -
-    `75731.0` and `75731` are the same point on a 1-decimal grid, and Kraken sends both
-    shapes - so only *more* digits than the exchange declares is a disagreement.
-    """
-    book_path = ctx.root / "tests" / "fixtures" / "book_sample.jsonl"
-    rules_path = ctx.root / "tests" / "fixtures" / "kraken" / "asset_pairs.json"
-    problem = _phase6_fixture(ctx, "book_sample.jsonl")
-    if problem is not None:
-        return problem
-    if not rules_path.is_file():
-        return pending(
-            "tests/fixtures/kraken/asset_pairs.json has not been deposited yet - it is the "
-            "AssetPairs response tests/harness/fake_kraken.py serves, invented Phase 0 "
-            "test data rather than a recording"
-        )
-    if rules_path.stat().st_size == 0:
-        return failed("tests/fixtures/kraken/asset_pairs.json is empty, so it proves nothing")
-
-    try:
-        recorded = _recorded_price_places(book_path)
-        declared, undeclared = _recorded_pair_decimals(rules_path)
-    except DriveError as exc:
-        return failed(str(exc))
-
-    # Three ways a pair can fail to have both halves, and each is named as the one it is.
-    # A pair whose `AssetPairs` entry exists but carries no `pair_decimals` is not
-    # "missing from asset_pairs.json", and saying so would send somebody to add an entry
-    # that is already there.
-    uncomparable: list[tuple[str, str]] = []
-    for pair in sorted(recorded):
-        if pair in declared:
-            continue
-        prices = sum(count for count, _ in recorded[pair].values())
-        why = (
-            "its asset_pairs.json entry carries no pair_decimals"
-            if pair in set(undeclared)
-            else _NO_DECLARATION
-        )
-        uncomparable.append((pair, f"{prices} recorded prices, {why}"))
-    uncomparable += [
-        (pair, "declared in asset_pairs.json with no pair_decimals field")
-        for pair in undeclared
-        if pair not in recorded
-    ]
-    uncomparable += [
-        (pair, _NO_RECORDING) for pair in sorted(declared) if pair not in recorded
-    ]
-    compared = sorted(set(recorded) & set(declared))
-    coverage = _pair_decimals_coverage(compared, sorted(uncomparable))
-    if not compared:
-        return failed(
-            "no pair is carried by both fixtures, so this criterion compared nothing "
-            "and a PASS here would mean only that it found no work. " + coverage
-        )
-
-    breaches: list[str] = []
-    said: list[str] = []
-    for pair in compared:
-        limit = declared[pair]
-        by_places = recorded[pair]
-        total = sum(count for count, _ in by_places.values())
-        if total == 0:
-            breaches.append(f"{pair} is in book_sample.jsonl and carries no price at all")
-            continue
-        over = sorted((places, by_places[places]) for places in by_places if places > limit)
-        if over:
-            worst = ", ".join(
-                f"{count} at {places}dp (for instance {example})"
-                for places, (count, example) in over
-            )
-            breaches.append(
-                f"{pair} declares pair_decimals {limit}; off that grid: "
-                f"{sum(c for _, (c, _) in over)} of {total} recorded prices - {worst}"
-            )
-            continue
-        widest = max(by_places)
-        said.append(
-            f"{pair} {total} recorded prices, the widest at {widest}dp, against the "
-            f"invented pair_decimals {limit}"
-        )
-
-    archive = _book_fixture_archive(book_path)
-    if breaches:
-        # The pairs that did agree are named too. A FAIL that lists only the breach
-        # leaves a reader unable to tell one bad pair from a fixture that is wrong
-        # throughout, and those want different responses.
-        agreed = (" The pairs that agree: " + "; ".join(said) + ".") if said else ""
-        return failed(
-            "the recorded book disagrees with the fake exchange's AssetPairs declaration, "
-            "so the two fixtures are not consistent - "
-            + "; ".join(breaches)
-            + ". " + _INVENTED_DECLARATION
-            + " This is not a verdict on Kraken: a disagreement means a re-cut book no "
-            "longer fits the chosen grid beside it. "
-            + coverage
-            + agreed
-            + " " + archive
-        )
-    return passed(
-        "every recorded price sits at or inside its declared pair_decimals - "
-        + "; ".join(said)
-        + ". " + _INVENTED_DECLARATION + " " + coverage
-        + " Read from the two committed fixtures alone, and no precision is inferred from "
-        "a price. " + archive
-    )
-
-
-def _book_fixture_archive(path: Path) -> str:
-    """The sentence naming what the book fixture was cut from, read out of its own header.
-
-    Read rather than written here, so the criterion's claim about its subject's
-    provenance cannot drift from the subject. A header that has lost the block says so
-    instead of being invented.
-    """
-    with path.open("rb") as handle:
-        header = json.loads(handle.readline())
-    sources = header.get("source_files")
-    window = header.get("window") or {}
-    if not isinstance(sources, list) or not sources:
-        return "book_sample.jsonl's header names no source archive."
-    return (
-        "book_sample.jsonl was cut from "
-        + ", ".join(str(name) for name in sources)
-        + f" over [{window.get('from')}, {window.get('to')})."
-    )
-
-
 # --------------------------------------------------------------------------- #
 # Registration
 # --------------------------------------------------------------------------- #
@@ -14326,7 +14039,13 @@ register(2, Criterion("commands_round_trip", check_commands_round_trip))
 # has a gate to build against from the first commit, exactly as spec 16 was registered
 # before the console. Every one of these reports PENDING until its subject lands.
 register(2, Criterion("recording_span_continuous", check_recording_span_continuous))
-register(2, Criterion("candles_match_kraken_ohlc", check_candles_match_kraken_ohlc))
+register(
+    2,
+    Criterion(
+        "candles_match_independent_reduction_of_recorded_trades",
+        check_candles_match_independent_reduction_of_recorded_trades,
+    ),
+)
 register(2, Criterion("data_guard_blocks_bad_data", check_data_guard_blocks_bad_data))
 register(2, Criterion("historical_loader_reports_gaps", check_historical_loader_reports_gaps))
 register(2, Criterion("console_shows_live_rows", check_console_shows_live_rows))
@@ -14582,17 +14301,6 @@ register(
     Criterion(
         "equity_row_never_values_positions_it_does_not_hold",
         check_equity_row_never_values_positions_it_does_not_hold,
-    ),
-)
-# Spec 118, operator ruling 2026-09-18, out of spec 101's hand measurement. Registered
-# last and after the nine were green: it judges neither an engine nor the chain but the
-# two committed fixtures against each other, which is the one thing every other criterion
-# that reads them was assuming.
-register(
-    6,
-    Criterion(
-        "recorded_book_agrees_with_recorded_pair_decimals",
-        check_recorded_book_agrees_with_recorded_pair_decimals,
     ),
 )
 

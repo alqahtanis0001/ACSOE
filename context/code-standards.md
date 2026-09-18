@@ -566,6 +566,16 @@ tree, 27 minutes apart, measured nothing the first run had not. The one thing th
 provided was the test count, and spec 115 puts that in the gate's own PASS message. Keep `mypy`
 and `ruff` first if failing fast is worth the seconds; they are not the cost.
 
+**Before a criterion is written, state what a PASS will demonstrate and what would have to be true
+for that to hold. If the answer depends on a number nobody has verified, verifying that number is
+the work — not the check.** Operator ruling 2026-09-18, after spec 118's criterion was proposed
+(by C), approved (by the operator), built, passed, mutation-swept and counted toward Phase 6 on
+two premises, both false: that its two fixtures were recordings frozen together (one was invented
+test data), and that other criteria relied on their agreement (none did). Nobody asked what its
+PASS demonstrated until it was green; the answer was nothing anything relied on. It was removed.
+A careful check of the wrong thing is still a check of the wrong thing, and mutation cannot see
+it: every arm of that sweep was killed. The tracker's FINDING has the account.
+
 **A criterion's message is a string in every test and a byte stream to the operator, and those
 are different things.** Spec 101's PASS message was the first criterion message in this project
 to contain `U+2212` — which `ui-context.md` rule 6 *requires* in numeric output — and

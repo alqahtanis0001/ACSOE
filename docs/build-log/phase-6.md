@@ -25,8 +25,8 @@ the market the test scripted.
 
 **Built.** Engines 9 `order_book`, 14 `adaptive_router`, 16 `decision`, 18 `execution`, 21
 `position_manager` and 22 `exit`; the paper broker and its ledger in `src/acsoe/clients/paper/`;
-engine 19 extended to record everything the new engines publish; and fourteen executable exit
-criteria (twelve specific to this phase, plus the document check and the toolchain check every
+engine 19 extended to record everything the new engines publish; and thirteen executable exit
+criteria (eleven specific to this phase, plus the document check and the toolchain check every
 phase carries).
 
 - **Agent A — platform.** The order surface every engine uses to place, cancel and query an order,
@@ -43,7 +43,9 @@ phase carries).
 - **Agent C — interface and models.** Engine 8's `is_buy` made absent on a refusal (95); engines 9
   and 14 with their committed fixtures (96, 97); engine 19 recording the new rows (98, 104, 114);
   operator-facing prose for every reason code, walked by a test in both directions (99, 120); the
-  twelve Phase 6 criteria (100, 105, 107, 115, 118), which sit beside the two every phase carries; and the console showing an open position live (101).
+  eleven Phase 6 criteria (100, 105, 107, 115), which sit beside the two every phase carries;
+  and the console showing an open position live (101). A twelfth, spec 118's, was built, passed
+  and then removed; see *Findings of method* below.
 - **The lead.** The operator's rulings into the authority documents (80); the kill switch's
   completion flag made to accept only a boolean `True` (81); registration of the six engines (82);
   the skeptic-cap ruling recorded (83); `context.previous_now`, so an engine can measure "since the
@@ -92,18 +94,25 @@ A prose key with no producer, because a specification said it already existed an
 And the seed data the console had displayed since Phase 1 turned out to use a refusal vocabulary no
 engine could emit.
 
+**A criterion was approved, built, passed and counted before anyone asked what its PASS
+demonstrated.** Spec 118's, offered by C and approved by the operator, checked the recorded order
+book against a precision declaration that turned out to be invented test data, and no other
+criterion relied on the two agreeing. A PASS demonstrated nothing anything relied on. It was
+removed, and the rule it left is that a criterion's author states what a PASS will demonstrate,
+and what must be true for that to hold, before writing it.
+
 **Verify output.** The close preparation re-gated phases 0 to 6 in order on a quiet tree at
 `98c0485`, every one exit 0 (phase 0 7/7, 1 10/10, 2 9/9, 3 9/9, 4 10/10, 5 14/14,
 6 14/14). The operator's rulings S2 and S3 then corrected criterion prose and messages in
 `scripts/verify.py`, and Phase 2 (9/9) and Phase 6 were re-gated on the corrected tree, both
-exit 0. The latest Phase 6 gate, verbatim:
+exit 0. The Phase 6 criterion of spec 118 was then removed and the candle criterion renamed, and Phase 2 and Phase 6 were gated again, both exit 0. The latest Phase 6 gate, verbatim:
 
 ```
 ACSOE verify - phase 6
 repo: C:\Users\saad2\Documents\GitHub\ACSOE
 
 PASS    docs_vocabulary                                     14 files scanned, 12 retired terms, no hit
-PASS    toolchain_green                                     pytest, mypy --strict and ruff all green (python.exe) - pytest `3320 passed, 2 skipped, 2 warnings in 1802.71s (0:30:02)` - full output: C:/Users/saad2/Documents/GitHub/ACSOE/logs/verify/toolchain_green/20260918T154721_178203-pytest-attempt1.log
+PASS    toolchain_green                                     pytest, mypy --strict and ruff all green (python.exe) - pytest `3309 passed, 2 skipped, 2 warnings in 1780.84s (0:29:40)` - full output: C:/Users/saad2/Documents/GitHub/ACSOE/logs/verify/toolchain_green/20260918T173919_267654-pytest-attempt1.log
 PASS    paper_trade_round_trip_target                       BTC/USD entry 1690626088: a post-only buy of 26.26015939 at 126.9, placed on the bar close past all 8 registered gates (data_guard, safety, scout, anomaly, cost, risk, skeptic, decision), filled at its limit on the next tick, watched for 3 ticks, then a trade at 130.757 crossed the target 130.707 the minute before 1715983501; it exited at the target when engine 22 sold 26.26015939 as a taker at 130.757. Entry fee 3.6656556492501, exit fee 6.524029356580637 and realised 91.095749761399263 were recomputed from the pinned book and engine 1's fee tier, and the orders, positions, trades and equity rows engine 19 wrote match them exactly; at the fake exchange's fee tier 3 (invented maker and taker rates from tests/fixtures/kraken/fee_tiers.json); engine 10 computed friction 0.003078783581501615063420783109 (0.308%) and hurdle 0.004618175372252422595131174664 (0.462%) on BTC/USD in this run, at maker 0.0011 and taker 0.0019 as engine 1 published them. Kraken's own schedule is a separate question, quoted from invariant 5 rather than measured here: at its reference tier-1 fees (friction about 1.25% round trip) a candidate needs an expected move above 3.125% against the 3.0% target, so Kraken's tier 1 is a no-trade regime at the current barriers
 PASS    paper_trade_round_trip_stop                         BTC/USD entry 1690626088: a post-only buy of 26.26015939 at 126.9, placed on the bar close past all 8 registered gates (data_guard, safety, scout, anomaly, cost, risk, skeptic, decision), filled at its limit on the next tick, watched for 3 ticks, then a trade at 124.9465 crossed the stop 124.9965 the minute before 1715983501; it exited at the stop when engine 22 sold 26.26015939 as a taker at 124.946. Entry fee 3.6656556492501, exit fee 6.234093562771586 and realised -61.212100660081686 were recomputed from the pinned book and engine 1's fee tier, and the orders, positions, trades and equity rows engine 19 wrote match them exactly; at the fake exchange's fee tier 3 (invented maker and taker rates from tests/fixtures/kraken/fee_tiers.json); engine 10 computed friction 0.003078783581501615063420783109 (0.308%) and hurdle 0.004618175372252422595131174664 (0.462%) on BTC/USD in this run, at maker 0.0011 and taker 0.0019 as engine 1 published them. Kraken's own schedule is a separate question, quoted from invariant 5 rather than measured here: at its reference tier-1 fees (friction about 1.25% round trip) a candidate needs an expected move above 3.125% against the 3.0% target, so Kraken's tier 1 is a no-trade regime at the current barriers
 PASS    paper_trade_round_trip_timeout                      BTC/USD entry 1690626088: a post-only buy of 26.26015939 at 126.9, placed on the bar close past all 8 registered gates (data_guard, safety, scout, anomaly, cost, risk, skeptic, decision), filled at its limit on the next tick, watched for 61 ticks, then the clock reached its timeout at 1716026461 with neither barrier traded; it exited at the timeout when engine 22 sold 26.26015939 as a taker at 126.925. Entry fee 3.6656556492501, exit fee 6.332834388093925 and realised -9.341986052594025 were recomputed from the pinned book and engine 1's fee tier, and the orders, positions, trades and equity rows engine 19 wrote match them exactly; at the fake exchange's fee tier 3 (invented maker and taker rates from tests/fixtures/kraken/fee_tiers.json); engine 10 computed friction 0.003078783581501615063420783109 (0.308%) and hurdle 0.004618175372252422595131174664 (0.462%) on BTC/USD in this run, at maker 0.0011 and taker 0.0019 as engine 1 published them. Kraken's own schedule is a separate question, quoted from invariant 5 rather than measured here: at its reference tier-1 fees (friction about 1.25% round trip) a candidate needs an expected move above 3.125% against the 3.0% target, so Kraken's tier 1 is a no-trade regime at the current barriers
@@ -115,9 +124,8 @@ PASS    order_book_slippage_on_recorded_book                ADA/USD (thin): 10 o
 PASS    adaptive_router_weights_on_fixture                  on tests/fixtures/leaderboard_sample.json - fabricated rows, so this is a property of the fixture and not of any trained model - engine 14 weighted {'train-20260913T120000-aaaa': 0.8181818181818181, 'train-20260913T120000-bbbb': 0.18181818181818196, 'train-20260913T120000-cccc': 0.0}, equal to the weights recomputed from the file: the mean over each version's folds of max(0, 1 - brier / base_rate_brier), normalised, with the older duplicate of a (version, fold) dropped, the other family (['some_other_family']) left out, and a version with no edge at zero. The chain was driven through the registered engines so that it reaches engine 14, which sits after the cost gate; at the fake exchange's fee tier 3 (invented maker and taker rates from tests/fixtures/kraken/fee_tiers.json); engine 10 computed friction 0.003078783581501615063420783109 (0.308%) and hurdle 0.004618175372252422595131174664 (0.462%) on BTC/USD in this run, at maker 0.0011 and taker 0.0019 as engine 1 published them. Kraken's own schedule is a separate question, quoted from invariant 5 rather than measured here: at its reference tier-1 fees (friction about 1.25% round trip) a candidate needs an expected move above 3.125% against the 3.0% target, so Kraken's tier 1 is a no-trade regime at the current barriers
 PASS    paper_equity_continuous_across_fill                 equity 5000.00 on cycle 2 and 4996.3343443507499 on the fill tick, cycle 3: it moved -3.6656556492501. The fill's own cost is 3.6656556492501: fee 3.6656556492501 + 26.26015939 x |mark 126.9 - fill 126.9|, recorded for BTC/USD entry 1690626088 (notional 3332.414226591); at the fake exchange's fee tier 3 (invented maker and taker rates from tests/fixtures/kraken/fee_tiers.json); engine 10 computed friction 0.003078783581501615063420783109 (0.308%) and hurdle 0.004618175372252422595131174664 (0.462%) on BTC/USD in this run, at maker 0.0011 and taker 0.0019 as engine 1 published them. Kraken's own schedule is a separate question, quoted from invariant 5 rather than measured here: at its reference tier-1 fees (friction about 1.25% round trip) a candidate needs an expected move above 3.125% against the 3.0% target, so Kraken's tier 1 is a no-trade regime at the current barriers
 PASS    equity_row_never_values_positions_it_does_not_hold  all 8 equity rows of a round trip (4 with a position open, including the fill tick, the exit tick and the tick after it) carry a positions_value of zero whenever they count no open position; at the fake exchange's fee tier 3 (invented maker and taker rates from tests/fixtures/kraken/fee_tiers.json); engine 10 computed friction 0.003078783581501615063420783109 (0.308%) and hurdle 0.004618175372252422595131174664 (0.462%) on BTC/USD in this run, at maker 0.0011 and taker 0.0019 as engine 1 published them. Kraken's own schedule is a separate question, quoted from invariant 5 rather than measured here: at its reference tier-1 fees (friction about 1.25% round trip) a candidate needs an expected move above 3.125% against the 3.0% target, so Kraken's tier 1 is a no-trade regime at the current barriers
-PASS    recorded_book_agrees_with_recorded_pair_decimals    every recorded price sits at or inside its declared pair_decimals - BTC/USD 783 recorded prices, the widest at 1dp, against the invented pair_decimals 1. The declaration is invented: asset_pairs.json is Phase 0 test data for the fake exchange, not a recording of Kraken's AssetPairs (its provenance block), so an agreement says the recorded book fits a chosen grid, not that Kraken's grid is known. Coverage: 1 compared of the 5 pairs the two fixtures carry between them, 4 not compared - ADA/USD (881 recorded prices, recorded in book_sample.jsonl, not declared in asset_pairs.json); ETH/BTC (declared in asset_pairs.json, not recorded in book_sample.jsonl); ETH/USD (declared in asset_pairs.json, not recorded in book_sample.jsonl); SOL/USD (declared in asset_pairs.json, not recorded in book_sample.jsonl). Read from the two committed fixtures alone, and no precision is inferred from a price. book_sample.jsonl was cut from kraken_v2__msi__2026-09-16.jsonl over [2026-09-16T00:17:06.100000Z, 2026-09-16T00:17:36.100000Z).
 
-14 criteria: 14 PASS, 0 FAIL, 0 PENDING
+13 criteria: 13 PASS, 0 FAIL, 0 PENDING
 Phase 6 is green: every criterion PASS, zero PENDING.
 ```
 
@@ -133,11 +141,12 @@ Phase 6 is green: every criterion PASS, zero PENDING.
 - **Ruled by the operator on 2026-09-18:**
   - S1 (Q1): engine 22 stays as built; invariant 14 records why its balance authorisation
     is deliberately wider than the code
-  - S2 (Q2): `asset_pairs.json` is invented test data, and now says so. The Phase 2 and
-    spec 118 criteria's prose was corrected (a FINDING); a genuine `AssetPairs` recording
-    lands with Q3's re-cut
+  - S2 (Q2): `asset_pairs.json` is invented test data, and now says so. The Phase 2 candle
+    criterion's prose was corrected and the criterion renamed for what it checks (a FINDING);
+    spec 118's criterion was removed; a genuine `AssetPairs` recording is a Phase 7 item, so
+    the candle criterion's tolerance stops being an invented number
   - S3: every trade criterion states its own run's figures
-- **Scheduled, not started:** Q3, widening spec 118 from 1 pair of 5 (with the recording).
+- **Withdrawn:** Q3, widening spec 118's coverage, with that criterion.
 - **Phase 7 prerequisites added:** an approved trade's reasons are not recorded (7), and
   `cycle_id` on order and position rows is the last writer's tick (8).
 
@@ -677,6 +686,49 @@ verdict.
 
 **Fix.** Arms written by a script through the file tool (`make_s3_arms.py`), each anchor asserted
 to occur exactly once against the live source before writing.
+
+### Spec 118's criterion removed: a PASS nobody had asked the meaning of
+
+**Agent:** Lead · **Task:** operator ruling of 2026-09-18 evening · **Date:** 2026-09-18
+
+**What happened.** The operator asked what a PASS on `recorded_book_agrees_with_recorded_pair_decimals`
+demonstrated, now that its declaration was known to be invented. Read from the code, the answer
+was **nothing that anything relies on, and nothing about Kraken**. The only other criterion that
+reads both fixtures, `order_book_slippage_on_recorded_book`, never reads `pair_decimals`: engines
+9 and 10 do not reference it, and the walk is recomputed from the book's own prices and quantities.
+Its verdict turned on a typed threshold (`1`): had someone typed `8`, any recording would pass. It
+could fail, but a FAIL would only have said that the recording disagreed with a number we chose.
+
+**Why.** Spec 118 rested on two premises, and both were false.
+- *"Both sides are recordings frozen together."* One side is invented Phase 0 test data. That
+  survived a day, to C's own spec 118 work and the lead's Q2.
+- *"Every other criterion that reads those fixtures rests on their agreement."* That survived until
+  a question that was not even about it.
+
+The criterion was proposed (by C, from spec 101's mark measurement), approved (by the operator),
+built, passed, mutation-swept and counted toward the phase **before anyone asked what a PASS
+demonstrated** — and neither the proposer nor the approver asked until it was green.
+
+**Fix.** Removed on the operator's ruling:
+- the check, its four helpers, its three constants and its registration;
+- its seven tests, their fixture and constants;
+- its slot in the two registered-set tests.
+
+It was not in the Phase 6 row, so the phase's definition of done is unchanged. Nothing else
+depended on it: every helper was its own, and commit `97927d9` added nothing another criterion
+uses. Both fixtures stay. Q3 is withdrawn with it. The genuine `AssetPairs` recording is
+re-scoped to a Phase 7 item, so that the candle criterion's tolerance stops being an invented
+number. The rule it produces is in `code-standards.md`: **before a criterion is written, state what
+a PASS will demonstrate and what would have to be true for that to hold; if the answer depends on
+a number nobody has verified, verifying that number is the work, not the check.**
+
+**Also this evening, recorded as the slips they were.**
+- A second escape-carrying heredoc (a `\n` inside a Python heredoc). It died on its own anchor
+  assertion before writing anything.
+- A stray `verify.py --phase 2 &` appended to a test command. It started a full gate outside the
+  gate script. Found in the process list and its four processes stopped within a minute; it wrote
+  nothing that is committed. **Neither mistake cost anything, and both are the same inattention the
+  standing rules exist for.**
 
 ## Agent A — Platform
 
@@ -10558,6 +10610,65 @@ unreachable by construction", about the fake. **Took.** Report them; they are pr
 messages the ruling named, in files the lead does not own. `bootstrap.py`'s identical comment
 **was** corrected: it is the lead's file. **Rejected.** Editing them under ownership rule 6: the
 ruling did not reach them, and a lane rule is cheaper to keep than to explain.
+
+## Later that evening: the rename, spec 118's removal, specs 121–125
+
+### D11 correction — the entry above claimed more than was done
+
+D11 said *"Each docstring now says the name is inaccurate."* Only spec 118's block comment said
+so. The candle criterion's docstring did not, until the rename added its history paragraph. The
+entry is left as written and corrected here, per `script-rules.md` rule 6. D11 itself was then
+overtaken by the operator's ruling: one criterion renamed, the other removed.
+
+### D16 — The new name is the operator's description, shortened only by articles
+
+**Took.** `candles_match_independent_reduction_of_recorded_trades`, the operator's own words for
+what it does. **Rejected.** A shorter name such as `candles_match_recorded_trades`, which drops
+*independent*. The independence of the reduction (it shares no code with the builder) is the one
+thing the check is worth, and A's spec 28 decision says so. Live code, tests, READMEs and the
+provenance take the new name; build logs, progress files, old specs and old gate logs keep the old
+one as history, and the docstring records the rename so the two can be joined.
+
+### D17 — Historical gate quotes keep their numbers and get a dated note — REVIEW
+
+**The operator's instruction** was that every count saying fourteen becomes thirteen, naming
+HANDOFFs 8 to 10. **Took.** Current-state counts become thirteen:
+- the tracker's status row;
+- `phase-6.md`'s summary;
+- HANDOFF 11.
+
+The Phase 6 gate quotes inside HANDOFFs 8, 9 and 10 keep "14 criteria, 14 PASS", which is what
+those gates printed, and each gets *[2026-09-18 evening: spec 118's criterion removed by operator
+ruling; Phase 6 has 13 criteria from then.]* beside it.
+
+**Rejected.** Rewriting them to 13: that would make each handoff quote a gate output that never
+existed. The operator ordered the history kept as written in the same message.
+
+**Not touched either way:** the tracker's four "14 criteria" counts that are **Phase 5's** (lines
+10, 710, 716, 882). A sweep would have changed them.
+
+**REVIEW:** this departs from the letter of the instruction. It was stated to the operator before
+it was done.
+
+### D18 — Spec 118 removed by anchored deletion, and the ADA/USD section proven untouched
+
+**Took.** One script cut:
+- the block from its banner to the `Registration` banner in `verify.py` (291 lines), and its
+  registration (11 lines);
+- the test block from its banner to end of file (281 lines);
+- the constant, the ordered-list slot and the runner entry.
+
+Every anchor was asserted once, and every removed name was asserted absent afterwards. One import
+became unused (`assert_pass`); ruff named it and it went. The tracker was byte-copied before the
+edit, and the ADA/USD section compared byte-for-byte afterwards: identical, 1,150 characters.
+**Rejected.** Editing by hand across three files.
+
+### D19 — A fifth stale-prose spec, 125, added and flagged
+
+The operator listed four. A's `exchange/README.md` sentence ("engines 21 and 22 read it from the
+client directly") is the same class. A had left it unwritten *because* it waited on the ruling S1
+gave. **Took.** Spec 125 (A), marked in its own header as not on the operator's list. **Rejected.**
+Folding it into another spec silently, or leaving it to be found a third time.
 
 ### D2 — This file, rather than appending to `overnight-decisions-2026-09-18.md`
 

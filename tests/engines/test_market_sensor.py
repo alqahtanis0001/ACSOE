@@ -276,7 +276,7 @@ def test_published_candles_are_bounded_per_pair(
 
 
 def test_built_candles_match_the_committed_fixture_for_three_pairs() -> None:
-    """The same comparison `candles_match_kraken_ohlc` makes, run here too so a
+    """The same comparison `candles_match_independent_reduction_of_recorded_trades` makes, run here too so a
     regression fails in the suite before it fails a phase gate."""
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     interval = int(fixture["interval_s"])

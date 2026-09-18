@@ -403,6 +403,65 @@ messages the ruling named, in files the lead does not own. `bootstrap.py`'s iden
 **was** corrected: it is the lead's file. **Rejected.** Editing them under ownership rule 6: the
 ruling did not reach them, and a lane rule is cheaper to keep than to explain.
 
+## Later that evening: the rename, spec 118's removal, specs 121–125
+
+### D11 correction — the entry above claimed more than was done
+
+D11 said *"Each docstring now says the name is inaccurate."* Only spec 118's block comment said
+so. The candle criterion's docstring did not, until the rename added its history paragraph. The
+entry is left as written and corrected here, per `script-rules.md` rule 6. D11 itself was then
+overtaken by the operator's ruling: one criterion renamed, the other removed.
+
+### D16 — The new name is the operator's description, shortened only by articles
+
+**Took.** `candles_match_independent_reduction_of_recorded_trades`, the operator's own words for
+what it does. **Rejected.** A shorter name such as `candles_match_recorded_trades`, which drops
+*independent*. The independence of the reduction (it shares no code with the builder) is the one
+thing the check is worth, and A's spec 28 decision says so. Live code, tests, READMEs and the
+provenance take the new name; build logs, progress files, old specs and old gate logs keep the old
+one as history, and the docstring records the rename so the two can be joined.
+
+### D17 — Historical gate quotes keep their numbers and get a dated note — REVIEW
+
+**The operator's instruction** was that every count saying fourteen becomes thirteen, naming
+HANDOFFs 8 to 10. **Took.** Current-state counts become thirteen:
+- the tracker's status row;
+- `phase-6.md`'s summary;
+- HANDOFF 11.
+
+The Phase 6 gate quotes inside HANDOFFs 8, 9 and 10 keep "14 criteria, 14 PASS", which is what
+those gates printed, and each gets *[2026-09-18 evening: spec 118's criterion removed by operator
+ruling; Phase 6 has 13 criteria from then.]* beside it.
+
+**Rejected.** Rewriting them to 13: that would make each handoff quote a gate output that never
+existed. The operator ordered the history kept as written in the same message.
+
+**Not touched either way:** the tracker's four "14 criteria" counts that are **Phase 5's** (lines
+10, 710, 716, 882). A sweep would have changed them.
+
+**REVIEW:** this departs from the letter of the instruction. It was stated to the operator before
+it was done.
+
+### D18 — Spec 118 removed by anchored deletion, and the ADA/USD section proven untouched
+
+**Took.** One script cut:
+- the block from its banner to the `Registration` banner in `verify.py` (291 lines), and its
+  registration (11 lines);
+- the test block from its banner to end of file (281 lines);
+- the constant, the ordered-list slot and the runner entry.
+
+Every anchor was asserted once, and every removed name was asserted absent afterwards. One import
+became unused (`assert_pass`); ruff named it and it went. The tracker was byte-copied before the
+edit, and the ADA/USD section compared byte-for-byte afterwards: identical, 1,150 characters.
+**Rejected.** Editing by hand across three files.
+
+### D19 — A fifth stale-prose spec, 125, added and flagged
+
+The operator listed four. A's `exchange/README.md` sentence ("engines 21 and 22 read it from the
+client directly") is the same class. A had left it unwritten *because* it waited on the ruling S1
+gave. **Took.** Spec 125 (A), marked in its own header as not on the operator's list. **Rejected.**
+Folding it into another spec silently, or leaving it to be found a third time.
+
 ### D2 — This file, rather than appending to `overnight-decisions-2026-09-18.md`
 
 **Took.** A new file for this night. **Rejected.** Appending to the earlier file of the same date:

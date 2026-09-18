@@ -68,8 +68,10 @@ the lead stopped on both** rather than choose; everything is in
   Phase 2, which never happened. So spec 118's criterion, named for a *recorded* declaration,
   compares a real recording against an invented one, and the Phase 2 candle criterion's
   `tick_size` tolerance reads the same invented file. No provenance block was written: one naming an
-  archive would be fabricated. Options in S2.
-- **Q3 — spec 118's coverage. Ruled: accepted, not tonight. RECORDED.**
+  archive would be fabricated. Options in S2. *Spec 118's criterion was later removed (below).*
+- **Q3 — WITHDRAWN 2026-09-18 evening, with spec 118's criterion**, which the operator removed
+  (FINDING under Findings — Phase 6). As first recorded: **Q3 — spec 118's coverage. Ruled:
+  accepted, not tonight. RECORDED.**
   `recorded_book_agrees_with_recorded_pair_decimals` **compares 1 pair of the 5 its two fixtures
   carry** (BTC/USD, 783 prices). The other four are named in its own message with the reason each is
   not compared. **Its PASS must not be read as broader than one pair.** Widening it to 3 of 5
@@ -95,6 +97,26 @@ near 1.77%, under the 3% target. So "tier 1 is a no-trade regime" is true of Kra
 schedule and is **neither measured nor tested by any criterion**. It changes no gate and no
 reconciliation. It changes what the PASS lines claim.
 
+### Open with the operator, 2026-09-18 evening
+
+- **The Phase 2 row in `ai-workflow-rules.md` still asks for what A's spec 28 decision could not
+  provide**: *"built 15m candles match a committed Kraken OHLC fixture … every OHLC field within one
+  `tick_size` for that pair as reported by `AssetPairs`"*. A chose the reference reduction because
+  Kraken's OHLC was not available, and recorded why; the row never moved. It is the same shape as S1:
+  a decision that stopped one file short. Changing a phase's exit criterion is the operator's
+  decision, so it is reported, not edited.
+- **Specs 121-125: stale prose sent back to its owners** (operator ruling of the same evening).
+  - 121 (B): engine 22's contract comment still says its question was escalated.
+  - 122 (B): `test_decision.py`'s tier comment. **Also found:** its `MAKER`/`TAKER` constants are
+    invariant 5's *reference* tier-3 fees (0.0022 / 0.0038), not the fake's (0.0011 / 0.0019).
+    The spec reports this and changes nothing.
+  - 123 (B): `test_feature_chain_rehearsal.py`'s tier comment.
+  - 124 (C): `test_order_book.py`'s tier docstring.
+  - 125 (A): engine 1's README says engines 21 and 22 read the retained values. **Not on the
+    operator's list**: the lead added it as the same class, because A had left it waiting on
+    exactly the ruling S1 gave, and flagged it as an addition.
+- **Spec 118's criterion: removed** by operator ruling. The FINDING is under Findings — Phase 6.
+
 ### The operator's rulings on S1–S3, 2026-09-18 evening
 
 - **S1 → accepted.** Engine 22 as built. Invariant 14 now records that its balance authorisation
@@ -104,8 +126,9 @@ reconciliation. It changes what the PASS lines claim.
   **verdict is sound** — its tolerance is never engaged, all 9 bars agree to the digit, and it
   would pass at any non-negative tolerance — and its assertion is unchanged. Its **prose** was
   false twice, and that is the FINDING recorded under Findings — Phase 6. `asset_pairs.json`
-  carries an honest provenance block; the candle criterion and spec 118 say what they compared
-  against; a genuine `AssetPairs` recording lands alongside Q3's re-cut, not now. Phase 2 had
+  carries an honest provenance block; the candle criterion says what it compared against (spec
+  118 did too, and was then removed); a genuine `AssetPairs` recording is re-scoped to Phase 7
+  item 9. Phase 2 had
   recorded a decision about the reference (`docs/build-log/phase-2.md:887`, A, spec 28): it
   limited the claim, and the correction **agrees** with it.
 - **S3 → accepted.** Every trade criterion states the friction and hurdle engine 10 computed in
@@ -337,31 +360,6 @@ redirected whole; 30 minutes lost and nothing else. (2) The script that inserted
 import left the block unsorted in two files, and **the gate caught it** (`ruff` I001 inside
 `toolchain_green`, a real FAIL on the lead's own work), taking two attempts to place the name
 correctly. Both are in `docs/build-log/phase-6/lead.md`.
-
-### SPEC 118 (C): the recorded book is checked against the recorded declaration — and the ruling's own premise was wrong
-
-`recorded_book_agrees_with_recorded_pair_decimals`, the 14th Phase 6 criterion: every recorded
-price in `tests/fixtures/book_sample.jsonl` sits at or inside that pair's `pair_decimals` in
-`tests/fixtures/kraken/asset_pairs.json`. **Coverage is stated, not implied** — 1 pair compared
-(BTC/USD, 783 prices, widest 1dp against a declared 1), 4 not, each named with its direction:
-ADA/USD recorded but undeclared, ETH/BTC, ETH/USD and SOL/USD declared but not in the sample. Five
-FAIL arms on a copied tree and a control that changes bytes without changing the grid point
-(`75733.6` → `75733.60`, still PASS), so the criterion is measuring the grid and not the spelling;
-a further test wraps `Path.open` to prove it reads those two files and nothing else. **No precision
-is ever inferred from a price** — that is the ADA/USD case, and inventing one would be the
-fabricated exchange value `AGENTS.md` forbids.
-
-**The correction that matters: the two fixtures are not "frozen together".** That was the ruling's
-stated reason a red could never be news about Kraken. `asset_pairs.json` landed 2026-09-08,
-`book_sample.jsonl` was cut from the 2026-09-16 archive, and the `AssetPairs` recording carries no
-provenance block at all. The conclusion holds for today's files; the argument does not. C kept the
-check, put both dates in the criterion's prose, and stopped rather than aligning them — a
-what-choice. **Q2 in `docs/build-log/phase-6/overnight-decisions-2026-09-18.md`**, with Q3
-(coverage could reach 3 of 5 by a re-cut **C** runs, not A — the cutter "chooses nothing", and the
-archive already holds ETH/USD and SOL/USD — but it shares the fixture with
-`order_book_slippage_on_recorded_book`, so the two must be looked at together) and F1 (an invented
-ADA/USD `pair_decimals` for the fake client sits two screens away; not a defect, and the new
-criterion's docstring names it as the thing it must not read).
 
 ### SPEC 109 (A): the last of the stale fallback prose, and three findings
 
@@ -759,7 +757,7 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 | 3 — Economics | **Green** | 2026-09-10 — 9 PASS, 0 FAIL, 0 PENDING |
 | 4 — Memory and replay | **Green on its gate; close and consolidation withheld by the operator** | 2026-09-11 — 10 PASS, 0 FAIL, 0 PENDING; re-verified 2026-09-12 at the Phase 5 preflight, same result, `replay_full_archive` skipped as `--live` |
 | 5 — Models | **Green** | 2026-09-15 — 14 PASS, 0 FAIL, 0 PENDING; phases 0 to 4 re-gated in order on the same quiet tree, all exit 0. Specs 59–79: A (61, 78, 79), B (62, 76), C (60, 63–75), Lead (59, 77). Nine rulings confirmed by the operator plus one addition (per-fold effective sample size) |
-| 6 — Decision and execution | **Open — gate green, close awaits the operator** | 2026-09-18 — phases 0 to 6 re-gated in order at `98c0485` on a quiet tree, Phase 6 **14 PASS, 0 FAIL, 0 PENDING**, exit 0 (`logs/verify/phase6-20260918-close-prep-lead-verify.log`); phases 0–5 in the same run, all exit 0. Specs 80–120 (102 parked to Phase 7). **Not marked green**: the operator sees the first paper trade and rules on S1–S3 first |
+| 6 — Decision and execution | **Open — gate green, close awaits the operator** | 2026-09-18 evening — **13 criteria, 13 PASS, 0 FAIL, 0 PENDING**, exit 0, after spec 118's criterion was removed and the Phase 2 candle criterion renamed (`logs/verify/phase6-20260918-rename-remove118-lead-verify.log`); earlier the same day phases 0–6 were re-gated in order at `98c0485`, all exit 0, when Phase 6 had 14. Specs 80–125 (102 parked to Phase 7; 118's criterion removed; 121–125 open with their owners). **Not marked green**: the operator rules on the close after reading the walk-through |
 | 7 — Evaluation | Blocked on 6 | — |
 | 8 — Live readiness | Blocked on 7 | — |
 
@@ -833,7 +831,8 @@ start of Phase 7.
    - The live client's order refusal stays as the **one copy to remove in Phase 8**
      (`rest.ORDER_CALLS`, compared against the protocol).
    - The paper wiring stays written as `== "paper"`, never `!= "live"`.
-   - Re-cutting `book_sample.jsonl` moves `order_book_slippage_on_recorded_book` as well as spec 118.
+   - Re-cutting `book_sample.jsonl` moves `order_book_slippage_on_recorded_book`. (It moved spec
+     118 too; that criterion was removed and Q3's re-cut is withdrawn with it, 2026-09-18.)
    - Line endings are measured in Python, never with this shell's `grep -c`.
 2. **Open items no ruling has closed, beyond Q1–Q3 and S3 above.**
    - **A's tautological assertion**, `tests/engines/test_exchange.py:214-215`:
@@ -1381,11 +1380,62 @@ restores the original sentence verbatim, and **all 52 pre-existing tests in that
 against it**; only the test added with the correction goes red.
 
 **The same shape as rule 4** (`ui-context.md`): a claim true only by the accident of what it
-happened to be pointed at. It recurred the same evening in three more places — spec 118's
-messages calling the invented file "the recorded AssetPairs", every trade criterion's message
-quoting invariant 5's reference friction for a run at the fake's rates (S3), and
-`fee_tiers.json`'s own comment — all corrected under rulings S2 and S3. **A message is a claim
+happened to be pointed at. It recurred the same evening in two more places, both corrected
+under ruling S3: every trade criterion's message quoting invariant 5's reference friction for a
+run at the fake's rates, and `fee_tiers.json`'s own comment. A third, spec 118's criterion,
+compared a real recording against the same invented declaration and called it recorded; it was
+removed rather than corrected (FINDING below). **So one criterion, this one, still compares
+real recordings against invented data, and it now says so.** **A message is a claim
 about evidence, and it needs a test that it is true, not a test that it is present.**
+
+**And the name made the same claim, which is worse** (operator ruling of the same evening). A
+criterion's name appears in every gate output, so it is read more often than any message and
+questioned less. `candles_match_kraken_ohlc` claimed Kraken's OHLC as plainly as the prose did, on
+every line of every Phase 2 gate for six phases. **Renamed
+`candles_match_independent_reduction_of_recorded_trades`** in the registry, its tests, the market
+sensor README, `scripts/ohlc_fixture.py`'s docstring and the fixture's provenance. Gate logs and
+build logs written before 2026-09-18 keep the old name, as history.
+
+### FINDING: a criterion was approved, built, passed and counted before anyone asked what its PASS demonstrated
+
+Recorded by operator ruling of 2026-09-18 evening, which removed the criterion. **This matters
+more than the removal.**
+
+`recorded_book_agrees_with_recorded_pair_decimals` (spec 118) checked that every price in the
+recorded book `tests/fixtures/book_sample.jsonl` sat on the `pair_decimals` grid declared for its
+pair in `tests/fixtures/kraken/asset_pairs.json`. **It was offered by C**, out of spec 101's mark
+measurement, and **approved by the operator**. It was built with care:
+- coverage stated rather than implied (1 pair of 5, each uncompared pair named with its reason);
+- five FAIL arms and a control (`75733.6` to `75733.60`, same grid point, still PASS);
+- a test proving it read two files and nothing else;
+- the rule that no precision is ever inferred from a price.
+
+It passed, was mutation-swept and was counted as the 14th Phase 6 criterion.
+
+**It rested on two premises, and both were false.**
+1. *"Both sides are recordings frozen together."* `asset_pairs.json` is invented Phase 0 test data
+   and was never cut from any archive. This survived a day: C found the dates did not match while
+   building it, and the lead found the file was never a recording while answering Q2.
+2. *"Every other criterion that reads those fixtures rests on their agreement."* The only other
+   reader of both, `order_book_slippage_on_recorded_book`, never reads `pair_decimals`; nor do
+   engines 9 and 10. This survived until a question that was not even about it: the operator
+   asking what a PASS demonstrated once the first premise had gone.
+
+**So a PASS demonstrated nothing anything relied on, and nothing about Kraken.** Its verdict turned
+on a typed threshold: had someone typed `8` instead of `1`, any recording would have passed.
+
+**Removed, not made PENDING.** It was not in the Phase 6 row of `ai-workflow-rules.md`, so the
+phase's definition of done is unchanged. Nothing depended on it: every helper was its own, and its
+commit `97927d9` added nothing another criterion uses. Q3, which existed only to widen it, is
+withdrawn. The genuine `AssetPairs` recording is re-scoped to Phase 7 item 9. The history (spec
+118, C's progress file, the build logs) stays as written, because what happened is the finding.
+
+**The offer was C's and the approval was the operator's, and neither asked the question until the
+criterion was green.** Nor did the lead, who scheduled it, gated it and counted it.
+
+**The rule** (now in `code-standards.md`, Verification): **before a criterion is written, state what
+a PASS will demonstrate and what would have to be true for that to hold. If the answer depends on a
+number nobody has verified, verifying that number is the work — not the check.**
 
 ## Locked Decisions
 
@@ -1650,7 +1700,7 @@ the reason in the YAML comment and in `DatasetConfig`.
   each manifest, with the digest stating it covers 405 of 457 folds and why. The 52 missing
   folds are the 2025 test weeks. Account: `docs/build-log/phase-5/lead.md`.
 - **PHASE 7 PREREQUISITES, recorded by operator ruling 2026-09-14. Phase 7's full walk-forward
-  and its replays pay the same cost again unless all six are fixed first (the fifth added by the lead and the sixth by operator ruling, both 2026-09-15). Items 7 and 8 were added by operator ruling 2026-09-18: 7 is a gap in what the store records, and 8 is a fact every Phase 7 join must carry.** Found by the
+  and its replays pay the same cost again unless all six are fixed first (the fifth added by the lead and the sixth by operator ruling, both 2026-09-15). Items 7 and 8 were added by operator ruling 2026-09-18: 7 is a gap in what the store records, and 8 is a fact every Phase 7 join must carry. Item 9 was added the same evening: a recording owed to a Phase 2 criterion.** Found by the
   Phase 5 full run (`docs/build-log/phase-5/lead.md`, the entries of 2026-09-13 and 2026-09-14):
   1. **Cap the skeptic's training set. RULED BY THE OPERATOR 2026-09-16: a rolling window of the
      last 13 folds**, matching the predictor's locked past-only 90-day window — it mirrors a Locked
@@ -1700,6 +1750,13 @@ the reason in the YAML comment and in `DatasetConfig`.
      and is stored with 7. `placed_at` and `opened_at` still say when. **Any analysis joining on
      `cycle_id` must know this, and Phase 7 will join on it** — a join from an order to the tick
      that placed it by `(run_id, cycle_id)` lands on the wrong tick.
+  9. **A genuine `AssetPairs` recording, so the candle criterion's tolerance stops being an invented
+     number.** Re-scoped by operator ruling of 2026-09-18 evening. It was first scheduled (S2)
+     alongside Q3's re-cut, for spec 118's criterion, which has since been removed with Q3.
+     `candles_match_independent_reduction_of_recorded_trades` still reads its `tick_size` from
+     `tests/fixtures/kraken/asset_pairs.json`, which is invented Phase 0 data. The verdict does not
+     depend on it (the tolerance is never engaged), but the number is a choice where the phase row
+     asks for an exchange value.
   Also measured, for whoever plans Phase 7: 457 weekly folds, pairs arriving over time (14 in
   2017, 115 first appearing in 2022), folds ranging from ~25 s (2017) to ~10 min (late 2024)
   on this machine; the 22.2-hour projection assumed 234 pairs in every fold and was wrong.

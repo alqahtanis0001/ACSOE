@@ -193,7 +193,7 @@ this engine**.
 
 `tests/fixtures/kraken/ohlc.json`, built by `scripts/ohlc_fixture.py`, holds real
 recorded Kraken `trade` frames for **BTC/USD, ETH/USD and SOL/USD** across three bars,
-plus the OHLCV those trades imply. `candles_match_kraken_ohlc` feeds the trades to
+plus the OHLCV those trades imply. `candles_match_independent_reduction_of_recorded_trades` feeds the trades to
 `build_candles` and compares, within one `tick_size` **read from `AssetPairs`** — never
 a constant — and 0.1% on volume.
 

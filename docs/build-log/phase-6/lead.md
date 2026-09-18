@@ -524,3 +524,46 @@ verdict.
 
 **Fix.** Arms written by a script through the file tool (`make_s3_arms.py`), each anchor asserted
 to occur exactly once against the live source before writing.
+
+### Spec 118's criterion removed: a PASS nobody had asked the meaning of
+
+**Agent:** Lead · **Task:** operator ruling of 2026-09-18 evening · **Date:** 2026-09-18
+
+**What happened.** The operator asked what a PASS on `recorded_book_agrees_with_recorded_pair_decimals`
+demonstrated, now that its declaration was known to be invented. Read from the code, the answer
+was **nothing that anything relies on, and nothing about Kraken**. The only other criterion that
+reads both fixtures, `order_book_slippage_on_recorded_book`, never reads `pair_decimals`: engines
+9 and 10 do not reference it, and the walk is recomputed from the book's own prices and quantities.
+Its verdict turned on a typed threshold (`1`): had someone typed `8`, any recording would pass. It
+could fail, but a FAIL would only have said that the recording disagreed with a number we chose.
+
+**Why.** Spec 118 rested on two premises, and both were false.
+- *"Both sides are recordings frozen together."* One side is invented Phase 0 test data. That
+  survived a day, to C's own spec 118 work and the lead's Q2.
+- *"Every other criterion that reads those fixtures rests on their agreement."* That survived until
+  a question that was not even about it.
+
+The criterion was proposed (by C, from spec 101's mark measurement), approved (by the operator),
+built, passed, mutation-swept and counted toward the phase **before anyone asked what a PASS
+demonstrated** — and neither the proposer nor the approver asked until it was green.
+
+**Fix.** Removed on the operator's ruling:
+- the check, its four helpers, its three constants and its registration;
+- its seven tests, their fixture and constants;
+- its slot in the two registered-set tests.
+
+It was not in the Phase 6 row, so the phase's definition of done is unchanged. Nothing else
+depended on it: every helper was its own, and commit `97927d9` added nothing another criterion
+uses. Both fixtures stay. Q3 is withdrawn with it. The genuine `AssetPairs` recording is
+re-scoped to a Phase 7 item, so that the candle criterion's tolerance stops being an invented
+number. The rule it produces is in `code-standards.md`: **before a criterion is written, state what
+a PASS will demonstrate and what would have to be true for that to hold; if the answer depends on
+a number nobody has verified, verifying that number is the work, not the check.**
+
+**Also this evening, recorded as the slips they were.**
+- A second escape-carrying heredoc (a `\n` inside a Python heredoc). It died on its own anchor
+  assertion before writing anything.
+- A stray `verify.py --phase 2 &` appended to a test command. It started a full gate outside the
+  gate script. Found in the process list and its four processes stopped within a minute; it wrote
+  nothing that is committed. **Neither mistake cost anything, and both are the same inattention the
+  standing rules exist for.**

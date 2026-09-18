@@ -39,7 +39,7 @@ from tests.verify.conftest import fabricate_package
 
 PHASE2_CRITERIA = (
     "recording_span_continuous",
-    "candles_match_kraken_ohlc",
+    "candles_match_independent_reduction_of_recorded_trades",
     "data_guard_blocks_bad_data",
     "historical_loader_reports_gaps",
     "console_shows_live_rows",
@@ -62,7 +62,7 @@ def shadow_real_package(root: Path) -> Path:
     only shadows the real package when the fabricated tree has one to shadow with.
     `tree_with_harness` builds on `bare_tree` and carries no `src/` at all, which is
     fine for a criterion whose subject is a file on disk and wrong for one that
-    reaches the package by import: `candles_match_kraken_ohlc` asked for
+    reaches the package by import: `candles_match_independent_reduction_of_recorded_trades` asked for
     `build_candles`, found **A's real one** in the developer's own checkout, handed
     it fabricated trades and got `ValueError: a trade must carry 'qty'` - a FAIL,
     where the test was asserting PENDING. The test was correct on the day it was
@@ -179,13 +179,13 @@ def test_no_phase_2_criterion_touches_a_gitignored_directory(verify_module: Modu
 def test_no_phase_2_criterion_hardcodes_an_exchange_value(verify_module: ModuleType) -> None:
     """Rule 2 of `trading-invariants.md`: a remembered tick size is a stale one.
 
-    `candles_match_kraken_ohlc` compares within one `tick_size` **as `AssetPairs`
+    `candles_match_independent_reduction_of_recorded_trades` compares within one `tick_size` **as `AssetPairs`
     reports it**, so the number has to be fetched. The volume tolerance is
     different in kind - 0.1% is the criterion's own statement of how close is close
     enough, not a value the exchange publishes - so it is named as a constant and
     deliberately not caught here.
     """
-    source = inspect.getsource(verify_module.check_candles_match_kraken_ohlc)
+    source = inspect.getsource(verify_module.check_candles_match_independent_reduction_of_recorded_trades)
     code = _COMMENT.sub("", _DOCSTRING.sub("", source))
     for pair_rule in ("tick_size=", "0.1\"", "0.01\"", "ordermin"):
         assert pair_rule not in code
@@ -360,7 +360,7 @@ def test_iso_8601_moments_are_accepted(verify_module: ModuleType, bare_tree: Pat
 
 
 # --------------------------------------------------------------------------- #
-# candles_match_kraken_ohlc
+# candles_match_independent_reduction_of_recorded_trades
 # --------------------------------------------------------------------------- #
 
 #: Three pairs that are all in the committed `tests/fixtures/kraken/asset_pairs.json`,
@@ -442,7 +442,7 @@ def test_candles_are_pending_with_no_fixture(
     verify_module: ModuleType, tree_with_harness: Path
 ) -> None:
     shadow_real_package(tree_with_harness)
-    outcome = run(verify_module, "candles_match_kraken_ohlc", tree_with_harness)
+    outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
     assert_pending(outcome, verify_module)
     assert "ohlc.json" in outcome.message
 
@@ -452,7 +452,7 @@ def test_candles_are_pending_with_a_fixture_and_no_builder(
 ) -> None:
     ohlc_fixture(tree_with_harness)
     shadow_real_package(tree_with_harness)
-    outcome = run(verify_module, "candles_match_kraken_ohlc", tree_with_harness)
+    outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
     assert_pending(outcome, verify_module)
     assert "build_candles" in outcome.message
 
@@ -462,7 +462,7 @@ def test_candles_pass_when_the_builder_reproduces_the_fixture(
 ) -> None:
     ohlc_fixture(tree_with_harness)
     fabricate_builder(tree_with_harness)
-    outcome = run(verify_module, "candles_match_kraken_ohlc", tree_with_harness)
+    outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
     assert_pass(outcome, verify_module)
     assert "tick_size" in outcome.message
 
@@ -483,7 +483,7 @@ def test_the_candle_pass_says_what_it_compared_against_and_what_it_measured(
     """
     ohlc_fixture(tree_with_harness)
     fabricate_builder(tree_with_harness)
-    outcome = run(verify_module, "candles_match_kraken_ohlc", tree_with_harness)
+    outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
     assert_pass(outcome, verify_module)
     message = outcome.message
     assert "criterion raised" not in message, message
@@ -502,7 +502,7 @@ def test_a_candle_fail_names_the_reference_reduction_and_not_kraken(
     """The FAIL half of the same ruling: a deviation is from the reference reduction."""
     ohlc_fixture(tree_with_harness)
     fabricate_builder(tree_with_harness, offsets=(("BTC/USD", "close", 0.5),))
-    outcome = run(verify_module, "candles_match_kraken_ohlc", tree_with_harness)
+    outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
     assert_fail(outcome, verify_module)
     assert "vs the reference reduction's" in outcome.message, outcome.message
     assert "invented AssetPairs" in outcome.message, outcome.message
@@ -515,7 +515,7 @@ def test_a_close_outside_the_pairs_own_tick_size_is_a_fail(
     """BTC/USD's `tick_size` is 0.1 in the committed `AssetPairs` fixture."""
     ohlc_fixture(tree_with_harness)
     fabricate_builder(tree_with_harness, offsets=(("BTC/USD", "close", 0.5),))
-    outcome = run(verify_module, "candles_match_kraken_ohlc", tree_with_harness)
+    outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
     assert_fail(outcome, verify_module)
     assert "tick_size" in outcome.message
 
@@ -532,21 +532,21 @@ def test_the_tolerance_really_comes_from_asset_pairs(
     """
     ohlc_fixture(tree_with_harness)
     fabricate_builder(tree_with_harness, offsets=(("BTC/USD", "close", 0.5),))
-    assert_fail(run(verify_module, "candles_match_kraken_ohlc", tree_with_harness), verify_module)
+    assert_fail(run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness), verify_module)
 
     pairs_path = tree_with_harness / "tests" / "fixtures" / "kraken" / "asset_pairs.json"
     envelope = json.loads(pairs_path.read_text(encoding="utf-8"))
     envelope["result"]["BTC/USD"]["tick_size"] = "1.0"
     pairs_path.write_text(json.dumps(envelope), encoding="utf-8")
 
-    assert_pass(run(verify_module, "candles_match_kraken_ohlc", tree_with_harness), verify_module)
+    assert_pass(run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness), verify_module)
 
 
 def test_a_dropped_bar_is_a_fail(verify_module: ModuleType, tree_with_harness: Path) -> None:
     """A bar Kraken has and the builder does not is a missing decision bar."""
     ohlc_fixture(tree_with_harness)
     fabricate_builder(tree_with_harness, drop={"ETH/USD": BASE_US + 900_000_000})
-    outcome = run(verify_module, "candles_match_kraken_ohlc", tree_with_harness)
+    outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
     assert_fail(outcome, verify_module)
     assert "no ETH/USD candle" in outcome.message
 
@@ -556,7 +556,7 @@ def test_volume_outside_one_tenth_of_a_percent_is_a_fail(
 ) -> None:
     ohlc_fixture(tree_with_harness)
     fabricate_builder(tree_with_harness, offsets=(("SOL/USD", "volume", 0.5),))
-    outcome = run(verify_module, "candles_match_kraken_ohlc", tree_with_harness)
+    outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
     assert_fail(outcome, verify_module)
     assert "outside 0.1%" in outcome.message
 
@@ -571,7 +571,7 @@ def test_a_pair_absent_from_asset_pairs_is_a_fail_not_an_invented_tolerance(
     envelope = json.loads(pairs_path.read_text(encoding="utf-8"))
     del envelope["result"]["SOL/USD"]
     pairs_path.write_text(json.dumps(envelope), encoding="utf-8")
-    outcome = run(verify_module, "candles_match_kraken_ohlc", tree_with_harness)
+    outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
     assert_fail(outcome, verify_module)
     assert "invented" in outcome.message
 

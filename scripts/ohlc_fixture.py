@@ -4,7 +4,7 @@
     python scripts/ohlc_fixture.py --from 2026-09-09T03:00:00Z --bars 3 --write
 
 The fixture holds, per pair, the **real recorded trades** and the OHLCV those trades
-imply. `candles_match_kraken_ohlc` feeds the trades to
+imply. `candles_match_independent_reduction_of_recorded_trades` feeds the trades to
 `acsoe.engines.market_sensor.candles.build_candles` and compares the result against the
 `ohlc` half, within one `tick_size` read from `AssetPairs` and 0.1% on volume.
 

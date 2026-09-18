@@ -27,7 +27,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: A's committed evidence, per `context/ownership.md`, plus the OHLC fixture, which is
-#: produced by `scripts/ohlc_fixture.py` and judged by `candles_match_kraken_ohlc`.
+#: produced by `scripts/ohlc_fixture.py` and judged by `candles_match_independent_reduction_of_recorded_trades`.
 #:
 #: Named one by one rather than globbed. A glob over `tests/fixtures/**` would sweep up
 #: C's and B's deposits, and a test of mine going red because another agent's fixture
