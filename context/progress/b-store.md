@@ -1,5 +1,86 @@
 # Agent B — Store and trading
 
+## Phase 6, session 9 — CLAIMED 2026-09-18, spec 119
+
+Claimed before any code, per rule 5. Tree clean at `e3b5406`, the full gate green when handed to
+me (13 criteria, 13 PASS, 0 FAIL, 0 PENDING). I am the first work after a green gate, so any red
+I introduce is mine and visible immediately.
+
+**Spec 119 — every seeded rejection uses an `(engine, code)` pair the live system can emit.**
+`clients/store/seed.py`'s `_REJECTION_REASONS` carries fourteen `(engine, code, sentence)`
+triples written in Phase 0, before any engine existed. The truth is derived here from each
+engine's own `contracts.py`, not from the tracker's list of five: **seven of the fourteen rows
+are wrong, spread over six distinct bad pairs, and one of the six is not in the tracker's list**
+(`scout`/`outside_universe`). Engine 9's row becomes engine 10 refusing on the absent estimate,
+by the operator's ruling; the other five mappings are how-choices recorded in the build log with
+the option rejected.
+
+**The test nothing has today**, and the reason this is a spec rather than a tidy-up: two tests in
+`tests/clients/store/test_seed.py` walking the seeded `(engine, code)` pairs — one over the rows
+the seed actually wrote to the database, one over the whole `_REJECTION_REASONS` vocabulary so an
+entry the RNG never picked is still checked — asserting each code is declared as a `REASON_*`
+constant in that engine's `contracts.py`. Observed red on the pre-fix seed before anything is
+changed. Spec 99's walking test goes engines → map; this one goes fixture → engines, which is the
+direction nothing walks.
+
+**Not touched:** `console/format.py` (C's, and C's spec 120 retires the orphaned prose after this
+lands), any engine, `scripts/verify.py`, `tests/verify/**`, `core/`, `bootstrap.py`, `config/`.
+`seed_fixtures_present` must still PASS with the same six fixtures; no row is deleted and the
+variety of reasons does not shrink — only two engine *names* leave the vocabulary, because
+neither can be a `rejected_by` in the live chain.
+
+**Line endings measured in Python at claim time** (`b.count(b"\r\n")` against `b.count(b"\n")`,
+never `grep -c`): `src/acsoe/clients/store/seed.py` is **1281 CRLF / 1281 LF — fully CRLF**, and
+stays so; every edit to it goes through an LF-view helper that writes back with `newline="\r\n"`.
+Pure LF and staying so: `tests/clients/store/test_seed.py` (563) and both records.
+
+Records: this file and `docs/build-log/phase-6/b-store.md`. Scratch in the session scratchpad;
+logs `logs/verify/b119-*`. No commit; no full gate from me, by instruction — narrow runs only.
+
+### Spec 119 — DONE 2026-09-18, not committed (the lead commits)
+
+- **The truth, derived from the engines: seven of fourteen rows wrong, six distinct bad pairs, and
+  the tracker's list is one short.** `scout`/`outside_universe` is not in the tracker's five, and it
+  is not a transcription slip: the finding came from spec 99's walking test, which goes engines
+  → map, and `outside_universe` **is** in `REASON_PROSE`, so nothing complained. The five it
+  did name are the five whose engines are C's; `scout` is mine.
+- **Two of the six engines cannot be a `rejected_by` at all.** Engine 9 `order_book` never returns
+  `BLOCK` (the operator's ruled case). **Engine 7 `scout` was not known to be the same shape**: it
+  publishes `reason_code=empty_universe` exactly when `candidate is None`, and engine 19's
+  `_write_rejection` returns 0 without a candidate pair, so none of `scout`'s twelve real codes can
+  ever reach the `rejections` table. Its exclusion codes are a per-pair tally over the universe,
+  not a refusal of a candidate. So that row changed engine too.
+- **A third, smaller disagreement.** The finding and the spec both say `REASON_PROSE` maps both
+  vocabularies. It maps five of the six: `dissimilarity_index` was retired by spec 71 and is not a
+  key today. The row still rendered because `operator_reason` prefers the sentence stored beside
+  the code. That is the mechanism that hid all of this: **the feed never needed the codes to be
+  real.**
+- **The mapping**, each recorded in the build log with the option rejected: `scout`/`outside_universe`
+  → `risk`/`position_open_on_pair`; both `skeptic`/`meta_label_veto` →
+  `skeptic`/`skeptic_veto`; `anomaly`/`outlier_market_state` → `anomaly`/`market_anomalous`;
+  `prediction`/`dissimilarity_index` → `prediction`/`di_refused`;
+  `order_book`/`insufficient_depth` → `cost`/`cost_inputs_unavailable` (the operator's
+  ruling); `decision`/`no_candidate_cleared` → `decision`/`stale_bar`.
+- **The seed's purpose is intact.** Fourteen rows still, 46 `rejections` rows still, **12 distinct
+  codes before and 12 after**. Proven rather than asserted: the committed seed and the working-tree
+  seed were each run into a fresh database and compared table by table — `runs`, `trades`,
+  `positions`, `orders`, `equity_snapshots`, `block_records`, `leaderboard` and `commands` are
+  byte-identical, and in `rejections` every column but `rejected_by`, `reason_code` and `reason` is
+  identical row for row. The RNG stream is untouched because the list is still fourteen long.
+- **The new tests, red first.** `5 failed` on the pre-fix seed, `5 passed` after. The database walk
+  reported only **five** of the six bad pairs under the first threshold set, because the draw never
+  picked the `order_book` row — which is why the second test walks the vocabulary itself.
+- **Mutations: M1 and M2 killed, M3 a deliberate control that survived** the whole of
+  `tests/clients/store/` and `tests/db/` (`276 passed`) and names the per-engine scope of the
+  enumeration as the one clause that makes the assertion about *pairs* rather than about codes.
+- **Narrow runs.** `tests/clients/store/` + `tests/db/` `276 passed`; `tests/console/` `365 passed,
+  1 warning` — C's own inverse-direction test already warns with exactly the five keys this
+  change orphans, which is spec 120's input list. `ruff check src/ tests/ scripts/` all checks
+  passed; `mypy --strict src/ scripts/` no issues in 153 source files. No full gate from me.
+- **Not touched:** `console/format.py`, any engine, `scripts/verify.py`, `tests/verify/**`,
+  `core/`, `bootstrap.py`, `config/`. Four files changed: `src/acsoe/clients/store/seed.py`,
+  `tests/clients/store/test_seed.py`, and these two records.
+
 ## Phase 6, session 8 — CLAIMED 2026-09-17, specs 111, 112, 110 in that order
 
 Claimed before any code, per rule 1. Tree clean at `df49cb4`, the full gate green when handed

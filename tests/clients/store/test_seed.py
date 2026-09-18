@@ -27,6 +27,7 @@ Money is asserted with exact `Decimal` comparisons. `pytest.approx` is banned by
 from __future__ import annotations
 
 import hashlib
+import importlib
 import sqlite3
 from decimal import Decimal
 from pathlib import Path
@@ -37,6 +38,7 @@ import pytest
 from acsoe.clients.store.client import DATA_GUARD_ENGINE, StoreClient
 from acsoe.clients.store.contracts import BlockStatus, RunMode
 from acsoe.clients.store.seed import (
+    _REJECTION_REASONS,
     DEFAULT_SEED,
     SeedFixtures,
     SeedThresholds,
@@ -545,6 +547,89 @@ def test_rejection_reasons_are_written_for_the_operator(seeded: SeedFixtures) ->
         assert "=" not in row.reason
         assert " " not in row.reason_code
         assert row.reason_code == row.reason_code.lower()
+
+
+# --------------------------------------------------------------------------- #
+# The refusal vocabulary is the engines' own — spec 119
+# --------------------------------------------------------------------------- #
+
+
+def _declared_reason_codes(engine: str) -> set[str]:
+    """Every `REASON_*` string constant one engine's `contracts.py` declares.
+
+    The same enumeration C's `tests/console/test_reason_prose.py` uses, written out
+    again here rather than imported: that module is C's lane, and a test of my seed
+    should not go red because a test of C's map was refactored. The convention itself
+    is the shared thing, and it is the convention because a hand-written list of codes
+    agrees with itself — which is exactly how the seed's own list came to be wrong.
+
+    Broader than any one tuple the module publishes on purpose. `scout`'s
+    `EXCLUSION_REASONS` deliberately omits the codes that are statements about the tick
+    rather than about a pair, so a check reading only that tuple would miss them.
+    """
+    module = importlib.import_module(f"acsoe.engines.{engine}.contracts")
+    return {
+        value
+        for name, value in vars(module).items()
+        if name.startswith("REASON_") and isinstance(value, str)
+    }
+
+
+def test_every_rejection_the_seed_wrote_names_a_code_its_engine_declares(
+    seeded: SeedFixtures,
+) -> None:
+    """Spec 119, and the walk nothing in this project performs.
+
+    Spec 99's test walks **engines** and proves no code an engine emits is unmapped by
+    the console. It cannot prove the converse, and the converse is what was wrong: the
+    seed was written in Phase 0 before any engine existed, so its codes were invented —
+    correctly, at the time — and nothing has compared the two since. `REASON_PROSE` maps
+    most of the invented vocabulary and `operator_reason` prefers the row's own sentence
+    over the map anyway, so the console renders every row and looks right. **The console
+    never needed the codes to be real**, which is why six phases passed without notice.
+
+    Read from the database rather than from the module constant, because the rows are
+    what the console and the Phase 3 fixtures actually see. The companion test below
+    walks the constant, which catches an entry the RNG happened not to pick.
+    """
+    with StoreClient(seeded.db_path) as store:
+        rejections = store.recent_rejections(limit=500)
+
+    assert rejections, "the seed writes a rejection feed"
+    invented = sorted(
+        {
+            (row.rejected_by, row.reason_code)
+            for row in rejections
+            if row.reason_code not in _declared_reason_codes(row.rejected_by)
+        }
+    )
+    assert invented == [], (
+        "the seed wrote rejection(s) naming a code the engine does not declare in its "
+        f"own contracts.py: {invented}. The console renders them and the operator reads "
+        "a refusal the system has never been able to make."
+    )
+
+
+def test_every_reason_in_the_seeds_vocabulary_names_a_code_its_engine_declares() -> None:
+    """The same property over the whole vocabulary, not only the rows that got written.
+
+    `_write_rejections` picks a triple at random per bar, so an entry can sit in the
+    list for a whole phase without ever reaching a row — and it would then be invisible
+    to the test above under every seed but one. This one needs no database and covers
+    the list exhaustively; the two together are the fixture side of the seam whose
+    engine side is spec 99's.
+    """
+    invented = sorted(
+        {
+            (engine, code)
+            for engine, code, _sentence in _REJECTION_REASONS
+            if code not in _declared_reason_codes(engine)
+        }
+    )
+    assert invented == [], (
+        "the seed's rejection vocabulary carries (engine, code) pair(s) the named engine "
+        f"does not declare: {invented}"
+    )
 
 
 def test_every_seeded_equity_row_says_its_cash_is_the_start_of_tick_figure(

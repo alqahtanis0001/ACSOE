@@ -2940,3 +2940,150 @@ else already reads "every fill it has executed" — `clients/paper/broker.py:129
 `engines/risk/README.md:227` — and the two remaining "simulated fill" mentions
 (`broker.py:378`, `tests/clients/paper/test_broker.py:632`) are the argument for *why* the ledger
 is unconditional in paper rather than a failure path, which is still true.
+
+### Spec 119, diagnosis — the seeded refusal vocabulary, checked against the engines rather than against the finding
+
+**Agent:** B · **Task:** spec 119 · **Date:** 2026-09-18
+
+**What happened.** `clients/store/seed.py`'s `_REJECTION_REASONS` holds fourteen
+`(engine, code, sentence)` triples that become `rejections` rows. Checked one at a time against
+the named engine's own `contracts.py` — every `REASON_*` string constant the module declares,
+which is the same enumeration C's spec 99 test uses — **seven of the fourteen rows name a code
+that engine does not declare**, over six distinct bad pairs:
+
+| Seeded engine | Seeded code | Codes the engine actually declares |
+|---|---|---|
+| `scout` | `outside_universe` | `pair_rules_missing`, `no_live_quote`, `crypto_quoted`, `quote_not_provably_stable`, `no_quote_balance`, `barriers_below_tick_size`, `no_fx_rate`, `insufficient_quote_balance`, `below_ordermin`, `below_costmin`, `scout_inputs_unavailable`, `empty_universe` |
+| `skeptic` (×2 rows) | `meta_label_veto` | `skeptic_unavailable`, `skeptic_veto` |
+| `anomaly` | `outlier_market_state` | `anomaly_unavailable`, `anomaly_inputs_incomplete`, `market_anomalous` |
+| `prediction` | `dissimilarity_index` | `prediction_unavailable`, `prediction_inputs_incomplete`, `di_refused`, `di_percentile_mismatch` |
+| `order_book` | `insufficient_depth` | `book_fetch_failed`, `book_unusable`, `book_too_thin`, `no_quote_balance`, `order_book_inputs_unavailable` |
+| `decision` | `no_candidate_cleared` | `pair_disagreement`, `stale_bar`, `input_missing`, `no_approved_quantity`, `decision_inputs_unavailable` |
+
+The other seven rows — three `cost` and four `risk` — name codes their engines do declare and are
+correct as they stand.
+
+**Why the tracker's list is one short, and it is not a transcription slip.** The finding of
+2026-09-16 names five bad pairs and does not name `scout`/`outside_universe`. That one is invisible
+from the direction the finding was found from: it was found by spec 99's walking test, which goes
+*engines → map*, and `outside_universe` **is** in `REASON_PROSE`, so the console renders it and
+nothing complains. The five it did name are the five whose engines are C's; `scout` is mine, and it
+is the only bad pair in an engine the finder did not own. Reported to the lead as a disagreement
+with the tracker rather than corrected in place.
+
+**Two of the six engines cannot be a `rejected_by` at all, not merely a wrong code.** A
+`rejections` row is written by engine 19 only when the *opportunity* chain blocked, `state["scout"]
+["pair"]` is present, and the blocking engine published a `reason_code` (`engines/memory/engine.py`,
+`_write_rejection`). Engine 9 `order_book` never returns `BLOCK` — it omits its estimate and engine
+10 refuses on the absence — which is the operator's ruled case. **Engine 7 `scout` fails the second
+condition instead**: it publishes `reason_code=empty_universe` exactly when `candidate is None`
+(`engines/scout/engine.py:249`), so on the one tick it refuses, there is no pair, and
+`_write_rejection` returns 0 before it ever looks at the code. `scout`'s twelve codes are real, and
+none of them can ever reach the `rejections` table — its exclusion codes are a per-pair *tally* on
+the universe, not a refusal of a candidate. So repointing that row is not a rename either: the row
+changes engine, exactly as engine 9's does.
+
+**A third disagreement, smaller.** Both the finding and spec 119 say `REASON_PROSE` maps both
+vocabularies, which is what has kept the console looking right. It maps five of the six:
+`dissimilarity_index` was retired from the map by spec 71 and is **not** a key today. The seeded row
+still renders, because `operator_reason` prefers the row's own prose sentence when it has one and
+only falls back to the map for an empty or code-like `reason` — so the one row whose code is
+unmapped is saved by the sentence beside it. Worth recording because it is the mechanism that hid
+all of this for six phases, stated exactly: **the console never needed the codes to be real.**
+
+**Why it matters.** Every one of these rows is research data about a refusal the system has never
+been able to make, and the rejection feed is the counterfactual dataset the whole exercise exists to
+build. Nothing walks from the fixture to the engines, which is the direction that would have caught
+it; that walk is what this spec adds.
+
+### Spec 119, fix — the seed's refusal vocabulary is now the engines' own, and two tests walk from the fixture back to them
+
+**Agent:** B · **Task:** spec 119 · **Date:** 2026-09-18
+
+**Fix.** Seven of the fourteen `_REJECTION_REASONS` rows are repointed. No row was deleted, the
+list is still fourteen long, and the number of **distinct codes is 12 before and 12 after** — the
+variety of reasons the console feed exercises is unchanged, and only two engine *names* leave it,
+because neither can be a `rejected_by` in the live chain.
+
+| # | Before | After | Why this one |
+|---|---|---|---|
+| 1 | `scout` / `outside_universe` | `risk` / `position_open_on_pair` | The engine had to change, not only the code: `scout` can never write a rejection. Invariant 6's one-position-per-pair refusal is the same *question* the retired row asked — is this pair tradable in the account's current state — asked by an engine that can actually refuse a candidate over it |
+| 2 | `skeptic` / `meta_label_veto` | `skeptic` / `skeptic_veto` | Engine 15 declares one veto code and one unavailability code. A rename |
+| 3 | `skeptic` / `meta_label_veto` | `skeptic` / `skeptic_veto` | The second sentence stays: engine 15 distinguishes nothing finer than a veto, so the variety lives in the prose, exactly as it does for the two `net_edge_below_hurdle` rows |
+| 4 | `anomaly` / `outlier_market_state` | `anomaly` / `market_anomalous` | A rename. `REASON_PROSE` already carries a comment saying the engine's code is `market_anomalous` |
+| 5 | `prediction` / `dissimilarity_index` | `prediction` / `di_refused` | A rename, and the one row whose code was **not** in `REASON_PROSE` either — spec 71 retired that spelling from the map and the seed kept it |
+| 6 | `order_book` / `insufficient_depth` | `cost` / `cost_inputs_unavailable` | **The operator's ruling.** Engine 9 publishes `book_too_thin` and omits `estimated_slippage_pct`; engine 10's `_require` refuses on the absent key with `cost_inputs_unavailable`. The sentence now says what the chain actually did |
+| 7 | `decision` / `no_candidate_cleared` | `decision` / `stale_bar` | The engine keeps a row — engine 16 became a gate on 2026-09-16 and its coherence refusal is one nothing else in the fixture exercises — but not that code: `no_candidate_cleared` describes the old "it combines their outputs" reading of engine 16, which is exactly what the gate ruling retired |
+
+**Options rejected, one per mapping that had a real alternative.** Row 1:
+`decision`/`pair_disagreement` — rejected because row 7 already gives the fixture a `decision`
+row, and because "is this pair tradable in the account's current state" is engine 11's question,
+not engine 16's. Row 6: `order_book`/`book_too_thin`, the minimal rename — rejected because it
+leaves the row describing a refusal by an engine that never returns `BLOCK`, which is the finding
+itself. Row 7: `decision`/`no_approved_quantity` — rejected because engine 11 refusing is
+already four rows, while `stale_bar` is the coherence failure only engine 16 can see.
+
+**The test, red before the fix, and the evidence that one test was not enough.** Two tests in
+`tests/clients/store/test_seed.py`, both walking fixture → engines, which is the direction
+nothing walks. Verbatim, on the pre-fix seed:
+
+```
+FAILED tests/clients/store/test_seed.py::test_every_rejection_the_seed_wrote_names_a_code_its_engine_declares[blocks1-dd0.01-loss1-err1]
+FAILED tests/clients/store/test_seed.py::test_every_rejection_the_seed_wrote_names_a_code_its_engine_declares[blocks15-dd0.10-loss5-err20]
+FAILED tests/clients/store/test_seed.py::test_every_rejection_the_seed_wrote_names_a_code_its_engine_declares[blocks30-dd0.25-loss12-err60]
+FAILED tests/clients/store/test_seed.py::test_every_rejection_the_seed_wrote_names_a_code_its_engine_declares[blocks60-dd0.50-loss40-err80]
+FAILED tests/clients/store/test_seed.py::test_every_reason_in_the_seeds_vocabulary_names_a_code_its_engine_declares
+5 failed, 81 deselected in 14.76s
+```
+
+```
+AssertionError: the seed's rejection vocabulary carries (engine, code) pair(s) the named engine
+does not declare: [('anomaly', 'outlier_market_state'), ('decision', 'no_candidate_cleared'),
+('order_book', 'insufficient_depth'), ('prediction', 'dissimilarity_index'),
+('scout', 'outside_universe'), ('skeptic', 'meta_label_veto')]
+```
+
+**The first threshold case reported five bad pairs, not six**, and the one it missed was
+`order_book`/`insufficient_depth`: `_write_rejections` draws a triple at random per bar, so under
+that seed the worst row in the list — the operator's own named case — **never reached a
+database row at all**. That is why there is a second test walking the module constant rather than
+the table. The database walk is the one that describes what the console actually shows; the
+vocabulary walk is the one an unlucky draw cannot dodge. After the fix, `5 passed`.
+
+**Nothing but the vocabulary moved.** The committed seed and the working-tree seed were each run
+into a fresh database and compared table by table (`seed.py` byte-copied and restored in a
+`finally` with the sha256 compared in the same statement, `6194fea090807e23` both arms).
+`runs`, `trades`, `positions`, `orders`, `equity_snapshots`, `block_records`, `leaderboard` and
+`commands` are **byte-identical**; `rejections` still holds 46 rows and every column but
+`rejected_by`, `reason_code` and `reason` is identical row for row. The RNG stream is untouched
+because the list is still fourteen entries long, which is why the six Phase 3 fixtures come out
+unchanged: the 18-tick outage over two `run_id`s with 5 double-blocker ticks, 2 open positions, 2
+resting entry orders, drawdown `0.2000017843760037115020877199`, a losing streak of 8, and 33
+trades / 46 rejections.
+
+**Mutations.** `PYTHONDONTWRITEBYTECODE=1`, one mutant at a time, each target byte-copied and
+restored in a `finally` with the sha256 compared in the same statement, every anchor asserted to
+occur exactly once, no mutant left on disk. Baseline `5 passed, 81 deselected`.
+
+| # | Mutation | Target sha256 | Verdict | Killed by |
+|---|---|---|---|---|
+| M1 | `("prediction", "di_refused",` to `("prediction", "dissimilarity_index",` — one repointed code reverted to its Phase 0 spelling | `6194fea090807e23` | `4 failed, 1 passed` — **KILLED** | both tests; the one passing case is the threshold set whose draw never picked that row, which is the second test's whole justification |
+| M2 | `("anomaly", "market_anomalous",` to `("risk", "market_anomalous",` — a **real** code moved onto an engine that does not declare it | `6194fea090807e23` | `5 failed` — **KILLED** | both tests |
+| M3 | **Control.** M2, plus `_declared_reason_codes` widened to the union over every engine's contracts | seed `6194fea090807e23`, test `4e911948274f4f6b` | `5 passed` — **SURVIVED**, and re-run against the whole of `tests/clients/store/` and `tests/db/`: `276 passed` | nothing |
+
+M3 is the one worth keeping. It says the assertion is about **pairs** and not about codes, and that
+the per-engine scope of the enumeration is the single clause doing that work: widen it by one line
+and a real code filed under the wrong engine passes every test in my lane. M1's split verdict is
+the other half — asked *which* test killed it, the honest answer is "one of the two, and under
+one draw in four only the vocabulary walk".
+
+**Not touched, deliberately.** `console/format.py` is C's and every code stays mapped until spec
+120. C's own `test_the_inverse_is_reported_as_a_warning_and_never_as_a_failure` already names the
+five keys this change orphans — `insufficient_depth`, `meta_label_veto`, `no_candidate_cleared`,
+`outlier_market_state`, `outside_universe` — as a warning rather than a failure, which is
+exactly the list spec 120 retires. `tests/console/` is `365 passed, 1 warning` after the change.
+
+**Consequence.** The seed's docstring now states the rule it was missing: a row's code is picked
+out of the engine's module, never composed because it reads well, and engines 7 and 9 are named as
+deliberately absent with the reason for each. The fixture-to-engine walk is the half of the seam
+spec 99 could not write from the console side.

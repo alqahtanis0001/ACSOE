@@ -203,6 +203,34 @@ into a real newline, a NUL byte, an unterminated heredoc) — the Phase 0 lesson
 any escape-carrying script with the file tool. `research/labelling.py` is wholly CRLF in the working
 tree (C's lane, not yet converted).
 
+### SPEC 119 (B): the seed's vocabulary is real, and three findings the original one missed
+
+B repointed seven seeded `rejections` rows across **six** bad pairs — the operator's engine 9 case
+becomes engine 10 refusing on the absent estimate, and each other mapping is recorded in B's build
+log with the option rejected. A new test walks every `(engine, code)` the seed writes against that
+engine's own `contracts.py`; it was observed red on the pre-fix seed and is green after. **Three
+findings, each correcting something this tracker previously stated:**
+
+1. **The 2026-09-16 list of bad pairs was one short.** `scout`/`outside_universe` is a sixth, and
+   nothing complained because spec 99's walk runs engines → map and that code *is* in the map.
+2. **Engine 7 `scout` has the same shape as engine 9, which nobody knew.** None of its twelve real
+   codes can reach `rejections` at all: it publishes `empty_universe` exactly when there is no
+   candidate, and engine 19 writes no rejection without a candidate pair. Its exclusion codes are a
+   per-pair tally over the universe, not a refusal of a candidate — so that row had to change
+   engine, not merely code, exactly as engine 9's did.
+3. **`REASON_PROSE` never needed the codes to be real, and that is the mechanism that hid five
+   phases of drift.** `operator_reason` prefers the sentence stored beside the code, so the console
+   rendered correctly whatever the code said. The earlier claim here that the map "maps both
+   vocabularies" is wrong in detail: it maps five of six, and `dissimilarity_index` was retired by
+   spec 71 without anything noticing.
+
+**And a control worth keeping.** B's M3 applied a real code filed under the wrong engine *and*
+widened the enumeration to the union over all engines: `5 passed`, and `276 passed` across the
+wider lane. **The per-engine scope of that enumeration is the single clause doing the work** — one
+line wider and a real code under the wrong engine passes everything. Also: B's first test reported
+five bad pairs rather than six, because its sampled draw never picked the `order_book` row, which
+is why the second test walks the constant rather than the written rows.
+
 ### PHASE 6's NINE CRITERIA ARE GREEN, 2026-09-18 02:40 local
 
 `verify.py --phase 6`: **13 criteria, 13 PASS, 0 FAIL, 0 PENDING, exit 0** —

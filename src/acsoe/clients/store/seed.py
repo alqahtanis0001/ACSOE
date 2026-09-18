@@ -169,6 +169,25 @@ _PAIRS: Final[tuple[tuple[str, str, str, Decimal], ...]] = (
 #: Rejection reasons written for the operator, not for the log — the console renders
 #: them verbatim. `ui-context.md` requires a proper minus sign (U+2212) in numeric
 #: output, so the stored text already carries one and the console needs no rewriting.
+#:
+#: **Every code here is one the named engine declares in its own `contracts.py`, and two
+#: tests in `tests/clients/store/test_seed.py` walk from these rows back to the engines to
+#: keep it that way.** Until spec 119 none of that was true: this list was written in
+#: Phase 0, before any engine existed, so plausible codes were invented — correct at the
+#: time — and nothing compared the two afterwards. The console hid it, because
+#: `operator_reason` prefers the sentence stored beside the code and only consults
+#: `REASON_PROSE` when there is none, so **the feed never needed the codes to be real**.
+#: Adding a row means picking its code out of the engine's module, never composing one
+#: that reads well: a rejection is research data about a refusal the system can make.
+#:
+#: **Engines 7 `scout` and 9 `order_book` are deliberately absent.** Neither can be a
+#: `rejected_by` in the live chain, so a row naming one describes a refusal that cannot
+#: happen. Engine 9 never returns `BLOCK` at all: a book too thin to walk leaves
+#: `estimated_slippage_pct` unpublished and engine 10 `cost` refuses on the absence,
+#: which is the `cost_inputs_unavailable` row below. Engine 7 does block, but only with
+#: `empty_universe`, which it publishes exactly when there is **no** candidate — and
+#: engine 19 writes no rejection without a candidate pair. Its exclusion codes are a
+#: per-pair tally over the universe, not a refusal of a candidate.
 _REJECTION_REASONS: Final[tuple[tuple[str, str, str], ...]] = (
     # ruff RUF001 flags U+2212 as an ambiguous character. It is the point: number
     # rule 6 of `ui-context.md` requires a proper minus sign in numeric output, not a
@@ -177,17 +196,28 @@ _REJECTION_REASONS: Final[tuple[tuple[str, str, str], ...]] = (
     ("cost", "net_edge_below_hurdle", "Net edge −0.21% after fees"),  # noqa: RUF001
     ("cost", "net_edge_below_hurdle", "Net edge −0.08% after fees"),  # noqa: RUF001
     ("cost", "spread_wider_than_move", "Spread 0.42% is wider than the expected move"),
+    # Engine 10 refusing on an input it never received — the shape engine 9 produces when
+    # the bid side cannot absorb the basis notional within the fetched depth. Operator
+    # ruling of 2026-09-16: the refusal belongs to the gate, not to the engine that
+    # declined to guess.
+    (
+        "cost",
+        "cost_inputs_unavailable",
+        "No slippage estimate: the book was too thin to price the exit",
+    ),
     ("risk", "below_ordermin", "Position would be below the pair's minimum order size"),
     ("risk", "below_costmin", "Position value below the pair's minimum order value"),
     ("risk", "insufficient_quote_balance", "Not enough USD held to open this position"),
     ("risk", "max_concurrent_positions", "Already holding the maximum number of positions"),
-    ("scout", "outside_universe", "Pair left the tradable universe at this balance"),
-    ("skeptic", "meta_label_veto", "Skeptic vetoed: similar setups lost 4 of the last 5 times"),
-    ("skeptic", "meta_label_veto", "Skeptic vetoed: entry timing looks like adverse selection"),
-    ("anomaly", "outlier_market_state", "Market state is an outlier on volume and spread"),
-    ("prediction", "dissimilarity_index", "Conditions unlike anything in training (DI 0.97)"),
-    ("order_book", "insufficient_depth", "Order book too thin to fill without 0.8% slippage"),
-    ("decision", "no_candidate_cleared", "Nothing cleared the gates on this bar"),
+    ("risk", "position_open_on_pair", "This pair already holds an open position"),
+    # One veto code, two sentences: engine 15 distinguishes nothing finer than a veto, and
+    # the variety the feed needs lives in the prose, exactly as it does for the two
+    # `net_edge_below_hurdle` rows above.
+    ("skeptic", "skeptic_veto", "Skeptic vetoed: similar setups lost 4 of the last 5 times"),
+    ("skeptic", "skeptic_veto", "Skeptic vetoed: entry timing looks like adverse selection"),
+    ("anomaly", "market_anomalous", "Market state is an outlier on volume and spread"),
+    ("prediction", "di_refused", "Conditions unlike anything in training (DI 0.97)"),
+    ("decision", "stale_bar", "An approval on this candidate came from an earlier decision bar"),
 )
 
 
