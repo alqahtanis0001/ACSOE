@@ -52,9 +52,13 @@ Kraken number an agent remembers is stale.
 The client never supplies a fallback for any of them. `map_trade_volume` raises when
 a fee field is missing rather than assuming a tier, and a pair whose `AssetPairs`
 entry is incomplete is dropped from the snapshot rather than defaulted. That is
-deliberate: invariant 2's paper-mode fallbacks are decisions made by the *consumer*,
-which must record which fallback fired, and a client that quietly supplied one would
-make that record impossible.
+deliberate, and read invariant 2 for why rather than a restatement of it here: since
+2026-09-16 **there is no paper-mode fallback left anywhere in the system**, so a
+failed fetch blocks in paper mode exactly as it does in live. This client reports the
+failed call and substitutes nothing, and no consumer substitutes either. A value
+quietly supplied here would not be pre-empting somebody else's decision — there is no
+such decision left to pre-empt — it would be the only thing in the system still able
+to turn a block into a trade.
 
 ### The field-name assumption
 

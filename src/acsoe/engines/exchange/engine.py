@@ -114,7 +114,8 @@ class ExchangeEngine(BaseEngine):
         ``gather(..., return_exceptions=True)`` rather than three awaits, so a failing
         ``TradeVolume`` does not stop the balances from being fetched. One outage must
         not become three blanks in ``state`` — a consumer needs to know exactly which
-        value it is missing, because the paper-mode fallback for each one is different.
+        value it is missing: engine 10 `cost` quotes the named call and its reason in
+        its block sentence, rather than the state key that is merely ``None``.
         """
         client = context.clients.kraken
 

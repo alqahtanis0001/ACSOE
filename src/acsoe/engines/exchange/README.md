@@ -60,13 +60,18 @@ having to.
 ## A failed fetch is recorded, never defaulted
 
 The three calls run concurrently with `return_exceptions=True`, so one outage does not
-become three blanks: a consumer has to know exactly which value it is missing, because
-invariant 2's paper-mode fallback is different for each one.
+become three blanks: a consumer has to know exactly which value it is missing. Engine
+10 `cost` is the reader that makes the granularity load-bearing — when the fee tier is
+absent and `trade_volume` is the call named in `failed_fetches`, its block sentence
+quotes *that call and its reason*, because "missing exchange.fee_tier" is true and
+sends the operator to look at a `None`.
 
-**This engine applies none of those fallbacks.** `fee_tier` is `null` when
-`TradeVolume` failed; it is never "assume tier 1". The fallback is the *consumer's*
-decision and invariant 2 requires the consumer to record which fallback fired, so
-supplying one here would erase the record. It would also be a hardcoded fee, which
+**This engine substitutes nothing, and no consumer substitutes either.** `fee_tier` is
+`null` when `TradeVolume` failed; it is never "assume tier 1". Invariant 2 is the place
+to read why, and it is shorter than it used to be: no paper-mode fallback remains
+anywhere in the system, and a failed fetch blocks in paper mode exactly as in live. So
+the absence engine 1 publishes is the answer, not a placeholder somebody downstream is
+expected to fill in. Supplying a tier here would be a hardcoded fee besides, which
 invariant 2 forbids outright.
 
 An exception that is not exchange-shaped is **re-raised**, not recorded. That is a

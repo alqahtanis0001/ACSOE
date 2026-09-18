@@ -19,6 +19,262 @@ Spec 84 is first because nothing else in the phase can start without it: B's pap
 implements it and engines 18, 21 and 22 call it. The concrete signatures are under
 **SPEC 84 — THE ORDER SURFACE, FOR B** immediately below.
 
+## SPEC 109 — THE PAPER-MODE FALLBACK PROSE — DONE 2026-09-18
+
+A claimed **spec 109**; claimed before any byte was changed, and the build-log diagnosis
+entry was written before the first edit. Prose only: no behaviour, no payload, no test
+assertion, nothing outside lane A.
+
+| Spec | What | Files I touched | State |
+|---|---|---|---|
+| 109 | Lane A stops describing paper-mode fallbacks that no longer exist; each site points at invariant 2 instead of restating it | `clients/kraken/{README.md,rest.py}`, `engines/exchange/{README.md,contracts.py,engine.py}`, `platform/config.py`, `tests/engines/test_exchange.py`, `tests/clients/kraken/test_rest.py`, this file, `docs/build-log/phase-6/a-platform.md` | **DONE 2026-09-18** — `182 passed in 1.22s`; ruff clean; mypy `153 source files` |
+
+**Narrow runs** (the lead runs the authoritative gate; I ran no full gate):
+`tests/engines/test_exchange.py tests/clients/kraken/` → **`182 passed in 1.22s`**
+(`logs/verify/a109-pytest.log`); `ruff check src/ tests/ scripts/` → **All checks passed**
+(`logs/verify/a109-ruff.log`); `mypy --strict src/ scripts/` → **`Success: no issues found
+in 153 source files`** (`logs/verify/a109-mypy.log`).
+
+**Line endings.** Only `engines/exchange/contracts.py` and `engines/exchange/engine.py` are
+CRLF; the other six files are wholly LF. Both CRLF files were patched through Python with the
+replacement's endings converted explicitly and the counts re-read afterwards (108 and 197 CRLF,
+**zero** bare LF in either). No heredoc carried an escape into any file.
+
+**A measurement error worth recording, because it nearly went the other way.** My first CRLF
+count used `grep -c $'\r$'` and reported *every* file as wholly CRLF — including four that hold
+no CR at all. The number was equal to `wc -l` for all ten files, which is what gave it away. The
+count that decides how a file is written has to be taken with the tool that will write it;
+re-measuring with Python gave the real split above. Had I trusted the first reading I would have
+converted six LF files to CRLF wholesale.
+
+### The eight sites rewritten
+
+Sites 1–5 are the ones spec 109 names. Sites 6–8 were found by the lane grep and carry the same
+sentence or a worse one; they are the same defect and were not left behind.
+
+| # | Site | Before, in substance | After, in substance |
+|---|---|---|---|
+| 1 | `clients/kraken/README.md` (~52) | The client supplies no fallback **because invariant 2's paper-mode fallbacks are the consumer's decision**, and the consumer must record which fired | Same refusal, and read invariant 2 for why: since 2026-09-16 no paper-mode fallback remains anywhere, so a failed fetch blocks in paper exactly as in live. The client reports the failed call and substitutes nothing; **no consumer substitutes either**. A value supplied here would not pre-empt a decision — there is none left — it would be the only thing still able to turn a block into a trade |
+| 2 | `engines/exchange/README.md` (~62) | The three calls are concurrent so a consumer knows which value is missing, **because invariant 2's fallback is different for each one**; engine 1 applies none of *those fallbacks*, which are the consumer's to record | The concurrency reason is now the true one: **engine 10 `cost` is the reader that makes the per-call granularity load-bearing** — it quotes the named call and its reason in its block sentence, because "missing exchange.fee_tier" sends the operator to a `None`. Then: this engine substitutes nothing and no consumer substitutes either; invariant 2 is the place to read why and it is shorter than it was |
+| 3 | `engines/exchange/contracts.py` (~16) | Engine 1 does not apply **invariant 2's paper-mode fallbacks: those are the consumer's decision** and supplying one here would erase the record | Engine 1 reports the failed call and substitutes nothing; invariant 2 — pointed at, not restated — leaves no paper-mode fallback anywhere, so no consumer substitutes either. The gate handed `None` still blocks, invariant 3 |
+| 4 | `engines/exchange/engine.py` (~117) | One outage must not become three blanks, **because the paper-mode fallback for each one is different** | Same requirement, true reason: engine 10 quotes the named call and its reason rather than the state key that is merely `None` |
+| 5 | `tests/engines/test_exchange.py` (module docstring, ~10) | The engine does not apply **invariant 2's paper-mode fallbacks: those are the consumer's decision** | It substitutes nothing, and under invariant 2 neither does any consumer: no paper-mode fallback remains, so the published absence is the answer and every gate handed it blocks |
+| 6 | `clients/kraken/rest.py` (~300, `map_trade_volume`) | **Not named by spec 109.** There is no "assume a tier" **because invariant 2's paper-mode fee fallback is a decision made by the consumer** | The fee fallback was retired 2026-09-10 and the last of any kind 2026-09-16, so a confirmed pair with no fee data blocks in paper exactly as in live. **Nothing downstream is waiting to supply what this function refuses to invent** |
+| 7 | `tests/engines/test_exchange.py` (~208, the fee-fallback test's docstring) | **Invariant 2's paper fallback is the consumer's decision** and the consumer must record which fired | Invariant 2 leaves no paper-mode fallback anywhere: a failed fee fetch blocks the pair in paper exactly as in live. A tier supplied here is the substitution the invariant forbids, and a hardcoded fee besides |
+| 8 | `tests/clients/kraken/test_rest.py` (~263, docstring) | **Invariant 2's paper fallback is the consumer's decision**, recorded as such | Invariant 2 leaves no paper-mode fallback: a pair with no fee data blocks. A supplied tier is indistinguishable from a fetched one |
+
+**Both test *names* were kept** — `test_no_fallback_is_ever_substituted_for_a_failed_fee_fetch`
+and `test_a_missing_fee_field_is_a_failure_and_never_an_assumed_tier` are accurate under the
+amended invariant and are more accurate than they were. Only the docstrings moved. **No
+assertion was touched in either file.**
+
+Site 9 — `platform/config.py::load_credentials` — is rewritten too and is written up as
+**finding 3** below, because it is the one that claimed something about behaviour rather than
+about whose decision a fallback is.
+
+### THREE FINDINGS, none of them silently corrected
+
+#### Finding 1 — an assertion in my own lane that cannot fail
+
+`tests/engines/test_exchange.py`, in the fee-fallback test:
+
+```python
+assert data["fee_tier"] is None
+assert "tier" not in str(data.get("fee_tier"))
+```
+
+Given the line above it the second is `"tier" not in "None"`, a tautology. It could only fail on
+a `fee_tier` that was a mapping carrying the key, which the preceding line has already excluded.
+The test's name is the property worth having and the **first** line proves it; the second reads
+as a stronger second check and is not one.
+
+**Not changed** — spec 109 is prose-only and a test assertion is not mine to edit under it. For
+a ruling: delete it, or replace it with an arm that can fail — assert on the whole payload, so a
+tier smuggled into a sibling key would be caught.
+
+#### Finding 2 — `exchange/README.md` describes a retention read that no engine performs
+
+Outside the grep's four words; found by reading the file. The "Retained last-known-good values"
+section says *"engines 21 and 22 read it from the client directly in Phase 6"*. On disk at
+`2beb8ba`:
+
+- **Engine 21 `position_manager` reads neither retained value** — `last_known_good` does not
+  occur anywhere in that package.
+- **Engine 22 `exit` reads only `last_known_good_asset_pairs`** (`engines/exit/engine.py:523`),
+  and its `contracts.py:159-166` records that it **deliberately never reads a balance**: an
+  exit's quantity is the position's, and a cap at the base holding would round every paper exit
+  to nothing, the paper ledger being quote-side only by B's spec 88 ruling.
+- So **`last_known_good_balances` has no reader in `src/` at all.** The client retains it
+  (`clients/kraken/rest.py:551`, on the facade, forwarded by the paper broker), engine 1 reads
+  its *age* to publish `retained`, and nothing reads its value.
+
+**The decision exists and it is in B's lane, not mine.** B recorded it 2026-09-16 in their build
+log ("Decision: engine 22 never reads a balance…") and progress file, marked **escalated to the
+lead** as a deviation from spec 93. So nothing changed unrecorded — A's README was simply never
+told, and the sentence was true of the spec and never of the code.
+
+**Why it is not a nicety.** Invariant 2 justifies the retention as *"a requirement on Agent A's
+client, not an optimisation"* because discarding *"would make rule 14 unimplementable at exactly
+the moment it is needed."* For `AssetPairs` that is right and engine 22 proves it. For the
+balance the premise no longer holds, and A's README is the only place still asserting it does. A
+reader auditing invariant 14 against the code finds a retained balance, a README saying two
+engines read it, and no reader — and cannot tell a requirement being met from a limb nobody
+amputated.
+
+**Not changed**, per the rule on stale prose. Two questions for the lead, neither mine under a
+prose spec:
+
+1. Does `last_known_good_balances` keep its retention with no reader — invariant 2's wording
+   requires the client to retain it regardless — or does invariant 14's *"engines 21 and 22 may
+   use the last known good balances"* need amending to what B built and the lead accepted?
+2. The README sentence is wrong either way, but **which** correct fact to write depends on the
+   answer to (1), so it waits for the ruling rather than guessing.
+
+#### Finding 3 — `load_credentials` told a fresh clone it could trade
+
+`platform/config.py`: *"paper mode runs the whole pipeline without one, and invariant 2's paper
+fallbacks exist exactly so that it can."* Both halves false, and the second worse than the other
+eight sites: it names paper fallbacks as the **mechanism** that makes an unauthenticated clone
+work. Invariant 2 states the truth in as many words — with an empty `.env` the private calls
+fail, `TradeVolume` returns nothing and **every pair blocks at the cost gate**; the clone still
+runs the loop, still records the book and still builds candles, but **takes no paper trades** and
+writes no rejection past that gate.
+
+**This one is rewritten as well as reported**, and the line between it and finding 2 is the test
+the lead set. Here the ruling exists and is explicit — invariant 2 already spells out both what a
+keyless clone does and what it does not — so the code does what the system decided and only the
+sentence is stale. In finding 2 the ruling is B's, it points the other way from my prose, and
+choosing which fact to record would be answering it.
+
+### Every other grep hit, with a verdict
+
+`fallback`, `starting_balances`, `substitut`, `assume` across `clients/kraken/`,
+`clients/recorder/`, `platform/`, `cli/`, `scripts/` (less `verify.py`), `engines/exchange`,
+`market_data_recorder`, `market_sensor`, `data_guard`, `research/{replay,historical,backtest}.py`
+and lane A's tests. Everything below is **kept unchanged**; the eight rewritten sites are in the
+table above and are not repeated.
+
+**True statements of invariant 2 as it now reads — keep:**
+
+- `clients/kraken/contracts.py:11` no default "not even as a fallback"; `:272` an assumed input
+  invalidates the cost gate; `:334` the spread is the input that may never be assumed; `:397` a
+  retained stale spread is a loaded gun pointed at the input that must have no fallback — this
+  one is invariant 2's own reasoning almost verbatim and is still correct.
+- `clients/kraken/README.md:41` no fee/minimum/tick/precision as constant, fallback or comment;
+  `:129` and `:148` an assumed spread invalidates the gate; `:292` "It applies no fallback. See
+  above" — still true, and "above" now points at the rewritten paragraph.
+- `clients/kraken/rest.py:40` and `:351` assumed spread or fee invalidates the gate; `:47` no
+  constant, fallback or comment; `:262` a missing pair rule blocks that pair with no fallback —
+  matches invariant 2's table row exactly.
+- `engines/data_guard/engine.py:84` "No default, and no fallback if the key is absent —
+  `config.get` raises"; `engines/data_guard/README.md:62`; `engines/market_sensor/README.md:176`.
+- `tests/platform/test_config.py:763` — *"a fallback here is a guessed answer to how much money
+  is at risk"*. Stronger now than when written.
+- `scripts/record.py:1298` — a hardcoded fallback is how a recorder quietly records the wrong
+  thing.
+
+**The word `fallback` used for something that is not an invariant-2 fallback — keep:**
+
+- `clients/kraken/ws.py:149-156` `_parse_ts(value, fallback)` and `:435` `_fallback_now()`. A
+  receive-timestamp for a frame whose own stamp will not parse. **Checked against invariant 9:**
+  `_fallback_now` returns `self._clock.now()`, the injected clock, not a direct read. No trading
+  value is involved.
+- `engines/market_data_recorder/engine.py:133,143` `fallback_ts = _iso(context.now)` — a gap
+  marker's stamp, also from the injected clock; `engine.py:5` and `README.md:157` — the
+  standalone recorder is the *operational* fallback for when the engine framework is down.
+- `platform/config.py:704` `ScoutConfig` — alphabetical ordering while `rank_feature` is absent,
+  *"a stated, boring fallback rather than a guess at what predicts a move"*. A ranking order, not
+  a traded value; invariant 2 does not reach it and the engine publishes `rank_feature: null` so
+  the record says which ordering was used.
+- `cli/console.py:10` no fallback console app; `cli/research.py:188` no silent fallback on an
+  engine signature mismatch.
+- `tests/platform/test_config.py:782` an `except ImportError` fallback that stays armed.
+
+**`starting_balances` — keep, all of them:**
+
+- `clients/kraken/contracts.py:124` — *"A currency code to amount map, exactly as
+  `paper.starting_balances` is shaped."* **Verified structurally true**: the config field is
+  `dict[str, Money]`, the alias is `Mapping[str, Money]`. It is a shape analogy and makes no
+  claim about where a balance comes from.
+- `platform/config.py:281,285,289,295,299,302` the validator and the field itself; `:959` a
+  `Config.get` docstring example of a map key and a leaf inside it. Code and examples, not claims.
+- `tests/platform/test_config.py` (11 hits) the section's own tests; `tests/cli/test_entrypoints.py:103,117` fixture config.
+- **Nothing in lane A reads `paper.starting_balances` as a balance.** The only readers in `src/`
+  are B's `clients/paper/broker.py`, which is the authority on its own cash, and the config
+  layer that validates it. Engine 11's read was removed by spec 106.
+
+**`substitut` — keep:** `platform/config.py:1111` YAML has no substitution;
+`scripts/cut_book_fixture.py:138` *"None rather than a substituted time"* — the right instinct;
+`scripts/recording/manager/registry.py:29` `{archive}` is substituted into a command template;
+`tests/research/test_di.py:116` a named mutation.
+
+**`assume` — keep:** the "measured rather than assumed" idiom throughout
+(`scripts/build_archive.py:28,63`, `build_ohlcvt.py:21,54,393,647,687`,
+`cut_book_fixture.py:120`, `ohlc_fixture.py:12`, `reconcile_spread.py:109`, `record.py:2387`,
+`recording/manager/archive.py:4`, `engines/market_sensor/README.md:46,130`,
+`tests/scripts/test_recording_manager.py:274`, `tests/clients/kraken/test_ws.py:622`,
+`tests/research/test_replay.py:134,377`, `tests/research/test_training_main.py:225`); the naive-
+datetime refusals (`clients/kraken/contracts.py:136`, `platform/clock.py:16`,
+`tests/platform/test_clock.py:5`, `tests/clients/kraken/test_contracts.py:123`); *"a backtest
+that silently assumes zero spread is invalid"* (`research/replay.py:111,405`,
+`research/historical.py:35,82`, `research/backtest.py:26,100`, and their three tests);
+`clients/kraken/README.md:59` "The field-name assumption", which is an honest statement about
+Kraken's field names and not about a trading value; `tests/clients/kraken/test_cache.py:340`,
+`test_rest.py:404`, `tests/engines/test_data_guard.py:170`.
+
+**`cli/engine.py:75` was checked and needed nothing.** `build_clients` already says the right
+thing — engine 1 records the failure and *"every gate that needs a value it did not get blocks on
+its own. That is invariant 3 working."* No fallback is mentioned or implied.
+
+### Stale copies outside lane A, reported not touched
+
+Three historical records still carry the superseded framing. All three are append-only logs, and
+rewriting a dated entry falsifies what was true on its date, so none was edited:
+
+- `context/progress/b-store.md:287` — "fallbacks the consumer's decision". **B's file.**
+- `context/progress-tracker.md:1476` — an audit entry stating the *old* invariant 2 outright:
+  "Fee falls back to tier 1; balance falls back to `paper.starting_balances`". **The lead's
+  file**, and the most quotable stale sentence left in the repository.
+- `context/progress/a-platform.md` — my own Phase 2 spec 26 entry, under "Three things I want the
+  next reader to notice". **Mine**, and given a supersession pointer rather than a rewrite; see
+  the how-choices below.
+
+`context/trading-invariants.md:97` also matches the grep — *"Every decision affected by a
+fallback records which fallback fired"* — and is **correct**: line 99 immediately scopes it to
+rule 14's liquidation, the one place a stale value is still used.
+
+### How-choices, each with the option rejected
+
+1. **Point at invariant 2; do not paraphrase it.** *Rejected:* restating the amended rule at each
+   site. Every one of these nine sites was a paraphrase, and each had to be re-edited when the
+   rule moved — nine sites, five files, three retirements (2026-09-10, 2026-09-16, tonight). A
+   site that names the rule and states only its own local consequence survives the next amendment.
+2. **Rewrite the paragraphs; delete none.** *Rejected:* deleting the fallback sentences outright.
+   Each paragraph carries a second fact worth keeping — why the calls are concurrent, why
+   `map_trade_volume` refuses a partial result — and the absence of a fallback is itself
+   load-bearing prose now that it is absolute. Deleting would leave the refusal looking arbitrary.
+3. **Fix sites 6–8 although spec 109 names only five.** *Rejected:* fixing exactly the five
+   listed. Sites 6 and 8 carry the identical sentence, in lane A, one file away; leaving them
+   would have left the defect in the repository under a spec whose title says it was removed.
+4. **Replace engine 1's concurrency justification with engine 10's real use of it, rather than
+   deleting the justification.** *Rejected:* saying only "one outage must not become three
+   blanks". The per-call granularity has a live reader — `cost/engine.py::_failed_fetch_reason`,
+   verified, not assumed — and a requirement with its reason deleted is the next thing someone
+   simplifies away.
+5. **A supersession pointer on my own Phase 2 entry, not a rewrite.** *Rejected:* rewriting the
+   Phase 2 paragraph to read correctly. It was true on its date and a progress file is a record;
+   the tracker's own idiom for this is a strikethrough plus "Superseded by", and that is what was
+   used. *Also rejected:* leaving it alone, since a dissertation reader who reaches line 1299
+   believes consumer-side fallbacks exist.
+6. **Two test names kept, two docstrings rewritten.** *Rejected:* renaming
+   `test_no_fallback_is_ever_substituted_for_a_failed_fee_fetch`. The name states the property
+   that is still true and is now unconditionally true; renaming would churn a green test for
+   nothing and would lose the grep trail from the spec to the test.
+7. **`clients/kraken/contracts.py:124` left exactly as it is.** *Rejected:* adding "and never a
+   source of balances for this client" to the `Balances` alias comment. The comment is a
+   structural analogy on a type alias, verified true, and makes no sourcing claim; the warning
+   belongs where a balance is actually chosen, which is not in lane A.
+
 ## SPEC 116 — THE REHEARSAL FOLLOWS THE EXIT-CYCLE RULING — CLAIMED 2026-09-17
 
 A claims **spec 116**. Nobody else may start it.
@@ -1296,9 +1552,12 @@ waited on the implementation.
    useless; discrimination is the only property the envelope has and one assertion
    cannot demonstrate it.
 2. **The client applies no fallback, deliberately.** `map_trade_volume` raises on a
-   missing fee field and never assumes a tier. Invariant 2's paper-mode fallbacks are
+   missing fee field and never assumes a tier. ~~Invariant 2's paper-mode fallbacks are
    decisions made by the *consumer*, which must record which one fired, and a client
-   that quietly supplied one would make that record impossible.
+   that quietly supplied one would make that record impossible.~~ **Superseded by spec
+   109, 2026-09-18** — the refusal is unchanged and the reason is not: there is no
+   paper-mode fallback anywhere in the system and no consumer decision to defer to.
+   True when written in Phase 2; left standing with its date rather than rewritten.
 3. **Absent is structurally distinct from zero.** `OrderBookSnapshot` cannot be
    constructed with an empty side, so "no book" arrives as an exception rather than as
    a zero spread. A *crossed* book is reported faithfully — `spread` may be negative —

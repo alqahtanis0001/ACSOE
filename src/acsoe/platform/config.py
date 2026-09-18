@@ -1177,9 +1177,13 @@ def load_credentials(*, arm_redaction: bool = True) -> Credentials | None:
     """The Kraken key pair from the environment, or None when it is not set.
 
     Returns None rather than raising, because a missing key is the normal state of a
-    fresh clone: paper mode runs the whole pipeline without one, and invariant 2's
-    paper fallbacks exist exactly so that it can. The caller decides whether the
-    absence blocks — in live mode it does.
+    fresh clone: paper mode starts, runs its loop, records the order book and builds
+    candles without one. It does **not** run the whole pipeline, and no paper fallback
+    is holding it up — invariant 2 states the consequence plainly and there has been no
+    paper-mode fallback since 2026-09-16. With an empty ``.env`` the private calls
+    fail, ``TradeVolume`` returns nothing, and every pair blocks at the cost gate, so
+    an unauthenticated clone takes no paper trades and writes no rejection past that
+    gate. The caller decides whether the absence blocks — in live mode it does.
 
     Registers both values with the log redactor before returning them, so a client
     built from this can never be the first thing to leak one.

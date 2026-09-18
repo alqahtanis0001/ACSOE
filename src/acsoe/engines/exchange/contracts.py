@@ -13,10 +13,11 @@ that gate works at. Everything here goes through ``money_text()``.
 
 **A failed fetch is recorded, never defaulted.** `ordermin`, `costmin`, `tick_size`,
 the fee tier and the balances are all absent — ``None`` — when their fetch failed,
-and the failure is named in ``failed_fetches``. Engine 1 does not apply invariant 2's
-paper-mode fallbacks: those are the *consumer's* decision and the consumer has to
-record which one fired, so supplying one here would erase the record. Downstream, a
-gate handed ``None`` blocks, which is invariant 3 working as intended.
+and the failure is named in ``failed_fetches``. Engine 1 reports the failed call and
+substitutes nothing, and invariant 2 — the place to read this rule rather than a
+restatement of it here — leaves no paper-mode fallback anywhere in the system, so no
+consumer substitutes either. Downstream, a gate handed ``None`` blocks, which is
+invariant 3 working as intended.
 """
 
 from __future__ import annotations

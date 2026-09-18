@@ -231,6 +231,45 @@ line wider and a real code under the wrong engine passes everything. Also: B's f
 five bad pairs rather than six, because its sampled draw never picked the `order_book` row, which
 is why the second test walks the constant rather than the written rows.
 
+### SPEC 109 (A): the last of the stale fallback prose, and three findings
+
+Eight sites rewritten across six files — the five spec 109 named, plus `clients/kraken/rest.py`,
+`tests/clients/kraken/test_rest.py` and `platform/config.py`, all carrying the identical sentence
+("invariant 2's paper-mode fallbacks are the consumer's decision"). **No behaviour, no payload and
+no assertion changed**; both test names were kept, because each states a property that is still
+true and is now unconditionally true. A's rule for the rewrites: **point at invariant 2, never
+paraphrase it** — all nine sites were paraphrases, and each had needed re-editing at every
+amendment (2026-09-10, 09-16, and tonight).
+
+1. **An assertion in A's own lane that cannot fail.** `tests/engines/test_exchange.py` asserts
+   `data["fee_tier"] is None` and then `"tier" not in str(data.get("fee_tier"))` — which is
+   `"tier" not in "None"`, a tautology given the line above. Left for its owner: a prose spec does
+   not touch assertions.
+2. **Invariant 14 grants a retained balance nothing reads** — see "Open questions" in
+   `docs/build-log/phase-6/overnight-decisions-2026-09-18.md`, Q1, raised to the operator.
+3. **`platform/config.py::load_credentials` told a fresh clone it could trade**: *"paper mode runs
+   the whole pipeline without one, and invariant 2's paper fallbacks exist exactly so that it
+   can."* Both halves false, and it named paper fallbacks as the **mechanism**. Rewritten rather
+   than only reported — and the distinction from finding 2 is the test that matters: **here the
+   ruling exists and is explicit** (invariant 2 spells out what a keyless clone does and does not
+   do), so only the sentence was stale; in finding 2 the ruling points the other way from the
+   prose, so choosing which fact to write would have been answering the question.
+
+**A's own method correction, worth more than the edit.** Its first CRLF count used
+`grep -c $'$'` and reported all ten files as wholly CRLF, four of which hold no CR at all — the
+giveaway being every count equalling `wc -l`. Re-measured in Python, the tool that would do the
+writing. Trusting the first reading would have converted six LF files to CRLF wholesale: a diff
+that hides a real change inside three thousand touched lines. `code-standards.md` already warns
+that this shell's `grep -c $'$'` lies; this is the second time it has been caught doing so.
+
+**No mutation table, with the reason stated rather than the omission left to be noticed:** the
+change adds and alters no assertion, so there is nothing to mutate that would not merely re-test
+the existing tests. What stands in for it is the verification done before each sentence was
+written — engine 10's read of `failed_fetches` traced to the line, engines 21's and 22's retention
+reads enumerated across all of `src/`, and the `Balances`/`starting_balances` shape claim checked
+against both declarations. **Two of those three became findings, which is the evidence they were
+checks rather than readings.**
+
 ### SPEC 120 (C): the seed-vocabulary finding is closed, and both directions are now asserted
 
 Five orphaned `REASON_PROSE` keys retired — `insufficient_depth`, `meta_label_veto`,
@@ -1473,7 +1512,7 @@ The lead's second audit found 22 issues, most of them decisions that had reached
 - `code-standards.md` corrected — config, clock and logging are in `platform/`, not `core/`.
 - `core/` imports nothing. `Config`, `Clock` and `Clients` are Protocols declared in `core/contracts.py` and implemented in `platform/` and `clients/`.
 - ~~Chain 2 is exactly three engines: 21, 22, 19.~~ **Superseded by the fourth audit** — there are now three runtime chains; see below. Engine 20 still runs offline.
-- Paper-mode fallbacks are stated once, in a table, scoped to mode. Live mode always blocks. Fee falls back to tier 1; balance falls back to `paper.starting_balances`, a per-currency map; pair rules and spread have no fallback and block the pair.
+- ~~Paper-mode fallbacks are stated once, in a table, scoped to mode. Live mode always blocks. Fee falls back to tier 1; balance falls back to `paper.starting_balances`, a per-currency map; pair rules and spread have no fallback and block the pair.~~ **Superseded — every clause of this line is now false.** The fee row was retired 2026-09-10 (a pair with no fee data blocks); the balance row became the paper ledger on 2026-09-16 and engine 11's substitution was removed outright on the 17th. **There is no paper-mode fallback left anywhere in the system**; see invariant 2 as it now reads. The line is struck rather than rewritten because it was true on its date and this is a dated record. Found by A during spec 109, 2026-09-18, and reported rather than edited — it is the most quotable stale sentence left in the repository, in the lead's own file.
 - `clients/recorder/` exists and belongs to A.
 - Per-task done is **no FAIL**. PENDING is expected mid-phase and only reaches zero at phase close.
 - Every criterion must pass on a fresh clone. Evidence lives in committed fixtures under `tests/fixtures/`, never in gitignored `data/`. `--live` verifies the real run and is never required for green.

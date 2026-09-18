@@ -1469,3 +1469,194 @@ that each reach an exit, so one defect in engine 19 is caught four times over.
 rehearsal file is `a907322197de...4e02267f9c` and engine 19 is
 `6d0c226f92...4ef0831fa7`, both confirmed unchanged after the mutation run. No full gate
 was run; the lead runs it.
+
+## SPEC 109 — THE PAPER-MODE FALLBACK PROSE, AND TWO THINGS THE GREP DID NOT FIND
+
+**Agent:** A · **Task:** spec 109 · **Date:** 2026-09-18 · **Written at diagnosis, before any
+byte of the fix.**
+
+### What happened
+
+Nine places in lane A describe, in substance, a division of labour that no longer exists:
+*engine 1 and the Kraken client decline to apply invariant 2's paper-mode fallback because the
+fallback is the **consumer's** decision, and the consumer must record which one fired.* Every
+clause of that was true when it was written. Since the operator's ruling of 2026-09-16 removed
+engine 11's `paper.starting_balances` branch — the last one — **there is no paper-mode fallback
+anywhere in the system**, so there is no consumer decision to defer to and no record for a
+consumer to keep. The prose is not merely out of date: it tells a reader that a substitution
+happens somewhere downstream, which is the one thing invariant 2 now forbids everywhere.
+
+Spec 109 names five of the nine. The grep for `fallback`, `starting_balances`, `substitut` and
+`assume` across the whole lane found four more, of which two carry the identical sentence
+(`clients/kraken/rest.py`, `tests/clients/kraken/test_rest.py`) and one is worse than any of
+the five (`platform/config.py::load_credentials`) — see below.
+
+### Why
+
+The five named sites and the two the grep added share one author's framing and one date. They
+are a correct statement of invariant 2 **as it read before 2026-09-10**, when the fee-tier row
+still named a tier to assume; the client and engine 1 were written to refuse the substitution
+locally while conceding it might legitimately happen elsewhere. The two retirements since —
+the fee tier on 2026-09-10, the balance on 2026-09-16 — each removed a fallback without
+removing the concession, because nothing greps for a sentence that is still grammatical and
+still about a real field. This is the same drift class as A's 2026-09-16 `OrderState` note:
+`docs_vocabulary` cannot catch it, there being no retired token in the line.
+
+**Why "point at invariant 2 rather than restate it" is the instruction and not a style
+preference.** Each of these sites restated the invariant in its own words, and each therefore
+had to be re-edited when the invariant moved — nine times, in five files, across three
+retirements. A site that names the rule and states only its own local consequence (*this
+function refuses to invent a tier*) stays true when the rule is amended.
+
+### FINDING 1 — an assertion in my own lane that cannot fail
+
+`tests/engines/test_exchange.py`, `test_no_fallback_is_ever_substituted_for_a_failed_fee_fetch`:
+
+```python
+assert data["fee_tier"] is None
+assert "tier" not in str(data.get("fee_tier"))
+```
+
+Given the line above it, the second assertion is `"tier" not in "None"` — a tautology. It could
+only ever fail on a `fee_tier` that was a mapping containing the key, which the preceding line
+has already excluded. The test's *name* is the property worth having and the first line proves
+it; the second line reads as a second, stronger check and is not one.
+
+**Not changed.** Spec 109 is prose-only and the lead's brief says a test asserting something is
+not mine to edit under a prose spec. Reported for a ruling: delete it, or replace it with an
+arm that can fail (assert on the whole payload, so a tier smuggled into a sibling key is
+caught).
+
+### FINDING 2 — `exchange/README.md` describes a retention read that no engine performs
+
+Outside the grep's vocabulary, found by reading the file. `src/acsoe/engines/exchange/README.md`,
+under "Retained last-known-good values":
+
+> Only rule 14's emergency liquidation may use one, and **engines 21 and 22 read it from the
+> client directly in Phase 6** — publishing it here would put it one attribute lookup away from
+> a gate that must never see it.
+
+On disk, at `2beb8ba`:
+
+- **Engine 21 `position_manager` reads neither retained value.** `last_known_good` does not
+  occur anywhere in that package.
+- **Engine 22 `exit` reads only `last_known_good_asset_pairs`** (`engines/exit/engine.py:523`),
+  and its `contracts.py:159-166` records at length that it **deliberately never reads a
+  balance**: an exit's quantity is the position's, and a cap at the base holding would round
+  every paper exit to nothing, the paper ledger being quote-side only by B's spec 88 ruling.
+- Consequently **`last_known_good_balances` has no reader in `src/` at all.** The client
+  retains it (`clients/kraken/rest.py:551`, surfaced on the facade and forwarded by the paper
+  broker), engine 1 reads its *age* to publish `retained`, and nothing ever reads its value.
+
+**There is a decision entry, and it is in B's lane, not mine.** B recorded it on 2026-09-16 in
+`docs/build-log/phase-6/b-store.md` ("Decision: engine 22 never reads a balance…") and in
+`context/progress/b-store.md` item 1, marked **escalated to the lead** as a deviation from
+spec 93. So this is not behaviour that changed unrecorded — it is A's README never having been
+told. The claim was true of the spec and has never been true of the code.
+
+**Why it matters rather than being a nicety.** Invariant 2 justifies the retention as *"a
+requirement on Agent A's client, not an optimisation"*, on the ground that discarding on
+failure *"would make rule 14 unimplementable at exactly the moment it is needed."* For
+`AssetPairs` that is exactly right and engine 22 proves it. For the balance the premise no
+longer holds: rule 14 as implemented does not need it, and A's README is the only place still
+asserting that it does. A reader auditing invariant 14 against the code finds a retained
+balance, a README saying two engines read it, and no reader — and cannot tell whether the
+retention is a requirement being met or a limb nobody amputated.
+
+**Not changed, per the lead's rule on stale prose.** Reported with two questions the lead owns,
+neither of which is mine to answer under a prose spec:
+
+1. Does `last_known_good_balances` keep its retention with no reader (invariant 2's wording
+   requires the client to retain it regardless), or does invariant 14's "engines 21 and 22 may
+   use the last known good balances" need amending to match what B built and the lead accepted?
+2. Either way the README sentence is wrong today. The honest rewrite depends on the answer to
+   (1), so it waits for the ruling rather than guessing which of the two facts to write down.
+
+### FINDING 3 — `load_credentials` tells a fresh clone it can trade
+
+`src/acsoe/platform/config.py`, `load_credentials`:
+
+> a missing key is the normal state of a fresh clone: **paper mode runs the whole pipeline
+> without one, and invariant 2's paper fallbacks exist exactly so that it can.**
+
+Both halves are false, and the second is false in a way the other eight sites are not — it does
+not merely defer a fallback to a consumer, it names paper fallbacks as the *mechanism* that
+makes an unauthenticated clone work. Invariant 2 states the true consequence in as many words:
+with an empty `.env` the private calls fail, `TradeVolume` returns nothing, and **every pair
+blocks at the cost gate**; the clone still runs the loop, still records the order book and
+still builds candles — *"which is what the recording exists for and cannot be recovered
+later"* — but takes no paper trades and writes no rejection row past the cost gate.
+
+**This one is rewritten rather than only reported**, because unlike finding 2 the ruling behind
+it exists and is explicit: invariant 2 already spells out both what a keyless clone does and
+what it does not, so the code is doing what the system decided and only the sentence is stale.
+It is called out here because it is the site in this batch most likely to mislead — the other
+eight would make a reader look downstream for a fallback and find none, whereas this one would
+make a reader believe an unauthenticated clone produces a research dataset.
+
+### The nine sites, and the verdict on every other grep hit
+
+The full table, with the substance of each rewrite and a verdict on every hit of `fallback`,
+`starting_balances`, `substitut` and `assume` across `clients/kraken/`, `clients/recorder/`,
+`platform/`, `cli/`, `scripts/` (less `verify.py`), `engines/exchange`, `market_data_recorder`,
+`market_sensor`, `data_guard`, `research/{replay,historical,backtest}.py` and lane A's tests,
+is in `context/progress/a-platform.md` under SPEC 109. It is kept there rather than duplicated
+here because it is a list of current state, which is what a progress file is for.
+
+### Fix
+
+Eight sites rewritten across six files — the five spec 109 names, plus `clients/kraken/rest.py`
+and `tests/clients/kraken/test_rest.py` carrying the identical sentence and
+`platform/config.py::load_credentials` carrying the worse one of finding 3. Each now **names
+invariant 2 and states only its own local consequence** instead of paraphrasing the rule, which
+is what stops the ninth re-edit: every one of these paraphrases had already survived two
+retirements (the fee tier 2026-09-10, the balance 2026-09-16) by being grammatical.
+
+Two substantive replacements rather than deletions, both verified against the code rather than
+inferred:
+
+- **Engine 1's concurrency justification.** The three calls ran concurrently "because the
+  paper-mode fallback for each one is different", which is now no reason at all. The real reader
+  of that granularity is **engine 10 `cost`**: `cost/engine.py::_failed_fetch_reason` walks
+  `failed_fetches` for the named call so the block sentence quotes *that call and its reason*
+  rather than `exchange.fee_tier`, which is true and sends the operator to look at a `None`.
+  Read in `cost/engine.py` and `cost/contracts.py:74` before writing it down, not assumed. Both
+  `engines/exchange/README.md` and `engines/exchange/engine.py` now say that.
+- **`load_credentials`.** Replaced with invariant 2's own stated consequence: a keyless clone
+  starts, loops, records the book and builds candles, and **takes no paper trades** because
+  every pair blocks at the cost gate.
+
+The two test **names** were kept — both state properties that are still true and are now
+unconditionally true — and **no assertion in either file was touched**. Only docstrings moved.
+
+**Line endings.** `engines/exchange/contracts.py` and `engines/exchange/engine.py` are the only
+CRLF files of the eight; the rest are wholly LF. The two CRLF files were patched through Python
+with the replacements' endings converted explicitly and the result re-read (108 and 197 CRLF,
+zero bare LF). No heredoc carried an escape into any file.
+
+**And the measurement that was wrong first time.** The opening CRLF count used
+`grep -c $'\r$'` and reported all ten files as wholly CRLF, including four holding no CR at all
+— the giveaway being that every count equalled `wc -l`. Re-measured with Python, which is the
+tool that would do the writing. Trusting the first reading would have converted six LF files to
+CRLF wholesale, which is the kind of diff that hides a real change inside 3,000 touched lines.
+
+**Runs.** `tests/engines/test_exchange.py tests/clients/kraken/` → **`182 passed in 1.22s`**
+(`logs/verify/a109-pytest.log`). `ruff check src/ tests/ scripts/` → **All checks passed**
+(`logs/verify/a109-ruff.log`). `mypy --strict src/ scripts/` → **`Success: no issues found in
+153 source files`** (`logs/verify/a109-mypy.log`). No full gate was run; the lead runs it.
+
+**No mutation table, and the reason rather than the omission.** Rule 2 of this log asks every
+assertion to be proven capable of failing. This change adds and alters **no assertion** — it is
+eight docstrings and comments — so there is nothing to mutate that would not simply be testing
+the tests that already existed. What stands in for it is the verification done before each
+sentence was written: engine 10's read of `failed_fetches` traced to the line, engine 21 and
+engine 22's retention reads enumerated across the whole of `src/`, and the `Balances`/
+`starting_balances` shape claim checked against both declarations. Two of those three checks
+turned into findings, which is the evidence that they were checks and not readings.
+
+**Findings 1 and 2 are not fixed and were not touched.** Finding 1 is a test assertion, out of
+scope for a prose spec. Finding 2 needs a ruling the lead owns — whether
+`last_known_good_balances` keeps a retention no engine reads, or whether invariant 14's sentence
+moves to match what B built — and **which of the two facts to write into the README depends on
+that answer**, so writing either one now would be answering the question rather than reporting
+it. Both are in `context/progress/a-platform.md` under SPEC 109 with the detail.

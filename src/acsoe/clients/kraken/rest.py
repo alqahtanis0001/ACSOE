@@ -298,9 +298,10 @@ def map_trade_volume(result: Any, *, fetched_at: int) -> FeeTierSnapshot:
     """``TradeVolume`` result to :class:`FeeTierSnapshot`.
 
     Every field is required. There is no "assume a tier" here and there must never
-    be: invariant 2's paper-mode fee fallback is a decision made by the consumer,
-    which has to record that it fired, and a client that quietly supplied one would
-    make that record impossible.
+    be. Invariant 2 carries the reasoning: the paper-mode fee fallback was retired on
+    2026-09-10 and the last paper-mode fallback of any kind on 2026-09-16, so a
+    confirmed pair with no fee data blocks that pair in paper mode exactly as in live.
+    Nothing downstream is waiting to supply what this function refuses to invent.
     """
     if not isinstance(result, Mapping):
         raise KrakenUnavailableError("trade_volume: result was not a mapping")

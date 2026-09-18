@@ -8,9 +8,10 @@ identically against an engine that hardcoded them, which is the exact defect
 invariant 2 exists to prevent.
 
 **A failed fetch has a documented, tested outcome and never a silent default.** The
-engine records which call failed and publishes `null` for its value. It does not
-apply invariant 2's paper-mode fallbacks: those are the consumer's decision and the
-consumer has to record which one fired.
+engine records which call failed and publishes `null` for its value. It substitutes
+nothing, and under invariant 2 neither does any consumer: no paper-mode fallback
+remains anywhere in the system, so the published absence is the answer and every gate
+handed it blocks.
 """
 
 from __future__ import annotations
@@ -205,9 +206,9 @@ def test_a_total_outage_still_does_not_block_trading(
 def test_no_fallback_is_ever_substituted_for_a_failed_fee_fetch(
     engine: ExchangeEngine, engine_context: Any, fresh_state: dict[str, Any], fake_kraken: Any
 ) -> None:
-    """Invariant 2's paper fallback is the *consumer's* decision and the consumer must
-    record which fallback fired. A tier supplied here would erase that record, and
-    would be a hardcoded fee besides."""
+    """Invariant 2 leaves no paper-mode fallback anywhere: a failed fee fetch blocks
+    the pair in paper mode exactly as in live. A tier supplied here would be the
+    substitution the invariant forbids, and a hardcoded fee besides."""
     fake_kraken.fail("trade_volume")
     data = run(engine, engine_context, fresh_state).data
     assert data["fee_tier"] is None

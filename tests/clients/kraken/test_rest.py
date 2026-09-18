@@ -261,10 +261,10 @@ async def test_the_fee_tier_comes_from_the_payload_and_changes_when_it_changes()
 
 
 def test_a_missing_fee_field_is_a_failure_and_never_an_assumed_tier() -> None:
-    """Invariant 2's paper fallback is the consumer's decision, recorded as such.
+    """Invariant 2 leaves no paper-mode fallback: a pair with no fee data blocks.
 
-    A client that quietly supplied a tier would make that record impossible, and a
-    fallback that nobody recorded is indistinguishable from a real fetch.
+    A client that quietly supplied a tier would be the substitution the invariant
+    forbids, and a supplied tier is indistinguishable from a fetched one.
     """
     incomplete = dict(fixture("trade_volume")["result"])
     del incomplete["maker_fee_pct"]
