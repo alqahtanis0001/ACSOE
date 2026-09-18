@@ -1,6 +1,34 @@
 # Phase 6 — shared task list
 
-## HANDOFF 11, 2026-09-18 evening — spec 118's criterion removed, the candle criterion renamed; the phase is NOT closed
+## HANDOFF 12, 2026-09-18 — PHASE 6 IS GREEN AND CLOSED. Phase 7 is not started.
+
+**Read this first. HANDOFF 11 and earlier are history.** Closed by the operator on 2026-09-18,
+after reading the first paper trade's walk-through (`docs/build-log/phase-6/first-paper-trade.md`).
+
+### State
+
+`verify.py --phase 6` at the close → **13 criteria, 13 PASS, 0 FAIL, 0 PENDING, exit 0** (21:16:45Z; `toolchain_green` `3309 passed, 2 skipped`; mypy and ruff clean first; no code byte differs from `5824a3b`). The narrative is `docs/build-log/phase-6.md`, whose summary is written for an
+examiner and cites the walk-through: what it proves, and what it does not.
+
+### For Phase 7's first session
+
+**Read the top of `context/progress-tracker.md` before planning anything.** The operator carried
+three things into Phase 7 at the close:
+1. Engine 14 has never weighted anything real, so a router verdict is not a judgement.
+2. This trade's zero slippage came from a pinned one-level book.
+3. F-new-1: approvals leave no record of why. This is the most consequential open item.
+
+Phase 7 prerequisites 1–9 are in the tracker's list.
+
+### Still open with owners, and prose only (not phase criteria)
+
+- Specs 121–125:
+  - 121, 122, 123: B.
+  - 124: C.
+  - 125: A (added by the lead, flagged).
+- The teammates' own stale status lines, listed by line number in the tracker's close record.
+
+## HANDOFF 11 (history), 2026-09-18 evening — spec 118's criterion removed, the candle criterion renamed; the phase is NOT closed
 
 **Read this first. HANDOFF 10 and earlier are history.** The operator is reading the walk-through
 (`docs/build-log/phase-6/first-paper-trade.md`), and the close ruling follows.

@@ -4,14 +4,13 @@ Written by the agents as work happens, per `context/script-rules.md`.
 Record every non-trivial problem and its fix. This cannot be reconstructed later.
 
 The per-agent files are `docs/build-log/phase-6/{lead,a-platform,b-store,c-interface}.md` and
-they remain exactly as the agents wrote them. This file is the consolidation, made in
-preparation for the phase close; **the phase is not closed** until the operator rules.
+they remain exactly as the agents wrote them. This file is the consolidation, made at the
+phase close. **Phase 6 was closed by the operator on 2026-09-18.**
 
 ## Phase 6 summary
 
-*Written by the lead, 2026-09-18, in preparation for the close. **The phase is not closed.** Its
-gate is green, but the operator asked to see the first paper trade before ruling on the close,
-and has not yet ruled. Nothing below should be read as the phase being finished.*
+*Written by the lead, 2026-09-18. **Phase 6 was closed by the operator on 2026-09-18**, after
+reading the first paper trade's walk-through, which the operator had asked to see before ruling.*
 
 **What this phase was for.** Phases 0 to 5 built a system that could decide *not* to trade: the
 data spine, the economics gates, the memory, and the models. Phase 6 builds the half that acts.
@@ -66,6 +65,26 @@ states the friction and hurdle engine 10 computed in its own run, and measured, 
 tier 1 clears the gate too (friction 0.708%), so the no-trade regime belongs to Kraken's
 reference schedule and not to anything these criteria ran.
 
+**The first paper trade, as the operator read it before closing.** The walk-through
+(`docs/build-log/phase-6/first-paper-trade.md`) follows one target round trip through the rows
+engine 19 wrote, every number read from the database. **Its strongest check is that two writers
+agree.** On the exit tick engine 19 computed the account's cash as the start-of-tick balance plus
+the sale's net proceeds, recorded as `after_exit`. A minute later the paper broker reported its
+own balance, independently. The two figures are identical to the last digit:
+5091.095749761399263. So the exit-cycle ruling is **proven rather than asserted**: two writers,
+two paths, one answer.
+
+**The walk-through is equally plain about what it does not show, and that is why it is kept.**
+- **The market is scripted.** Every pair is planted with one constructed candle series and a
+  pinned bid, so "BTC/USD at 126.9" is not a Bitcoin price.
+- **The model is certain to nine decimals** (P(target) 0.9999999979999998), because it was trained
+  inside the run on a constructed, steadily rising series.
+- **The fees are the fake exchange's**, not Kraken's.
+- **The database holds no record of why the trade was approved.** Refusals carry their economics;
+  approvals carry none.
+
+A reader of this phase should take the machinery as demonstrated and the economics as untested.
+
 **Problems of note.** Four defects were found that would each have shipped as working code, every
 test green:
 
@@ -105,14 +124,15 @@ and what must be true for that to hold, before writing it.
 `98c0485`, every one exit 0 (phase 0 7/7, 1 10/10, 2 9/9, 3 9/9, 4 10/10, 5 14/14,
 6 14/14). The operator's rulings S2 and S3 then corrected criterion prose and messages in
 `scripts/verify.py`, and Phase 2 (9/9) and Phase 6 were re-gated on the corrected tree, both
-exit 0. The Phase 6 criterion of spec 118 was then removed and the candle criterion renamed, and Phase 2 and Phase 6 were gated again, both exit 0. The latest Phase 6 gate, verbatim:
+exit 0. The Phase 6 criterion of spec 118 was then removed and the candle criterion renamed, and Phase 2 and Phase 6 were gated again, both exit 0; after the Phase 2 row was amended, Phase 2 was
+gated alone, 9/9. **The final Phase 6 gate, run at the close on the committed tree**, verbatim:
 
 ```
 ACSOE verify - phase 6
 repo: C:\Users\saad2\Documents\GitHub\ACSOE
 
 PASS    docs_vocabulary                                     14 files scanned, 12 retired terms, no hit
-PASS    toolchain_green                                     pytest, mypy --strict and ruff all green (python.exe) - pytest `3309 passed, 2 skipped, 2 warnings in 1780.84s (0:29:40)` - full output: C:/Users/saad2/Documents/GitHub/ACSOE/logs/verify/toolchain_green/20260918T173919_267654-pytest-attempt1.log
+PASS    toolchain_green                                     pytest, mypy --strict and ruff all green (python.exe) - pytest `3309 passed, 2 skipped, 2 warnings in 1787.73s (0:29:47)` - full output: C:/Users/saad2/Documents/GitHub/ACSOE/logs/verify/toolchain_green/20260918T211421_553026-pytest-attempt1.log
 PASS    paper_trade_round_trip_target                       BTC/USD entry 1690626088: a post-only buy of 26.26015939 at 126.9, placed on the bar close past all 8 registered gates (data_guard, safety, scout, anomaly, cost, risk, skeptic, decision), filled at its limit on the next tick, watched for 3 ticks, then a trade at 130.757 crossed the target 130.707 the minute before 1715983501; it exited at the target when engine 22 sold 26.26015939 as a taker at 130.757. Entry fee 3.6656556492501, exit fee 6.524029356580637 and realised 91.095749761399263 were recomputed from the pinned book and engine 1's fee tier, and the orders, positions, trades and equity rows engine 19 wrote match them exactly; at the fake exchange's fee tier 3 (invented maker and taker rates from tests/fixtures/kraken/fee_tiers.json); engine 10 computed friction 0.003078783581501615063420783109 (0.308%) and hurdle 0.004618175372252422595131174664 (0.462%) on BTC/USD in this run, at maker 0.0011 and taker 0.0019 as engine 1 published them. Kraken's own schedule is a separate question, quoted from invariant 5 rather than measured here: at its reference tier-1 fees (friction about 1.25% round trip) a candidate needs an expected move above 3.125% against the 3.0% target, so Kraken's tier 1 is a no-trade regime at the current barriers
 PASS    paper_trade_round_trip_stop                         BTC/USD entry 1690626088: a post-only buy of 26.26015939 at 126.9, placed on the bar close past all 8 registered gates (data_guard, safety, scout, anomaly, cost, risk, skeptic, decision), filled at its limit on the next tick, watched for 3 ticks, then a trade at 124.9465 crossed the stop 124.9965 the minute before 1715983501; it exited at the stop when engine 22 sold 26.26015939 as a taker at 124.946. Entry fee 3.6656556492501, exit fee 6.234093562771586 and realised -61.212100660081686 were recomputed from the pinned book and engine 1's fee tier, and the orders, positions, trades and equity rows engine 19 wrote match them exactly; at the fake exchange's fee tier 3 (invented maker and taker rates from tests/fixtures/kraken/fee_tiers.json); engine 10 computed friction 0.003078783581501615063420783109 (0.308%) and hurdle 0.004618175372252422595131174664 (0.462%) on BTC/USD in this run, at maker 0.0011 and taker 0.0019 as engine 1 published them. Kraken's own schedule is a separate question, quoted from invariant 5 rather than measured here: at its reference tier-1 fees (friction about 1.25% round trip) a candidate needs an expected move above 3.125% against the 3.0% target, so Kraken's tier 1 is a no-trade regime at the current barriers
 PASS    paper_trade_round_trip_timeout                      BTC/USD entry 1690626088: a post-only buy of 26.26015939 at 126.9, placed on the bar close past all 8 registered gates (data_guard, safety, scout, anomaly, cost, risk, skeptic, decision), filled at its limit on the next tick, watched for 61 ticks, then the clock reached its timeout at 1716026461 with neither barrier traded; it exited at the timeout when engine 22 sold 26.26015939 as a taker at 126.925. Entry fee 3.6656556492501, exit fee 6.332834388093925 and realised -9.341986052594025 were recomputed from the pinned book and engine 1's fee tier, and the orders, positions, trades and equity rows engine 19 wrote match them exactly; at the fake exchange's fee tier 3 (invented maker and taker rates from tests/fixtures/kraken/fee_tiers.json); engine 10 computed friction 0.003078783581501615063420783109 (0.308%) and hurdle 0.004618175372252422595131174664 (0.462%) on BTC/USD in this run, at maker 0.0011 and taker 0.0019 as engine 1 published them. Kraken's own schedule is a separate question, quoted from invariant 5 rather than measured here: at its reference tier-1 fees (friction about 1.25% round trip) a candidate needs an expected move above 3.125% against the 3.0% target, so Kraken's tier 1 is a no-trade regime at the current barriers
@@ -147,10 +167,18 @@ Phase 6 is green: every criterion PASS, zero PENDING.
     the candle criterion's tolerance stops being an invented number
   - S3: every trade criterion states its own run's figures
 - **Withdrawn:** Q3, widening spec 118's coverage, with that criterion.
+- **Carried into Phase 7's first session** by the operator at the close, and recorded at the top of
+  the tracker:
+  - engine 14 has never weighted anything real (`leaderboard_empty` on this trade), so a router
+    verdict is not a judgement until engine 20 writes persisted rows;
+  - engine 9's slippage of 0 on this trade came from a book pinned to one level, and is not
+    evidence about slippage (`order_book_slippage_on_recorded_book` is the real exercise);
+  - an approved trade leaves no record of why it was approved, which the attribution work cannot
+    get around.
 - **Phase 7 prerequisites added:** an approved trade's reasons are not recorded (7), and
   `cycle_id` on order and position rows is the last writer's tick (8).
 
-The phase close itself, and marking the phase green in the tracker, wait on the operator.
+Phase 6 is marked green in the tracker, dated 2026-09-18. Phase 7 is not started.
 
 ## Consolidated from the per-agent logs
 
@@ -761,6 +789,21 @@ endings, refuses mixed ones, and the diff shows only the 15 real lines.
 **D17 was accepted**, and the operator recorded that their own instruction was wrong on that
 point: the Phase 6 fourteens in HANDOFFs 8-10 are real gate outputs, and four of the tracker's
 fourteens are Phase 5's.
+
+### A third escape-carrying heredoc, the same evening
+
+**Agent:** Lead · **Task:** the Phase 6 close · **Date:** 2026-09-18
+
+**What happened.** Editing the consolidation's header, the lead again wrote a Python heredoc whose
+anchor contained `\\n`. The escape was decoded above the shell, the anchor matched nothing, and
+the script stopped on its own exactly-once assertion before writing. Both edits were then made
+with the file tool.
+
+**Why it is recorded.** It is the third time in one evening, against a rule the operator keeps in
+the lead's standing instructions. The earlier two did the same thing: each was caught by an
+assertion, and none cost anything. That is the harness working, and it is not a reason to keep
+relying on it. **The habit to keep:** any edit whose text carries a backslash goes through the file
+tool, whatever it is inside.
 
 ## Agent A — Platform
 

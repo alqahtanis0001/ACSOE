@@ -4,7 +4,25 @@
 
 ## Current Phase
 
-**Phase 6 — Decision and execution. OPEN 2026-09-16.** Engines 9 `order_book`, 14
+**Phase 7 — Evaluation is next. NOT STARTED.** Three things carried into its first session by the
+operator at the Phase 6 close, 2026-09-18. **Read these before planning anything.**
+
+1. **Engine 14 `adaptive_router` has never weighted anything real.** On the first paper trade it
+   returned `leaderboard_empty`: the drive's database held no leaderboard rows. It will not weight
+   anything real until engine 20 writes persisted rows. **Phase 7's attribution must not read a
+   router verdict as a judgement.**
+2. **Engine 9's slippage on the first paper trade was 0 because the book was pinned to one level.**
+   The real exercise of the walk is `order_book_slippage_on_recorded_book`, over the recorded book.
+   **Phase 7 must not take that trade's zero as evidence about slippage.**
+3. **F-new-1 is the most consequential open item: an approved trade leaves no record of why it was
+   approved.** The counterfactual dataset records reasons for refusals and nothing for approvals:
+   only `rejections` carries expected move, friction, net edge and hurdle. Phase 7's attribution
+   will want to explain which trades the system took and why, and **it cannot** (Phase 7
+   prerequisite 7).
+
+**Phase 6 — Decision and execution. GREEN AND CLOSED 2026-09-18** by the operator, after reading
+the first paper trade's walk-through (`docs/build-log/phase-6/first-paper-trade.md`); the
+narrative is `docs/build-log/phase-6.md`. *As opened, 2026-09-16:* Engines 9 `order_book`, 14
 `adaptive_router`, 16 `decision`, 18 `execution`, 21 `position_manager`, 22 `exit` and the fill
 simulator — the Phase 6 row as written, not cut. Preflight: `verify.py --phase 5` re-run on a
 quiet tree at `e75bc26`, **14 criteria, 14 PASS, 0 FAIL, 0 PENDING, exit 0**
@@ -763,8 +781,8 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 | 3 — Economics | **Green** | 2026-09-10 — 9 PASS, 0 FAIL, 0 PENDING |
 | 4 — Memory and replay | **Green on its gate; close and consolidation withheld by the operator** | 2026-09-11 — 10 PASS, 0 FAIL, 0 PENDING; re-verified 2026-09-12 at the Phase 5 preflight, same result, `replay_full_archive` skipped as `--live` |
 | 5 — Models | **Green** | 2026-09-15 — 14 PASS, 0 FAIL, 0 PENDING; phases 0 to 4 re-gated in order on the same quiet tree, all exit 0. Specs 59–79: A (61, 78, 79), B (62, 76), C (60, 63–75), Lead (59, 77). Nine rulings confirmed by the operator plus one addition (per-fold effective sample size) |
-| 6 — Decision and execution | **Open — gate green, close awaits the operator** | 2026-09-18 evening — **13 criteria, 13 PASS, 0 FAIL, 0 PENDING**, exit 0, after spec 118's criterion was removed and the Phase 2 candle criterion renamed (`logs/verify/phase6-20260918-rename-remove118-lead-verify.log`); earlier the same day phases 0–6 were re-gated in order at `98c0485`, all exit 0, when Phase 6 had 14. Specs 80–125 (102 parked to Phase 7; 118's criterion removed; 121–125 open with their owners). **Not marked green**: the operator rules on the close after reading the walk-through |
-| 7 — Evaluation | Blocked on 6 | — |
+| 6 — Decision and execution | **Green** — closed by the operator 2026-09-18 after reading the first paper trade's walk-through | 2026-09-18, the final gate at the close — **13 criteria, 13 PASS, 0 FAIL, 0 PENDING**, exit 0, `toolchain_green` `3309 passed, 2 skipped` (`logs/verify/phase6-20260918-phase6-close-lead-verify.log`). 2026-09-18 evening — **13 criteria, 13 PASS, 0 FAIL, 0 PENDING**, exit 0, after spec 118's criterion was removed and the Phase 2 candle criterion renamed (`logs/verify/phase6-20260918-rename-remove118-lead-verify.log`); earlier the same day phases 0–6 were re-gated in order at `98c0485`, all exit 0, when Phase 6 had 14. Specs 80–125 (102 parked to Phase 7; 118's criterion removed; 121–125 open with their owners, prose only) |
+| 7 — Evaluation | **Next — not started** | — |
 | 8 — Live readiness | Blocked on 7 | — |
 
 ## Completed
@@ -802,7 +820,13 @@ A phase is green only when `python scripts/verify.py --phase N` passes every cri
 
 - **Nothing is outstanding for any agent.** A, B and C all report clear. Two items deliberately survive the close and are carried in Next Up rather than hidden: `cli/engine.py` still passes a `Clients()` of three `None`s, and engine 17's `CONDITION_ACTION` table is unratified.
 
-## Phase 6 — merged for the close, NOT closed
+## Phase 6 — how it closed
+
+*Closed by the operator 2026-09-18, after reading the walk-through. The merge below was made in
+preparation for the close and stands as the close record; specs 121–125 (prose only) remain
+open with their owners and are not phase criteria.*
+
+### Merged for the close
 
 *Merged from the three progress files by the lead, 2026-09-18, as close preparation ordered by the
 operator. **The phase is open**: the gate is green and the operator rules on the close after seeing

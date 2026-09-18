@@ -599,3 +599,18 @@ endings, refuses mixed ones, and the diff shows only the 15 real lines.
 **D17 was accepted**, and the operator recorded that their own instruction was wrong on that
 point: the Phase 6 fourteens in HANDOFFs 8-10 are real gate outputs, and four of the tracker's
 fourteens are Phase 5's.
+
+### A third escape-carrying heredoc, the same evening
+
+**Agent:** Lead · **Task:** the Phase 6 close · **Date:** 2026-09-18
+
+**What happened.** Editing the consolidation's header, the lead again wrote a Python heredoc whose
+anchor contained `\\n`. The escape was decoded above the shell, the anchor matched nothing, and
+the script stopped on its own exactly-once assertion before writing. Both edits were then made
+with the file tool.
+
+**Why it is recorded.** It is the third time in one evening, against a rule the operator keeps in
+the lead's standing instructions. The earlier two did the same thing: each was caught by an
+assertion, and none cost anything. That is the harness working, and it is not a reason to keep
+relying on it. **The habit to keep:** any edit whose text carries a backslash goes through the file
+tool, whatever it is inside.
