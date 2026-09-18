@@ -29,10 +29,10 @@
 
 ### For the operator, not decided
 
-- **The Phase 2 row in `ai-workflow-rules.md`** still asks for "a committed Kraken OHLC fixture …
+- *[Ruled that evening: the row is amended.]* **The Phase 2 row in `ai-workflow-rules.md`** still asks for "a committed Kraken OHLC fixture …
   `tick_size` … as reported by `AssetPairs`". A's spec 28 decision could not meet that and said so,
   and the row never moved.
-- **D17 (REVIEW).** The Phase 6 gate quotes in HANDOFFs 8–10 keep "14" with a dated note, rather
+- *[Ruled that evening: accepted.]* **D17 (REVIEW).** The Phase 6 gate quotes in HANDOFFs 8–10 keep "14" with a dated note, rather
   than being rewritten to 13.
 
 ### What is left in Phase 6

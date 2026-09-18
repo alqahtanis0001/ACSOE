@@ -421,7 +421,10 @@ thing the check is worth, and A's spec 28 decision says so. Live code, tests, RE
 provenance take the new name; build logs, progress files, old specs and old gate logs keep the old
 one as history, and the docstring records the rename so the two can be joined.
 
-### D17 — Historical gate quotes keep their numbers and get a dated note — REVIEW
+### D17 — Historical gate quotes keep their numbers and get a dated note
+
+**RULED 2026-09-18 evening: accepted, "better than my instruction"; the operator records that
+their instruction was wrong on this point.**
 
 **The operator's instruction** was that every count saying fourteen becomes thirteen, naming
 HANDOFFs 8 to 10. **Took.** Current-state counts become thirteen:

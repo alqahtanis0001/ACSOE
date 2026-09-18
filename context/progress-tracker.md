@@ -99,7 +99,8 @@ reconciliation. It changes what the PASS lines claim.
 
 ### Open with the operator, 2026-09-18 evening
 
-- **The Phase 2 row in `ai-workflow-rules.md` still asks for what A's spec 28 decision could not
+- **RULED 2026-09-18 evening: the Phase 2 row is amended** (see the FINDING). As first recorded:
+  **the Phase 2 row in `ai-workflow-rules.md` still asks for what A's spec 28 decision could not
   provide**: *"built 15m candles match a committed Kraken OHLC fixture … every OHLC field within one
   `tick_size` for that pair as reported by `AssetPairs`"*. A chose the reference reduction because
   Kraken's OHLC was not available, and recorded why; the row never moved. It is the same shape as S1:
@@ -116,6 +117,11 @@ reconciliation. It changes what the PASS lines claim.
     operator's list**: the lead added it as the same class, because A had left it waiting on
     exactly the ruling S1 gave, and flagged it as an addition.
 - **Spec 118's criterion: removed** by operator ruling. The FINDING is under Findings — Phase 6.
+- **D17 → accepted, and the operator records that their own instruction was wrong on this
+  point.** The instruction was to rewrite every Phase 6 "fourteen" to thirteen, naming HANDOFFs
+  8 to 10. Those were real gate outputs from when they ran, so each keeps its number with a
+  dated note, and four of the tracker's "fourteen"s were **Phase 5's** and would have been
+  destroyed by the rewrite.
 
 ### The operator's rulings on S1–S3, 2026-09-18 evening
 
@@ -1395,6 +1401,20 @@ every line of every Phase 2 gate for six phases. **Renamed
 `candles_match_independent_reduction_of_recorded_trades`** in the registry, its tests, the market
 sensor README, `scripts/ohlc_fixture.py`'s docstring and the fixture's provenance. Gate logs and
 build logs written before 2026-09-18 keep the old name, as history.
+
+**And the phase rule above it said the same thing** (operator ruling of the same evening, which
+amended it). The Phase 2 row of `ai-workflow-rules.md` asked for candles to *"match a committed
+Kraken OHLC fixture … within one `tick_size` for that pair as reported by `AssetPairs`"*. A's spec
+28 decision had established at the time that neither half was available. A said so, and nothing
+carried it up to the rule. **That is not a criterion misdescribing itself; it is the rule
+misdescribing what any criterion could do**, and every green Phase 2 since was read against it.
+**The chain, then: the criterion's name, its message, its docstring and the phase rule above it
+all claimed the same thing, and none of them was true. Four layers, one false claim, six
+phases.** The row now says what is achievable and true, and states that the earlier wording was
+never met. **Phase 2's green stands** (operator, the same evening): it was awarded on the criterion
+actually passing, and the criterion checked the local reduction, so the amendment makes the
+record match what was proven. It is not a re-examination of Phase 2, and nothing about that
+phase reopens.
 
 ### FINDING: a criterion was approved, built, passed and counted before anyone asked what its PASS demonstrated
 

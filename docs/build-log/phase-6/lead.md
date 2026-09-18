@@ -567,3 +567,35 @@ a number nobody has verified, verifying that number is the work, not the check.*
   gate script. Found in the process list and its four processes stopped within a minute; it wrote
   nothing that is committed. **Neither mistake cost anything, and both are the same inattention the
   standing rules exist for.**
+
+### The Phase 2 row amended: the rule above the criterion made the same false claim
+
+**Agent:** Lead · **Task:** operator ruling of 2026-09-18 evening · **Date:** 2026-09-18
+
+**What happened.** The Phase 2 row of `context/ai-workflow-rules.md` asked for candles to *"match a
+committed Kraken OHLC fixture … within one `tick_size` for that pair as reported by `AssetPairs`"*.
+Neither half was ever available, and A recorded both at the time (spec 28, 2026-09-09). Nothing
+carried that up to the rule. The phase's definition of done described something that could not
+exist, and every green Phase 2 since has been read against it.
+
+**Fix.** The row now asks for what the renamed criterion checks: an independent reduction of real
+recorded trades, every field within one `tick_size` of the fake's pair rules, the largest measured
+difference stated, and Kraken's published OHLC with a real `tick_size` as a `--live` task. A note
+below the table says plainly that the earlier wording was never met. It is added to tonight's
+FINDING as its fourth layer (name, message, docstring, rule: one false claim, six phases), not
+made a new finding.
+
+**One word kept out, and why.** The operator's wording was "matches … **exactly**". The criterion
+asserts *within one `tick_size`* and **reports** the largest difference, which is 0 on the
+committed fixture; it does not assert zero. Writing "exactly" into the rule would have repeated
+the defect being recorded — a rule claiming more than the criterion checks. The difference was put
+to the operator: making "exactly" the rule means strengthening the criterion to assert a
+difference of 0, which is a criterion change and needs a gate.
+
+**Line endings.** `ai-workflow-rules.md` is uniformly CRLF in the working copy (179 of 179) against
+an LF blob. The patch script refused it at first, as it was written to; it now preserves a file's
+endings, refuses mixed ones, and the diff shows only the 15 real lines.
+
+**D17 was accepted**, and the operator recorded that their own instruction was wrong on that
+point: the Phase 6 fourteens in HANDOFFs 8-10 are real gate outputs, and four of the tracker's
+fourteens are Phase 5's.
