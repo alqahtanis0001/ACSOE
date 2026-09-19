@@ -1,0 +1,13 @@
+fold 330: capped rows 405652 vs uncapped manifest 5363365; BUY calls 23198; veto@0.5 capped 0.983 uncapped 0.983; 49 s
+fold 336: capped rows 402451 vs uncapped manifest 5506031; BUY calls 29360; veto@0.5 capped 0.991 uncapped 0.993; 56 s
+fold 342: capped rows 379513 vs uncapped manifest 5703914; BUY calls 49077; veto@0.5 capped 0.977 uncapped 0.985; 48 s
+fold 348: capped rows 632325 vs uncapped manifest 6125075; BUY calls 56654; veto@0.5 capped 0.964 uncapped 0.976; 67 s
+fold 354: capped rows 857052 vs uncapped manifest 6539847; BUY calls 40270; veto@0.5 capped 0.933 uncapped 0.986; 85 s
+fold 360: capped rows 760109 vs uncapped manifest 6816244; BUY calls 66557; veto@0.5 capped 0.927 uncapped 0.982; 77 s
+fold 366: capped rows 772018 vs uncapped manifest 7258297; BUY calls 40105; veto@0.5 capped 0.890 uncapped 0.977; 71 s
+fold 372: capped rows 735183 vs uncapped manifest 7477079; BUY calls 56135; veto@0.5 capped 0.960 uncapped 0.991; 79 s
+fold 378: capped rows 463163 vs uncapped manifest 7685661; BUY calls 27427; veto@0.5 capped 0.816 uncapped 0.956; 52 s
+fold 384: capped rows 465411 vs uncapped manifest 7906636; BUY calls 14073; veto@0.5 capped 0.927 uncapped 0.968; 54 s
+fold 390: capped rows 429080 vs uncapped manifest 8103430; BUY calls 57863; veto@0.5 capped 0.989 uncapped 0.993; 48 s
+fold 396: capped rows 466188 vs uncapped manifest 8341927; BUY calls 19112; veto@0.5 capped 0.927 uncapped 0.954; 58 s
+fold 402: capped rows 763201 vs uncapped manifest 8833316; BUY calls 97229; veto@0.5 capped 0.846 uncapped 0.980; 82 s

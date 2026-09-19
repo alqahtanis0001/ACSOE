@@ -1,0 +1,35 @@
+Q1 fold 404 test window: 2024-12-28 00:00 to 2025-01-04 00:00 (end exclusive), test_rows 93166, train 2024-09-29 00:00 to 2024-12-28 00:00
+Q2 1.5 years (547.875 days) before fold 404's test end is 2023-07-06 03:00; fold containing it: [326]
+   fold-to-fold test_start steps (s): [604800]
+   fold 325: test 2023-06-24 00:00 to 2023-07-01 00:00, test_rows 69187
+   fold 326: test 2023-07-01 00:00 to 2023-07-08 00:00, test_rows 67262
+   fold 327: test 2023-07-08 00:00 to 2023-07-15 00:00, test_rows 63141
+   fold 328: test 2023-07-15 00:00 to 2023-07-22 00:00, test_rows 66780
+   span used below: folds 326-404 (79 folds), 2023-07-01 00:00 to 2025-01-04 00:00 (553.0 days)
+Q3 folds in span 79 (326-404); OOS rows 6712659; decision bars with >=1 row 53022; calendar 15m bars 53088; pairs per bar mean 126.6 median 124 max 232 min 6; distinct pairs 234
+   2023 part: bars 17661, pairs/bar mean 111.8 max 220
+   2024+: bars 35361, pairs/bar mean 134.0 max 232
+   study join: 6712659 rows joined; finite DI (complete vector) 2978503; finite anomaly 2991262 of 6712659
+   alphabetical candidate pairs (top 6): [('1INCHUSD', 29857), ('AAVEUSD', 20082), ('ADAUSD', 1576), ('ACHUSD', 861), ('ACAUSD', 624), ('AKTUSD', 9)]
+CHECK 2024 reproduction: 71 (the 2026-09-18 figure was 71)
+
+Q5 UPPER BOUND, alphabetical candidate, folds 326-404
+   (a) bars clearing = the 2026-09-18 bound; (b) + one open position per pair, using each label's own resolution time
+   tier 3 ref fees, spread  0 bps: friction 0.60%, bar 1.500% | (a) 74 | (b) 34
+      (a) n 74; realised +1.251%; net +0.651%/trade sd 2.181% 95% CI [+0.154%, +1.147%]; half-width 0.497%
+      (b) n 34; realised +0.781%; net +0.181%/trade sd 2.224% 95% CI [-0.567%, +0.928%]; half-width 0.748%
+   tier 3 ref fees, spread 10 bps: friction 0.70%, bar 1.750% | (a) 29 | (b) 12
+      (a) n 29; realised +0.788%; net +0.088%/trade sd 2.259% 95% CI [-0.734%, +0.911%]; half-width 0.822%
+      (b) n 12; realised +0.655%; net -0.045%/trade sd 2.273% 95% CI [-1.331%, +1.241%]; half-width 1.286%
+   tier 3 ref fees, spread 25 bps: friction 0.85%, bar 2.125% | (a) 10 | (b) 6
+      (a) n 10; realised +1.650%; net +0.800%/trade sd 2.174% 95% CI [-0.547%, +2.147%]; half-width 1.347%
+      (b) n 6; realised +0.750%; net -0.100%/trade sd 2.465% 95% CI [-2.072%, +1.872%]; half-width 1.972%
+
+   The bound depends on friction alone. Count (a) by total round-trip friction (fees + spread), for reading off any tier's figure once one is sourced:
+   0.20%:1961  0.25%:1108  0.30%:659  0.35%:428  0.40%:298  0.45%:197  0.50%:128  0.55%:98  0.60%:74  0.65%:44  0.70%:29  0.75%:19  0.80%:16  0.85%:10  0.90%:2  0.95%:1  1.00%:0  1.05%:0  1.10%:0  1.15%:0  1.20%:0
+   max expected_move_pct over the span, any pair 2.8105%; alphabetical candidate 2.4424%
+
+Q5 STRICTER (still not the chain): tier 3 ref fees, each gate added in chain order
+   spread  0 bps: clear 74 -> complete vector 48 -> anomaly 47 -> DI 31 -> skeptic(uncapped) 2 -> one-per-pair 1 | n 1; realised +3.000%; net +2.400%/trade sd nan% 95% CI [+nan%, +nan%]; half-width nan%
+   spread 10 bps: clear 29 -> complete vector 18 -> anomaly 18 -> DI 5 -> skeptic(uncapped) 2 -> one-per-pair 1 | n 1; realised +3.000%; net +2.300%/trade sd nan% 95% CI [+nan%, +nan%]; half-width nan%
+   spread 25 bps: clear 10 -> complete vector 5 -> anomaly 5 -> DI 1 -> skeptic(uncapped) 0 -> one-per-pair 0 | n 0

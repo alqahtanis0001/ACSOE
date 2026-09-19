@@ -1,0 +1,5 @@
+rows 15978803 decision bars 271667 folds 405
+pairs per bar: mean 58.8 max 232
+span 1491004800 1735947900
+bars where ANY pair clears 1.500% (best-case ranking): 8303
+bars where the alphabetically first pair clears 1.500% (engine 7 today): 938

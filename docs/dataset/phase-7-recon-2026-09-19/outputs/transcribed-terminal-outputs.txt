@@ -1,0 +1,230 @@
+TRANSCRIBED TERMINAL OUTPUTS
+
+These scripts printed to the terminal and did not write their output to a file. The text below is
+copied verbatim from the session terminals (Claude Code sessions 2027b2be, 2026-09-18, and
+68f2f338, 2026-09-19). Nothing was re-run to produce this file. Library warnings are omitted.
+Scripts are in ../scripts/ under the same names.
+
+======================================================================
+2026-09-18_q_year.py  (session 2027b2be)
+======================================================================
+window 2024-01-04 23:45:00+00:00 to 2025-01-03 23:45:00+00:00
+folds 53 min fold 352 max fold 404
+rows 4676051 decision bars 34977
+pairs per bar: mean 133.7 max 232 distinct pairs 234
+alphabetical-candidate bars clearing 1.5% (tier 3, zero spread, upper bound): 71
+any-pair bars clearing 1.5%: 2195
+
+======================================================================
+2026-09-18_q_net.py  (session 2027b2be)
+======================================================================
+return_pct sample [-0.015, -0.015, -0.015] nulls 0
+all years, alphabetical candidate, spread 0 bps: 938 clear; realised +0.320%; net -0.280% per trade, sd 2.180%, se 0.071%, 95% ci [-0.419%, -0.140%]
+all years, alphabetical candidate, spread 5 bps: 681 clear; realised +0.360%; net -0.290% per trade, sd 2.190%, se 0.084%, 95% ci [-0.454%, -0.125%]
+all years, alphabetical candidate, spread 10 bps: 541 clear; realised +0.311%; net -0.389% per trade, sd 2.186%, se 0.094%, 95% ci [-0.573%, -0.204%]
+all years, alphabetical candidate, spread 25 bps: 253 clear; realised +0.139%; net -0.711% per trade, sd 2.161%, se 0.136%, 95% ci [-0.978%, -0.445%]
+2024, alphabetical candidate, spread 0 bps: 71 clear; realised +1.177%; net +0.577% per trade, sd 2.196%, se 0.261%, 95% ci [+0.066%, +1.088%]
+2024, alphabetical candidate, spread 5 bps: 43 clear; realised +1.141%; net +0.491% per trade, sd 2.194%, se 0.335%, 95% ci [-0.165%, +1.146%]
+2024, alphabetical candidate, spread 10 bps: 29 clear; realised +0.788%; net +0.088% per trade, sd 2.259%, se 0.420%, 95% ci [-0.734%, +0.911%]
+2024, alphabetical candidate, spread 25 bps: 10 clear; realised +1.650%; net +0.800% per trade, sd 2.174%, se 0.687%, 95% ci [-0.547%, +2.147%]
+
+======================================================================
+q_hold.py  (session 68f2f338)
+======================================================================
+friction 0.30%: trades  267; hold minutes mean 215 max 720 total 57390; net +0.048% +/- 0.257% (95% half-width)
+friction 0.35%: trades  187; hold minutes mean 192 max 720 total 35910; net -0.024% +/- 0.307% (95% half-width)
+friction 0.40%: trades  127; hold minutes mean 184 max 720 total 23415; net +0.041% +/- 0.377% (95% half-width)
+friction 0.45%: trades   87; hold minutes mean 179 max 720 total 15615; net +0.341% +/- 0.460% (95% half-width)
+friction 0.50%: trades   55; hold minutes mean 152 max 720 total 8370; net +0.262% +/- 0.587% (95% half-width)
+friction 0.55%: trades   43; hold minutes mean 135 max 720 total 5790; net +0.226% +/- 0.674% (95% half-width)
+friction 0.60%: trades   34; hold minutes mean 141 max 720 total 4785; net +0.181% +/- 0.748% (95% half-width)
+friction 0.70%: trades   12; hold minutes mean 178 max 720 total 2130; net -0.045% +/- 1.286% (95% half-width)
+friction 0.85%: trades    6; hold minutes mean 158 max 405 total 945; net -0.100% +/- 1.972% (95% half-width)
+
+======================================================================
+q_spread_agg.py  (session 68f2f338)
+======================================================================
+summary_2026-09-11.jsonl 28978
+summary__msi__2026-09-11.jsonl 33922
+summary__msi__2026-09-12.jsonl 196202
+summary__msi__2026-09-13.jsonl 196398
+summary__msi__2026-09-14.jsonl 196517
+summary__msi__2026-09-15.jsonl 155724
+summary__msi__2026-09-16.jsonl 199441
+summary__msi__2026-09-17.jsonl 156673
+summary__msi__2026-09-18.jsonl 199446
+summary__msi__2026-09-19.jsonl 6241
+{'session': 6, 'summary': 1369542, 'gap': 779}
+rows 1369542 pairs 187 from 2026-09-11 16:13:00+00:00 to 2026-09-19 00:45:00+00:00
+
+======================================================================
+q_spread_fit.py  (session 68f2f338)
+======================================================================
+pair-bars 79415, pairs 184, 2026-09-12 02:45:00+00:00 to 2026-09-19 00:45:00+00:00
+spread_bps quantiles over pair-bars: p5 1.41, p25 5.29, p50 10.18, p75 19.31, p95 56.48
+log-spread variance 1.382: between pairs 83.7%, within pair over time 16.3%
+
+Out-of-sample checks (OLS, log spread on the five archive-computable predictors):
+  in-sample (all rows, all pairs)          n_train   79415 n_test   79415 | R2(log) 0.571 | resid sd(log) 0.770 (x4.52 at 95%) | bias -0.000 | actual/pred p5 0.31 p50 1.01 p95 3.41 | train-90% band covers 90.0% | per-pair mean error sd 0.615 (x3.34), worst |2.28|
+  time split: first half -> second half    n_train   39421 n_test   39994 | R2(log) 0.543 | resid sd(log) 0.764 (x4.47 at 95%) | bias -0.084 | actual/pred p5 0.28 p50 0.94 p95 2.95 | train-90% band covers 90.0% | per-pair mean error sd 0.579 (x3.11), worst |2.20|
+  pair split: pairs not in group 0 -> group 0 n_train   63095 n_test   16320 | R2(log) 0.550 | resid sd(log) 0.945 (x6.37 at 95%) | bias -0.134 | actual/pred p5 0.20 p50 0.89 p95 3.61 | train-90% band covers 85.1% | per-pair mean error sd 0.733 (x4.21), worst |2.41|
+  pair split: pairs not in group 1 -> group 1 n_train   64201 n_test   15214 | R2(log) 0.587 | resid sd(log) 0.697 (x3.92 at 95%) | bias +0.147 | actual/pred p5 0.35 p50 1.19 p95 3.48 | train-90% band covers 91.5% | per-pair mean error sd 0.582 (x3.13), worst |1.71|
+  pair split: pairs not in group 2 -> group 2 n_train   62033 n_test   17382 | R2(log) 0.504 | resid sd(log) 0.609 (x3.30 at 95%) | bias +0.101 | actual/pred p5 0.43 p50 1.09 p95 3.03 | train-90% band covers 95.0% | per-pair mean error sd 0.585 (x3.15), worst |2.17|
+  pair split: pairs not in group 3 -> group 3 n_train   63377 n_test   16038 | R2(log) 0.603 | resid sd(log) 0.810 (x4.90 at 95%) | bias -0.113 | actual/pred p5 0.23 p50 0.93 p95 3.39 | train-90% band covers 85.5% | per-pair mean error sd 0.605 (x3.27), worst |1.66|
+  pair split: pairs not in group 4 -> group 4 n_train   64954 n_test   14461 | R2(log) 0.478 | resid sd(log) 0.802 (x4.82 at 95%) | bias +0.014 | actual/pred p5 0.32 p50 0.97 p95 3.93 | train-90% band covers 88.6% | per-pair mean error sd 0.625 (x3.40), worst |1.44|
+  time AND pair split (group 0 unseen, 2nd half) n_train   31505 n_test    8404 | R2(log) 0.594 | resid sd(log) 0.881 (x5.63 at 95%) | bias -0.190 | actual/pred p5 0.24 p50 0.84 p95 3.26 | train-90% band covers 86.0% | per-pair mean error sd 0.678 (x3.78), worst |2.19|
+  coefficients (all rows): const +9.957, lqv16 -0.147, ltr16 -0.253, lrv16 +0.510, lrng +0.346, lpx -0.020
+
+Coefficient stability, one fit per UTC day:
+  2026-09-12  n  10694  const +10.925, lqv16 -0.150, ltr16 -0.295, lrv16 +0.616, lrng +0.338, lpx -0.011
+  2026-09-13  n  12200  const +10.683, lqv16 -0.193, ltr16 -0.252, lrv16 +0.544, lrng +0.348, lpx -0.019
+  2026-09-14  n  12177  const +10.491, lqv16 -0.121, ltr16 -0.321, lrv16 +0.625, lrng +0.309, lpx -0.025
+  2026-09-15  n   9571  const +8.964, lqv16 -0.196, ltr16 -0.134, lrv16 +0.315, lrng +0.407, lpx -0.029
+  2026-09-16  n  12120  const +10.008, lqv16 -0.094, ltr16 -0.332, lrv16 +0.583, lrng +0.312, lpx -0.013
+  2026-09-17  n   9677  const +9.640, lqv16 -0.179, ltr16 -0.156, lrv16 +0.408, lrng +0.447, lpx -0.016
+  2026-09-18  n  12501  const +9.873, lqv16 -0.063, ltr16 -0.386, lrv16 +0.592, lrng +0.257, lpx -0.020
+
+Pair-level fit (184 pairs, one mean each): R2 0.731, resid sd(log) 0.604 -> a pair's typical spread predicted within x3.27 at 95%
+
+======================================================================
+q_spread_extrap.py  (session 68f2f338)
+======================================================================
+archive USD pairs 231; recorded USD pairs 184; in both 72
+1INCHUSD: recorded? False | window bars 13667 | backcast median 25.4 bps, 95% band for the pair's level 7.7-84.0 bps | share of window bars outside the 2026 fit's 1-99% range: lqv16 10%, ltr16 8%, lrv16 1%, lrng 0%, lpx 0%
+AAVEUSD: recorded? True (2026 measured median 5.6 bps) | window bars 44264 | backcast median 7.3 bps, 95% band for the pair's level 2.2-24.2 bps | share of window bars outside the 2026 fit's 1-99% range: lqv16 1%, ltr16 1%, lrv16 0%, lrng 3%, lpx 0%
+ADAUSD: recorded? True (2026 measured median 5.1 bps) | window bars 52567 | backcast median 4.8 bps, 95% band for the pair's level 1.4-15.7 bps | share of window bars outside the 2026 fit's 1-99% range: lqv16 12%, ltr16 3%, lrv16 0%, lrng 2%, lpx 0%
+ACHUSD: recorded? False | window bars 17658 | backcast median 22.0 bps, 95% band for the pair's level 6.7-72.8 bps | share of window bars outside the 2026 fit's 1-99% range: lqv16 4%, ltr16 8%, lrv16 1%, lrng 0%, lpx 0%
+ACAUSD: recorded? False | window bars 6837 | backcast median 56.9 bps, 95% band for the pair's level 17.2-188.1 bps | share of window bars outside the 2026 fit's 1-99% range: lqv16 13%, ltr16 7%, lrv16 7%, lrng 5%, lpx 0%
+
+======================================================================
+q_depth.py  (session 68f2f338)
+======================================================================
+all recorded: 185 pairs
+  median spread bps           p10 3.6, p25 6.7, p50 12.4, p75 25.9, p90 45.0  (n 185)
+  depth-to-$10k bps (median)  p10 5.8, p25 15.8, p50 35.8, p75 84.9, p90 167.3  (n 173)
+  share of minutes the 10-level book reached $10k: p10 0.2, p25 19.3, p50 81.3, p75 99.4, p90 100.0  (n 185)
+  slippage UB at <=$10k, bps  p10 4.0, p25 11.1, p50 29.4, p75 72.8, p90 151.6  (n 173)
+
+recorded AND in archive: 72 pairs
+  median spread bps           p10 1.9, p25 4.8, p50 9.5, p75 20.5, p90 34.6  (n 72)
+  depth-to-$10k bps (median)  p10 5.1, p25 10.1, p50 21.3, p75 39.7, p90 67.2  (n 69)
+  share of minutes the 10-level book reached $10k: p10 19.3, p25 61.9, p50 98.7, p75 100.0, p90 100.0  (n 72)
+  slippage UB at <=$10k, bps  p10 3.5, p25 6.7, p50 18.7, p75 32.7, p90 59.9  (n 69)
+  AAVE/USD: spread 5.56, depth10k 7.444815, reached 100%, slipUB 4.66428
+  ADA/USD: spread 5.08, depth10k 5.65565, reached 94%, slipUB 3.1149849999999994
+
+======================================================================
+q_capped.py validate 20,40  (session 68f2f338)
+======================================================================
+VALIDATE fold 20: rows 64276 (manifest 64276); identity MATCH; max |P mine - P saved| 0.00e+00
+VALIDATE fold 40: rows 132434 (manifest 132434); identity MATCH; max |P mine - P saved| 0.00e+00
+
+======================================================================
+q_capped_compare.py  (session 68f2f338; run inline, saved as a script)
+======================================================================
+BUY calls 3751522 base target rate 0.2438
+p_uncapped 0.5 survive 58720 1.565% target rate 0.5806
+p_capped 0.5 survive 233371 6.221% target rate 0.4077
+p_uncapped 0.6 survive 222343 5.927% target rate 0.4691
+p_capped 0.6 survive 648670 17.291% target rate 0.366
+p_uncapped 0.7 survive 1260510 33.600% target rate 0.3533
+p_capped 0.7 survive 1571388 41.887% target rate 0.3273
+overlap of survivors at 0.5: 49032
+corr 0.8316290179889703
+
+======================================================================
+q_picks.py  (session 68f2f338)
+======================================================================
+friction 0.60% 12m: trades 65, of which on a recorded pair 11; recorded spread of those: median 24.7219, p75 127.408, max 127.408; net on recorded -0.0005454545454545434, unrecorded 0.004833333333333334
+   top pairs: [('BSXUSD', 13), ('HDXUSD', 10), ('STORJUSD', 4), ('CQTUSD', 4), ('JTOUSD', 2), ('POLSUSD', 2), ('SBRUSD', 2), ('TRUUSD', 2)]
+friction 0.60% 18m: trades 79, of which on a recorded pair 11; recorded spread of those: median 24.7219, p75 127.408, max 127.408; net on recorded -0.0005454545454545434, unrecorded 0.003485294117647059
+   top pairs: [('BSXUSD', 13), ('HDXUSD', 10), ('SRMUSD', 6), ('STORJUSD', 4), ('CQTUSD', 4), ('GARIUSD', 3), ('POLISUSD', 2), ('JTOUSD', 2)]
+friction 0.70% 12m: trades 24, of which on a recorded pair 3; recorded spread of those: median 127.408, p75 127.408, max 127.408; net on recorded -0.006999999999999999, unrecorded 0.005857142857142857
+   top pairs: [('BSXUSD', 6), ('HDXUSD', 5), ('TRUUSD', 2), ('STORJUSD', 2), ('CQTUSD', 2), ('IDEXUSD', 1), ('SPELLUSD', 1), ('MVUSD', 1)]
+friction 0.70% 18m: trades 28, of which on a recorded pair 3; recorded spread of those: median 127.408, p75 127.408, max 127.408; net on recorded -0.006999999999999999, unrecorded 0.0068
+   top pairs: [('BSXUSD', 6), ('HDXUSD', 5), ('TRUUSD', 2), ('CQTUSD', 2), ('STORJUSD', 2), ('SRMUSD', 1), ('BTTUSD', 1), ('IMXUSD', 1)]
+
+======================================================================
+q_bucket.py  (session 68f2f338)
+======================================================================
+recording spans 7.4 days; declared table (median of per-pair medians, bps):
+       <$10k:  16 pairs  spread 30.4 (IQR 12.2-36.0)  slippage@$5k ~17.7
+   $10k-100k:  49 pairs  spread 25.8 (IQR 11.2-39.2)  slippage@$5k ~20.8
+    $100k-1M:  84 pairs  spread 12.3 (IQR 7.2-19.4)  slippage@$5k ~7.5
+     $1M-10M:  36 pairs  spread 5.5 (IQR 2.7-9.4)  slippage@$5k ~1.7
+
+alphabetical: candidate buckets over 18m: {0: 3851, 1: 20265, 2: 22444, 3: 6423, 4: 39}
+  fees 0.60% 6m: bars 17469 -> anomaly 8831 -> DI 8636 -> cost 0 -> risk 0 -> skeptic(capped .50) 0
+  fees 0.60% 12m: bars 34881 -> anomaly 14635 -> DI 14301 -> cost 1 -> risk 1 -> skeptic(capped .50) 1 | 1 pairs, 0 target, net -2.17% +/-nan%
+  fees 0.60% 18m: bars 53022 -> anomaly 20223 -> DI 19807 -> cost 1 -> risk 1 -> skeptic(capped .50) 1 | 1 pairs, 0 target, net -2.17% +/-nan%
+  fees 0.50% 6m: bars 17469 -> anomaly 8831 -> DI 8636 -> cost 3 -> risk 3 -> skeptic(capped .50) 1 | 1 pairs, 0 target, net -2.07% +/-nan%
+  fees 0.50% 12m: bars 34881 -> anomaly 14635 -> DI 14301 -> cost 5 -> risk 5 -> skeptic(capped .50) 3 | 2 pairs, 0 target, net -2.11% +/-0.08%
+  fees 0.50% 18m: bars 53022 -> anomaly 20223 -> DI 19807 -> cost 5 -> risk 5 -> skeptic(capped .50) 3 | 2 pairs, 0 target, net -2.11% +/-0.08%
+  fees 0.40% 6m: bars 17469 -> anomaly 8831 -> DI 8636 -> cost 15 -> risk 15 -> skeptic(capped .50) 3 | 2 pairs, 0 target, net -2.01% +/-0.08%
+  fees 0.40% 12m: bars 34881 -> anomaly 14635 -> DI 14301 -> cost 31 -> risk 24 -> skeptic(capped .50) 12 | 2 pairs, 3 target, net -0.94% +/-1.14%
+  fees 0.40% 18m: bars 53022 -> anomaly 20223 -> DI 19807 -> cost 31 -> risk 24 -> skeptic(capped .50) 12 | 2 pairs, 3 target, net -0.94% +/-1.14%
+
+log_return_4 asc: candidate buckets over 18m: {0: 3557, 1: 18431, 2: 23924, 3: 6501, 4: 609}
+  fees 0.60% 6m: bars 17469 -> anomaly 6562 -> DI 6395 -> cost 0 -> risk 0 -> skeptic(capped .50) 0
+  fees 0.60% 12m: bars 34881 -> anomaly 14588 -> DI 14217 -> cost 3 -> risk 3 -> skeptic(capped .50) 3 | 3 pairs, 1 target, net -0.67% +/-2.94%
+  fees 0.60% 18m: bars 53022 -> anomaly 21707 -> DI 21196 -> cost 4 -> risk 4 -> skeptic(capped .50) 3 | 3 pairs, 1 target, net -0.67% +/-2.94%
+  fees 0.50% 6m: bars 17469 -> anomaly 6562 -> DI 6395 -> cost 14 -> risk 13 -> skeptic(capped .50) 12 | 10 pairs, 6 target, net +0.06% +/-1.34%
+  fees 0.50% 12m: bars 34881 -> anomaly 14588 -> DI 14217 -> cost 27 -> risk 24 -> skeptic(capped .50) 23 | 17 pairs, 10 target, net -0.19% +/-0.93%
+  fees 0.50% 18m: bars 53022 -> anomaly 21707 -> DI 21196 -> cost 33 -> risk 29 -> skeptic(capped .50) 26 | 20 pairs, 11 target, net -0.25% +/-0.87%
+  fees 0.40% 6m: bars 17469 -> anomaly 6562 -> DI 6395 -> cost 49 -> risk 39 -> skeptic(capped .50) 36 | 22 pairs, 14 target, net -0.32% +/-0.72%
+  fees 0.40% 12m: bars 34881 -> anomaly 14588 -> DI 14217 -> cost 75 -> risk 62 -> skeptic(capped .50) 58 | 35 pairs, 26 target, net -0.03% +/-0.58%
+  fees 0.40% 18m: bars 53022 -> anomaly 21707 -> DI 21196 -> cost 96 -> risk 81 -> skeptic(capped .50) 71 | 42 pairs, 30 target, net -0.15% +/-0.52%
+
+======================================================================
+q_emrank.py  (session 68f2f338)
+======================================================================
+fees 0.60% expected_move  6m: clear cost    26 -> trades  22 (18 pairs, 10 target) net -0.21% +/-0.95%
+fees 0.60% expected_move 12m: clear cost    55 -> trades  46 (35 pairs, 21 target) net -0.20% +/-0.65%
+fees 0.60% net_margin     6m: clear cost    33 -> trades  28 (22 pairs, 12 target) net -0.30% +/-0.84%
+fees 0.60% net_margin    12m: clear cost    70 -> trades  55 (40 pairs, 26 target) net -0.10% +/-0.60%
+fees 0.50% expected_move  6m: clear cost   107 -> trades  71 (47 pairs, 30 target) net -0.26% +/-0.52%
+fees 0.50% expected_move 12m: clear cost   182 -> trades 119 (75 pairs, 54 target) net -0.11% +/-0.40%
+fees 0.50% net_margin     6m: clear cost   167 -> trades  83 (51 pairs, 36 target) net -0.14% +/-0.48%
+fees 0.50% net_margin    12m: clear cost   280 -> trades 145 (76 pairs, 69 target) net +0.04% +/-0.37%
+fees 0.40% expected_move  6m: clear cost   270 -> trades 150 (70 pairs, 63 target) net -0.17% +/-0.35%
+fees 0.40% expected_move 12m: clear cost   443 -> trades 254 (110 pairs, 111 target) net -0.08% +/-0.27%
+fees 0.40% net_margin     6m: clear cost   358 -> trades 173 (74 pairs, 68 target) net -0.24% +/-0.33%
+fees 0.40% net_margin    12m: clear cost   565 -> trades 283 (111 pairs, 121 target) net -0.06% +/-0.26%
+
+======================================================================
+q_di_rebuild.py 404,360,326  (session 68f2f338)
+======================================================================
+fold 404: load+verify training rows 2.5 s; reference build 5.9 s; reference (200000, 117); identity MATCHES the study's; rss 3182 MiB peak 4576 MiB
+fold 360: load+verify training rows 1.4 s; reference build 5.0 s; reference (169284, 117); identity MATCHES the study's; rss 3275 MiB peak 5692 MiB
+fold 326: load+verify training rows 0.9 s; reference build 4.0 s; reference (102668, 117); identity MATCHES the study's; rss 2383 MiB peak 5692 MiB
+
+======================================================================
+q_timing.py  (session 68f2f338)
+======================================================================
+start rss 50 MiB
+engine 5 features: 127 pairs x 104 bars: 0.753 s per decision bar (5.9 ms/pair); MAX_LOOKBACK_BARS 96
+engine 8: booster load 0.02 s (once per fold); predict 0.2 ms; TreeExplainer build 1.96 s (once per fold); shap one row 16 ms
+DI: reference in memory +196 MiB; score one row 119 ms
+engine 13: load 0.03 s, score one row 10.7 ms | engine 15: predict 0.3 ms
+end rss 455 MiB | peak working set 634 MiB | peak commit 2207 MiB
+
+======================================================================
+q_rank_timing.py  (session 68f2f338)
+======================================================================
+127 pairs per bar, fold 404 artefacts:
+  predict + calibrate : looped 0.027 s | batched 0.001 s
+  anomaly score       : looped 0.749 s | batched 0.010 s
+  DI score            : looped 14.529 s | batched 0.901 s
+  total               : looped 15.31 s | batched 0.91 s
+
+======================================================================
+probe_load.py 404  (session 68f2f338; the first attempt's refusal lines, then the memory re-run)
+======================================================================
+prediction(8): REFUSED (PredictionError) in 18.90s: model run 'train-20260913T205245-067b2b9d-f404' carries no di.npz, so this market cannot be compared against the training set. That run was trained while `prediction.di_percentile` was absent, which is the operator's key; engine 8 will not predict without the refusal it exists to make.
+anomaly(13): REFUSED (AnomalyError) in 0.04s: model run 'train-20260913T205245-067b2b9d-f404' records no anomaly threshold. It was trained while `anomaly.threshold_percentile` was absent, which is the operator's key; nothing here invents the number that decides when a market is broken.
+skeptic(15): LOADED in 0.05s, +0.0 MiB
+baseline rss MiB 15.4
+after imports rss MiB 26.8
+skeptic(15): LOADED in 0.02s, +4.7 MiB
+load_run with today's expected features: OK, 117 features, + 0.1 MiB
+rss MiB 175.2 | peak working set MiB 188.0 | peak commit MiB 1682.2
