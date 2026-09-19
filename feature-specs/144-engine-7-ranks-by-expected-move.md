@@ -12,7 +12,7 @@ Engine 7 examines its filtered universe in descending order of expected move. **
 judges the chosen candidate independently.** Engines 13 and 8 run after engine 7 on that one pair
 exactly as today, and no gate's verdict depends on the ranking.
 
-## The arrangement, and the question it leaves (R11)
+## The arrangement, and R11 as ruled
 
 **The registry order does not change.** Engine 7 computes the ranking itself, through a pure
 function in `modelling/`. Engines never import each other, and `modelling/` is the one package both
@@ -20,28 +20,26 @@ sides may import. That function scores every universe pair with the fold's predi
 calibrators (about 1 ms for 127 pairs, batched). Engines 13 and 8 then re-judge the chosen pair from
 scratch, as they do today.
 
-**RULING REQUIRED (R11): does the ranking skip pairs the anomaly and DI gates would refuse?**
+**R11, RULED 2026-09-19: yes, the ranking skips pairs the anomaly and DI gates would refuse.** The
+46 was measured that way, and the simulation must match the measurement, or the grid stops
+describing the run. So engine 7 ranks only among pairs whose anomaly score and DI would pass,
+computed batched with the same artefacts (about 0.9 s per bar, spec 137). The measurement's anomaly
+stage also refused incomplete vectors, so a pair with an incomplete vector is skipped too. The gates
+still re-judge the chosen pair, independently and with the same result, because each recomputes its
+own verdict from the same artefact.
 
-- **(a) No.** Rank by expected move alone. The cleanest separation: the ranking never consults a
-  gate criterion. But a top-ranked pair that engine 13 or 8 then refuses loses the bar, and the
-  trade count for this arrangement is **NOT MEASURED**.
-- **(b) Yes.** Rank only among pairs whose anomaly score and DI would pass, computed batched with
-  the same artefacts (about 0.9 s per bar, spec 137). The gates still re-judge the chosen pair,
-  independently and with the same result. This is the arrangement the 46-trade figure in
-  `phase-7-findings.md` §4 was measured under, and so the one the amendment was decided on.
+*Rejected (a): rank by expected move alone.* It is the cleaner separation, since the ranking would
+never consult a gate criterion. But its trade count was never measured, so the amendment's evidence
+would not describe the system simulated.
 
-**Lead's recommendation: (b).** It is the arrangement the operator's decision rests on. The gates'
-verdicts are unaffected, because each re-computes its own verdict for the chosen pair from the same
-artefact.
-
-## Implementation (after R11)
+## Implementation
 
 1. **C:** `modelling/ranking.py` (or a function in an existing module). Given the feature rows of the
    universe and the loaded artefacts, return pairs ordered by expected move descending, ties by
-   name. Under (b), exclude pairs whose batched anomaly score or DI exceeds the artefact's
-   threshold. It uses `modelling.expected_move`, `modelling.calibration` and, under (b),
-   `modelling.di` (spec 137) exactly as engines 8 and 13 do, so the numbers are identical by
-   construction.
+   name. Exclude pairs with an incomplete vector, and pairs whose batched anomaly score or DI
+   exceeds the artefact's threshold (R11). It uses `modelling.expected_move`,
+   `modelling.calibration` and `modelling.di` (spec 137) exactly as engines 8 and 13 do, so the
+   numbers are identical by construction.
 2. **B:** engine 7's `rank_universe` takes that order when `scout.rank_feature` names
    `expected_move`. It loads the artefacts through `store.model_run_dir`, as engines 8, 13 and 15 do.
    It publishes the ranked list's top values for the console, and **it never blocks on a ranking
@@ -64,5 +62,10 @@ artefact.
   given pair.
 - `rank_universe` is tested directly on input where arrival order and the intended order disagree
   on every element.
+- **The simulation matches the measurement.** On the rehearsal day's bars (spec 142), the ranked
+  candidate equals the pair the §4 grid's script (`docs/dataset/phase-7-recon-2026-09-19/scripts/q_emrank.py`)
+  selects on the same bar from the same fold's artefacts. Any difference is explained in the build
+  log. An unexplained difference means the grid no longer describes the run, and it is reported to
+  the lead before spec 143 launches.
 - `pytest tests/ -q` · `mypy --strict src/ scripts/` · `ruff check src/ tests/ scripts/` ·
   `python scripts/verify.py --phase 7`

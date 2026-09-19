@@ -18,7 +18,8 @@ proven capable of FAIL.
      ones, and the report's figures recompute from the digest's series.
    - It also runs a committed one-day fixture through the whole pipeline.
    - `--live` checks the real run's database.
-   - **The message states the window, tiers and scenario digest the digest came from.**
+   - **The message states the window, tiers, ranking and scenario digest the digest came from, and
+     names both benchmarks.**
 2. **`promotion_gate_rejects_haircut_edge`:** spec 139's fabricated pair, judged through the real
    engine 20.
 3. **`research_screens_render`:** the leaderboard and SHAP view render from a seeded database.

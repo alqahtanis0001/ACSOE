@@ -3,8 +3,8 @@
 **Owner:** C — Interface and models
 
 **Phase:** 7. Phase 7 prerequisite 5. **Required:** R1 was ruled expected move, batched
-(2026-09-19). Under spec 144's recommended arrangement (b), the ranking scores every universe pair's
-DI every bar. If the operator rules R11 (a), this spec reverts to optional.
+(2026-09-19), and R11 was ruled on the same day: the ranking skips pairs the anomaly and DI gates
+would refuse. So the ranking scores every universe pair's DI on every bar.
 
 ## Goal
 

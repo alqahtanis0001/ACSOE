@@ -23,7 +23,9 @@ difference lives in the client layer, as `architecture-context.md` requires.
 3. **The synthetic top of book and the order book.**
    - For each pair at `now`, centre the book on the last traded price at or before `now`.
    - Take the half-spread and the depth from spec 130's bucket table, using the pair's trailing
-     24-hour dollar volume computed from the served trades.
+     24-hour dollar volume computed from the served trades. **Every pair takes its bucket's value,
+     recorded or not.** A pair the recorder happened to measure does not get its own 2026 spread,
+     because the table is declared and applies uniformly.
    - Build 10 bid and 10 ask levels whose cumulative notional reaches $10,000 at the bucket's
      recorded depth distance, evenly spread.
    - `order_book(pair, depth)` returns that book, and the stream's book and ticker messages carry

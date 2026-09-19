@@ -31,35 +31,48 @@ reads a rule, not a conversation.
    already requires "an explicitly documented proxy". Name the two proxies: the declared book and
    the declared fee scenario. Name where each is documented, and state that they live **in the
    client layer only**, so no engine branches on mode.
-4. **The ranking. RULED 2026-09-19 (R1): engine 8's expected move, batched.** Write invariant 4's
-   amendment in the operator's words: *a model's output may order candidates for examination,
-   provided every gate judges the chosen candidate independently and no gate's verdict is
-   influenced by the ranking. The prohibition on a model overriding or softening a gate is
-   untouched.* The rationale and its residual are in `docs/dataset/phase-7-findings.md` §R.2.
-   Point there; do not restate them.
-   - **R12, for the operator before this lands.** Invariant 4 also says *"A model may only ever
-     make the system less willing to trade, never more."* The ranking measurably makes the system
-     more willing: 3 trades become 46 at tier 3. The amendment must carve that sentence out in words
-     the operator approves. Otherwise the invariant contradicts itself. **The lead does not write
-     that wording.**
+4. **The ranking. RULED 2026-09-19 (R1): engine 8's expected move, batched. R12 ruled the same
+   day: the wording.** In invariant 4, replace the sentence *"A model may only ever make the system
+   less willing to trade, never more."* with the operator's text, verbatim:
+
+   > A model may never cause a trade that a gate would refuse, and may never soften, bypass or
+   > override a gate's verdict. A model's output may order candidates for examination, provided
+   > every gate judges the chosen candidate independently and no gate's verdict is influenced by
+   > the ordering. Ordering changes which candidate is examined, never whether an examined
+   > candidate is approved.
+
+   Record beneath it, as the operator's record: **amended 2026-09-19 to permit engine 7 ranking by
+   engine 8's expected move. It raises trades from 3 to 46 at tier 3 with the net unchanged at
+   roughly zero. It was amended to obtain a sample large enough to measure rather than a more
+   favourable result, and had the net moved from negative to positive the operator would have
+   treated that as a warning and not amended.** The rationale and the residual circularity are in
+   `docs/dataset/phase-7-findings.md` §R.2 and §R.9. Point there; do not restate them.
    - Invariant 4's paragraph on engine 7 ("its candidate ranking is a deterministic score over
-     features. It contains no model") changes with it.
+     features. It contains no model") changes with it. Its universe filter stays arithmetic and
+     protected. Its ordering reads the predictor's output, and it skips pairs the anomaly and DI
+     gates would refuse (R11).
+   - Grep for every other "less willing" claim that describes invariant 4 (step 7). Invariant 2's
+     sentence about fallbacks and invariant 14's "less willing to act" are about other things and
+     stay. Every restatement of invariant 4 points at the new text.
    - `project-overview.md` counts the engines with no machine learning, and `scout` is one of them.
      **Do not change the count to the next number down.** `docs_vocabulary` retires that word
      beside "engines". Say instead that engine 7's filter contains no model and its ordering reads
      the predictor's output.
    - Config: `scout.rank_feature: expected_move` (spec 144 defines the name), with the ruling's
      date.
-5. **The skeptic cap. RULING REQUIRED (R2).** The cap itself was ruled 2026-09-16 (13 folds, spec
-   83). What is open is whether the simulation runs the capped skeptic (the lead's recommendation;
-   `phase-7-findings.md` §5a shows a fourfold difference in pass rate in this window) or the
-   uncapped one as trained. Record the answer in the tracker's prerequisite 1.
+5. **The skeptic cap. RULED 2026-09-19 (R2): the simulation runs the capped skeptic** (13 folds,
+   the cap ruled 2026-09-16, spec 83). Recorded in the tracker's prerequisite 1 on 2026-09-19.
 6. **Config.** A `replay:` section naming:
    - the scenario fixtures: spec 130's table, and
      `tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json`, fetched and committed by the lead
      on 2026-09-19;
    - the fee tier, **3 or 5, one per run** (R3, ruled 2026-09-19);
-   - `training.skeptic_cap_folds: 13` if R2 is capped.
+   - the window, **folds 379 to 404** (R4, ruled 2026-09-19);
+   - `training.skeptic_cap_folds: 13` (R2).
+
+   The ranking is `scout.rank_feature`: `expected_move` for the ranked runs, absent for the
+   alphabetical baseline. Each run's config is built by the driver (spec 131), never by editing the
+   committed file between runs.
 
    A may request keys; only the lead adds them.
 7. **Grep for the contradicted claim** (the retired-vocabulary procedure, steps 2 to 4). Search
@@ -79,7 +92,7 @@ reads a rule, not a conversation.
   rule; it relaxes nothing that exists.
 - Do not write any Kraken fee figure into a context file. The schedule is a fixture, and
   invariant 5's reference figures stay reference figures.
-- Do not settle R2 or R12 by default. Each is written only once the operator has answered.
+- R12 is written verbatim. Do not rephrase it, shorten it, or merge it with existing prose.
 
 ## Check When Done
 

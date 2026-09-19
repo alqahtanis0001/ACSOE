@@ -34,8 +34,15 @@ Today both engines refuse all 405 folds: there is no `di.npz`, and the anomaly t
 3. **A new run directory per fold**, through `StoreClient.new_model_run_dir`, which refuses an
    existing one.
    - Name: the source run id plus a Phase 7 suffix.
-   - Files: copies of `model.txt`, `calibrators.json`, `scaler.json`, `anomaly.joblib` (and
-     `skeptic.txt` unless spec 136 supplies a capped one), plus `di.npz`.
+   - Files: copies of `model.txt`, `calibrators.json`, `scaler.json` and `anomaly.joblib`, plus
+     `di.npz`, plus the **capped** skeptic spec 136 trained for that fold (R2), taken from 136's
+     staging output with its training identity and row count. The uncapped `skeptic.txt` is not
+     copied, so no run can load it by mistake.
+   - **The directory is written once and complete**, because the store refuses an existing
+     directory and the manifest's sha256s must cover every file. So the module and its tests are
+     built in wave 1, and the assembly for the window runs after spec 136's skeptics exist. A fold
+     with no capped skeptic is not assembled; the module refuses it rather than falling back to the
+     uncapped one.
    - A manifest written by `modelling/artefacts.py`, carrying a sha256 per file.
 4. **Provenance in the manifest:**
    - the source run id and each copied file's source sha256;
@@ -52,7 +59,8 @@ Today both engines refuse all 405 folds: there is no `di.npz`, and the anomaly t
 - `models/train-20260913T205245-067b2b9d-f*` are **never written to**. The store refuses an
   existing directory anyway.
 - No retraining of any predictor, calibrator, scaler or forest.
-- Only the folds the ruled window needs (R4), not all 405, unless the operator asks.
+- Only the folds the ruled window needs, folds 379 to 404 (R4, six months), not all 405, unless the
+  operator asks.
 
 ## Check When Done
 

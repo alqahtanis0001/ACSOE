@@ -1,5 +1,12 @@
 # 75 — The candidate-ranking study, for the operator's ruling on engine 7
 
+> **RESOLVED 2026-09-19 by operator ruling R1.** Engine 7 ranks by engine 8's expected move, batched,
+> with invariant 4 amended. No feature from this study was adopted: `log_return_4` was rejected
+> because it was chosen from this study, which was computed over the same out-of-sample data the
+> Phase 7 report uses. The ruling, its reasoning and the recorded circularity are in
+> `context/progress-tracker.md` (Open Questions, the entry marked RESOLVED 2026-09-19). The
+> implementation is spec 144. The study below stands as it was written and run.
+
 **Owner:** C — Interface and models
 
 **Phase:** 5. `research/training.py` gains a `--ranking-study` mode; the report lands in

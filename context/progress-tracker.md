@@ -4,12 +4,46 @@
 
 ## Current Phase
 
-**Phase 7 — Evaluation. SPECS 126–143 DRAFTED 2026-09-19, AWAITING OPERATOR APPROVAL; nothing
-claimed or built.** The task list and the eight open rulings (R1–R4, R7–R10) are at the top of
-`feature-specs/PHASE-7-TASKS.md`. The evidence behind them is `docs/dataset/phase-7-findings.md`
-(committed `93403b7`), which gathers everything measured about the system's economic behaviour before
-the chain simulation, with the simulation's slots marked. Ruled on 2026-09-19 and carried by spec
-126:
+**Phase 7 — Evaluation. SPECS 126–144 WRITTEN AND EVERY RULING ANSWERED, 2026-09-19; AWAITING
+OPERATOR APPROVAL TO BUILD. Nothing claimed or built.** The seven rulings still open after the second
+round were answered by the operator on 2026-09-19 and applied to the specs and the findings the same
+day: R2 capped skeptic; R4 six months (folds 379–404, ending at fold 404's test close, 2025-01-04);
+R8 both benchmarks; R9 every configuration ever evaluated on the out-of-sample data, listed and
+counted conservatively; R10b the working form; R11 the ranking skips pairs the anomaly and DI gates
+would refuse; R12 invariant 4's wording in the operator's words. **Spec 75 is resolved** (Open
+Questions). Phase 6 re-gated at the Phase 7 preflight, 2026-09-19
+(`logs/verify/phase6-20260919-phase7-preflight-lead.log`). The task list is
+`feature-specs/PHASE-7-TASKS.md`. The evidence is `docs/dataset/phase-7-findings.md`, which gathers
+everything measured about the system's economic behaviour before the chain simulation, with the
+simulation's slots marked. **The operator rules on the phase close after seeing the simulation's
+output, as in Phase 6. The lead does not mark it green.**
+
+**The account's own fee tier is a recorded fact; tiers 3 and 5 are declared scenarios.** On
+2026-09-19 one read-only authenticated `TradeVolume` call (pair BTC/USD, HTTP 200, empty error
+list) returned **tier 1: maker 0.40%, taker 0.80%**. That was measured on the account, not
+assumed. The Phase 7 simulation's tiers 3 (0.22%/0.38%) and 5 (0.15%/0.30%) are **declared
+scenarios** read from Kraken's published schedule
+(`tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json`), in replay mode only. They are not
+the account's tier. At the account's own tier the cost gate cannot pass anything at the current
+barriers (`phase-7-findings.md` §2, the tier-1 proof). The same call confirmed that the key rotated
+in Phase 2 is alive and holds Kraken's Query Funds permission. Whether it also holds trade
+permission cannot be read from the API; the operator checks it on Kraken's key page.
+
+**Recordings made before the recorder gap fix lack the pair rules and the fee tier, 2026-09-19.**
+Operator instruction, separate from Phase 7. The recorder reads Kraken's instrument snapshot to
+choose its subscriptions and then discards it, and nothing records `TradeVolume`. **So every
+recording up to the change that adds those frames has no recorded pair rules and no recorded fee
+tier.** That covers the eleven days on disk and everything recorded until the fix lands. Engine 7
+would exclude every pair as `pair_rules_missing` and engine 10 would block every pair, so **a replay
+over those recordings needs declared substitutes, not recorded facts**. They would be a declared
+`AssetPairs` and a declared fee scenario, labelled as declared wherever they appear, as in Phase 7's
+replay of the 2023–24 archive. A's recorder audit (`docs/build-log/phase-7/a-platform.md`, the
+recorder gap audit) lists what else the recording lacks. **The exact first recording that carries
+the new frames is written here when the recorder is restarted with them.** Until then the cut-off is
+open.
+
+*The second round of rulings, as recorded when the specs were first revised:* Ruled on 2026-09-19 and
+carried by spec 126:
 
 - invariant 2 permits a declared fee scenario in replay mode only, enforced by a test;
 - a genuine `AssetPairs` is to be recorded (prerequisite 9);
@@ -1533,7 +1567,7 @@ Settled with evidence. Do not relitigate. Changing one requires the operator, no
   Accuracy is never computed: the base rate is 23.89% and a model that always predicts `stop` is right 51% of the time. Retired as a term in `ai-workflow-rules.md`.
 - **Rows are weighted by average uniqueness**, and the effective sample size is reported **per fold on the same line as that fold's row count** and in aggregate. Operator addition: a fold with 8,000 rows and an effective size of 300 is a fold whose numbers mean almost nothing, and an aggregate hides exactly that fold.
 - **The DI reference set** is the predictor's training rows for the fold, per pair the last `prediction.di_window_days`, mean k-nearest distance, thresholded at `prediction.di_percentile` of the leave-one-out distribution, refitted each weekly retrain. **Amended by the operator 2026-09-15: the leave-one-out excludes every reference row within 48 bars (`backtest.embargo_bars`) of the row being scored, across all pairs, not the row alone** — 78 of the 117 DI columns are shared by every pair on a bar, so excluding the row alone left near-identical same-moment neighbours and the threshold measured time proximity rather than distributional distance. Spec 68, amendment.
-- **Engine 7's ranking is a config-named feature**, `scout.rank_feature` with `scout.rank_descending`; alphabetical while absent, and the engine says so. The feature is ruled after spec 75's study reports.
+- **Engine 7's ranking is a config-named feature**, `scout.rank_feature` with `scout.rank_descending`; alphabetical while absent, and the engine says so. The feature is ruled after spec 75's study reports. **Ruled 2026-09-19 (R1): engine 8's expected move, not a studied feature.** Spec 75 is resolved; see Open Questions, and spec 144.
 - **`lightgbm`, `scikit-learn` and `shap` are base dependencies** from Phase 5; `hmmlearn` and `statsmodels` stay in the `research` extra.
 
 ### Operator rulings of 2026-09-12, recorded here so Phase 5 inherits them rather than asking
@@ -1770,6 +1804,11 @@ the reason in the YAML comment and in `DatasetConfig`.
      apply inside the window. **Implementation is Phase 7, not Phase 6**, because capping changes
      what the skeptic is trained on and re-measuring means retraining 405 skeptics.
      **Finding 1 below was measured on the uncapped skeptic** — see the caveat recorded against it.
+     **Ruled 2026-09-19 (R2): the Phase 7 simulation runs the capped skeptic**, trained for the
+     simulation window's folds only (spec 136). In the window the capped skeptic passes 6.2% of BUY
+     calls at a 0.41 target rate against the uncapped one's 1.6% at 0.58 (`phase-7-findings.md` §5a).
+     In the operator's words, that is a difference in this data at the step that decides the funnel's
+     end, not a difference in principle. The all-405-fold re-measurement stays outstanding.
      The problem, for the record: fold k's skeptic trained on every eligible BUY call from every
      earlier fold, uncapped; by fold 404 that was 8.9M rows, the per-fold memory peak grew from
      ~66 GB to ~79 GB, and the run died allocating that matrix at fold 405.
@@ -1863,8 +1902,26 @@ the reason in the YAML comment and in `DatasetConfig`.
 - **RESOLVED 2026-09-09, before Phase 2 engine work began — the orchestrator reads no commands, so the kill switch does not work.** Fixed by the lead as the first task of the phase, composed from the four methods `StoreClient` already exposes, entirely inside `core/`, renaming nothing in B's directory; the startup re-application of claimed-but-unconsumed rows is wired and had never existed. A third break in the same path turned up while fixing it: `_clear_close_intent_if_finished` called a `mark_close_all_consumed` the store has never had, so even a *successful* liquidation left its row unconsumed for the startup replay to re-run on the next boot against an already-flat account. `commands_round_trip` is registered for phase 2 and PASSes. The original finding, kept because the lesson is the transferable part: Found 2026-09-09 by C while building spec 24, confirmed and widened by the lead. `core/orchestrator.py:173` looks up `store.claim_pending_commands` via `getattr`; **`StoreClient` has no such method.** It exposes `pending_commands()`, `claimed_unconsumed_commands()`, `claim_command(command_id, *, claimed_at, run_id)` and `mark_command_consumed(command_id, *, consumed_at)`. So the lookup returns `None`, the reader logs `commands_skipped` at debug level and returns, and **a daemon wired to the real store would silently ignore every Activate, Freeze and Close-all ever written.** Two further faults in the same method: `_mark_consumed` calls `mark_command_consumed(command, now=...)` against a signature of `(command_id, *, consumed_at)`, which would raise if it were ever reached; and **the startup re-application of claimed-but-unconsumed rows is not wired at all** — nothing in `src/` calls `claimed_unconsumed_commands()`, though `architecture-context.md` requires it and names the exact failure it prevents, a daemon killed mid-liquidation coming back with `close_all` marked done and positions still open. The only implementations of the orchestrator's shape are a test double in `tests/core/test_orchestrator.py` and C's documented adapter in `tests/console/test_commands.py`, which is why every gate to date has passed over it. **This is Phase 0 work in `core/orchestrator.py`, which is lead-only, so it is the lead's to fix and no teammate's.** Harmless in Phase 1 — no daemon runs and the console only writes rows — and it bites the moment one does, which is Phase 2. The cheapest correct fix stays entirely inside `core/`: compose the reader from the four methods the store already has, rather than renaming anything in B's directory. **Fix before any Phase 2 work begins.**
 - **RESOLVED 2026-09-09 — `toolchain_green` is now registered for every phase**, via `register_every_phase`, exactly as `docs_vocabulary` is. `TOOLCHAIN` stays scoped to `src/`: the operator deliberately did not widen it to `tests/` or `scripts/`, so the two Phase 0 findings in `verify.py` and the three in `tests/` remain out of scope for the gate. One consequence to expect: every phase's gate now runs `pytest`, so the intermittent seed-path crash below can now surface as a FAIL on any phase rather than only Phase 0. The account of the hole this closed:
 - *Was open, for the operator at the Phase 1 boundary — `toolchain_green` was registered for Phase 0 only, so from Phase 1 onward the gate never ran the tests.* Found 2026-09-09: `scripts/verify.py --phase 1` reported `7 PASS, 0 FAIL, 2 PENDING` while `pytest` was reporting `2 failed, 639 passed`. Nothing in the report was wrong — no Phase 1 criterion makes a claim about the suite — but "a phase is done when `verify.py --phase N` passes every criterion" is the project's definition of done, and for every phase after 0 that definition currently cannot see a red suite. Run-protocol step 4 covers the gap by making each agent run all four commands themselves, which is why this was caught, but it depends on a person following a procedure rather than on the gate. **The obvious fix is to register `toolchain_green` for every phase, exactly as `docs_vocabulary` already is.** It is a change to what every phase asserts, so it belongs at a phase boundary and to the operator, not mid-phase and not to an agent — the same reasoning that deferred widening `TOOLCHAIN` beyond `src/` out of Phase 0. Note the two interact: registering it for every phase also spreads the intermittent seed-path crash across every phase's gate, so the crash question above should be settled first or at the same time.
-- **OPEN, for Phase 7 by operator ruling 2026-09-15: whether any ranking feature pays for a
-  trade.** Spec 75's study over the full run (`docs/dataset/ranking-study-2026-09-14.md`) reports
+- **RESOLVED 2026-09-19 by operator ruling (R1, closing spec 75, open since Phase 3): engine 7
+  ranks its universe by engine 8's expected move, batched, and invariant 4 is amended to permit
+  it** (the wording is R12, in `feature-specs/126-phase-7-rulings-into-the-documents.md` step 4,
+  and lands in `trading-invariants.md` with spec 126). **The reasoning, as ruled:** expected move is
+  not a selected feature. It is the predictor's own output and the exact number engine 10 compares
+  against the hurdle, so choosing it involves no search over candidates. `log_return_4` was
+  rejected because it was chosen from a study computed over the same out-of-sample data the Phase 7
+  report uses. Net-margin ranking was rejected on live feasibility, not cost: 127 REST calls per bar,
+  unchecked against the rate limiter, so simulating it would measure a system that could not run
+  live. Alphabetical stays as the simulation's baseline, over the same window and tiers. The
+  ranking skips pairs the anomaly and DI gates would refuse (R11), because that is how the 46-trade
+  figure was measured, and every gate still judges the chosen pair independently. **The residual
+  circularity is recorded, not denied:** the expected-move grid (`phase-7-findings.md` §4) was
+  computed on the same out-of-sample data, before the decision to amend. Three things bound it: the
+  stated criterion was sample size; the net stayed at about zero under every row; and the promotion
+  bar was fixed before anything ran. Implemented by spec 144; `scout.rank_feature` lands with spec
+  126. Alphabetical ordering therefore stays in force until spec 144 is built, and it is no longer
+  an open question. *The entry below is the question as it stood, kept for the record.*
+- *As it stood before 2026-09-19:* **OPEN, for Phase 7 by operator ruling 2026-09-15: whether any
+  ranking feature pays for a trade.** Spec 75's study over the full run (`docs/dataset/ranking-study-2026-09-14.md`) reports
   the **mean realised barrier return per bar** of the pair each feature would rank first, and the
   short-horizon reversal features (`bar_body_pct`, `log_return_4`, `log_return_16` ascending) read
   positive in every test year. **That number is not comparable with friction**: friction is paid

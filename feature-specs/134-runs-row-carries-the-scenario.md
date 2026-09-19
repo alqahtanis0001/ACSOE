@@ -13,8 +13,14 @@ without its declared inputs.
 
 1. The orchestrator's `_record_run` writes `scenario_digest` and `scenario_description`. It takes
    them from the clients object when the replay client exposes them, and leaves them null
-   otherwise.
-2. Engine 19 needs nothing new. Every trade and rejection joins to its run by `run_id`.
+   otherwise. **The description carries the synthetic book's parameters** (the bucket table's
+   identity and each bucket's spread and depth as served), the fee tier and schedule, the rules
+   file, the partition manifest, the window, the ranking, and whether the run is the alphabetical
+   baseline. The digest covers the same inputs.
+2. **Every trade and rejection carries the digest through its `run_id`.** The scenario is fixed for
+   the life of a run, so the run's digest is each row's digest, and engine 19 needs nothing new. A
+   test proves the join: every `trades` and `rejections` row of a replay run resolves to a `runs`
+   row with a non-null digest, and none resolves to a paper run's null.
 
 ## Scope Limits
 

@@ -13,11 +13,23 @@ carries an interval and an effective sample size.
 ## Implementation
 
 1. `research/attribution.py`, new and C's. Read-only over a run database.
-2. **The benchmark. RULING REQUIRED (R8).** The glossary names buy-and-hold as the benchmark and
-   does not say of what. The lead's proposal, overturnable by the operator: BTC/USD buy-and-hold
-   from the same time-and-sales, over the same ticks, with a second benchmark of an equal-weighted
-   basket of the pairs the run actually held while it held them. Build nothing against either until
-   the ruling lands.
+2. **Two benchmarks, RULED 2026-09-19 (R8). Report both.**
+   - **BTC/USD buy-and-hold** answers the question an examiner asks first. It is built from the same
+     time-and-sales partitions the run replayed (spec 128), marked at the same ticks. It is bought at
+     the first tick of the window and held to the last.
+   - **An equal-weighted basket of the pairs the run actually held** answers the question they ask
+     second. It holds equal weights of the pairs the run held, over the periods the run held them,
+     and cash otherwise. It is marked from the same partitions at the same ticks, with no fees.
+     *This is the lead's reading of "the pairs actually held" as the recommendation proposed it
+     ("while held"). If the operator meant the held pairs bought and held over the whole window,
+     that is a third series, not a replacement.*
+   - **Each benchmark is reported against the run's equity curve including its cash periods.** The
+     run's curve is never trimmed to the days it held a position, for either regression.
+   - **The window is the run's own**, read from its `runs` row and first and last equity rows, and
+     never a constant. A benchmark over a different window than the run's is the quiet failure this
+     phase is warned about. A test plants a run whose window differs from the committed six months
+     and requires the benchmark to follow it.
+   - The glossary's **buy-and-hold** entry points here (spec 126).
 3. **Returns on a fixed grid:** daily equity returns, from `equity_snapshots` by `ts`, including
    days with no position. Regress on the benchmark's returns with `statsmodels`, using a HAC
    (Newey–West) covariance with the lag chosen and stated, because consecutive days share open
@@ -48,6 +60,11 @@ carries an interval and an effective sample size.
 ## Check When Done
 
 - On a fabricated equity series with a known alpha and beta, the report recovers both within their
-  intervals, and a series with the alpha removed is reported as not significant.
+  intervals **against each benchmark**, and a series with the alpha removed is reported as not
+  significant.
+- A fabricated run with flat days is regressed over every day, flat ones included. Dropping the
+  flat days is a planted defect, and it must turn the test red.
+- The benchmark window follows a planted run window, and a benchmark pinned to a constant window is
+  a planted defect that must turn a test red.
 - `pytest tests/ -q` · `mypy --strict src/ scripts/` · `ruff check src/ tests/ scripts/` ·
   `python scripts/verify.py --phase 7`

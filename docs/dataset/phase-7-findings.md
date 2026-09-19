@@ -16,9 +16,10 @@ table says which chain behaviour it does and does not model.
 - **NOT MEASURED** marks a figure that would need a fresh computation. It was deliberately not
   computed for this document, and the slot is left empty rather than filled.
 
-Written 2026-09-19, at `f0e7514` plus this document. **Revised the same day** (§R) after four
-operator rulings made after the first version was written; every section below that the rulings
-touch now says so. Scripts and their raw outputs are in
+Written 2026-09-19, at `f0e7514` plus this document. **Revised the same day** (§R), twice: first for
+four operator rulings made after the first version was written, then for the last seven (R2, R4,
+R8, R9, R10b, R11, R12) and a check of the $60 figure (§R.1). Every section below that the rulings
+touch says so. Scripts and their raw outputs are in
 `docs/dataset/phase-7-recon-2026-09-19/` (`scripts/` and `outputs/`). Where an output was only
 printed to a terminal, it is transcribed verbatim in `outputs/transcribed-terminal-outputs.txt`,
 cited below as **[T]**.
@@ -32,6 +33,20 @@ recommendation of 3 and 4. The reason is the framing:
 
 - **Tier 3 is reachable by a small retail account.** It needs $10,000 of 30-day spot volume or
   $20,000 of assets on platform.
+- **Reaching tier 3 by volume costs about $60 in fees at most.** The $60 is the **fee cost** of
+  generating the $10,000 of volume. It is not the volume.
+  - The arithmetic: a $1,000 balance bought and sold back generates $2,000 of volume per round trip.
+    At tier 1's 1.20% round trip (maker 0.40% in, taker 0.80% out), that round trip costs about $12
+    in fees. Five round trips make $10,000 of volume and cost about $60.
+  - The cost does not depend on the balance. It is the volume times the average fee per side: $10,000
+    × 0.60% = $60. A larger balance needs fewer round trips for the same total.
+  - **$60 is an upper bound.** It charges every trade at tier 1's rates. The fetched schedule (§2)
+    has a tier 2 from $2,500 of volume, at 0.30%/0.60%. If the tier moves up as the volume accrues,
+    the first $2,500 costs $15 (0.60% average per side) and the remaining $7,500 costs $33.75 (0.45%),
+    **about $49 in all**. How quickly Kraken re-tiers an account is not on disk, so the range is
+    stated: **about $49 to $60**.
+  - Not counted in either figure: the spread paid on each taker exit, and the price risk of holding
+    between the buy and the sell.
 - **Tier 5 needs $50,000 of 30-day volume or $100,000 held**, a scale most retail accounts never
   reach.
 
@@ -44,10 +59,22 @@ has 46 trades at fees of 0.60%, 119 at 0.50% and 254 at 0.40% over 12 months (§
 were not computed, so tier 5's count lies between the 0.40% and 0.50% rows and is **NOT MEASURED**.
 
 **R.2 Engine 7 ranks its universe by engine 8's expected move, batched.** Invariant 4 is amended to
-permit it, narrowly, in the operator's words: *a model's output may order candidates for
-examination, provided every gate judges the chosen candidate independently and no gate's verdict
-is influenced by the ranking. The prohibition on a model overriding or softening a gate is
-untouched.*
+permit it. The sentence "a model may only ever make the system less willing to trade, never more"
+is replaced by the operator's wording (R12, ruled 2026-09-19):
+
+> A model may never cause a trade that a gate would refuse, and may never soften, bypass or
+> override a gate's verdict. A model's output may order candidates for examination, provided every
+> gate judges the chosen candidate independently and no gate's verdict is influenced by the
+> ordering. Ordering changes which candidate is examined, never whether an examined candidate is
+> approved.
+
+The invariant records beneath it that it was amended on 2026-09-19 to permit this ranking. It
+raises trades from 3 to 46 at tier 3 with the net unchanged at roughly zero. It was amended to
+obtain a sample large enough to measure, not a more favourable result, and had the net moved from
+negative to positive the operator would have treated that as a warning and not amended. **The
+ranking skips pairs the anomaly and DI gates would refuse (R11)**, because the 46 was measured that
+way, and the simulation must match the measurement. Each gate still judges the chosen pair itself.
+This closes spec 75, open since Phase 3.
 
 - **Why expected move and not `log_return_4`.** `log_return_4` was chosen from a study computed
   over the same out-of-sample data this report uses, and the lead had warned of exactly that.
@@ -81,9 +108,52 @@ earlier schedule, so the 2026 schedule is applied to a 2023–24 window.**
 **R.4 The promotion bar is set before anything runs.** In the operator's words: *a model is
 promoted only if the lower bound of the 95% interval on net return per trade is above zero, after
 friction, on the deflated metric.* The operator expects nothing to pass it, and setting it in
-advance is the point. **Its operational form is fixed in spec 139 before any run.** In particular,
-how the interval is widened for the number of trials, and which covariance allows for overlapping
-holds, are fixed there and not chosen after a result exists.
+advance is the point. **Its working form was ruled on 2026-09-19 (R10b), as proposed:** the
+interval is computed allowing for overlapping holds, then widened for the number of trials, and a
+model is promoted only if the widened interval's lower bound is above zero. The operator notes that
+this is stricter than the original wording, which is correct. The exact statistics are fixed in
+spec 139 and committed as code with a worked example before any simulated figure exists.
+
+**R.5 The simulation runs the capped skeptic (R2).** The skeptic is trained on the last 13 folds'
+BUY calls, as ruled on 2026-09-16. In the operator's words: *1.6% passing at a 58% hit rate against
+6.2% at 41% is a difference in this data at the step that decides the funnel's end, not a
+difference in principle* (§5a).
+
+**R.6 The window is six months (R4).** It is folds 379 to 404, test weeks from 2024-07-06 to fold
+404's test close at 2025-01-04 00:00 UTC, at tiers 3 and 5. **Two rankings:** engine 8's expected
+move, and alphabetical as the baseline, over the same window and tiers. That makes four runs.
+Nothing else is configured. The tiers run in parallel on separate databases. The folds within a tier
+run in sequence, because account state crosses fold boundaries and a freeze in one week changes
+every week after it.
+
+**R.7 Two benchmarks (R8).**
+
+- **BTC/USD buy-and-hold** answers the question an examiner asks first: would holding Bitcoin have
+  done better?
+- **An equal-weighted basket of the pairs the run actually held**, held while the run held them and
+  in cash otherwise, answers the second: would holding the same pairs over the same periods have
+  done as well without the barriers?
+
+Each is reported against the run's equity curve including its cash periods.
+
+**R.8 What counts as a trial (R9).** Every configuration ever evaluated against the out-of-sample
+data counts as a trial, **listed one by one, not summarised**:
+
+- the leaderboard rows;
+- every cell of the reconnaissance grids;
+- the ranking study's features;
+- the skeptic veto sweep's thresholds;
+- the DI and anomaly percentiles compared on this data;
+- this phase's two rankings at two tiers.
+
+The count errs high on purpose, and the ledger says so. An overstated trial count makes the haircut
+harsher and the result harder to claim, which is the right direction to err (spec 139).
+
+**R.9 The residual circularity, stated by the project rather than found by a reader.** §R.2's
+"What remains" is a limitation of the evaluation and goes into the write-up as one. The
+expected-move grid was computed on the same out-of-sample data this report uses. Three things bound
+it: sample size was the stated criterion for amending, the net stayed at about zero under every
+row, and the promotion bar was fixed before anything ran.
 
 ---
 
@@ -387,7 +457,7 @@ yields too few trades to say anything about its return. Its point estimates are 
 rest on one to twelve trades on two pairs.
 
 **SIMULATED VALUE PENDING:** the expected-move ranking's chain trade count, pair count and net per
-trade, at tiers 3 and 5.
+trade at tiers 3 and 5, beside the alphabetical baseline's over the same six months (§R.6).
 
 ---
 
@@ -546,7 +616,7 @@ substitution costs.
 | **Entry fills.** Every offline figure assumes the trade was entered at the bar's close. | The paper broker's pessimistic rule: a post-only buy fills only on a trade strictly below its limit, from the time-and-sales. | The offline counts are upper bounds on fills. Fills that do happen are selected towards falling markets (adverse selection). |
 | **Complete features.** 50.2% of out-of-sample rows carry an unfilled lookback (Phase 5, Finding 3). | Nothing: engines 13 and 8 refuse them, correctly. | The surviving population is the more liquid half, and 62% of window bars are refused before a prediction (§1b). |
 | **2025.** The walk-forward died at fold 405. | Nothing. | No test week after 2025-01-03. |
-| **Choosing configurations on the same data.** The grids above were searched on the out-of-sample file, and the ranking study behind `log_return_4` used it too. | Expected-move ranking replaces the studied feature with the predictor's own output (§R.2), and the promotion bar is fixed in advance (§R.4). | The residual is stated in §R.2: the amendment was decided with the §4 grid in view. The deflated metric's trial count should include every cell searched here. |
+| **Choosing configurations on the same data.** The grids above were searched on the out-of-sample file, and the ranking study behind `log_return_4` used it too. | Expected-move ranking replaces the studied feature with the predictor's own output (§R.2), and the promotion bar is fixed in advance (§R.4). | The residual is stated in §R.2 and §R.9: the amendment was decided with the §4 grid in view. Every cell searched here is a trial in the deflated metric's ledger (§R.8, ruled R9). |
 
 ---
 
@@ -578,7 +648,8 @@ not meaningful" or shows its n. Those include:
 | §3 | The bucket arm's chain figures |
 | §4 | The expected-move ranking's chain trade count, pairs and net, at tiers 3 and 5 |
 | §6 | The chain trades' expected move at entry against realised return |
-| New | The equity curve including cash periods; alpha against the buy-and-hold benchmark; the per-trade reasons for approval (prerequisite 7); the promotion verdict against the bar fixed in §R.4 |
+| New | The equity curve including cash periods; alpha against both benchmarks (§R.7); the per-trade reasons for approval (prerequisite 7); the promotion verdict against the bar fixed in §R.4; the trial count from the committed ledger (§R.8) |
+| New | The alphabetical baseline's figures beside the expected-move ranking's, at both tiers (§R.6) |
 
 ## 10. Findings the simulation will not change
 

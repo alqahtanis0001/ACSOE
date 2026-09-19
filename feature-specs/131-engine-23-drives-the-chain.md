@@ -2,7 +2,8 @@
 
 **Owner:** A — Platform (`research/backtest.py`, `cli/research.py`)
 
-**Phase:** 7. Depends on 129. The artefacts it points at come from 135 (and 136 if R2 is capped).
+**Phase:** 7. Depends on 129. The artefacts it points at come from 135, with the capped skeptic from
+136 (R2, ruled 2026-09-19).
 
 ## Goal
 

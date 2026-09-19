@@ -43,3 +43,56 @@ evaluation's headline numbers mean. None of these is an engineering default.
 
 *Objection:* the specs cannot all be claimed on approval. Specs 136, 138 and 139 stay held until
 their rulings land, and B has one task. This is a plan with visible gaps rather than a complete one.
+
+### The $60 figure: the operator's arithmetic holds as an upper bound, and tier 2 lowers it
+
+**Agent:** Lead · **Date:** 2026-09-19
+
+**What happened.** The lead and the operator disagreed about what the $60 figure for reaching tier 3
+measures. The operator's arithmetic: a $1,000 balance bought and sold back generates $2,000 of
+volume per round trip. At 1.20% round trip that costs about $12 in fees, so five round trips reach
+$10,000 of volume for about $60 in fees. **The $60 is the fee cost of reaching tier 3, not the
+volume.** That is right, and the figure had gone missing from the findings.
+
+**Why it is an upper bound.** The arithmetic charges every trade at tier 1. The committed schedule
+(`tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json`) has a tier 2 from $2,500 of 30-day
+volume, at 0.30%/0.60%. If the account is re-tiered as the volume accrues, the first $2,500 costs
+$15 and the other $7,500 costs $33.75, about $49 in all. How quickly Kraken re-tiers is not on disk,
+so the findings state $49 to $60. The cost is the volume times the average fee per side, so it does
+not depend on the balance. It excludes the spread on the taker exits and the price risk while
+holding.
+
+**Fix.** Restored in `phase-7-findings.md` §R.1, with the wording that it is the fee cost made
+explicit, and both figures shown.
+
+### The seven rulings applied, and three things found while applying them
+
+**Agent:** Lead · **Date:** 2026-09-19
+
+R2, R4, R8, R9, R10b, R11 and R12 were written into specs 126 and 129–144, the task list, the
+findings (§R.2, §R.4 to §R.9) and the tracker. Spec 75 is recorded as resolved in the tracker and in
+the spec file. Three things surfaced while writing them in:
+
+1. **Specs 135 and 136 could not both be built as written.** Spec 136 wrote the capped skeptic
+   "into spec 135's run directory and manifest". But spec 135 creates that directory through
+   `new_model_run_dir`, which refuses an existing directory, and its manifest carries a sha256 per
+   file. A skeptic added afterwards is either refused or not covered by the manifest. **Fixed in the
+   specs:** 136 writes to a staging directory, and 135's assembly runs after it, writing each run
+   directory once and complete. A fold with no capped skeptic is refused, never assembled with the
+   uncapped one.
+2. **R4 and "alphabetical as the baseline" together make four runs, not two.** Spec 143 described
+   one run per tier. It now describes two rankings at two tiers, with the tiers in parallel and the
+   folds in sequence within each run.
+3. **R10b's working form still left two choices open**: which overlap-robust interval, and how
+   "widened for trials" is computed. Leaving them to the builder would mean choosing them after the
+   code exists and closer to a result. **Chose, in spec 139:** HAC (Newey–West) on the per-trade
+   series, with the lag set to the largest number of trades overlapping any one hold, computed from
+   times alone; and Bonferroni over the ledger's trial count.
+   *Rejected:* a block bootstrap (coarse at tens of trades, and it adds a seed and a resample count),
+   and the deflated Sharpe ratio's expected-maximum offset (it needs a variance of Sharpe ratios
+   across trials, which most ledger rows cannot supply). **Contestable, so it is flagged to the
+   operator with the specs rather than settled silently.**
+
+One reading is also flagged rather than assumed. R8's second benchmark is taken as the recommendation
+worded it: the pairs held, **while** they were held, and cash otherwise. The other reading, the held
+pairs bought and held over the whole window, would be a third series, not a replacement.

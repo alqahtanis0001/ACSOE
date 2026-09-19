@@ -2147,3 +2147,69 @@ only, so I run it over my own test paths separately.
   editing — that is the point of the machinery. What *will* fail is
   `test_default_yaml_loads_cleanly` and the type-parsing cases, which is correct: the file would
   no longer be known-good. The refusal tests would keep passing throughout.
+
+## Recorder gap audit (2026-09-19) — separate from Phase 7 spec work
+
+**Claimed 2026-09-19 on the lead's message. Audit only: no code edited, nothing built, and the
+recorder, the manager and the funding poller were not stopped or restarted.** The scope is what
+a replay of a recorded day needs that `scripts/record.py` and `scripts/recording/funding.py` do
+not capture. Findings are in `docs/build-log/phase-7/a-platform.md` under "Recorder gap audit".
+Spec 127 was not touched. AssetPairs and the v2 instrument snapshot were fetched once each into
+the session scratchpad, not into `tests/fixtures/`, only to read their field sets.
+
+Status: **findings delivered to the lead; waiting on the operator's ruling before any build.**
+
+Open for the lead (details in the build log):
+- The funding poller **is not running**. Its last poll was 2026-09-15 08:00Z. Nothing restarts it
+  after a reboot, because `master.bat` starts only the supervisor and the recorder.
+- `map_trade_volume` in `clients/kraken/rest.py` does not match Kraken's documented TradeVolume
+  shape, and `trade_volume()` sends no `pair`, so Kraken returns no fees. The live fee fetch
+  cannot succeed as written.
+- `map_asset_pairs` keys pair rules by REST name (`XXBTZUSD`, quote `ZUSD`). Engine 3 keys quotes
+  by v2 symbol (`BTC/USD`), and engine 7 compares the quote against `USD`, so live engine 7
+  would exclude every pair. The recorder's frame has to be keyed the way engine 7 reads it.
+
+### Build, on the operator's ruling of 2026-09-19 (claimed by A-recorder)
+
+Order: P3-funding, then P2 (`fees.py`) with its `recorder.pollers` entry. P1 is **not ruled**
+and is not to be built. Teammates do not commit and I restart nothing until the lead says so.
+
+- [x] **P3-funding, built 2026-09-19, awaiting the lead's gate and commit.** `supervise.py`
+  runs the recorder plus the pollers listed under `recorder.pollers`, re-read live, each with
+  the recorder's backoff and lock-wait. `tests/scripts/test_supervise.py` has 27 tests, and the
+  mutation sweep killed 10 of 10. The config key has been requested from the lead. The
+  switchover restart waits for the lead's word.
+- [ ] **P2.** `scripts/recording/fees.py`: hourly signed TradeVolume plus public AssetPairs,
+  verbatim, into `data/raw/fees/`. It uses a copied `.env` reader and signer, per the lead's
+  how-decision.
+
+## a-replay — Phase 7 specs 129, 131, 142 (2026-09-19)
+
+**Claimed 2026-09-19 by a-replay (Agent A, Platform), after the Phase 6 preflight gate exited 0:
+spec 129 (the replay client), then 131 (engine 23 drives the registered chain), then 142 (rehearse
+one replayed day).** Also: every new config model field this phase goes through a-replay
+(`src/acsoe/platform/config.py`).
+
+- [ ] 129 — in progress
+- [ ] 131 — not started
+- [ ] 142 — not started
+
+### Seams agreed or proposed (by message)
+
+- a-data (127, 128, 130): the partition, rules and table shapes, proposed 2026-09-19. I am
+  building against mocks of exactly those shapes.
+- c-models (135): run dirs named `train-20260913T205245-067b2b9d-f<k>-p7`, proposed; the fold
+  block in the manifest.
+- The lead (134): `clients.scenario_digest` and `clients.scenario_description`, both `str`,
+  on the clients container, proposed.
+
+### Stops and open items (messaged to the lead)
+
+- **S-fee-class.** `FeeTierSnapshot` is account-level, so the Stablecoin, Pegged & FX fee table
+  cannot be served per pair without a contract or engine change. Recommended: the Spot Crypto
+  tier for every pair, with the count of candidates and trades on the ~11 affected pairs
+  reported. Case against: those pairs would be priced at the wrong schedule. Alternative:
+  exclude them from the rules, which is a universe change.
+- **Core need for spec 131 step 6.** An optional `previous_now` keyword on the orchestrator
+  constructor, so that a resumed replay's first tick has its trade range. Without it, killing
+  and resuming cannot reproduce the uninterrupted rows exactly.

@@ -2,9 +2,11 @@
 
 **Owner:** C — Interface and models
 
-**Phase:** 7. Phase 7 prerequisite 1, ruled 2026-09-16 (spec 83). **Held until the operator rules
-R2** (spec 126 step 5). If R2 is "simulate the uncapped skeptic as trained", this spec is reduced
-to steps 1 and 4 and the run records the cap as outstanding.
+**Phase:** 7. Phase 7 prerequisite 1, ruled 2026-09-16 (spec 83). **R2 ruled 2026-09-19: the
+simulation runs the capped skeptic.** In the operator's words, 1.6% passing at a 58% hit rate
+against 6.2% at 41% is a difference in this data at the step that decides the funnel's end, not a
+difference in principle. The window's folds are 379 to 404 (R4). Fold 379's cap reaches back to fold
+366.
 
 ## Goal
 
@@ -20,8 +22,10 @@ window, inside that fold's Phase 7 run directory (spec 135).
 2. **Replication proven first.** With the cap disabled, retrain two early folds and require the
    training identity and every probability to equal the saved `skeptic.txt`'s. On 2026-09-19,
    folds 20 and 40 matched exactly (`docs/dataset/phase-7-recon-2026-09-19/scripts/q_capped.py`).
-3. **Train the window's folds** with the cap and write each skeptic into spec 135's run directory
-   and manifest, with its training identity and row count. Measured 2026-09-19: about 28 s a fold
+3. **Train the window's folds** (379 to 404) with the cap. Write each skeptic, with its training
+   identity and row count, to a staging directory under `data/derived/` that spec 135's assembly
+   reads. It is not written into a run directory directly: those are written once and complete by
+   spec 135. Measured 2026-09-19: about 28 s a fold
    alone, about 50 s with six running at once.
 4. **Re-measure what Finding 1 caveats**, over the window's folds only:
    - the survivor target rate at 0.50, 0.60 and 0.70;

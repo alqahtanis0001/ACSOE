@@ -6,8 +6,8 @@
 
 ## Goal
 
-The ruled window, replayed through the full chain at each ruled fee tier, one process and one
-database per tier. It produces:
+The ruled window, replayed through the full chain at each ruled fee tier under each of the two
+rankings, one process and one database per run. It produces, for each run:
 
 - the funnel;
 - the trades, with their approval economics;
@@ -18,25 +18,38 @@ The figures replace every SIMULATED VALUE PENDING in `docs/dataset/phase-7-findi
 
 ## Implementation
 
-1. **The shape. RULING REQUIRED (R4)** for the window only; the tiers are ruled. The lead's
-   proposal: six months (folds 379 to 404), at tiers 3 and 5, running in parallel.
-   - Estimated at 7 to 15 hours per tier from measured parts. Spec 142 replaces the estimate with a
-     measurement before the run is launched.
-   - Twelve months at one tier is the alternative, at 15 to 29 hours.
+1. **The shape, RULED 2026-09-19 (R4): six months**, folds 379 to 404, ending at fold 404's test
+   close, 2025-01-04 00:00 UTC. **Four runs:** two rankings (engine 8's expected move, and
+   alphabetical as the baseline) at two tiers. Each run has its own process and its own database.
+   - The two tiers run in parallel on separate databases. **Folds never run in parallel within a
+     run**, because account state crosses fold boundaries and a freeze in one week changes every
+     week after it.
+   - Sessions: build and rehearse first (spec 142), then launch unattended.
+   - Estimated at 7 to 15 hours per run from measured parts. Spec 142 replaces the estimate with a
+     measurement before launch. If the measured total means the four runs cannot finish in one
+     unattended session, the lead brings the options to the operator before launch.
 2. **The tiers, RULED 2026-09-19 (R3): 3 and 5.** Tier 3 is 0.22%/0.38%, reachable by a small
    account; tier 5 is 0.15%/0.30%, at $100,000 held. Both are from the committed fixture. Tier 1
    needs no run: it is provably zero (`phase-7-findings.md` §2).
-3. Before launch, record in the build log:
+3. **The alphabetical baseline** runs over the same window, tiers, artefacts and scenario. It
+   differs only in `scout.rank_feature`, which is absent. Its runs row says it is the baseline.
+4. Before launch, record in the build log, per run:
    - the scenario digest and the ranking in force;
-   - the skeptic variant and the fold run ids;
+   - the skeptic variant (capped, 13 folds) and the fold run ids;
+   - the trial count from the committed ledger (spec 139), which is fixed before launch;
    - the free memory and disk.
 
-   The recorder keeps running throughout, and the run must not starve it.
-4. After the run:
-   - produce spec 138's report per tier;
+   The recorder, the recording manager and the funding poller keep running throughout, and the runs
+   must not starve them.
+5. After the runs:
+   - produce spec 138's report per run, against both benchmarks;
+   - apply spec 139's promotion gate to the expected-move runs, and report the verdict against the
+     bar fixed in advance;
    - commit a digest of each run (equity series, trades, funnel counts, scenario) under
      `tests/fixtures/` for spec 141's criterion;
    - substitute the findings' pending slots, each with its source.
+6. **Report to the operator and stop.** The operator rules on the phase close after seeing the
+   output, as in Phase 6. The lead does not close the phase and does not mark it green.
 
 ## Scope Limits
 
@@ -49,7 +62,7 @@ The figures replace every SIMULATED VALUE PENDING in `docs/dataset/phase-7-findi
 
 ## Check When Done
 
-- Both runs complete, or the stop is recorded with its cause.
+- All four runs complete, or each stop is recorded with its cause.
 - The digests committed, and `backtest_emits_alpha_report` PASS against them.
 - Every SIMULATED VALUE PENDING marker substituted or explained.
 - `pytest tests/ -q` · `mypy --strict src/ scripts/` · `ruff check src/ tests/ scripts/` ·
