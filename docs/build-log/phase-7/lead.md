@@ -391,3 +391,28 @@ from what is on disk.
 **At tonight's rate the real runs would crash 11–19 times each**, over 10,000–17,000 ticks.
 That is past the ruled cap of 10 resumes per run, so the watchdog would stop both runs partway.
 **Stopped for the operator.**
+
+### Decision: the A/B that decides what launches (the operator's rule, fixed before any result)
+
+**Agent:** Lead · **Date:** 2026-09-19, about 21:15
+
+**The test.** The same full day (2024-10-20, the rehearsal's config), four runs at `3efe958`
+(before the SHAP writer, 140, and before 146) and four at `19c5a11` (both in), all eight in
+parallel. Tiers 3 and 5, two runs of each per arm. Faulthandler on. **No code changed.** 146
+adds no native code; the SHAP writer adds polars and parquet writes on bar ticks.
+
+**What each result means, ruled by the operator before the result was seen:**
+- **`3efe958` clean and `19c5a11` crashes:** the SHAP writer is implicated.
+  - Drop it and launch from a commit without it: a clean revert, gated. It is not rewritten
+    tonight.
+  - The check script's SHAP assertion is relaxed for this launch only.
+  - The findings state that no SHAP explanations were recorded for these runs, and why; the
+    writer becomes a Phase 8 item.
+- **Both crash:** it is the machine. Launch `19c5a11` with SHAP, with the watchdog's caps raised to
+  **40 resumes per run and 8 per hour**; the same-tick loop detector is unchanged.
+- **Neither crashes:** that is not a clean bill; at 1.8 per hour, four days per arm is a coin
+  flip. Launch `19c5a11` with SHAP, at 40 per run and 8 per hour. Crash counts are reported in
+  the morning.
+
+**In every case:** the gating rehearsal must PASS the check script on the commit that launches,
+and the launch goes ahead without waiting for the operator.
