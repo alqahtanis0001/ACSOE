@@ -4,8 +4,25 @@
 
 ## Current Phase
 
-**Phase 7 — Evaluation is next. NOT STARTED.** Three things carried into its first session by the
-operator at the Phase 6 close, 2026-09-18. **Read these before planning anything.**
+**Phase 7 — Evaluation. SPECS 126–143 DRAFTED 2026-09-19, AWAITING OPERATOR APPROVAL; nothing
+claimed or built.** The task list and the eight open rulings (R1–R4, R7–R10) are at the top of
+`feature-specs/PHASE-7-TASKS.md`. The evidence behind them is `docs/dataset/phase-7-findings.md`
+(committed `93403b7`), which gathers everything measured about the system's economic behaviour before
+the chain simulation, with the simulation's slots marked. Ruled on 2026-09-19 and carried by spec
+126:
+
+- invariant 2 permits a declared fee scenario in replay mode only, enforced by a test;
+- a genuine `AssetPairs` is to be recorded (prerequisite 9);
+- the DI and anomaly thresholds are rebuilt from the Phase 5 study, not refitted;
+- spread and depth are declared by liquidity bucket, the form delegated to the lead;
+- a replay-only client serves a synthetic book.
+
+**Flagged:** the plan runs no full walk-forward, so prerequisites 2 to 4 are not scheduled. That
+contradicts prerequisite list line "pays the same cost again unless all six are fixed first",
+which assumed a rerun.
+
+Three things carried into its first session by the operator at the Phase 6 close, 2026-09-18.
+**Read these before planning anything.**
 
 1. **Engine 14 `adaptive_router` has never weighted anything real.** On the first paper trade it
    returned `leaderboard_empty`: the drive's database held no leaderboard rows. It will not weight
