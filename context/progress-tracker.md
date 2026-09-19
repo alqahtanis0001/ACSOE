@@ -1637,6 +1637,12 @@ the reason in the YAML comment and in `DatasetConfig`.
   input points at the machine as much as at the library. This machine has shown an unexplained
   native memory fault before, and **the recorder is exposed to the same fault.** Evidence:
   `docs/build-log/phase-7/lead.md`, "The gating rehearsal at `19c5a11` crashed natively in polars".
+  **The event log, by operator ruling a Phase 8 item in its own right:** two native python crashes
+  on the evening of 2026-09-19, **faulting in two different modules** (19:19 `ntdll.dll`, 19:54
+  `python313.dll`, both `0xc0000005`). That is consistent with heap corruption. **No WHEA
+  (hardware error) events in 30 days.** The second stack was engine 3's `build_candles`
+  (`candles.py:179`, a polars `DataFrame` built from lists), a different polars entry point from
+  the first. Not chased further in Phase 7.
 - **OPEN, Phase 8, by operator instruction 2026-09-19 (not for the Phase 7 launch): the mutation
   harness can leave a mutant on disk.** c-eval's `mutate.py` (the Phase 7 sweep harness, in the
   session scratchpad) keeps the original bytes **in memory only** and writes them back in a
