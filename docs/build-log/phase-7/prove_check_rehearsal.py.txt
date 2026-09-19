@@ -42,8 +42,11 @@ GOOD_TALLIES = [
 ]
 
 
+GOOD_SCENARIO = json.dumps({"ranking": "expected_move", "alphabetical_baseline": False, "declared": "x"})
+
+
 def build(tallies=GOOD_TALLIES, refs=("shap/RUN/1/STORJ%2FUSD.parquet", "shap/RUN/2/DOGE%2FUSD.parquet"),
-          files=True) -> tuple[Path, Path]:
+          files=True, scenario=GOOD_SCENARIO) -> tuple[Path, Path]:
     if WORK.exists():
         shutil.rmtree(WORK)
     out, derived = WORK / "out", WORK / "derived"
@@ -51,7 +54,7 @@ def build(tallies=GOOD_TALLIES, refs=("shap/RUN/1/STORJ%2FUSD.parquet", "shap/RU
     for name in ("a.sqlite", "b.sqlite", "split.sqlite"):
         c = sqlite3.connect(out / name)
         c.execute("CREATE TABLE runs (run_id TEXT, scenario_digest TEXT, scenario_description TEXT)")
-        c.execute("INSERT INTO runs VALUES ('RUN', 'abc', 'declared')")
+        c.execute("INSERT INTO runs VALUES ('RUN', 'abc', ?)", (scenario,))
         c.execute("CREATE TABLE rejections (shap_ref TEXT)")
         c.executemany("INSERT INTO rejections VALUES (?)", [(r,) for r in refs] + [(None,)])
         c.execute("CREATE TABLE scout_tallies (cycle_id, scanned, rank_feature, rank_descending, candidate, ranked, rank_run_ids)")
@@ -130,6 +133,13 @@ ARMS = [
     ("no model run ids", dict(report=GOOD_REPORT, tallies=no_ids), "non-increasing"),
     ("never a candidate", dict(report=GOOD_REPORT, tallies=no_cand), "chose a candidate"),
     ("engine 7 always blocked", dict(report=GOOD_REPORT, tallies=all_blocked), "published a universe"),
+    ("scenario says alphabetical", dict(report=GOOD_REPORT, scenario=json.dumps(
+        {"ranking": "alphabetical", "alphabetical_baseline": True})), "scenario: every runs row"),
+    ("scenario baseline flag true", dict(report=GOOD_REPORT, scenario=json.dumps(
+        {"ranking": "expected_move", "alphabetical_baseline": True})), "scenario: every runs row"),
+    ("scenario has no ranking", dict(report=GOOD_REPORT, scenario=json.dumps({"declared": "x"})),
+     "scenario: every runs row"),
+    ("scenario not JSON", dict(report=GOOD_REPORT, scenario="declared"), "scenario: every runs row"),
 ]
 
 code, text = run(GOOD_REPORT)

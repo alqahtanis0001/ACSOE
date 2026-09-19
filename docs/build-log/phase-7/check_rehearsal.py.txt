@@ -96,6 +96,27 @@ def ranking_from_rows(db: Path, *, require_candidate: bool) -> None:
           f"{len(with_candidate)} candidate ticks checked, bad cycles {bad_order[:5]}")
 
 
+def ranking_from_scenario(db: Path) -> None:
+    """The ranking as the run recorded it on its `runs` row: the replay driver writes the
+    ranking it ran into `scenario_description`. A second, independent record beside engine 7's
+    per-tick rows, and the only one available before a run's second tick (a fresh store blocks
+    engine 7 on tick 1 until engine 19 has written an equity row; lead.md, 2026-09-19)."""
+    connection = connect_ro(db)
+    try:
+        described = [r[0] for r in connection.execute("SELECT scenario_description FROM runs")]
+    finally:
+        connection.close()
+    seen = []
+    for text in described:
+        try:
+            body = json.loads(text) if text else {}
+        except json.JSONDecodeError:
+            body = {}
+        seen.append((body.get("ranking"), body.get("alphabetical_baseline")))
+    check(f"{db.name} scenario: every runs row records ranking expected_move, not the alphabetical baseline",
+          bool(seen) and all(r == EXPECTED_MOVE and a is False for r, a in seen), seen)
+
+
 def rehearsal(out: Path, derived: Path) -> None:
     report_path = out / "report.json"
     check("report.json exists (a failed child run exits before writing it)", report_path.is_file(),
@@ -173,6 +194,7 @@ def rehearsal(out: Path, derived: Path) -> None:
     check("engine 7 never errored", tallies.get("engine_7_errored") == 0, tallies.get("engine_7_errored"))
 
     for name in ("a.sqlite", "b.sqlite", "split.sqlite"):
+        ranking_from_scenario(out / name)
         ranking_from_rows(out / name, require_candidate=True)
 
     ticks = report.get("ticks") or {}
@@ -195,6 +217,7 @@ def live_runs(dbs: list[Path]) -> None:
               [(r["run_id"], (r["scenario_digest"] or "NULL")[:16]) for r in runs])
         for r in runs:
             print(f"INFO  {db.name} scenario_description: {str(r['scenario_description'])[:300]}")
+        ranking_from_scenario(db)
         check(f"{db.name}: scout_tallies rows recorded", ticks > 0, ticks)
         if ticks:
             ranking_from_rows(db, require_candidate=False)
