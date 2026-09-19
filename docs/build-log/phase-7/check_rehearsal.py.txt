@@ -1,0 +1,220 @@
+"""Phase 7 launch preconditions, asserted: FAIL loudly, never just count (lead, 2026-09-19).
+
+Committed BEFORE the gating rehearsal ran, so the bar was fixed before its output existed.
+Copy to scratch as check_rehearsal.py and run with the main checkout's venv python.
+
+    python check_rehearsal.py rehearsal <out dir> [--derived <data/derived>]
+    python check_rehearsal.py run <run db> [<run db> ...]
+
+`rehearsal` reads <out>/report.json from scripts/rehearse_replay_day.py and the databases it
+left (a, b, split), and asserts every precondition in the handover (section 3 step 4) plus the
+operator's ranking assertion. `run` checks a LIVE run's own recorded state at launch, read-only.
+
+Why it exists: rehearse_replay_day.py REPORTS its counts and exits 0 whatever they are. Engine 19
+records-and-continues on a refused SHAP write, and `scout.rank_feature` is absent from the
+committed config, so a broken SHAP writer or a missing `--ranking expected_move` would each give
+a technically valid run of the wrong thing with nothing going red. Every check below reads what
+the run itself stored, never the command line that started it.
+
+Exit 0 only if every check passes. Each check prints PASS or FAIL with its evidence.
+"""
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+MAIN = Path(r"C:\Users\saad2\Documents\GitHub\ACSOE")
+EXPECTED_MOVE = "expected_move"
+failures: list[str] = []
+
+
+def check(name: str, ok: bool, evidence: Any) -> None:
+    print(f"{'PASS' if ok else 'FAIL'}  {name}: {evidence}")
+    if not ok:
+        failures.append(name)
+
+
+def connect_ro(db: Path) -> sqlite3.Connection:
+    # Read-only by URI, so checking a live run can never write to it.
+    connection = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def ranking_from_rows(db: Path, *, require_candidate: bool) -> None:
+    """The operator's assertion: the run ranked by EXPECTED MOVE, from engine 7's stored rows.
+
+    On every tick engine 7 published a universe (`scanned` not NULL; a blocked engine 7 stores
+    only its reason code), `rank_feature` must be `expected_move` and `rank_descending` 1. A
+    NULL `rank_feature` there is exactly what the alphabetical fallback leaves. On every tick
+    with a candidate, the stored `ranked` list must be non-empty, start with that candidate,
+    be non-increasing in expected move, and name the model runs that scored it.
+    """
+    tag = db.name
+    connection = connect_ro(db)
+    try:
+        rows = [dict(r) for r in connection.execute(
+            "SELECT cycle_id, scanned, rank_feature, rank_descending, candidate, ranked, rank_run_ids "
+            "FROM scout_tallies ORDER BY cycle_id")]
+    finally:
+        connection.close()
+    published = [r for r in rows if r["scanned"] is not None]
+    check(f"{tag} ranking: engine 7 published a universe on at least one tick",
+          len(published) > 0, f"{len(published)} of {len(rows)} tally rows")
+    wrong_feature = [r["cycle_id"] for r in published if r["rank_feature"] != EXPECTED_MOVE]
+    check(f"{tag} ranking: rank_feature = expected_move on every such tick (NULL = alphabetical)",
+          not wrong_feature and len(published) > 0,
+          f"{len(wrong_feature)} ticks otherwise; values seen "
+          f"{sorted({str(r['rank_feature']) for r in published})}; first bad cycles {wrong_feature[:5]}")
+    wrong_direction = [r["cycle_id"] for r in published if r["rank_descending"] != 1]
+    check(f"{tag} ranking: rank_descending = 1 on every such tick", not wrong_direction,
+          f"{len(wrong_direction)} ticks otherwise")
+    with_candidate = [r for r in published if r["candidate"] is not None]
+    if require_candidate:
+        check(f"{tag} ranking: at least one tick chose a candidate, so the order is tested",
+              len(with_candidate) > 0, f"{len(with_candidate)} ticks with a candidate")
+    else:
+        print(f"INFO  {tag} ranking: {len(with_candidate)} ticks with a candidate so far")
+    bad_order: list[Any] = []
+    for r in with_candidate:
+        ranked = json.loads(r["ranked"]) if r["ranked"] else []
+        moves = [Decimal(str(e["expected_move_pct"])) for e in ranked]
+        ok = (
+            bool(ranked)
+            and ranked[0]["pair"] == r["candidate"]
+            and all(a >= b for a, b in zip(moves, moves[1:]))
+            and r["rank_run_ids"] is not None
+        )
+        if not ok:
+            bad_order.append(r["cycle_id"])
+    check(f"{tag} ranking: every candidate is the top of a non-increasing expected-move list "
+          "with its model run ids", not bad_order,
+          f"{len(with_candidate)} candidate ticks checked, bad cycles {bad_order[:5]}")
+
+
+def rehearsal(out: Path, derived: Path) -> None:
+    report_path = out / "report.json"
+    check("report.json exists (a failed child run exits before writing it)", report_path.is_file(),
+          str(report_path))
+    if not report_path.is_file():
+        return
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    check("tree_unchanged is true", report.get("tree_unchanged") is True, report.get("tree_unchanged"))
+    check("two clean runs identical", report.get("clean_runs_identical") is True,
+          report.get("clean_runs_identical"))
+    check("kill-and-resume identical", report.get("resumed_identical") is True,
+          report.get("resumed_identical"))
+    # Absent means the rehearsal did not run the expected-move comparison at all.
+    check("ranking_stop present and false", report.get("ranking_stop") is False,
+          report.get("ranking_stop", "ABSENT"))
+    rc = report.get("ranking_check") or {}
+    check("spec 144 grid comparison covered at least one bar", rc.get("bars_compared", 0) > 0,
+          f"compared {rc.get('bars_compared')}, agree {rc.get('agree')}, "
+          f"ties {len(rc.get('tie_broken_by_name_spelling', []))}, "
+          f"disagreements {len(rc.get('disagreements', []))}")
+
+    recomputed = report.get("recomputed") or {}
+    economics = recomputed.get("economics", [])
+    fills = recomputed.get("fills", [])
+    econ_bad = [e["userref"] for e in economics
+                if not (e.get("friction_equal") and e.get("hurdle_equal") and e.get("trade_row_equal", True))]
+    check("every approval's friction, hurdle and trade row recompute exactly",
+          bool(economics) and not econ_bad, f"{len(economics)} approvals, unequal {econ_bad}")
+    fill_bad = [f["userref"] for f in fills
+                if not ((f.get("fill_at_limit") and f.get("fill_tick_equal")) if f["status"] == "filled"
+                        else f.get("no_print_below_limit"))]
+    check("every entry fill (or non-fill) recomputes exactly", bool(fills) and not fill_bad,
+          f"{len(fills)} entries, unequal {fill_bad}")
+
+    pre = report.get("launch_preconditions") or {}
+    check("runs.scenario_digest non-null on every run",
+          pre.get("runs", 0) > 0 and pre.get("runs_with_scenario_digest") == pre.get("runs"),
+          f"{pre.get('runs_with_scenario_digest')} of {pre.get('runs')}")
+    check("every placed entry has its approvals row",
+          pre.get("entries_placed", 0) > 0 and pre.get("entries_with_an_approvals_row") == pre.get("entries_placed"),
+          f"{pre.get('entries_with_an_approvals_row')} of {pre.get('entries_placed')}")
+    check("approvals.details filled on every approval",
+          pre.get("approvals", 0) > 0 and pre.get("approvals_with_details") == pre.get("approvals"),
+          f"{pre.get('approvals_with_details')} of {pre.get('approvals')}")
+    check("rejections.details filled on every rejection",
+          pre.get("rejections", 0) > 0 and pre.get("rejections_with_details") == pre.get("rejections"),
+          f"{pre.get('rejections_with_details')} of {pre.get('rejections')}")
+
+    # SHAP: the files must exist AND agree with what the database says it wrote.
+    db_a = out / "a.sqlite"
+    connection = connect_ro(db_a)
+    try:
+        refs = [r[0] for r in connection.execute(
+            "SELECT shap_ref FROM rejections WHERE shap_ref IS NOT NULL")]
+        run_ids = [r[0] for r in connection.execute("SELECT run_id FROM runs")]
+    finally:
+        connection.close()
+    missing = [ref for ref in refs if not (derived / ref).is_file()]
+    on_disk = sum(len(list((derived / "shap" / str(rid)).rglob("*.parquet")))
+                  for rid in run_ids if (derived / "shap" / str(rid)).is_dir())
+    check("SHAP files written (> 0)", pre.get("shap_files", 0) > 0 and on_disk > 0,
+          f"report {pre.get('shap_files')}, on disk under {derived / 'shap'} {on_disk}")
+    check("rejections carry shap_ref, and every ref resolves to a file",
+          len(refs) > 0 and not missing, f"{len(refs)} refs, {len(missing)} missing {missing[:3]}")
+
+    tallies = report.get("scout_tallies") or {}
+    check("scout_tallies: one row per tick engine 7 ran, every row equal to its payload",
+          tallies.get("table_present") is True and tallies.get("counts_equal") is True
+          and tallies.get("mismatched_count") == 0 and tallies.get("ticks_engine_7_ran", 0) > 0,
+          f"rows {tallies.get('tally_rows')} for {tallies.get('ticks_engine_7_ran')} ticks, "
+          f"mismatched {tallies.get('mismatched_count')}")
+    check("scout_tallies: no-candidate ticks exercised on the real chain",
+          tallies.get("of_which_no_candidate", 0) > 0, tallies.get("of_which_no_candidate"))
+    check("engine 7 never errored", tallies.get("engine_7_errored") == 0, tallies.get("engine_7_errored"))
+
+    for name in ("a.sqlite", "b.sqlite", "split.sqlite"):
+        ranking_from_rows(out / name, require_candidate=True)
+
+    ticks = report.get("ticks") or {}
+    print(f"INFO  ticks: bar {ticks.get('bar')} (mean {ticks.get('bar_ms_mean')} ms), "
+          f"minute {ticks.get('minute')} (mean {ticks.get('minute_ms_mean')} ms)")
+    print(f"INFO  gates: {report.get('gates')}")
+
+
+def live_runs(dbs: list[Path]) -> None:
+    for db in dbs:
+        connection = connect_ro(db)
+        try:
+            runs = [dict(r) for r in connection.execute(
+                "SELECT run_id, scenario_digest, scenario_description FROM runs")]
+            ticks = connection.execute("SELECT count(*) FROM scout_tallies").fetchone()[0]
+        finally:
+            connection.close()
+        check(f"{db.name}: a runs row with a non-null scenario_digest",
+              len(runs) > 0 and all(r["scenario_digest"] for r in runs),
+              [(r["run_id"], (r["scenario_digest"] or "NULL")[:16]) for r in runs])
+        for r in runs:
+            print(f"INFO  {db.name} scenario_description: {str(r['scenario_description'])[:300]}")
+        check(f"{db.name}: scout_tallies rows recorded", ticks > 0, ticks)
+        if ticks:
+            ranking_from_rows(db, require_candidate=False)
+
+
+def main() -> int:
+    mode, *rest = sys.argv[1:]
+    if mode == "rehearsal":
+        out = Path(rest[0])
+        derived = Path(rest[rest.index("--derived") + 1]) if "--derived" in rest else MAIN / "data" / "derived"
+        rehearsal(out, derived)
+    elif mode == "run":
+        live_runs([Path(p) for p in rest])
+    else:
+        raise SystemExit(__doc__)
+    print(f"\n{'ALL PASS' if not failures else f'FAILED: {len(failures)}'}")
+    for name in failures:
+        print(f"  - {name}")
+    return 0 if not failures else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

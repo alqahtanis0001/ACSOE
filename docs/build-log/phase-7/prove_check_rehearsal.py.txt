@@ -1,0 +1,154 @@
+"""Prove every assertion in check_rehearsal.py can fail: a synthetic passing fixture, then one
+violation at a time, each of which must turn exactly its named check to FAIL."""
+from __future__ import annotations
+
+import copy
+import json
+import shutil
+import sqlite3
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).parent
+CHECK = HERE / "check_rehearsal.py"
+WORK = HERE / "prove_work"
+
+GOOD_REPORT = {
+    "tree_unchanged": True, "clean_runs_identical": True, "resumed_identical": True,
+    "ranking_stop": False,
+    "ranking_check": {"bars_compared": 3, "agree": 3, "tie_broken_by_name_spelling": [], "disagreements": []},
+    "recomputed": {
+        "economics": [{"userref": 1, "friction_equal": True, "hurdle_equal": True, "trade_row_equal": True}],
+        "fills": [{"userref": 1, "status": "filled", "fill_at_limit": True, "fill_tick_equal": True},
+                  {"userref": 2, "status": "cancelled", "no_print_below_limit": True}],
+    },
+    "launch_preconditions": {"runs": 1, "runs_with_scenario_digest": 1, "entries_placed": 2,
+                             "entries_with_an_approvals_row": 2, "approvals": 2, "approvals_with_details": 2,
+                             "rejections": 3, "rejections_with_details": 3, "shap_files": 2},
+    "scout_tallies": {"table_present": True, "counts_equal": True, "mismatched_count": 0,
+                      "ticks_engine_7_ran": 3, "of_which_no_candidate": 1, "engine_7_errored": 0,
+                      "tally_rows": 3},
+    "ticks": {}, "gates": {},
+}
+
+RANKED = json.dumps([{"pair": "STORJ/USD", "expected_move_pct": "1.9"},
+                     {"pair": "DOGE/USD", "expected_move_pct": "1.2"}])
+GOOD_TALLIES = [
+    # cycle, scanned, rank_feature, desc, candidate, ranked, run_ids
+    (1, 200, "expected_move", 1, "STORJ/USD", RANKED, '{"predictor":"r"}'),
+    (2, 200, "expected_move", 1, None, "[]", None),
+    (3, None, None, None, None, None, None),  # a blocked engine 7: reason code only
+]
+
+
+def build(tallies=GOOD_TALLIES, refs=("shap/RUN/1/STORJ%2FUSD.parquet", "shap/RUN/2/DOGE%2FUSD.parquet"),
+          files=True) -> tuple[Path, Path]:
+    if WORK.exists():
+        shutil.rmtree(WORK)
+    out, derived = WORK / "out", WORK / "derived"
+    out.mkdir(parents=True)
+    for name in ("a.sqlite", "b.sqlite", "split.sqlite"):
+        c = sqlite3.connect(out / name)
+        c.execute("CREATE TABLE runs (run_id TEXT, scenario_digest TEXT, scenario_description TEXT)")
+        c.execute("INSERT INTO runs VALUES ('RUN', 'abc', 'declared')")
+        c.execute("CREATE TABLE rejections (shap_ref TEXT)")
+        c.executemany("INSERT INTO rejections VALUES (?)", [(r,) for r in refs] + [(None,)])
+        c.execute("CREATE TABLE scout_tallies (cycle_id, scanned, rank_feature, rank_descending, candidate, ranked, rank_run_ids)")
+        c.executemany("INSERT INTO scout_tallies VALUES (?,?,?,?,?,?,?)", tallies)
+        c.commit()
+        c.close()
+    if files:
+        for r in refs:
+            p = derived / r
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"x")
+    return out, derived
+
+
+def run(report: dict, **kw) -> tuple[int, str]:
+    out, derived = build(**kw)
+    (out / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    done = subprocess.run([sys.executable, str(CHECK), "rehearsal", str(out), "--derived", str(derived)],
+                          capture_output=True, text=True)
+    return done.returncode, done.stdout
+
+
+def mutated(path: list, value) -> dict:
+    r = copy.deepcopy(GOOD_REPORT)
+    node = r
+    for key in path[:-1]:
+        node = node[key]
+    if value is DELETE:
+        del node[path[-1]]
+    else:
+        node[path[-1]] = value
+    return r
+
+
+DELETE = object()
+alpha = [(c, s, None if s is not None else f, d, cand, "[]" if cand is None else r, ids)
+         for c, s, f, d, cand, r, ids in GOOD_TALLIES]
+alpha_noc = [(1, 200, None, 1, "STORJ/USD", "[]", None)] + GOOD_TALLIES[1:]
+unsorted = [(1, 200, "expected_move", 1, "STORJ/USD",
+             json.dumps([{"pair": "STORJ/USD", "expected_move_pct": "1.2"},
+                         {"pair": "DOGE/USD", "expected_move_pct": "1.9"}]), '{"predictor":"r"}')] + GOOD_TALLIES[1:]
+not_top = [(1, 200, "expected_move", 1, "DOGE/USD", RANKED, '{"predictor":"r"}')] + GOOD_TALLIES[1:]
+asc = [(1, 200, "expected_move", 0, "STORJ/USD", RANKED, '{"predictor":"r"}')] + GOOD_TALLIES[1:]
+no_ids = [(1, 200, "expected_move", 1, "STORJ/USD", RANKED, None)] + GOOD_TALLIES[1:]
+no_cand = [(1, 200, "expected_move", 1, None, "[]", None)] + GOOD_TALLIES[1:]
+all_blocked = [(1, None, None, None, None, None, None)]
+
+ARMS = [
+    ("tree changed", dict(report=mutated(["tree_unchanged"], False)), "tree_unchanged is true"),
+    ("clean runs differ", dict(report=mutated(["clean_runs_identical"], False)), "two clean runs identical"),
+    ("resume differs", dict(report=mutated(["resumed_identical"], False)), "kill-and-resume identical"),
+    ("ranking stop", dict(report=mutated(["ranking_stop"], True)), "ranking_stop present and false"),
+    ("ranking stop ABSENT (alphabetical flag)", dict(report=mutated(["ranking_stop"], DELETE)), "ranking_stop present and false"),
+    ("grid compared nothing", dict(report=mutated(["ranking_check", "bars_compared"], 0)), "spec 144 grid comparison"),
+    ("friction unequal", dict(report=mutated(["recomputed", "economics", 0, "friction_equal"], False)), "friction, hurdle"),
+    ("no economics", dict(report=mutated(["recomputed", "economics"], [])), "friction, hurdle"),
+    ("fill tick unequal", dict(report=mutated(["recomputed", "fills", 0, "fill_tick_equal"], False)), "entry fill"),
+    ("unfilled had a print", dict(report=mutated(["recomputed", "fills", 1, "no_print_below_limit"], False)), "entry fill"),
+    ("digest missing", dict(report=mutated(["launch_preconditions", "runs_with_scenario_digest"], 0)), "scenario_digest"),
+    ("entry without approval", dict(report=mutated(["launch_preconditions", "entries_with_an_approvals_row"], 1)), "approvals row"),
+    ("approvals details missing", dict(report=mutated(["launch_preconditions", "approvals_with_details"], 1)), "approvals.details"),
+    ("no approvals at all", dict(report=mutated(["launch_preconditions", "approvals"], 0)), "approvals.details"),
+    ("rejections details missing", dict(report=mutated(["launch_preconditions", "rejections_with_details"], 0)), "rejections.details"),
+    ("SHAP count zero in report", dict(report=mutated(["launch_preconditions", "shap_files"], 0)), "SHAP files written"),
+    ("SHAP files absent on disk", dict(report=GOOD_REPORT, files=False), "SHAP files written"),
+    ("no shap_ref stored", dict(report=GOOD_REPORT, refs=()), "rejections carry shap_ref"),
+    ("tally count unequal", dict(report=mutated(["scout_tallies", "counts_equal"], False)), "one row per tick"),
+    ("tally mismatched", dict(report=mutated(["scout_tallies", "mismatched_count"], 1)), "one row per tick"),
+    ("no no-candidate tick", dict(report=mutated(["scout_tallies", "of_which_no_candidate"], 0)), "no-candidate ticks"),
+    ("engine 7 errored", dict(report=mutated(["scout_tallies", "engine_7_errored"], 1)), "never errored"),
+    ("ALPHABETICAL: rank_feature NULL", dict(report=GOOD_REPORT, tallies=alpha), "rank_feature = expected_move"),
+    ("ALPHABETICAL on the candidate tick only", dict(report=GOOD_REPORT, tallies=alpha_noc), "rank_feature = expected_move"),
+    ("ascending", dict(report=GOOD_REPORT, tallies=asc), "rank_descending = 1"),
+    ("ranked not sorted", dict(report=GOOD_REPORT, tallies=unsorted), "non-increasing"),
+    ("candidate not top", dict(report=GOOD_REPORT, tallies=not_top), "non-increasing"),
+    ("no model run ids", dict(report=GOOD_REPORT, tallies=no_ids), "non-increasing"),
+    ("never a candidate", dict(report=GOOD_REPORT, tallies=no_cand), "chose a candidate"),
+    ("engine 7 always blocked", dict(report=GOOD_REPORT, tallies=all_blocked), "published a universe"),
+]
+
+code, text = run(GOOD_REPORT)
+print(f"BASELINE exit {code}  {'ALL PASS' if 'ALL PASS' in text else 'NOT PASS'}")
+if code != 0:
+    print(text)
+    raise SystemExit(1)
+bad = 0
+for name, kw, needle in ARMS:
+    report = kw.pop("report")
+    code, text = run(report, **kw)
+    fails = [l for l in text.splitlines() if l.startswith("FAIL")]
+    killed = code == 1 and any(needle in l for l in fails)
+    bad += not killed
+    print(f"{'KILLED ' if killed else 'SURVIVED'} {name}  -> {len(fails)} FAIL: {[l[:70] for l in fails][:2]}")
+# the missing report
+shutil.rmtree(WORK)
+(WORK / "out").mkdir(parents=True)
+done = subprocess.run([sys.executable, str(CHECK), "rehearsal", str(WORK / "out")], capture_output=True, text=True)
+print(f"{'KILLED ' if done.returncode == 1 else 'SURVIVED'} report.json missing")
+bad += done.returncode != 1
+print(f"\n{len(ARMS) + 1 - bad} of {len(ARMS) + 1} killed")
