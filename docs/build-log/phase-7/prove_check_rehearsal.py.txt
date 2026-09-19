@@ -46,11 +46,16 @@ GOOD_SCENARIO = json.dumps({"ranking": "expected_move", "alphabetical_baseline":
 
 
 def build(tallies=GOOD_TALLIES, refs=("shap/RUN/1/STORJ%2FUSD.parquet", "shap/RUN/2/DOGE%2FUSD.parquet"),
-          files=True, scenario=GOOD_SCENARIO) -> tuple[Path, Path]:
+          files=True, scenario=GOOD_SCENARIO, stale=False) -> tuple[Path, Path]:
+    import os
+    import time
     if WORK.exists():
         shutil.rmtree(WORK)
     out, derived = WORK / "out", WORK / "derived"
     out.mkdir(parents=True)
+    (out / "config.yaml").write_text("x", encoding="utf-8")
+    start = time.time() - 100
+    os.utime(out / "config.yaml", (start, start))
     for name in ("a.sqlite", "b.sqlite", "split.sqlite"):
         c = sqlite3.connect(out / name)
         c.execute("CREATE TABLE runs (run_id TEXT, scenario_digest TEXT, scenario_description TEXT)")
@@ -66,6 +71,8 @@ def build(tallies=GOOD_TALLIES, refs=("shap/RUN/1/STORJ%2FUSD.parquet", "shap/RU
             p = derived / r
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(b"x")
+            if stale:
+                os.utime(p, (start - 1000, start - 1000))
     return out, derived
 
 
@@ -140,6 +147,7 @@ ARMS = [
     ("scenario has no ranking", dict(report=GOOD_REPORT, scenario=json.dumps({"declared": "x"})),
      "scenario: every runs row"),
     ("scenario not JSON", dict(report=GOOD_REPORT, scenario="declared"), "scenario: every runs row"),
+    ("SHAP files left by an earlier rehearsal", dict(report=GOOD_REPORT, stale=True), "written by THIS rehearsal"),
 ]
 
 code, text = run(GOOD_REPORT)

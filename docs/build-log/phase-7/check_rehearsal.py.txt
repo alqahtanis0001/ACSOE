@@ -176,10 +176,18 @@ def rehearsal(out: Path, derived: Path) -> None:
     finally:
         connection.close()
     missing = [ref for ref in refs if not (derived / ref).is_file()]
-    on_disk = sum(len(list((derived / "shap" / str(rid)).rglob("*.parquet")))
-                  for rid in run_ids if (derived / "shap" / str(rid)).is_dir())
+    files = [f for rid in run_ids if (derived / "shap" / str(rid)).is_dir()
+             for f in (derived / "shap" / str(rid)).rglob("*.parquet")]
+    on_disk = len(files)
     check("SHAP files written (> 0)", pre.get("shap_files", 0) > 0 and on_disk > 0,
           f"report {pre.get('shap_files')}, on disk under {derived / 'shap'} {on_disk}")
+    # Run ids repeat between rehearsals of one day, and SHAP files are write-once, so a file
+    # left by an EARLIER rehearsal would satisfy both checks around this one while this
+    # rehearsal's own writes were refused. Every file must be newer than this rehearsal.
+    started = (out / "config.yaml").stat().st_mtime if (out / "config.yaml").is_file() else float("inf")
+    stale = [str(f) for f in files if f.stat().st_mtime < started]
+    check("every SHAP file under this run's ids was written by THIS rehearsal (none older than its start)",
+          on_disk > 0 and not stale, f"{len(stale)} older than {started:.0f} {stale[:2]}")
     check("rejections carry shap_ref, and every ref resolves to a file",
           len(refs) > 0 and not missing, f"{len(refs)} refs, {len(missing)} missing {missing[:3]}")
 
