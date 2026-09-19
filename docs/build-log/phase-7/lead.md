@@ -80,9 +80,10 @@ the spec file. Three things surfaced while writing them in:
    specs:** 136 writes to a staging directory, and 135's assembly runs after it, writing each run
    directory once and complete. A fold with no capped skeptic is refused, never assembled with the
    uncapped one.
-2. **R4 and "alphabetical as the baseline" together make four runs, not two.** Spec 143 described
+2. ~~**R4 and "alphabetical as the baseline" together make four runs, not two.** Spec 143 described
    one run per tier. It now describes two rankings at two tiers, with the tiers in parallel and the
-   folds in sequence within each run.
+   folds in sequence within each run.~~ **SUPERSEDED 2026-09-19 by the operator: Phase 7 is TWO
+   runs.** See the entry "Phase 7 is two runs" below.
 3. **R10b's working form still left two choices open**: which overlap-robust interval, and how
    "widened for trials" is computed. Leaving them to the builder would mean choosing them after the
    code exists and closer to a result. **Chose, in spec 139:** HAC (Newey–West) on the per-trade
@@ -241,3 +242,27 @@ moved-in-main check). The re-launch was confirmed to have started by reading its
 20 s in, not by the command returning. **The standing check after any launch: read the evidence
 it has started, never the return code alone.** This is the operator's rule about confirming a
 detached run is alive, applied to a gate.
+
+### Phase 7 is two runs: tiers 3 and 5 on expected move. The four-run reading is withdrawn
+
+**Agent:** Lead · **Date:** 2026-09-19
+
+**Ruled by the operator:** two runs, tiers 3 and 5, on engine 8's expected-move ranking (operator ruling 2026-09-19, after the overnight build). No alphabetical run, now or later: alphabetical is the name of the limitation the ranking removed, not a rival ranking. A baseline run would answer whether ranking beats not ranking, which nobody will challenge. It would not answer whether the model has skill; the benchmark basket (R8) and the promotion gate (R10b) answer that. It is also required by no Phase 7 criterion.
+
+**Where the four-run reading came from, so no future session rebuilds it.** The Phase 7 brief
+said "Tiers 3 and 5. Two rankings: engine 8's expected move, and alphabetical as the baseline",
+and "ALPHABETICAL AS THE BASELINE, same window, same tiers. Two configurations only." The lead
+read "same tiers" as both rankings at both tiers, and wrote four runs into spec 143, the task
+list and findings §R.6. The operator has since ruled two, and records that those lines conflict
+with an earlier decision that there would be no alphabetical ranking. **Every live statement of
+four runs has been rewritten or struck through; this entry is the authority.**
+
+**Consequences recorded, not changed:**
+- **The trial ledger** (spec 139, N = 1,679) counts four Phase 7 runs. Two will run, so it
+  overcounts by two, in the harsher direction R9 asked for, and is left as committed. The effect
+  on the Bonferroni quantile is negligible (1,679 against 1,677 trials).
+- **Engine 7's alphabetical path still exists**, as the behaviour when `scout.rank_feature` is
+  absent. That is also the committed `config/default.yaml`, where the key is absent. The run
+  selects expected move through the driver's `--ranking expected_move`. Removing the path, or
+  setting the key in the committed config, changes what the daemon does, so it is not done
+  without a ruling.

@@ -120,9 +120,10 @@ BUY calls, as ruled on 2026-09-16. In the operator's words: *1.6% passing at a 5
 difference in principle* (§5a).
 
 **R.6 The window is six months (R4).** It is folds 379 to 404, test weeks from 2024-07-06 to fold
-404's test close at 2025-01-04 00:00 UTC, at tiers 3 and 5. **Two rankings:** engine 8's expected
-move, and alphabetical as the baseline, over the same window and tiers. That makes four runs.
-Nothing else is configured. The tiers run in parallel on separate databases. The folds within a tier
+404's test close at 2025-01-04 00:00 UTC. **Two runs: tier 3 and tier 5, both on engine 8's
+expected-move ranking.** There is no alphabetical run: it is the name of the limitation the
+ranking removed, and whether the model has skill is answered by the benchmark basket (§R.7) and
+the promotion bar (§R.4) (operator ruling 2026-09-19). Nothing else is configured. The tiers run in parallel on separate databases. The folds within a tier
 run in sequence, because account state crosses fold boundaries and a freeze in one week changes
 every week after it.
 
@@ -144,7 +145,7 @@ data counts as a trial, **listed one by one, not summarised**:
 - the ranking study's features;
 - the skeptic veto sweep's thresholds;
 - the DI and anomaly percentiles compared on this data;
-- this phase's two rankings at two tiers.
+- this phase's runs (the committed ledger counts four; two run, a deliberate overcount of two).
 
 The count errs high on purpose, and the ledger says so. An overstated trial count makes the haircut
 harsher and the result harder to claim, which is the right direction to err (spec 139).
@@ -457,7 +458,7 @@ yields too few trades to say anything about its return. Its point estimates are 
 rest on one to twelve trades on two pairs.
 
 **SIMULATED VALUE PENDING:** the expected-move ranking's chain trade count, pair count and net per
-trade at tiers 3 and 5, beside the alphabetical baseline's over the same six months (§R.6).
+trade at tiers 3 and 5 over the six months (§R.6).
 
 ---
 
@@ -649,7 +650,6 @@ not meaningful" or shows its n. Those include:
 | §4 | The expected-move ranking's chain trade count, pairs and net, at tiers 3 and 5 |
 | §6 | The chain trades' expected move at entry against realised return |
 | New | The equity curve including cash periods; alpha against both benchmarks (§R.7); the per-trade reasons for approval (prerequisite 7); the promotion verdict against the bar fixed in §R.4; the trial count from the committed ledger (§R.8) |
-| New | The alphabetical baseline's figures beside the expected-move ranking's, at both tiers (§R.6) |
 
 ## 10. Findings the simulation will not change
 

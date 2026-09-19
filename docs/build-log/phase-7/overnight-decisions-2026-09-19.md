@@ -596,3 +596,9 @@ the dataset has a residue. The rehearsal's grid comparison, with its stop criter
   7's spells `BTC/USD` < `EUR/USD`. **Explained, not a stop:** every tied pair sits near 0.47%
   against a bar of at least 1.30%, so no cost verdict can differ. Aligning the tie-break spelling is
   recorded for the operator, not changed, because it changes which candidate is examined.
+
+### CORRECTION, after the operator woke: Phase 7 is two runs, not four
+
+Every mention above of four runs, of two rankings, or of an "alphabetical baseline" is
+superseded. The ruling: two runs, tiers 3 and 5, on engine 8's expected-move ranking (operator ruling 2026-09-19, after the overnight build). No alphabetical run, now or later: alphabetical is the name of the limitation the ranking removed, not a rival ranking. A baseline run would answer whether ranking beats not ranking, which nobody will challenge. It would not answer whether the model has skill; the benchmark basket (R8) and the promotion gate (R10b) answer that. It is also required by no Phase 7 criterion. The account and the stale reading's origin are in `lead.md`,
+"Phase 7 is two runs".

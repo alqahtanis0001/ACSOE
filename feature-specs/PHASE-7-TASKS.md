@@ -19,7 +19,7 @@ Check first, then resume from here:
   funding 18684/39376, fees 28860/34472. The recording manager (`serve.py`, port 8766) is PID
   52180. The supervisor restarts its own children; a whole-supervisor death needs `master.bat`. **A dead one of these is restarted, never a live one** (operator's
   reading of the standing rule).
-- **The run, once launched:** four detached processes (two rankings × tiers 3 and 5). The launch
+- **The run, once launched:** two detached processes (tiers 3 and 5, expected move). The launch
   command, PIDs, logs and expected finish are written HERE when launched.
 - **Gates** run in clean worktrees, `../ACSOE-gate` and `../ACSOE-gate2`, through `gate.py` (the
   lead's scratchpad; its logic is in D11). Logs: `logs/verify/gate-<label>.log`.
@@ -95,12 +95,13 @@ lead does not close the phase and does not mark it green.
   arithmetic. The client is constructible only in replay mode (enforced by a test). Its parameters
   go on the `runs` row, and a digest goes on every trade and rejection.
 - **R1, ranking:** engine 8's expected move, batched. **This closes spec 75.** Net-margin ranking
-  is rejected on live feasibility. Alphabetical is the baseline.
+  is rejected on live feasibility. No alphabetical run (operator ruling 2026-09-19).
 - **R2, skeptic:** the capped skeptic (13 folds).
 - **R3, tiers:** 3 and 5.
 - **R4, window:** six months, folds 379 to 404, ending at fold 404's test close (2025-01-04). That
-  is two rankings at two tiers, four runs. The tiers run in parallel on separate databases. Folds
-  run in sequence within a run.
+  is **two runs: tiers 3 and 5 on expected move** (operator ruling 2026-09-19; the lead's earlier
+  four-run reading is withdrawn). The tiers run in parallel on separate databases. Folds run in
+  sequence within a run.
 - **R7, the fee figures:** sourced. Kraken's schedule was fetched and committed on 2026-09-19. The
   2026 schedule applied to a 2023–24 window is a stated limitation.
 - **R8, benchmarks:** both. BTC/USD buy-and-hold, and an equal-weighted basket of the pairs held
@@ -142,7 +143,7 @@ Claim by writing the spec number in your progress file. Waves are dependency ord
 | 126 | Rulings into the documents: invariant 2's replay fee and book rule, invariant 4 in the operator's words (R12), the proxies named, config keys, seams | `context/*`, `config/default.yaml` | `docs_vocabulary` PASS; the contradicted-claim grep recorded; every seam has a producer no later than its consumer | 0 |
 | 144 | The ranking's contract: `engine-contracts.md`, `project-overview.md`, the ownership seam | `context/*` | invariant 4 as ruled; `docs_vocabulary` PASS | 0 |
 | 134 | The `runs` row carries the replay scenario digest and the synthetic book's parameters | `core/orchestrator.py`, `tests/core/` | the replay row carries both; the paper row carries null | 2 |
-| 143 | The four runs, the digests and the findings substitution | `tests/fixtures/`, `docs/dataset/phase-7-findings.md` | all four runs complete or stop with the cause; every pending marker substituted | 4 |
+| 143 | The two runs (tiers 3 and 5, expected move), the digests and the findings substitution | `tests/fixtures/`, `docs/dataset/phase-7-findings.md` | all four runs complete or stop with the cause; every pending marker substituted | 4 |
 
 ### A — Platform — 6 tasks
 

@@ -70,8 +70,8 @@ reads a rule, not a conversation.
    - the window, **folds 379 to 404** (R4, ruled 2026-09-19);
    - `training.skeptic_cap_folds: 13` (R2).
 
-   The ranking is `scout.rank_feature`: `expected_move` for the ranked runs, absent for the
-   alphabetical baseline. Each run's config is built by the driver (spec 131), never by editing the
+   The ranking is `scout.rank_feature: expected_move`, passed by the driver for both runs.
+   There is no alphabetical run (operator ruling 2026-09-19). Each run's config is built by the driver (spec 131), never by editing the
    committed file between runs.
 
    A may request keys; only the lead adds them.

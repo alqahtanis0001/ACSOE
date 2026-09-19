@@ -28,7 +28,9 @@ on the same data. The gate rejects a model that does not survive, and records wh
    - every threshold in the skeptic veto sweep, and in the skeptic-against-`p_target` comparison;
    - every DI and anomaly percentile compared on the out-of-sample rows (0.95, 0.99 and 0.999 for
      the DI, both with and without the exclusion; 0.95 and 0.99 for the anomaly gate);
-   - this phase's two rankings at two tiers: four trials.
+   - this phase's runs. The committed ledger counts four (two rankings at two tiers, as first
+     planned). The operator then ruled two runs, so the ledger overcounts by two, in the harsher
+     direction, and is left as committed (`lead.md`, "Phase 7 is two runs").
 
    **Count conservatively, and say so in the ledger.** Where it is unclear whether two evaluations
    are one trial or two, count two. An overstated count makes the haircut harsher and the result
