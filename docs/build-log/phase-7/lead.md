@@ -439,6 +439,30 @@ on, not low enough to clear anything. The arithmetic, so the inference can be ch
 - P(0 in one arm) ≈ e^−0.96 ≈ 0.38. P(0 in both, if the rates were equal) ≈ 0.15.
 - **Zero in both arms is an ordinary result whether or not the writer is implicated.**
 
+### The gating rehearsals pass everything but kill-and-resume, on the cycle number inside `shap_ref`
+
+**Agent:** Lead · **Date:** 2026-09-19, 23:10
+
+**What happened.** Five gating rehearsals of 2024-10-20 at `19c5a11`, in isolated worktrees,
+**all five completed** (21:45 to 23:06; about 6,375 ticks, no crashes). Against the committed
+check, each passes every precondition — SHAP files written by that rehearsal and every
+`shap_ref` resolving, both `details` columns filled, one `scout_tallies` row per engine-7 tick
+with 22 no-candidate ticks, a non-null digest, `tree_unchanged`, `ranking_stop` false, 75 bars
+compared with 0 disagreements, and expected-move ranking asserted from both the runs row and
+engine 7's own stored rows — **except `kill-and-resume identical`, which is false in all five.**
+
+**Why.** The only differing column in the whole database is `rejections.shap_ref`. Its path
+embeds the writing tick's **cycle number** (`shap/<run>/136/…` against `shap/<run>/96/…`),
+and a resumed process deliberately restarts `cycle_id` at 1 (`cli/research.py`, the run-id
+comment). The harness excludes `cycle_id` and `run_id` as process columns, but not the copy of
+them inside the SHAP path. Proven in all five: with `shap_ref` dropped, **every table is
+byte-identical**, and the 71 refs match one for one once the run and cycle segments are
+ignored. **The decisions, economics, orders, trades, equity and tallies are identical.**
+
+**Not fixed tonight.** The honest fix is in a-replay's harness: mask the path's process segments
+as the column comparison already does. That is a code change in another lane at 23:10, and it
+changes what the rehearsal reports.
+
 ### A hole in the SHAP check, found before it could pass on stale files
 
 **What happened.** SHAP files are keyed by `run_id`, and a rehearsal's run ids come only from its
