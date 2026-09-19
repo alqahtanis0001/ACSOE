@@ -24,19 +24,21 @@ Check first, then resume from here:
 - **Gates** run in clean worktrees, `../ACSOE-gate` and `../ACSOE-gate2`, through `gate.py` (the
   lead's scratchpad; its logic is in D11). Logs: `logs/verify/gate-<label>.log`.
 
-**Pushed state:** `cd8131b` on origin/main. Committed: the rulings documents (126, the context
-half of 144, the spec 145 text), and boundary 1: the `core/` `previous_now` seed (D9), the
-`context.mode` fix (F2), and the supervisor running config-listed pollers (P3).
+**Pushed state:** `bd96346` on origin/main. Committed, in order:
+- the rulings documents (126, the context half of 144, spec 145's text);
+- b1: the `core/` `previous_now` seed (D9), the `context.mode` fix (F2), and P3;
+- b2: A's 127, 128 and 130, P1, P2;
+- b3: C's 137, the modelling half of 144, and 139's statistics and trial ledger (N = 1,679).
 
-**Boundaries in flight or queued (lead gates, commits and pushes each):**
-- b2 gating: A's 127, 128 and 130, recorder P1 and P2, with the `fees.py` line in
-  `config/recorder.yaml`.
-- b3 gating: C's 137, the modelling half of 144, and 139's statistics and trial ledger (N = 1,679).
-- Next: 132 (+ `approvals.details`) with 133, 134 (the lead's, built) and the `DOCUMENTED_TABLES`
-  line, plus a-replay's rehearsal-test expectation fix. Then the config boundary (a-replay's
-  `replay:` and `training.skeptic_cap_folds` fields, plus the lead's YAML). Then engine 20's gate
-  and `format.py` with B's engine 7 half of 144. Then 129/131, then 136 → 135, then 145, then
-  140's writer, then 142 (the rehearsal), then the launch (143).
+**Queued (uncommitted in the working tree), and what each waits on:**
+- Config + 129 + 131 (a-replay): waits on `training.skeptic_cap_folds` and the move of the
+  rehearsal fixture to `tests/fixtures/phase7/` (D17). The lead's `replay:` YAML is written in
+  `config/default.yaml`, uncommitted, and gates with it.
+- 132 + 133 + 134 + the `verify.py` batch + engine 20 + `format.py` + the console leaderboard + the
+  scout half of 144: waits on B's `approvals.details` column and B's 144.
+- 138 (c-criteria): waits on its core-import fix.
+- 136 → 135 (c-models): in progress.
+- Then 145, 140's writer (which waits on B's `write_shap`), 142 (the rehearsal), and the launch.
 
 **Teammates (background agents in the lead's session; a fresh session has none, so re-spawn from
 the team brief):**
