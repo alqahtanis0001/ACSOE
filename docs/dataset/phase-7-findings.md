@@ -787,6 +787,17 @@ literature.** No source was verified for such a claim.
     **By the pre-set rule, the runs launch with SHAP**, with the watchdog allowed up to 40
     resumes per run and 8 per hour. The loop detector is unchanged: two consecutive resumes
     dying at the same tick stop a run.
+- **One launch precondition was judged met by hand, and is declared here rather than left
+  silent.** The gating rehearsal's `kill-and-resume identical` check was false. The cause is the
+  check, not the system: `rejections.shap_ref` embeds the writing tick's cycle number, and a
+  resumed process restarts `cycle_id` at 1 by design. The harness excludes `cycle_id` and
+  `run_id` as columns, but not the copy of them inside that path.
+  - **Evidence, in all five gating rehearsals:** with `shap_ref` excluded, **every table is
+    byte-identical** between the uninterrupted run and the killed-and-resumed one, and the 71
+    SHAP refs match one for one once the run and cycle segments are ignored.
+  - So a resume changes no decision, and the operator ruled the precondition met on that
+    evidence. Every other precondition was met by the committed check script. Correcting the
+    harness's exclusion rule is a Phase 8 item.
 - **Each run's first decision bar is skipped by design.** On a fresh database engine 7 has no
   stored equity to size positions against until engine 19 writes the first row at the end of
   tick 1. Engine 7 fails closed rather than fall back to a balance, so it blocks tick 1

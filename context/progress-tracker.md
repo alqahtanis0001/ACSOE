@@ -1625,6 +1625,18 @@ the reason in the YAML comment and in `DatasetConfig`.
 
 ## Open Questions
 
+- **OPEN, Phase 8, for a-replay (operator ruling 2026-09-19): the rehearsal's identity check must
+  mask the process segments inside `shap_ref`.** `scripts/rehearse_replay_day.py` drops
+  `cycle_id` and `run_id` as columns (`PROCESS_COLUMNS`) when comparing an uninterrupted run with
+  a killed-and-resumed one, but `rejections.shap_ref` embeds both in its path
+  (`shap/<run_id>/<cycle_id>/<pair>.parquet`), and a resumed process restarts `cycle_id` at 1 by
+  design. So `resumed_identical` is false on every rehearsal that writes SHAP, although the rows
+  are identical. Proven on all five gating rehearsals of 2026-09-19: with `shap_ref` excluded
+  every table is byte-identical, and 71 of 71 refs match once the run and cycle segments are
+  ignored. **The launch of 2026-09-19 treated this precondition as met on that evidence**
+  (`docs/dataset/phase-7-findings.md` §7b; `docs/build-log/phase-7/lead.md`). Mask the path's
+  process segments as the column comparison does. Not done tonight: another lane's code, at
+  23:10, on the launch's critical path.
 - **OPEN, Phase 8, by operator ruling 2026-09-19: a non-deterministic native crash in polars.**
   The Phase 7 gating rehearsal at `19c5a11` died with an access violation right after a polars
   panic in its row export to Python (`polars-python/src/dataframe/export.rs:59`, "`elements` was
