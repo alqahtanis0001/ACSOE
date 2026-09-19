@@ -364,3 +364,30 @@ without one, so the rate is low, but it is not zero. A crash kills the run mid-t
 recovery is `--resume`, which is proven identical by the rehearsal's kill-and-resume check. The
 operator's rule, though, is never to restart a launched run. So whether a dead run may be resumed,
 and by whom, is a ruling.
+
+**A second crash, and a rate over the operator's threshold (21:05).** The operator ruled
+auto-resume (option A, modified). They also ruled that a second rehearsal crash is a stop, and
+so is a crash rate implying more than about one per hour per run. Both happened.
+- **The rehearsal rerun** (`rehearsal2-19c5a11`): run "a" finished all 425 ticks. **Run "b"
+  died after 358 ticks** (2024-10-20 16:31Z), at 19:54 local, `0xC0000005`.
+- **Faulthandler's stack this time:** engine 3, `candles.py:179` `build_candles`, building a
+  polars `DataFrame` from a dict of lists (`_construct_series_with_fallbacks`). That is a
+  **different polars entry point** from the first crash, which was in row export.
+- **The event log shows exactly two python crashes in two days**, 19:19 in `ntdll.dll` and 19:54
+  in `python313.dll`. Two different faulting modules on identical input points to heap
+  corruption. **No WHEA hardware errors in 30 days.** The recorder logged no crash.
+
+**The rate on `19c5a11`, over every run tonight:** 1,831 ticks in 1.13 process-hours, 2 crashes.
+That is about 1 per 900 ticks, or about 1.8 per process-hour; a Poisson interval on 2 events
+spans roughly 0.2–6 per hour. The stress runs (tiers 3 and 5, a full day each) and both repros
+were clean.
+
+**The morning, on code from before 140 and 146:** 28 runs and 4,288 ticks, 0 crashes. That
+covers the preliminary rehearsals, the dry rehearsals and the bench. At tonight's rate, zero
+crashes in 4,288 ticks has a probability of about 1%. **So something changed:** 140's SHAP
+writer (new polars and parquet writes on bar ticks), 146 (none), or the machine. Not separable
+from what is on disk.
+
+**At tonight's rate the real runs would crash 11–19 times each**, over 10,000–17,000 ticks.
+That is past the ruled cap of 10 resumes per run, so the watchdog would stop both runs partway.
+**Stopped for the operator.**
