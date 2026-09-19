@@ -1625,6 +1625,18 @@ the reason in the YAML comment and in `DatasetConfig`.
 
 ## Open Questions
 
+- **OPEN, for the operator's ruling (2026-09-19): the committed daemon still ranks
+  alphabetically.** `scout.rank_feature` is **absent** from `config/default.yaml`, so engine 7's
+  `rank_universe` (`src/acsoe/engines/scout/contracts.py`, "With `feature` `None` the ordering is
+  alphabetical") orders the universe by pair name in the committed daemon. **Phase 7 avoids it only
+  because the replay driver passes `--ranking expected_move`.** Nothing is retired: the alphabetical
+  path is live code and the committed default. The ruling needed is whether to set
+  `scout.rank_feature: expected_move` in the committed config (and whether to remove the
+  alphabetical path). Either changes what the daemon does. **Until it is ruled, a daemon started
+  from the committed config ranks alphabetically. That is correct only for as long as someone
+  remembers that the flag is doing the work**, the same failure shape as the funding poller.
+  The YAML's own comment ("absent until spec 75's study reports") is stale, and is corrected in the
+  next gated boundary.
 - **~~OPEN for the operator, Phase 5, deliberately: three values are absent until the walk-forward reports.~~ ALL THREE ARE NOW RULED AND LANDED, 2026-09-15, and all three are PROVISIONAL.** `prediction.di_percentile: 0.99`, `anomaly.threshold_percentile: 0.99` and `skeptic.veto_threshold: 0.50` are in `config/default.yaml`, each with its evidence in the comment beside it and each revisited once the chain runs end to end. The operator ruled 2026-09-12 that the lead's recommendations (0.95, 0.99, 0.5) were guesses until there was a distribution to place them on; each of the three was then chosen from that distribution, and the DI's only after the 48-bar exclusion had been applied and refitted. Engines 8, 13 and 15 no longer fail closed on an absent threshold — they fail closed on an absent `models.*_run_id`, which is what a fresh clone has. The fourth key, `scout.rank_feature`, stays absent: the operator ruled no feature 2026-09-15 and the question moves to Phase 7.
 
   **RULED 2026-09-15 by the operator: `prediction.di_percentile: 0.99`, provisional until the

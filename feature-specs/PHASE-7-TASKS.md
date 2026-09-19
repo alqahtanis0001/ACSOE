@@ -143,7 +143,7 @@ Claim by writing the spec number in your progress file. Waves are dependency ord
 | 126 | Rulings into the documents: invariant 2's replay fee and book rule, invariant 4 in the operator's words (R12), the proxies named, config keys, seams | `context/*`, `config/default.yaml` | `docs_vocabulary` PASS; the contradicted-claim grep recorded; every seam has a producer no later than its consumer | 0 |
 | 144 | The ranking's contract: `engine-contracts.md`, `project-overview.md`, the ownership seam | `context/*` | invariant 4 as ruled; `docs_vocabulary` PASS | 0 |
 | 134 | The `runs` row carries the replay scenario digest and the synthetic book's parameters | `core/orchestrator.py`, `tests/core/` | the replay row carries both; the paper row carries null | 2 |
-| 143 | The two runs (tiers 3 and 5, expected move), the digests and the findings substitution | `tests/fixtures/`, `docs/dataset/phase-7-findings.md` | all four runs complete or stop with the cause; every pending marker substituted | 4 |
+| 143 | The two runs (tiers 3 and 5, expected move), the digests and the findings substitution | `tests/fixtures/`, `docs/dataset/phase-7-findings.md` | both runs complete or stop with the cause; every pending marker substituted | 4 |
 
 ### A — Platform — 6 tasks
 
