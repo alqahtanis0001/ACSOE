@@ -1,0 +1,73 @@
+"""Boundary gate in a clean worktree.
+
+usage: gate.py <label> <phase> <file> [<file> ...]
+
+Resets ../ACSOE-gate to the main checkout's HEAD, copies the named files (paths relative to the
+repo root) from the main checkout's working tree into it, and runs
+`python scripts/verify.py --phase N` there with PYTHONPATH pointing at the worktree's src/, so the
+editable install of the main checkout is not what the tests import. A file named but absent in
+the main tree is deleted in the worktree (a removal in the boundary). Output goes to
+<main>/logs/verify/gate-<label>.log with the file list and hashes at the top.
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+MAIN = Path(r"C:\Users\saad2\Documents\GitHub\ACSOE")
+GATE = MAIN.parent / os.environ.get("ACSOE_GATE_TREE", "ACSOE-gate")
+PY = MAIN / ".venv" / "Scripts" / "python.exe"
+
+
+def run(args: list[str], cwd: Path) -> str:
+    done = subprocess.run(args, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if done.returncode != 0:
+        raise SystemExit(f"{args} failed: {done.stdout}{done.stderr}")
+    return done.stdout.strip()
+
+
+def sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16] if path.exists() else "ABSENT"
+
+
+def main() -> int:
+    label, phase, *files = sys.argv[1:]
+    head = run(["git", "rev-parse", "HEAD"], MAIN)
+    run(["git", "checkout", "--detach", "--force", head], GATE)
+    run(["git", "reset", "--hard", head], GATE)
+    run(["git", "clean", "-fd", "--exclude=logs/"], GATE)
+    lines = [f"gate {label} phase {phase} at {datetime.now(timezone.utc).isoformat()} HEAD {head}"]
+    for rel in files:
+        src, dst = MAIN / rel, GATE / rel
+        if src.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+        elif dst.exists():
+            dst.unlink()
+        lines.append(f"  {rel}  main={sha(src)}  gate={sha(dst)}")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(GATE / "src")
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    log = MAIN / "logs" / "verify" / f"gate-{label}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("w", encoding="utf-8", newline="") as out:
+        out.write("\n".join(lines) + "\n\n")
+        out.flush()
+        done = subprocess.run([str(PY), "scripts/verify.py", "--phase", phase], cwd=GATE, env=env,
+                              stdout=out, stderr=subprocess.STDOUT)
+        out.write(f"\nexit {done.returncode}\n")
+    # hashes again after the gate: the boundary's files must not have moved in main meanwhile
+    moved = [rel for rel in files if sha(MAIN / rel) != sha(GATE / rel)]
+    with log.open("a", encoding="utf-8", newline="") as out:
+        out.write(f"moved in main during the gate: {moved or 'none'}\n")
+    print(f"exit {done.returncode}; moved {moved or 'none'}; log {log}")
+    return done.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

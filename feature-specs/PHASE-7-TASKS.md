@@ -1,5 +1,71 @@
 # Phase 7 — shared task list
 
+## HANDOFF 1 — LIVE STATE, 2026-09-19 overnight (the lead updates this block at every boundary)
+
+**The operator is asleep. The instruction: build, rehearse one calendar day of the window (96 bars,
+same client, config and engines as the full run), then launch the six-month run detached.** If
+the rehearsal shows anything the operator would want escalated, stop, write it down, and do not
+launch. Take how-decisions; stop on anything that changes what the system does or what a number
+means, or costs more than 3 h. **Every decision is logged in
+`docs/build-log/phase-7/overnight-decisions-2026-09-19.md`, and the morning report reads it in
+order.** Morning report order: the decision list, the run's status and progress, the recorder audit,
+and anything stopped.
+
+**If you are a fresh session after a lost connection: do not restart anything that is running.**
+Check first, then resume from here:
+- **Recording.** The recorder runs under `scripts/recording/supervise.py` (old code, started
+  2026-09-16). It is pending ONE switchover to the committed supervisor plus P1's `record.py`. See
+  "Recorder" below.
+- **Funding poller.** Hand-started 04:42 local, PID 42044. The recording manager (`serve.py`,
+  port 8766) is PID 52180. **A dead one of these is restarted, never a live one** (operator's
+  reading of the standing rule).
+- **The run, once launched:** four detached processes (two rankings × tiers 3 and 5). The launch
+  command, PIDs, logs and expected finish are written HERE when launched.
+- **Gates** run in clean worktrees, `../ACSOE-gate` and `../ACSOE-gate2`, through `gate.py` (the
+  lead's scratchpad; its logic is in D11). Logs: `logs/verify/gate-<label>.log`.
+
+**Pushed state:** `cd8131b` on origin/main. Committed: the rulings documents (126, the context
+half of 144, the spec 145 text), and boundary 1: the `core/` `previous_now` seed (D9), the
+`context.mode` fix (F2), and the supervisor running config-listed pollers (P3).
+
+**Boundaries in flight or queued (lead gates, commits and pushes each):**
+- b2 gating: A's 127, 128 and 130, recorder P1 and P2, with the `fees.py` line in
+  `config/recorder.yaml`.
+- b3 gating: C's 137, the modelling half of 144, and 139's statistics and trial ledger (N = 1,679).
+- Next: 132 (+ `approvals.details`) with 133, 134 (the lead's, built) and the `DOCUMENTED_TABLES`
+  line, plus a-replay's rehearsal-test expectation fix. Then the config boundary (a-replay's
+  `replay:` and `training.skeptic_cap_folds` fields, plus the lead's YAML). Then engine 20's gate
+  and `format.py` with B's engine 7 half of 144. Then 129/131, then 136 → 135, then 145, then
+  140's writer, then 142 (the rehearsal), then the launch (143).
+
+**Teammates (background agents in the lead's session; a fresh session has none, so re-spawn from
+the team brief):**
+- a-data: 127, 128, 130. Done.
+- a-replay: 129, 131, 142, and the config fields.
+- b-store: 132 and engine 7's half of 144.
+- c-models: 137 and the modelling half of 144 (done); 136, then 135.
+- c-eval: 139 (done); 133 (done); next 145, then 140's writer.
+- c-criteria: 141, 138, and 140's screens (after the run).
+- a-recorder: P1, P2 and P3 (built). The switchover waits on the lead's word.
+
+**The team brief is committed at `docs/build-log/phase-7/team-brief.md`**: give it to any
+re-spawned teammate. **The gate script is committed at `docs/build-log/phase-7/gate.py.txt`**:
+copy it to a scratch location, and run it as `python gate.py <label> 7 <files...>`, with
+`ACSOE_GATE_TREE=ACSOE-gate2` to select the second worktree.
+
+**Recorder, the single switchover (after b2 is committed and pushed):** stop PID 42044; stop the
+old supervisor (PIDs 34472/34540, which takes `record.py` 34416/14508 with it); start
+`scripts/recording/master.bat` in its own console. Then verify: the recorder is writing, and an
+`instrument` line has landed; funding and fees each write their first line. Then record the cut-off
+time in the tracker ("Recordings made before the recorder gap fix").
+
+**Operator rulings of the night that are not yet in the authority files:**
+- P1, P2 and P3 approved.
+- F-new-1 fixed (spec 145), before the run.
+- 140's writer before the run.
+- If C is the bottleneck, cut the SHAP writer rather than compress engine 19's three changes.
+- The account's tier-1 fees were measured and recorded (tracker).
+
 ## HANDOFF 0, 2026-09-19 — specs written, every ruling answered, AWAITING OPERATOR APPROVAL TO BUILD. Nothing is claimed or built.
 
 **Read this first.** Specs 126 to 144 were written by the lead from the Phase 7 row, the nine Phase 7
