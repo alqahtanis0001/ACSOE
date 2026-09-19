@@ -38,6 +38,7 @@ __all__ = [
     "CLOSED_TRADES_FIELD",
     "COST_KEY",
     "CYCLE_ID_KEY",
+    "DETAILS_VERSION",
     "ECONOMICS_FIELDS",
     "EXCHANGE_KEY",
     "EXECUTION_KEY",
@@ -63,6 +64,7 @@ __all__ = [
     "TRADING_BLOCKED_BY_KEY",
     "UNREALISED_PNL_FIELD",
     "USERREF_FIELD",
+    "VERDICT_FIELDS",
     "WRITTEN_TABLES",
     "MemoryState",
     "MissingInputError",
@@ -228,6 +230,36 @@ MODEL_RUN_KEYS: Final[tuple[tuple[str, str], ...]] = (
 APPROVAL_TRADE_FIELDS: Final[tuple[str, ...]] = (
     *(column for column, _ in ECONOMICS_FIELDS),
     *(column for column, _ in MODEL_RUN_KEYS),
+)
+
+# --------------------------------------------------------------------------- #
+# Every gate's verdict, on both sides of every decision - spec 145
+# --------------------------------------------------------------------------- #
+
+#: The version of the snapshot's shape, written into every one.
+DETAILS_VERSION: Final = 1
+
+#: Which fields of each opportunity-chain engine's payload the snapshot records, **in chain
+#: order**, which is also the order a refusal stops at. Only fields the engine already
+#: publishes; a test walks each engine's `contracts.py` and fails on a name it does not
+#: publish, so a rename goes red instead of recording nothing. Engines 5 and 6 are absent:
+#: they judge nothing. `shap` is absent from engine 8's: it is spec 140's Parquet.
+#: Engine 10 publishes no fee, spread or slippage component, so none is listed for it.
+VERDICT_FIELDS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("scout", ("pair", "rank_feature", "rank_descending", "ranked", "rank_skipped",
+               "rank_run_ids")),
+    ("regime", ("label",)),
+    ("anomaly", ("score", "threshold", "anomalous", "model_run_id")),
+    ("prediction", ("p_target", "p_stop", "p_timeout", "expected_move_pct", "is_buy", "di",
+                    "di_threshold", "model_run_id")),
+    ("order_book", ("estimated_slippage_pct", "basis_notional", "best_bid", "fill_price",
+                    "levels_consumed", "depth")),
+    ("cost", ("expected_move_pct", "friction_pct", "net_edge_pct", "hurdle_pct",
+              "clears_hurdle")),
+    ("risk", ("approved", "qty", "notional", "risk_amount")),
+    ("adaptive_router", ("active_model_run_id", "di_margin", "regime")),
+    ("skeptic", ("p_wrong", "threshold", "vetoed", "model_run_id")),
+    ("decision", ("coherent", "checked")),
 )
 
 #: Every table engine 19 writes, in the order it writes them. The order is load-bearing

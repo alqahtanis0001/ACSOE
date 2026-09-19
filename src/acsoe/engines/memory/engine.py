@@ -37,6 +37,7 @@ imports no other engine: every `state` key it reads is named in this package's
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
@@ -65,6 +66,7 @@ from acsoe.engines.memory.contracts import (
     CLOSED_TRADES_FIELD,
     COST_KEY,
     CYCLE_ID_KEY,
+    DETAILS_VERSION,
     ECONOMICS_FIELDS,
     EXCHANGE_KEY,
     EXECUTION_KEY,
@@ -89,6 +91,7 @@ from acsoe.engines.memory.contracts import (
     TRADING_BLOCKED_BY_KEY,
     UNREALISED_PNL_FIELD,
     USERREF_FIELD,
+    VERDICT_FIELDS,
     WRITTEN_TABLES,
     MemoryState,
     MissingInputError,
@@ -550,6 +553,7 @@ class MemoryEngine(BaseEngine):
                 cycle_id=cycle_id,
                 ts=ts,
                 pair=str(pair),
+                details=self._verdicts(state, refused_by=None),
                 updated_at=ts,
                 **economics,
             )
@@ -568,6 +572,48 @@ class MemoryEngine(BaseEngine):
             field: None if approval is None else getattr(approval, field)
             for field in APPROVAL_TRADE_FIELDS
         }
+
+    # ------------------------------------------------------- verdict snapshot
+
+    def _verdicts(self, state: State, *, refused_by: str | None) -> str:
+        """Every judging engine's verdict this tick, as canonical JSON. Spec 145.
+
+        Engines in chain order, **stopping at the refuser** on a refusal (marked
+        `refused_by`); on an approval every one present. A field an engine did not publish
+        is absent, never null-filled: absent and null are different facts. Values are
+        copied exactly as published, so money stays an exact decimal string and a
+        statistic stays a float. An engine that raised records `{"status": "ERROR"}` and
+        nothing else, whatever its payload; a payload that is not a mapping records
+        `{"status": "UNREADABLE"}`. **Never raises**: engine 19 is the single writer, and a
+        lost tick is worse than a partial snapshot.
+        """
+        errored = self._errored_opportunity_engine(state)
+        engines: dict[str, Any] = {}
+        for engine, fields in VERDICT_FIELDS:
+            if engine not in state:
+                if engine == refused_by:
+                    break
+                continue
+            payload = state[engine]
+            if engine == errored:
+                engines[engine] = {"status": "ERROR"}
+            elif not isinstance(payload, Mapping):
+                engines[engine] = {"status": "UNREADABLE"}
+            else:
+                engines[engine] = {name: payload[name] for name in fields if name in payload}
+            if engine == refused_by:
+                break
+        snapshot: dict[str, Any] = {"details_version": DETAILS_VERSION, "engines": engines}
+        if refused_by is not None:
+            snapshot["refused_by"] = refused_by
+        try:
+            return json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError):
+            return json.dumps(
+                {"details_version": DETAILS_VERSION, "unserialisable": True, "refused_by": refused_by},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
 
     # ------------------------------------------------------------- rejections
 
@@ -642,6 +688,7 @@ class MemoryEngine(BaseEngine):
                 reason_code=str(reason_code),
                 reason=str(state.get(BLOCK_REASON_KEY) or ""),
                 candidate_score=self._score(blocker),
+                details=self._verdicts(state, refused_by=str(blocked_by)),
                 updated_at=ts,
                 **economics,
             )

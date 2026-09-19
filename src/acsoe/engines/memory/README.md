@@ -96,6 +96,22 @@ writes the trade it reads `approval(entry_userref)` and copies the seven fields 
   from the store and is not caught. That is why the approval's `cycle_id` is always the placing
   tick, where `orders.cycle_id` is the last tick that wrote the row (prerequisite 8).
 
+## Every gate's verdict, on both sides (spec 145)
+
+On the placing tick the approval row, and on every refusal the rejection row, carry `details`:
+canonical JSON (sorted keys, compact) with `details_version: 1` and, per judging engine in chain
+order, that engine's payload **restricted to `VERDICT_FIELDS`** (`contracts.py`). A refusal stops
+at the refuser, which is included and named in `refused_by`; no engine after it appears.
+
+- **Absent is absent.** A field an engine did not publish is left out, never null-filled.
+- **Values are copied as published**: money stays an exact decimal string, a statistic a float.
+- **An engine that raised records `{"status": "ERROR"}`**, whatever its payload holds; a payload
+  that is not a mapping records `{"status": "UNREADABLE"}`; a snapshot that cannot be serialised
+  records only that. **Building it never fails the tick**: a lost tick is worse than a partial
+  snapshot.
+- `shap` is not in it; that is spec 140's Parquet. A test walks every listed engine's
+  `contracts.py` so a renamed field goes red instead of recording nothing.
+
 ## What it writes into `state`
 
 `state["memory"]` only — contract rule 2. It carries per-table counts (zeros included,
