@@ -397,3 +397,53 @@ def test_the_flag_disagreeing_with_a_declared_cap_is_refused_never_overriding_it
 def test_a_flag_that_is_not_positive_is_refused() -> None:
     with pytest.raises(skeptic_cap.CappedSkepticError, match="positive number of folds"):
         skeptic_cap._with_cap(Undeclared(), 0)
+
+
+
+# --------------------------------------------------------------------------- #
+# The walk-forward reads the key itself
+# --------------------------------------------------------------------------- #
+
+
+def test_the_walk_forward_trains_the_skeptic_the_config_caps(
+    run: dict[str, Any], config: Any, tmp_path: Path
+) -> None:
+    """``train_walkforward`` reads ``training.skeptic_cap_folds`` and passes it through. Capped at
+    one fold, the last fold's recorded skeptic identity is the one recomputed from the ruling,
+    not the uncapped one the fixture run recorded under a config with no effective cap."""
+    from tests.harness.doubles import load_default_config
+    from tests.research.test_training import NOW, dataset_for
+
+    capped = training.train_walkforward(
+        dataset_for(load_default_config(), random_walk=False),
+        config=WithCap(config, 1),
+        models_dir=tmp_path / "models",
+        derived_dir=tmp_path / "derived",
+        now=NOW,
+        max_folds=FOLDS,
+    )
+    entry = next(item for item in capped.folds if int(item["fold_index"]) == LAST)
+    assert entry["skeptic_training_identity"] == recomputed(run, config, cap=1)
+    uncapped = next(item for item in run["report"].folds if int(item["fold_index"]) == LAST)
+    assert entry["skeptic_training_identity"] != uncapped["skeptic_training_identity"]
+
+
+def test_the_cap_is_part_of_the_config_digest() -> None:
+    """A run's config digest must change when what its skeptic trains on changes."""
+    from tests.harness.doubles import load_default_config
+
+    base = load_default_config()
+    assert training._config_digest(WithCap(base, 13)) != training._config_digest(WithCap(base, None))
+
+
+def test_the_committed_config_carries_the_ruled_cap() -> None:
+    """The operator's ruling, 13 folds, read through the one reader both paths share."""
+    from tests.harness.doubles import load_default_config
+
+    assert training.skeptic_cap_folds(load_default_config()) == 13
+    assert skeptic_cap.read_cap(load_default_config()) == 13
+
+
+def test_a_cap_that_is_not_positive_is_refused_by_the_reader() -> None:
+    with pytest.raises(training.TrainingError, match="positive number of folds"):
+        skeptic_cap.read_cap(WithCap(Undeclared(), 0))

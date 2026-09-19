@@ -8,10 +8,12 @@ money is at risk.
 
 Three refusals are worth reading before changing anything here.
 
-**Mode.** Phase 0 accepts ``paper`` and nothing else. ``platform/live_guard.py``,
-which implements the three switches of invariant 1, is a Phase 8 deliverable.
-Until it exists the loader refuses to start on any other mode. The absence of the
-guard is not permission, and no code path may promote paper to live implicitly.
+**Mode.** ``live`` is refused. ``platform/live_guard.py``, which implements the
+three switches of invariant 1, is a Phase 8 deliverable, and until it exists the
+loader refuses to start in live mode. The absence of the guard is not permission,
+and no code path may promote paper to live implicitly. ``paper`` is the default.
+``replay`` is accepted since Phase 7 for the offline replay (spec 129), which builds
+its config in memory and never reaches the exchange; ``acsoe engine`` refuses it.
 
 **Nulls.** A key written as ``null`` in ``config/default.yaml`` is marked OPERATOR
 REQUIRED: the context files name it and value it nowhere, and it is trading
@@ -36,6 +38,7 @@ variable. It deliberately does not read ``ACSOE_LIVE``: that is one of invariant
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -766,6 +769,16 @@ class TrainingConfig(_Section):
     min_data_in_leaf: int = Field(gt=0)
     """Minimum rows behind a leaf. The main guard against fitting noise in a thin pair."""
 
+    skeptic_cap_folds: int | None = Field(default=None, ge=1)
+    """The skeptic's rolling training window, in folds (operator ruling 2026-09-16, R2).
+
+    Fold *k*'s skeptic trains only on the out-of-sample BUY calls of folds *k*-cap to
+    *k*-1. Optional **leaf**: absent or null means uncapped, the Phase 5 trainer's
+    behaviour, and ``Config.get`` returns ``None``. When present it must be at least 1,
+    because a cap of zero folds is a skeptic trained on nothing. Read by C's
+    ``research/skeptic_cap.py`` (spec 136).
+    """
+
 
 #: The deepest book engine 9 may be configured to walk, and it is **not** a Kraken
 #: limit — it is what this system's own feed delivers.
@@ -803,6 +816,52 @@ class OrderBookConfig(_Section):
 
     depth: int = Field(gt=0, le=MAX_BOOK_DEPTH)
     """Levels a side engine 9 walks. Approved by the lead at 10, 2026-09-16."""
+
+
+class ReplayConfig(_Section):
+    """The Phase 7 replay's declared scenario and its window. Specs 126, 129 and 131.
+
+    **Optional as a section**, and read only by the replay client and the replay driver.
+    A paper process never reads it, and the replay client refuses construction outside
+    replay mode before it opens any file named here (invariant 2's amendment, spec 126).
+
+    The paths are relative to the repository root. `fee_tier` is the committed default;
+    the driver builds each run's config with the tier that run uses (R3: tiers 3 and 5,
+    one per run), and never edits the committed file between runs.
+
+    `run_id_format` names each fold's Phase 7 run directory (spec 135) and must contain
+    `{fold}`. It is the one place the name is written, so the driver and C's assembly
+    cannot spell it two ways.
+    """
+
+    asset_pairs_file: str
+    instrument_file: str
+    pair_names_file: str
+    spread_table_file: str
+    fee_schedule_file: str
+    fee_tier: int = Field(gt=0)
+    partitions_dir: str
+    first_fold: int = Field(ge=0)
+    last_fold: int = Field(ge=0)
+    run_id_format: str
+
+    @model_validator(mode="after")
+    def _window_is_ordered(self) -> Self:
+        if self.last_fold < self.first_fold:
+            raise ValueError(
+                f"replay.last_fold ({self.last_fold}) is before replay.first_fold "
+                f"({self.first_fold})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _run_id_format_names_the_fold(self) -> Self:
+        if "{fold}" not in self.run_id_format:
+            raise ValueError(
+                "replay.run_id_format must contain {fold}: without it every fold would "
+                "load the same models"
+            )
+        return self
 
 
 class SeedsConfig(_Section):
@@ -874,6 +933,11 @@ class Config(BaseModel):
     # surfacing as a `ConfigKeyError` from inside engine 9 three chains into a tick.
     order_book: OrderBookConfig
 
+    # ---- Phase 7, spec 129. -----------------------------------------------
+    # Optional, and it stays optional: only the offline replay reads it, and a paper
+    # daemon must start without it. See ReplayConfig.
+    replay: ReplayConfig | None = None
+
     @model_validator(mode="after")
     def _lookback_fits_in_what_engine_3_publishes(self) -> Self:
         """A feature may not want more history than engine 3 puts in ``state``.
@@ -911,6 +975,9 @@ class Config(BaseModel):
         this, and do not implement the three switches here — they belong to
         ``live_guard.py``, and three conditions checked in the module that
         forbids them is not a guard.
+
+        Its name is from Phase 0, when it refused ``replay`` too. Phase 7 lifted that
+        half (spec 129) and left the live half exactly as it was.
         """
         if self.mode == "live":
             raise ValueError(
@@ -919,11 +986,11 @@ class Config(BaseModel):
                 "platform/live_guard.py, which is a Phase 8 deliverable and does not "
                 "exist yet. The absence of the guard is not permission. Set mode: paper."
             )
-        if self.mode != "paper":
-            raise ValueError(
-                f"mode: {self.mode} is refused. Phase 0 accepts mode: paper only; "
-                "replay is built in Phase 4 and live in Phase 8."
-            )
+        # `replay` is accepted since Phase 7 (spec 129): the offline replay runs the
+        # registered chains in mode replay, and its config is built in memory by the
+        # driver from the committed file, which stays `mode: paper`. Nothing in replay
+        # reaches the exchange. `acsoe engine` refuses a replay config itself, so this
+        # opens no route by which a daemon runs in any mode but paper.
         return self
 
     def get(self, dotted_key: str, /) -> Any:
@@ -1004,6 +1071,73 @@ class Config(BaseModel):
             return cls.model_validate(raw)
         except ValidationError as exc:
             raise ConfigError(_readable(exc, config_path)) from exc
+
+
+class ConfigView:
+    """A `Config` the replay driver re-points at a new, immutable `Config` per fold.
+
+    Spec 131 step 3. The orchestrator holds one config object for its whole life, and
+    the models in force change at every fold boundary. So the orchestrator is handed
+    this view, and the driver builds each fold's `Config` fresh with
+    :func:`derive_config` (validated, frozen, never a loaded one mutated) and points the
+    view at it. Engines read `mode` and `get`, both delegated, so they cannot tell the
+    view from the config. Satisfies the `Config` Protocol in `core/contracts.py`.
+
+    **The mode cannot change through the view.** A switch that moved a replay into paper
+    would change what the run is part-way through it, and is refused.
+    """
+
+    __slots__ = ("_current",)
+
+    def __init__(self, config: Config) -> None:
+        self._current = config
+
+    @property
+    def mode(self) -> Literal["paper", "live", "replay"]:
+        return self._current.mode
+
+    def get(self, dotted_key: str, /) -> Any:
+        return self._current.get(dotted_key)
+
+    @property
+    def current(self) -> Config:
+        return self._current
+
+    def use(self, config: Config) -> None:
+        if config.mode != self._current.mode:
+            raise ValueError(
+                f"a config view cannot change mode, and this switch would move it from "
+                f"{self._current.mode} to {config.mode}"
+            )
+        self._current = config
+
+
+def derive_config(base: Config, updates: Mapping[str, Any]) -> Config:
+    """A new, validated `Config`: `base` with each dotted key in `updates` replaced.
+
+    The driver's one way to build a run's config or a fold's config (spec 126 step 6,
+    spec 131 step 3). It goes through `model_validate`, so a derived config meets every
+    constraint the committed one does, including the refusal of live mode. A path through
+    something that is not a section is refused by name. A leaf the model does not declare
+    is refused by `extra="forbid"`, because adding a key here would give the config a
+    setting that `config/default.yaml` does not have.
+    """
+    raw: dict[str, Any] = base.model_dump(by_alias=True)
+    for dotted, value in updates.items():
+        node: Any = raw
+        parts = dotted.split(".")
+        for part in parts[:-1]:
+            child = node.get(part) if isinstance(node, dict) else None
+            if not isinstance(child, dict):
+                raise ConfigKeyError(
+                    f"cannot derive {dotted!r}: {part!r} is not a section of the config"
+                )
+            node = child
+        node[parts[-1]] = value
+    try:
+        return Config.model_validate(raw)
+    except ValidationError as exc:
+        raise ConfigError(f"a derived config is invalid: {exc}") from exc
 
 
 def _model_keys(model: BaseModel) -> list[str]:

@@ -355,15 +355,45 @@ def test_a_rejection_written_without_its_economics_is_a_fail(
     there, the join works, the history screen renders a line — and the numbers that made
     the refusal analysable are gone.
     """
+    # The anchor carries the rejection writer's own read of the blocker: since spec 133 the
+    # approval writer harvests the same way, and the bare assignment occurs three times.
     patch_module(
         phase4_tree,
         MEMORY_ENGINE,
+        "            value = blocker.get(field)\n"
         "            economics[column] = None if value is None else str(value)",
+        "            value = blocker.get(field)\n"
         "            economics[column] = None",
     )
     outcome = run(verify_module, "rejections_survive_restart", phase4_tree)
     assert_fail(outcome, verify_module)
     assert "only counts rows" in outcome.message
+
+
+def test_the_same_defect_in_the_approval_writer_is_not_mistaken_for_the_rejections(
+    verify_module: ModuleType, phase4_tree: Path
+) -> None:
+    """The twin of the test above, planted in spec 133's approval writer, which harvests
+    economics with the same idiom.
+
+    **No criterion judges the approvals table yet**, so this cannot be a FAIL: what it pins
+    is that the two anchors are different code. The same defect in the approval writer leaves
+    `rejections_survive_restart` PASS, so the test above is shown to fail on the rejection
+    writer and not on whichever copy of the line a patcher happened to reach. The approval
+    writer's own defect is killed by `tests/engines/test_memory_approvals.py`
+    (`test_absent_economics_are_written_absent_not_zero` and
+    `test_the_placing_tick_writes_one_approval_with_engine_10s_figures`).
+    """
+    patch_module(
+        phase4_tree,
+        MEMORY_ENGINE,
+        "            # exactly, and `decimal_field` would turn absent into zero.\n"
+        "            economics[column] = None if value is None else str(value)",
+        "            # exactly, and `decimal_field` would turn absent into zero.\n"
+        "            economics[column] = None",
+    )
+    outcome = run(verify_module, "rejections_survive_restart", phase4_tree)
+    assert outcome.result is verify_module.Result.PASS, outcome.message
 
 
 def test_a_rejection_stamped_with_the_reading_run_is_a_fail(

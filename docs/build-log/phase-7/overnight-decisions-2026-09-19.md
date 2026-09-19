@@ -503,3 +503,96 @@ run from measuring the system that exists.
 would have *reported* this, not held the run for it. The case against: a run of 27–41 h that
 measures an exit rule the operator may change tomorrow. The mitigation: the run is resumable and
 stoppable, and the offline grids stand beside it for comparison.
+
+### F6 — FINDING: a train/serve skew in the features of unmoving pairs; the run matches live, the training data does not
+
+Found by a-replay in the preliminary rehearsal, in spec 144's grid comparison. Engine 7 matched the
+offline grid on 17 of the first 18 ranked bars. At 2024-10-20 00:15 it took USDC/USD where the grid
+took EUR/USD. On that unmoving pair, engine 5 over 200 published bars yields **exact 0.0** for
+`log_return_16`, `efficiency_ratio_16`, `log_return_96` and `efficiency_ratio_96`. The training
+dataset, computed over the whole archive, carries floating-point residues there (−2.7e-20 to
+5.5e-16), and the z-scores differ at 1e-16 to 1e-14. **Fold 394's booster gives P(target) 0.287
+on the replay's vector and 0.176 on the dataset's**, because a split threshold sits between an
+exact zero and a residue.
+
+**The run matches the live daemon; the training data and the offline grids carry the residue.**
+So the simulation measures the real system, and this is a stated limitation of the model rather
+than of the replay.
+
+**Not a stop, with a criterion that would make it one:** any grid disagreement on a pair whose
+expected move clears the cost bar in either arm stops the launch. The harness reports it. The
+affected pairs so far are stablecoins and FX near 0.47%, against a bar near 1.5%.
+
+**Sized by c-models, with no code change.** A fix (rounding or exact summation in
+`modelling/features.py`) changes what the system computes, so it is the operator's decision.
+
+### D16, delivered: engine 5 is 13× faster, bit for bit
+
+c-criteria batched `modelling/features.py` into a single grouped implementation (rolling windows,
+ranks and shifts over the pair). `compute()` is the one-group case of the new `compute_many()`, so
+there is still one arithmetic, and `modelling/` gained no import. On the rehearsal day's real engine
+3 output: **median 1,636 ms → 124 ms per bar tick; 59,280 published values, 0 differing bit for bit,
+NaN positions identical.** The old implementation is the test oracle. All 12 Phase 5 criteria PASS,
+including `features_reproduce_in_replay`, and a 13-arm sweep killed 12 with 1 equivalent.
+**About 8 h → 0.6 h per run.**
+
+**F6, addendum.** Hypothesis testing found that polars' `sin`/`cos` on a one-row series take a
+scalar path that differs by 1 ulp from the vectorised kernel. The batch keeps single-bar pairs on
+the old path, so nothing changes. **The same 1-ulp split already exists between live (a pair with one
+candle) and training (long frames), on the four clock features only.** It is recorded beside F6 as
+another train/serve residue, and not fixed.
+
+### D22 — `fee_scenario_is_replay_only` names its one producer by exact path. CONTESTABLE
+
+After D17's widening, the criterion found `scripts/build_bucket_table.py` (spec 130). That script
+**produces** the declared bucket table, writing it to `tests/fixtures/replay/`, and it builds the
+path from pieces, which the old directory marker never saw. **Chose:** name that file as the single
+producer, in a constant apart from the readers, pinned by exact path, spec and reason. A test
+proves that any other module naming the table or the directory is still caught, however it builds
+the path. **Rejected:**
+- moving the builder's write into the runtime replay client (another lane; an offline builder
+  inside a runtime client);
+- a structural "writes, never reads" rule, which an AST cannot prove;
+- scoping the walk to `src/` only, which would narrow what the criterion checks.
+
+**CONTESTABLE:** it is an exemption, the shape the lead rejected in D17's option C. The difference
+claimed: one audited file whose role (producing the fixture) is categorically not the reading the
+invariant forbids, against an open-ended list.
+
+**F6, sized by c-models** (no code change), over all 2,216,920 out-of-sample rows of folds
+379–404, each re-scored through its fold's `-p7` artefacts as trained and with the residues zeroed:
+- **Affected:** 12 columns (the log returns, efficiency ratios, `range_atr` at 4/16/48 and
+  `volume_z_4`). 23,155 rows carry a residue (1.04%), 17,171 of them complete vectors.
+- **Effect:** the expected move changes on 2,308 rows; largest change 0.453 pp, 99th percentile
+  0.127 pp, median 0.
+- **Crossings among complete rows, by cost bar:** 5 at 1.00%, 1 at 1.05%, 1 at 1.10%, 2 at 1.15%,
+  1 at 1.20%, **0 at 1.25% and above**.
+
+**The lowest bar the simulation can apply is 2.5 × friction in the most liquid bucket:**
+- at tier 5: fees 0.45% + spread 0.055% + served slippage 0.014% ≈ 0.52% friction, so a bar of
+  **≈1.30%**;
+- at tier 3: ≈0.67% friction, so a bar of **≈1.67%**.
+
+**So no affected row can change a cost verdict at either tier. F6 acts on the ranking only, and is
+not a stop.** The measurement's caveat is that the live value was assumed to be exactly 0.0 wherever
+the dataset has a residue. The rehearsal's grid comparison, with its stop criterion, is the check.
+
+### Preliminary rehearsal, second pass (quiet tree digest, tier 3, fold 394): clean
+
+- **Determinism:** two clean runs identical, and kill-and-resume identical apart from the run-id
+  columns and `cycle_id`.
+- **The day:** 4 approvals, 7 orders, 3 trades: STORJ stop −71.03, STORJ target +45.98 (F5's +2.0%
+  fill), DOGE target +83.55. 71 rejections, all `cost:net_edge_below_hurdle`; no other gate refused,
+  and nothing errored.
+- **Every friction, hurdle and fill recomputed exactly.**
+- **Cost:** 4.44 s per bar tick and 4.09 s per minute tick, 2.1 GB per process. This was measured
+  before the engine 5 speed-up (`3d6ae12`) landed, which removes about 1.5 s of that per bar tick.
+- **Launch preconditions:** the scenario digest is set, and approvals rows exist for 4 of 4.
+  **`details` and SHAP are 0 of N, as expected**, because 145 and 140's writer are not yet in
+  engine 19. The gating rehearsal must show them non-zero.
+- **Spec 144's grid check:** of 75 ranked bars, 68 agree and 0 differ. The other 7 are ties on the
+  calibrators' all-timeout plateau (EUR, GBP, TRX, USDC, USDT and XBT against USD, all at an
+  expected move of 0.004654988), where the grid's tie-break spells `EURUSD` < `XBTUSD` and engine
+  7's spells `BTC/USD` < `EUR/USD`. **Explained, not a stop:** every tied pair sits near 0.47%
+  against a bar of at least 1.30%, so no cost verdict can differ. Aligning the tie-break spelling is
+  recorded for the operator, not changed, because it changes which candidate is examined.

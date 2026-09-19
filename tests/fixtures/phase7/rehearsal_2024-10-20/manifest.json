@@ -1,0 +1,2565 @@
+{
+ "columns": {
+  "price": "text, byte for byte as published",
+  "ts": "int64, epoch seconds, as published",
+  "volume": "text, byte for byte as published"
+ },
+ "cut_by": "scripts/cut_replay_fixture.py",
+ "cut_from": {
+  "manifest": "data/derived/trades_weekly/manifest.json",
+  "sha256": "cb7897c276695c7274f11bbd9496b7745683fecc22f3bd5ea15e5829f866d175"
+ },
+ "end_exclusive": "2024-10-21T00:00:01+00:00",
+ "pairs": {
+  "1INCHUSD": {
+   "source_sha256": {
+    "2024-10-12": "efd95a8b65ca9ea4f39017f886c4ce2c288d7aeaee7e07899b1b1698a9df43b8",
+    "2024-10-19": "e67c0c51c53466efdd2651afb5054c321f4930afa908baeef821483600b69b04"
+   },
+   "total_rows": 504,
+   "weeks": {
+    "2024-10-12": 77,
+    "2024-10-19": 427
+   }
+  },
+  "AAVEUSD": {
+   "source_sha256": {
+    "2024-10-12": "562279f738335580feab95388edf579565b8fbbdd7db08bddcfbe546a8e49b75",
+    "2024-10-19": "68b922afdea377b4c942562d94899da4cad95d7b0e4d26a918ad08e15a42f078"
+   },
+   "total_rows": 3492,
+   "weeks": {
+    "2024-10-12": 1420,
+    "2024-10-19": 2072
+   }
+  },
+  "ACAUSD": {
+   "source_sha256": {
+    "2024-10-12": "939fd9f54710753315fe3f582ac8713e6594a253240bc6a0967edf107e8d602d",
+    "2024-10-19": "58f809d7086d2868225feab476f282ebbd1afc3b9cba73662d81be2ad6533c06"
+   },
+   "total_rows": 158,
+   "weeks": {
+    "2024-10-12": 70,
+    "2024-10-19": 88
+   }
+  },
+  "ACHUSD": {
+   "source_sha256": {
+    "2024-10-12": "d3357bb8000e46e9438f9999bbfe971a38546d2b248fa11cd49146d527576e8f",
+    "2024-10-19": "5784230f25265552b95b27d0d35c6f9dfa36aeb021ce23be00129d86e6044230"
+   },
+   "total_rows": 249,
+   "weeks": {
+    "2024-10-12": 95,
+    "2024-10-19": 154
+   }
+  },
+  "ADAUSD": {
+   "source_sha256": {
+    "2024-10-12": "7f1897cf6c8b7070c9756ea351376cbac78a1ac4364877c4d2fc605fa710c755",
+    "2024-10-19": "81c98571efd8cf1a0058d71955a98bfe7f9e2f51d6e9b0a21bbc1d972026bd48"
+   },
+   "total_rows": 5370,
+   "weeks": {
+    "2024-10-12": 1970,
+    "2024-10-19": 3400
+   }
+  },
+  "ADXUSD": {
+   "source_sha256": {
+    "2024-10-12": "b5c90724d3c070b27450a3cf367dcdad1a8150d5446f4ded09cbcb386bd2dc4f",
+    "2024-10-19": "3c2c8c82d57cbdc4309e6ad4f5114ca260bf134a5e3d35e8213673ccc65b9b32"
+   },
+   "total_rows": 731,
+   "weeks": {
+    "2024-10-12": 8,
+    "2024-10-19": 723
+   }
+  },
+  "AGLDUSD": {
+   "source_sha256": {
+    "2024-10-12": "b0719ce55b809922aa8c054c7f97b1ce777ed6f57194590abef90c8d903f157a",
+    "2024-10-19": "b92f2598becbba6a9eddf1e4cfc49dfc281a31742a7bd8d80cf2f676235f2bc5"
+   },
+   "total_rows": 30,
+   "weeks": {
+    "2024-10-12": 17,
+    "2024-10-19": 13
+   }
+  },
+  "AIRUSD": {
+   "source_sha256": {
+    "2024-10-12": "afaf2d3ffd20abf7f407a79fb069f0dee063c80772303f4f8027232ff107f53c",
+    "2024-10-19": "176ebab3cda56a2d7a51289a73eb67fe7b37e53dc13053a5d2d01cf3adee0392"
+   },
+   "total_rows": 216,
+   "weeks": {
+    "2024-10-12": 100,
+    "2024-10-19": 116
+   }
+  },
+  "AKTUSD": {
+   "source_sha256": {
+    "2024-10-12": "95d92c82197ed8f02d4e3b824f0d72e83b9158dde4df3237820e8ab42aa4a06e",
+    "2024-10-19": "a2a4bebb72cadbcb349e2fa8a09d9401ba77c5e75e95b4559aaf54e53a52c8cb"
+   },
+   "total_rows": 9888,
+   "weeks": {
+    "2024-10-12": 3562,
+    "2024-10-19": 6326
+   }
+  },
+  "ALCXUSD": {
+   "source_sha256": {
+    "2024-10-12": "3939dd56efc9a80affc2e78df1471138cae53f0364347682ce41d5dc7f72e9e9",
+    "2024-10-19": "30e4cf4488cac8109a004a1722e0b249b965aa10cf4faeea2f8be1cd61311270"
+   },
+   "total_rows": 101,
+   "weeks": {
+    "2024-10-12": 19,
+    "2024-10-19": 82
+   }
+  },
+  "ALGOUSD": {
+   "source_sha256": {
+    "2024-10-12": "a5647ba0d7e25ed76e82b5c49d61a309d20dabc70b43d888b441a2a02e159c38",
+    "2024-10-19": "2714635fe2c08a72cd01ede33da15003507772b47425d7b440c8e731f2fbf092"
+   },
+   "total_rows": 1146,
+   "weeks": {
+    "2024-10-12": 382,
+    "2024-10-19": 764
+   }
+  },
+  "ALICEUSD": {
+   "source_sha256": {
+    "2024-10-12": "140ebd2e8f2cf91bfcb37b343d4a50401671555a52ea49205e474715e55000d5",
+    "2024-10-19": "c430708aa4315497c002ad51103866b4485b9ad1ecd6844049382161c315be4b"
+   },
+   "total_rows": 138,
+   "weeks": {
+    "2024-10-12": 53,
+    "2024-10-19": 85
+   }
+  },
+  "ALPHAUSD": {
+   "source_sha256": {
+    "2024-10-12": "53d5207045f94e36301d19f2766a0e597076c2b2ad325951eba9023af5810466",
+    "2024-10-19": "63da9ab6f43ece74cd3dbef98fc91ef03e32d5c0650eddef3d2bdb6f4bf12300"
+   },
+   "total_rows": 77,
+   "weeks": {
+    "2024-10-12": 24,
+    "2024-10-19": 53
+   }
+  },
+  "ANKRUSD": {
+   "source_sha256": {
+    "2024-10-12": "dad89c019068b86c86c273644d26586735ab0b0f7eb24328bf6c2def5dccbe9e",
+    "2024-10-19": "e2ffd2c675065ab840437ebfecdb8dd4ff0ff1b57fe27b50616f547a32bbae88"
+   },
+   "total_rows": 231,
+   "weeks": {
+    "2024-10-12": 56,
+    "2024-10-19": 175
+   }
+  },
+  "APEUSD": {
+   "source_sha256": {
+    "2024-10-12": "8a6ac08265e93e82095cb0bf6e91d8c89ab49eef9d609d762643329e3cd4d2bf",
+    "2024-10-19": "c606d6390870e55c4daa62c2c16a305b0ffd825cdd7ff66e36220c252e6aa28f"
+   },
+   "total_rows": 21856,
+   "weeks": {
+    "2024-10-12": 135,
+    "2024-10-19": 21721
+   }
+  },
+  "API3USD": {
+   "source_sha256": {
+    "2024-10-12": "22754e77666728ff55b9f346cd064c2e7d55b994fb6a172b0cf0a93f9b0aa1ae",
+    "2024-10-19": "53e5582e053da8275c55a920e9f0e9f0d75524269c22f5512a9f5484f0280db6"
+   },
+   "total_rows": 5769,
+   "weeks": {
+    "2024-10-12": 220,
+    "2024-10-19": 5549
+   }
+  },
+  "APTUSD": {
+   "source_sha256": {
+    "2024-10-12": "2e273f19934949b9a529bee12234eeca28fe7a0a9bbe9989bea58786d0c8a69f",
+    "2024-10-19": "4e6490d6bfe5c26849138f8908f4453661a5ff82956b9e0eff405b63ce377a9c"
+   },
+   "total_rows": 4906,
+   "weeks": {
+    "2024-10-12": 1974,
+    "2024-10-19": 2932
+   }
+  },
+  "ARBUSD": {
+   "source_sha256": {
+    "2024-10-12": "d71d5e28df6ab804205702a348886c9cc1688331a0a546d318e996a8c844312c",
+    "2024-10-19": "6d8c55c56f48b0760eff9d642ab38d799a32f76b5746e1800e0aaea7640d4608"
+   },
+   "total_rows": 2781,
+   "weeks": {
+    "2024-10-12": 438,
+    "2024-10-19": 2343
+   }
+  },
+  "ARPAUSD": {
+   "source_sha256": {
+    "2024-10-12": "98dde7d54059323b6cfd3d943bde42ebdc7b3dfc09ed8aad937c87c1cffccd35",
+    "2024-10-19": "b31c368e6e79e7a1d715daac3864994840167c360d62f1d3eca72b9b7e9b5f59"
+   },
+   "total_rows": 2161,
+   "weeks": {
+    "2024-10-12": 28,
+    "2024-10-19": 2133
+   }
+  },
+  "ASTRUSD": {
+   "source_sha256": {
+    "2024-10-12": "c7d156e7661202f471a4cb0759ba050546e087ab8f7168a59db68ed59d24b0c8",
+    "2024-10-19": "6613a3666a7ecb06507683d199bc3f0c47ac116c2b3ef96e6ffcd4cbcbae4254"
+   },
+   "total_rows": 126,
+   "weeks": {
+    "2024-10-12": 37,
+    "2024-10-19": 89
+   }
+  },
+  "ATLASUSD": {
+   "source_sha256": {
+    "2024-10-12": "c40535133da6dbf0440a1ce4d50f37027368e368147daaea27db9f7f6f23407f",
+    "2024-10-19": "7ec8c803a960d4cf8f235677ce45a9880c8a047879425246e63b348f2d23acb4"
+   },
+   "total_rows": 773,
+   "weeks": {
+    "2024-10-12": 389,
+    "2024-10-19": 384
+   }
+  },
+  "ATOMUSD": {
+   "source_sha256": {
+    "2024-10-12": "6c4ad0b174b5dee4e5e6282de7fb69686fddfa841a4e8dcb2a690757a7a8fe22",
+    "2024-10-19": "9922456b854083f3b93b2bcc7b66312b01ca232dccf332abe7298c8c5699b6a6"
+   },
+   "total_rows": 2033,
+   "weeks": {
+    "2024-10-12": 713,
+    "2024-10-19": 1320
+   }
+  },
+  "AUDIOUSD": {
+   "source_sha256": {
+    "2024-10-12": "8fa6aab78249efc4c03fb802f6d8a798b162f8a7044dabaa7cbd932571dcc146",
+    "2024-10-19": "1f9d5761bad96719b0c366f7840ea49a57fff2d9b22cd1355cb53270f5dc475d"
+   },
+   "total_rows": 186,
+   "weeks": {
+    "2024-10-12": 10,
+    "2024-10-19": 176
+   }
+  },
+  "AUDUSD": {
+   "source_sha256": {
+    "2024-10-12": "dbb6d6cb540a2263a9e7290f9eb5a5a96d9af93ef5974efb5a11e80be2dca240",
+    "2024-10-19": "7c4afc544ed72e39ef5d5e3eaa7287441c4ae40a1d62b6da336de112358d6f25"
+   },
+   "total_rows": 1531,
+   "weeks": {
+    "2024-10-12": 704,
+    "2024-10-19": 827
+   }
+  },
+  "AVAXUSD": {
+   "source_sha256": {
+    "2024-10-12": "0f9cd647eb349e07ce1dd645ea631a53c796473f8e612ef016bc9b0b44633823",
+    "2024-10-19": "450389b869ef4ef7e588b053e7b88881c8d37bf7ba7618fc750e41ce7a2c7b9c"
+   },
+   "total_rows": 4584,
+   "weeks": {
+    "2024-10-12": 1977,
+    "2024-10-19": 2607
+   }
+  },
+  "AXSUSD": {
+   "source_sha256": {
+    "2024-10-12": "4fcba555d6fad10ccf5d1320bba07bf41a6c2b882144e2bd2049833e168688d7",
+    "2024-10-19": "601b8e30bc7ab0a9bfe1945820a06aa137f6e1f3f63a8a571a1f401b2a26eea4"
+   },
+   "total_rows": 8371,
+   "weeks": {
+    "2024-10-12": 1561,
+    "2024-10-19": 6810
+   }
+  },
+  "BADGERUSD": {
+   "source_sha256": {
+    "2024-10-12": "bd60212ad45ac296717896b4e4925ef54577f828f10fae3727a2b944b11f578b",
+    "2024-10-19": "d031bf70d654c8d390ed7d35c51b4d7e3c8035e7982a76627501c8c78efcb36a"
+   },
+   "total_rows": 115,
+   "weeks": {
+    "2024-10-12": 46,
+    "2024-10-19": 69
+   }
+  },
+  "BALUSD": {
+   "source_sha256": {
+    "2024-10-12": "7cd4762682c50c3e17467016f4a43dd42596a5fc6edb6c4a6f29760bfc0832c4",
+    "2024-10-19": "c284fa610bbdb45bd921f351d999eeaebfa0b557a5b047990f57d2da4f3a7154"
+   },
+   "total_rows": 176,
+   "weeks": {
+    "2024-10-12": 12,
+    "2024-10-19": 164
+   }
+  },
+  "BANDUSD": {
+   "source_sha256": {
+    "2024-10-12": "df130d8856e76767fc600492d25f5ddfd4158198ca9e8a50232bda1c7b08ccee",
+    "2024-10-19": "946d01023604cf85fbd8e1e36402966d3a706cdebcd57df47008a83059a15536"
+   },
+   "total_rows": 97,
+   "weeks": {
+    "2024-10-12": 16,
+    "2024-10-19": 81
+   }
+  },
+  "BATUSD": {
+   "source_sha256": {
+    "2024-10-12": "26d9372eb1e61c74c7d00e61b7b463d6d63e39e8887678f7560d0cab2cb3e979",
+    "2024-10-19": "cd2b71493629c956aab4434fcb570e35e5a5e1a9eeec1590800fb26ce0e6d7f9"
+   },
+   "total_rows": 163,
+   "weeks": {
+    "2024-10-12": 40,
+    "2024-10-19": 123
+   }
+  },
+  "BCHUSD": {
+   "source_sha256": {
+    "2024-10-12": "c1ef3102744ceaf6faabd15a9dab9f79ebcf5260e3476f5d69ac6ed25f5c9727",
+    "2024-10-19": "0ebe08c72c719a02380b43fb24b9c2d7747020e2c779e4fb9341a7ea09cc46c2"
+   },
+   "total_rows": 4835,
+   "weeks": {
+    "2024-10-12": 2550,
+    "2024-10-19": 2285
+   }
+  },
+  "BICOUSD": {
+   "source_sha256": {
+    "2024-10-12": "25f36ac1c0ff3db1c1827c5a2c227a38ed741acfcbecdbc00a52bb6f0f4d1a83",
+    "2024-10-19": "727e8b01464abdf40b70279786df0e4c42da0628efae2dd4fc1a767ed04a3077"
+   },
+   "total_rows": 311,
+   "weeks": {
+    "2024-10-12": 55,
+    "2024-10-19": 256
+   }
+  },
+  "BITUSD": {
+   "source_sha256": {
+    "2024-10-12": "1e65fb1d26d57492dd5f6c99566b493fa2f1dffc6b8c57c874f223861626bb05",
+    "2024-10-19": "6e324ceb8862abfe5bb893fe6e3f840909e19e4871f732012d7ffeff56f8df4e"
+   },
+   "total_rows": 208,
+   "weeks": {
+    "2024-10-12": 142,
+    "2024-10-19": 66
+   }
+  },
+  "BLURUSD": {
+   "source_sha256": {
+    "2024-10-12": "cc7df724b539b681155d4b69a3fccdff9c24c0ddf8fadb1566b30d17c8bbac36",
+    "2024-10-19": "e5392f60667c0999f3f33443164abdb3521d62e5bff3fb830df5c7963c943735"
+   },
+   "total_rows": 1805,
+   "weeks": {
+    "2024-10-12": 222,
+    "2024-10-19": 1583
+   }
+  },
+  "BLZUSD": {
+   "source_sha256": {
+    "2024-10-12": "8ae99d6a045f0c39b58a29d12e19956b492232c163fa08b606fb309f4d7ee92f",
+    "2024-10-19": "ef1e03800c65daa25967856750a4ec9500aa155cec2edc268b9f2590801bd846"
+   },
+   "total_rows": 175,
+   "weeks": {
+    "2024-10-12": 33,
+    "2024-10-19": 142
+   }
+  },
+  "BNCUSD": {
+   "source_sha256": {
+    "2024-10-12": "530a93d8abcf450b193b4b7515a74d58b9dd486b6c1b25dc183874513dcad5c7",
+    "2024-10-19": "e318231b2e2c5e276883975167b882f82f6b1ebb7b051c1ba5d210ba16237604"
+   },
+   "total_rows": 118,
+   "weeks": {
+    "2024-10-12": 68,
+    "2024-10-19": 50
+   }
+  },
+  "BNTUSD": {
+   "source_sha256": {
+    "2024-10-12": "d1bb8638479f836810861566437fb191fc83a81d29c0a12b083a3c640f058ba5",
+    "2024-10-19": "08ff8cccac86e583ff32ad1a3ba0d6af28d74d4eebb71808bb9f42496d05a308"
+   },
+   "total_rows": 76,
+   "weeks": {
+    "2024-10-12": 15,
+    "2024-10-19": 61
+   }
+  },
+  "BOBAUSD": {
+   "source_sha256": {
+    "2024-10-12": "b77b7b0045dbb22f87b8dae1e364f7b4c64243af93420d6703f9c2fd8d4a09d8",
+    "2024-10-19": "14dc573aa738dac3ab1155cee4b5c38eee7c5d90df6238db7f63edac6232b736"
+   },
+   "total_rows": 1149,
+   "weeks": {
+    "2024-10-12": 685,
+    "2024-10-19": 464
+   }
+  },
+  "BONDUSD": {
+   "source_sha256": {
+    "2024-10-12": "b3f36c47e338034de59216a4d493ef703dd84101abd4578b24daa491b0d9f6fe",
+    "2024-10-19": "561ff55225bfc7b946d87ddfcb2cda2af28e4658c6f88e51d53d464efd665056"
+   },
+   "total_rows": 622,
+   "weeks": {
+    "2024-10-12": 15,
+    "2024-10-19": 607
+   }
+  },
+  "BONKUSD": {
+   "source_sha256": {
+    "2024-10-12": "76dcab88c428f1575ef5d22b9e1a6c976409463ebaaa4a50dc1bb1958fe7ed87",
+    "2024-10-19": "4ae2bd1b7097d9a6bb4f28546f7c6f5df58ddad2f5bab5a8c3a37f048dff580a"
+   },
+   "total_rows": 2748,
+   "weeks": {
+    "2024-10-12": 1256,
+    "2024-10-19": 1492
+   }
+  },
+  "BSXUSD": {
+   "source_sha256": {
+    "2024-10-12": "02cf1d1f08a4a350b783726716b911fdcab1ff538af9cf2860edc6763c359716",
+    "2024-10-19": "1fffa84d78f0627e31294491c85a15aa705b5895c01e898b7432d382e4b566cd"
+   },
+   "total_rows": 293,
+   "weeks": {
+    "2024-10-12": 84,
+    "2024-10-19": 209
+   }
+  },
+  "BTTUSD": {
+   "source_sha256": {
+    "2024-10-12": "685991c0ef54e6f540c133c789a12b2745a4ec9af4d422d1e2bf8b11f51f807a",
+    "2024-10-19": "da18938a93c0f500d4c010d5f37d4143f07279d6ecdafc6678e582e03e0c296d"
+   },
+   "total_rows": 389,
+   "weeks": {
+    "2024-10-12": 156,
+    "2024-10-19": 233
+   }
+  },
+  "C98USD": {
+   "source_sha256": {
+    "2024-10-12": "979a7512ccc5651c944ffc484b3923f784042493365f4298058a7007939b006b",
+    "2024-10-19": "9f573a53893cbf982e509be9f46349e9cd57a128d2f59691892e32d307493c20"
+   },
+   "total_rows": 43,
+   "weeks": {
+    "2024-10-12": 2,
+    "2024-10-19": 41
+   }
+  },
+  "CELRUSD": {
+   "source_sha256": {
+    "2024-10-12": "be5c9676f4a469c8407755fb6819370365c864438dd8a2ab80f0a8d9dc20245a",
+    "2024-10-19": "2ba19e45c5751e341840d90ec700cab2dc47e3bf33585c3786a53135474edfe6"
+   },
+   "total_rows": 158,
+   "weeks": {
+    "2024-10-12": 73,
+    "2024-10-19": 85
+   }
+  },
+  "CFGUSD": {
+   "source_sha256": {
+    "2024-10-12": "1fce7f4d1c9521132bb3c072c7210c6b5dfb244b1510117dfe0d8b25a58ef2ed",
+    "2024-10-19": "011b692f77084cd5b508ad31911ee51c137b591027d38b907ff167b1e8f62840"
+   },
+   "total_rows": 2620,
+   "weeks": {
+    "2024-10-12": 1637,
+    "2024-10-19": 983
+   }
+  },
+  "CHRUSD": {
+   "source_sha256": {
+    "2024-10-12": "60406f29700a8b0a77a80464a0aa3317074e285e6a4871a65f626a034897fb15",
+    "2024-10-19": "b9f17c5ffb174460903491bed20af8f26f460e1039acced7c8ef7c0014e0dded"
+   },
+   "total_rows": 164,
+   "weeks": {
+    "2024-10-12": 10,
+    "2024-10-19": 154
+   }
+  },
+  "CHZUSD": {
+   "source_sha256": {
+    "2024-10-12": "00f8d8847319baae815b3c8e74c41bca8bcdd46e5d1c708f54e945813f678313",
+    "2024-10-19": "311b8f782740e61994dd60e1e45bc67fc0e9e8520914de69b414803deb0a8ca0"
+   },
+   "total_rows": 388,
+   "weeks": {
+    "2024-10-12": 113,
+    "2024-10-19": 275
+   }
+  },
+  "COMPUSD": {
+   "source_sha256": {
+    "2024-10-12": "c985509a0fc2885877437ddab113593d9402ae256ef1c3e78e5e67315d62155f",
+    "2024-10-19": "4cd6889b48426c8cd7642ed61de9d794f163ef8d5f3eda569d73f9f8c6c4fabd"
+   },
+   "total_rows": 182,
+   "weeks": {
+    "2024-10-12": 65,
+    "2024-10-19": 117
+   }
+  },
+  "COTIUSD": {
+   "source_sha256": {
+    "2024-10-12": "0846a02f47ccc0b0bb85a7bf8893ef750e569232755e62fa8549c3d4e3b75c6f",
+    "2024-10-19": "0dc65bb1fccc7d221f0b88892070f7bc5c16ba18a73919edb46bdf506730f788"
+   },
+   "total_rows": 382,
+   "weeks": {
+    "2024-10-12": 95,
+    "2024-10-19": 287
+   }
+  },
+  "CQTUSD": {
+   "source_sha256": {
+    "2024-10-12": "c97b8b5fbbef319257b7acd65498bf6b61ef0f0a2827766af34e07f865c610c1",
+    "2024-10-19": "e4ff72c685b1e5c2959837444135ed64015c911bf008cf993bc421e382a7f84e"
+   },
+   "total_rows": 487,
+   "weeks": {
+    "2024-10-12": 196,
+    "2024-10-19": 291
+   }
+  },
+  "CRVUSD": {
+   "source_sha256": {
+    "2024-10-12": "e6097e83904fd3a939b5351b34c1c44bb3c463a3bafa6bc5ecf9b99b0a6da3df",
+    "2024-10-19": "ae55bd2988cd5fd0cc2657c1fdb733d613738385ee568d77e7875949ddcdcef5"
+   },
+   "total_rows": 14452,
+   "weeks": {
+    "2024-10-12": 1735,
+    "2024-10-19": 12717
+   }
+  },
+  "CSMUSD": {
+   "source_sha256": {
+    "2024-10-12": "30b78bbf86cb99e5164a214619844443ce9f75527e580721573aee5ce0fb46bb",
+    "2024-10-19": "365dc0ba5a0682fd306f5ed8b2e069baba262fc2236acbb3d795e96ec17868fe"
+   },
+   "total_rows": 14,
+   "weeks": {
+    "2024-10-12": 2,
+    "2024-10-19": 12
+   }
+  },
+  "CTSIUSD": {
+   "source_sha256": {
+    "2024-10-12": "4d46360472d1a99b66af2b7e16d3f49bcf2c7c3efcaa31e53f1c552d8f829458",
+    "2024-10-19": "966daf7a5c198e088346edba5ea510735b945ec527fb24e7888afc04db6d087f"
+   },
+   "total_rows": 294,
+   "weeks": {
+    "2024-10-12": 74,
+    "2024-10-19": 220
+   }
+  },
+  "CVCUSD": {
+   "source_sha256": {
+    "2024-10-12": "43cc30bf7589364439276a52e65ddb23930056dd3e1d511cb8efb0f4e64844e1",
+    "2024-10-19": "71ae955c2b46edbbac75fce1fe38af8679d265c3b4303388d2276b271f26e1b3"
+   },
+   "total_rows": 93,
+   "weeks": {
+    "2024-10-12": 40,
+    "2024-10-19": 53
+   }
+  },
+  "CVXUSD": {
+   "source_sha256": {
+    "2024-10-12": "c4e8a7ff828be3b9449a56aa76d4dd771ac8c9f858c02bf4bf6d63c9ae287186",
+    "2024-10-19": "893f764c187f33ed3e7c66199d0019dd2a758dce0e13a83907dd56170090c9a6"
+   },
+   "total_rows": 177,
+   "weeks": {
+    "2024-10-12": 73,
+    "2024-10-19": 104
+   }
+  },
+  "DAIUSD": {
+   "source_sha256": {
+    "2024-10-12": "ab8ab4bf976b40265855e18084c59fe0151588f3914f86d72b40c14f73d6275a",
+    "2024-10-19": "66aa7e71c81b871953a101cdc32cb915e97507f58e420c95bd2481e46f4b7cdc"
+   },
+   "total_rows": 806,
+   "weeks": {
+    "2024-10-12": 523,
+    "2024-10-19": 283
+   }
+  },
+  "DASHUSD": {
+   "source_sha256": {
+    "2024-10-12": "4119d5f4d5b3742271020ab404bf99bef5ec441634c89f35ded86aa284c033e1",
+    "2024-10-19": "7e98c7e2ca96c3ab19d9dd4bb62b4649107208a677e46bd51e937a7b66845dba"
+   },
+   "total_rows": 340,
+   "weeks": {
+    "2024-10-12": 126,
+    "2024-10-19": 214
+   }
+  },
+  "DENTUSD": {
+   "source_sha256": {
+    "2024-10-12": "63905dbfd1e45f2d49b54cddd49485e08bca5101cc93c9e58feb819ebe3b8595",
+    "2024-10-19": "b18f04ab86ec983e4def87d516dd8108068b6f2cf4c2f4c57076be72090d2599"
+   },
+   "total_rows": 123,
+   "weeks": {
+    "2024-10-12": 41,
+    "2024-10-19": 82
+   }
+  },
+  "DOTUSD": {
+   "source_sha256": {
+    "2024-10-12": "486c95da1b1311773483a85431f4840abd5270df9e419c2b67cb9dd0eb38a5a3",
+    "2024-10-19": "1234c97a9e0534ed0a27b3e62c629a840e690c0992346ec8e7e3af02b1ce7c65"
+   },
+   "total_rows": 7101,
+   "weeks": {
+    "2024-10-12": 1624,
+    "2024-10-19": 5477
+   }
+  },
+  "DYDXUSD": {
+   "source_sha256": {
+    "2024-10-12": "ddbd8fe339c83f345e7ae932a0d21394a04433c849f3ba6710ccb4d7756af66d",
+    "2024-10-19": "2c1437032c6345d77a3ee8deef43250bc5bb67070ddd9f37ae5ee93f0f81d95a"
+   },
+   "total_rows": 1473,
+   "weeks": {
+    "2024-10-12": 73,
+    "2024-10-19": 1400
+   }
+  },
+  "EGLDUSD": {
+   "source_sha256": {
+    "2024-10-12": "79359164ee4544a162510228702f8d39ee265cb7c693fe5422cb0bf4410bb3ce",
+    "2024-10-19": "8e8816cb449e6e5a56dd9f3e5d63011819bccc9a6802bb41c06e4597976663da"
+   },
+   "total_rows": 371,
+   "weeks": {
+    "2024-10-12": 152,
+    "2024-10-19": 219
+   }
+  },
+  "ENJUSD": {
+   "source_sha256": {
+    "2024-10-12": "7c24ec070a9492b6c13a9b7a951da515796f1f51b863b20725d4f02ae05c1824",
+    "2024-10-19": "c3a5365312df9d52392228b7832b7902eb2f43160b6617c66d3229fa1f68f6f6"
+   },
+   "total_rows": 915,
+   "weeks": {
+    "2024-10-12": 339,
+    "2024-10-19": 576
+   }
+  },
+  "ENSUSD": {
+   "source_sha256": {
+    "2024-10-12": "04e90852debdcd9dbe5ac0837baaf73ca54d05f277de18b27f222b0e4d32ff0c",
+    "2024-10-19": "711e0ee0fa5596d706be67a10a2ebc62b172e52aad0ed16d28d4a360de225716"
+   },
+   "total_rows": 787,
+   "weeks": {
+    "2024-10-12": 257,
+    "2024-10-19": 530
+   }
+  },
+  "EOSUSD": {
+   "source_sha256": {
+    "2024-10-12": "34938b31483499c3473862dde9892a5873eba0bc56a7c03d057338c1ee065ec8",
+    "2024-10-19": "6c691c30cb918a169da9c9b3209db1bba1afd33afc279b0f08b6d16adf4dc5c5"
+   },
+   "total_rows": 584,
+   "weeks": {
+    "2024-10-12": 110,
+    "2024-10-19": 474
+   }
+  },
+  "ETCUSD": {
+   "source_sha256": {
+    "2024-10-12": "28bdc2809e4e28396bbc0eeaaff673bee20d9fccfa50a65904894edc9ab6d57e",
+    "2024-10-19": "0a53fc10d51f1b074584442497a65913ae6e19b934a53f89a458d8e2725c69e4"
+   },
+   "total_rows": 1249,
+   "weeks": {
+    "2024-10-12": 268,
+    "2024-10-19": 981
+   }
+  },
+  "ETHPYUSD": {
+   "source_sha256": {
+    "2024-10-12": "70dbdb1b1216209ed78f810b16e7a3786860e1a645991fcaec02c0bafec5dda2",
+    "2024-10-19": "92d25a360658e5d82185aedddba6d8f4e2bbf0c7dcd681a46c6f8683c80b9b36"
+   },
+   "total_rows": 17,
+   "weeks": {
+    "2024-10-12": 4,
+    "2024-10-19": 13
+   }
+  },
+  "ETHUSD": {
+   "source_sha256": {
+    "2024-10-12": "195db7f763685402eab80fed7815b398d3b4b2f7379177d1a16678b7633e6482",
+    "2024-10-19": "344530b135bc0e4dfebc9aa0460960c3b88ab9dc8e7e1468aeaad58ba59d0277"
+   },
+   "total_rows": 36414,
+   "weeks": {
+    "2024-10-12": 15908,
+    "2024-10-19": 20506
+   }
+  },
+  "ETHWUSD": {
+   "source_sha256": {
+    "2024-10-12": "70ca7d7bc237c014ccf44efc34f1935b9b3c86ca4446b416708d85e9201815c7",
+    "2024-10-19": "ca38cbda7eff3e3bb22fdf9b155032775941d7cc103122b97041fdabdeb790e6"
+   },
+   "total_rows": 479,
+   "weeks": {
+    "2024-10-12": 178,
+    "2024-10-19": 301
+   }
+  },
+  "EULUSD": {
+   "source_sha256": {
+    "2024-10-12": "4fed8e2a15849e80c0b1edbfae3ffea8eb93f565881a1018012644d6f4fb25be",
+    "2024-10-19": "1dacbf62a8a81b8ebc02399c6a4631623e9bbec4f180da80a77f9e183a2fd378"
+   },
+   "total_rows": 139,
+   "weeks": {
+    "2024-10-12": 94,
+    "2024-10-19": 45
+   }
+  },
+  "EURUSD": {
+   "source_sha256": {
+    "2024-10-12": "d3724788800c23443eeea6c4081bb7798ebe2ab76e2e5ebd811d760fc60a74ce",
+    "2024-10-19": "8c2fb0f9331f2a8228d32c104ca33512d1e313b25c59d1d938c3fa7047f6fb77"
+   },
+   "total_rows": 25750,
+   "weeks": {
+    "2024-10-12": 8293,
+    "2024-10-19": 17457
+   }
+  },
+  "EWTUSD": {
+   "source_sha256": {
+    "2024-10-12": "0584c21282ad8c9fc03ab0d7c40da76fbed7fb4bbb3ab8fe6c8ddea42c35474d",
+    "2024-10-19": "72bf702244f05dbf38f2b7c86919da21434254f82f9e8b0d64cabd5f382e22c7"
+   },
+   "total_rows": 2943,
+   "weeks": {
+    "2024-10-12": 876,
+    "2024-10-19": 2067
+   }
+  },
+  "FARMUSD": {
+   "source_sha256": {
+    "2024-10-12": "14775a52d21fdac39fe34210879e076e08f5a377a23bc38e82c922ed11a6252a",
+    "2024-10-19": "558c481b46590b5162f8056d6412b9bea2d9c32eb1289d583da597f5b23085cd"
+   },
+   "total_rows": 113,
+   "weeks": {
+    "2024-10-12": 66,
+    "2024-10-19": 47
+   }
+  },
+  "FETUSD": {
+   "source_sha256": {
+    "2024-10-12": "1dbf0431367c603f5ebc59cf0481e87623e3cbad7ac2ae6fe28a9dd84e1fc118",
+    "2024-10-19": "41eb383cb41c0cd088940925c840560c4354bd2289dfdd29f450bec7bacfdf34"
+   },
+   "total_rows": 5807,
+   "weeks": {
+    "2024-10-12": 2387,
+    "2024-10-19": 3420
+   }
+  },
+  "FIDAUSD": {
+   "source_sha256": {
+    "2024-10-12": "e49bcec7268ad9e38ecbeb21507010b0cd89fe001acef3c64a358437332b1a8a",
+    "2024-10-19": "fe63a1d2f36c0267f935bffa1924891c22868c43800a0ec00d42062e404c3294"
+   },
+   "total_rows": 507,
+   "weeks": {
+    "2024-10-12": 157,
+    "2024-10-19": 350
+   }
+  },
+  "FILUSD": {
+   "source_sha256": {
+    "2024-10-12": "754de17feba2fff53fd3bccd5bacb269c971bc843ba92b0582030dc0c168f2d0",
+    "2024-10-19": "80d541423a5cce14f287c40b99e2d67165113421f00eff75d4acd6cd1280508f"
+   },
+   "total_rows": 2036,
+   "weeks": {
+    "2024-10-12": 921,
+    "2024-10-19": 1115
+   }
+  },
+  "FISUSD": {
+   "source_sha256": {
+    "2024-10-12": "9c0d2e8d1ea2daa3ada2e60297d68b9fac2a5fd2724c1ede2661d36e4f45f096",
+    "2024-10-19": "44e7da684152bbb239161dfb3e107e2cfa8f20eb25e0b388f3bba2ceaeeffbc6"
+   },
+   "total_rows": 27,
+   "weeks": {
+    "2024-10-12": 7,
+    "2024-10-19": 20
+   }
+  },
+  "FLOWUSD": {
+   "source_sha256": {
+    "2024-10-12": "557207f3f9fb6d91addc13486a3495176747ce8b0304be319fed4a3adae6ada8",
+    "2024-10-19": "7862a95ea64c37f7b7dadddc6e0861b4499801339b50aa25a8a6fcbdb20b9ba5"
+   },
+   "total_rows": 761,
+   "weeks": {
+    "2024-10-12": 255,
+    "2024-10-19": 506
+   }
+  },
+  "FLRUSD": {
+   "source_sha256": {
+    "2024-10-12": "6f9002cde064075cc3adca3be2bddaecb269691d4ac3c9751c46e132cde7dedd",
+    "2024-10-19": "8f055cf1fde700f0ce63dbcbb6b62be086f26ef291c5f32cf05b4261f2469719"
+   },
+   "total_rows": 1953,
+   "weeks": {
+    "2024-10-12": 533,
+    "2024-10-19": 1420
+   }
+  },
+  "FORTHUSD": {
+   "source_sha256": {
+    "2024-10-12": "fdcb0c6c7cf2d47315fdc87b6537a944ee22c417aa276bc935bc619536e5bbd1",
+    "2024-10-19": "fe188fe594e6ad1e5128054130b273f703aa50533765301d390e065e97407ddf"
+   },
+   "total_rows": 71,
+   "weeks": {
+    "2024-10-12": 15,
+    "2024-10-19": 56
+   }
+  },
+  "FTMUSD": {
+   "source_sha256": {
+    "2024-10-12": "d4885af2f95bb39a393ec5093aedecd41be425c695168957a53c81ef67f10a27",
+    "2024-10-19": "627dc06517caff0bb86928f885cb5cdcd49e272b8746d8290e7e821e2a723093"
+   },
+   "total_rows": 7641,
+   "weeks": {
+    "2024-10-12": 2883,
+    "2024-10-19": 4758
+   }
+  },
+  "FXSUSD": {
+   "source_sha256": {
+    "2024-10-12": "e4e2071523333dc14ff6cb59e231a2295036a3c8bb3e05460f867b6498e449d5",
+    "2024-10-19": "9c5f44c058ac78da7ed0928040348ab23eb3710033bc150b2d07956d94e443eb"
+   },
+   "total_rows": 165,
+   "weeks": {
+    "2024-10-12": 68,
+    "2024-10-19": 97
+   }
+  },
+  "GALAUSD": {
+   "source_sha256": {
+    "2024-10-12": "aaaf833fc38c184a40d95ed2d7fefa4b3f7398a8b9401f31f656a1c88e576da0",
+    "2024-10-19": "dd9d19020fc80e0479a2092b6f7308f60d84ad65233f58ce8ee4a75d708922b9"
+   },
+   "total_rows": 1733,
+   "weeks": {
+    "2024-10-12": 469,
+    "2024-10-19": 1264
+   }
+  },
+  "GALUSD": {
+   "source_sha256": {
+    "2024-10-12": "c4457d32d57a8a02eb6976ea31970e297a666bcedd11b19cdf5828b00e2959f5",
+    "2024-10-19": "bb62d8fe5632db7733995a2b5a03a63bc37ee8b3a216493cafe136655f5b4808"
+   },
+   "total_rows": 130,
+   "weeks": {
+    "2024-10-12": 72,
+    "2024-10-19": 58
+   }
+  },
+  "GARIUSD": {
+   "source_sha256": {
+    "2024-10-12": "c706c66437d59549e8feb11b420a88da5974b49f1cfd9ee4ea31904ea47db39a",
+    "2024-10-19": "c22337b626142fee4a343630f8a7da41658a067ff543a3e829b66f83b9b8d018"
+   },
+   "total_rows": 460,
+   "weeks": {
+    "2024-10-12": 301,
+    "2024-10-19": 159
+   }
+  },
+  "GBPUSD": {
+   "source_sha256": {
+    "2024-10-12": "7701afea7059ba8ad3aec66741e6c6564ca7f6d8854f0129daaaede0142777f1",
+    "2024-10-19": "f71825cc574470a4e84c11de0843994aa5304e5a200000cf8c06d62d5bc1f398"
+   },
+   "total_rows": 8064,
+   "weeks": {
+    "2024-10-12": 3034,
+    "2024-10-19": 5030
+   }
+  },
+  "GHSTUSD": {
+   "source_sha256": {
+    "2024-10-12": "2eabd344783094ca1f8e22a4b398c154407cd6b4449a28e815d40586a0606f11",
+    "2024-10-19": "b01307b866c4ac83de8e4d775776e60c013cc6357df94c6242ec4adcb7366a29"
+   },
+   "total_rows": 453,
+   "weeks": {
+    "2024-10-12": 21,
+    "2024-10-19": 432
+   }
+  },
+  "GLMRUSD": {
+   "source_sha256": {
+    "2024-10-12": "d93e64030b262de021fb02041bb95f61960593ae84989b494f1e8d2c7eb6a66e",
+    "2024-10-19": "4c8a6393399efa8699ad97bb6651e7f384da4767f622ba0faea47f456b6f065b"
+   },
+   "total_rows": 135,
+   "weeks": {
+    "2024-10-12": 49,
+    "2024-10-19": 86
+   }
+  },
+  "GMTUSD": {
+   "source_sha256": {
+    "2024-10-12": "4f25b7f508a1065a20eb579598ccd81589a0b4cf8b19bf037846e64c46c807e5",
+    "2024-10-19": "91fa56ecb2127be24cf591a3c3cc3efa56f104a136b3588c86ce0ac228886c92"
+   },
+   "total_rows": 198,
+   "weeks": {
+    "2024-10-12": 32,
+    "2024-10-19": 166
+   }
+  },
+  "GMXUSD": {
+   "source_sha256": {
+    "2024-10-12": "f390bc6b61d3acb9580806760e857cfff96e69b59e7aab8d5f7541395a5afb7f",
+    "2024-10-19": "1dbcadf84f1c35acac44e813a54be034914e3d71d54c1bd8999bcf869af423d1"
+   },
+   "total_rows": 198,
+   "weeks": {
+    "2024-10-12": 125,
+    "2024-10-19": 73
+   }
+  },
+  "GNOUSD": {
+   "source_sha256": {
+    "2024-10-12": "1db06699ec49cb64b7a806779b9aac2364510df6d6e86b37eebbcf09d81f6248",
+    "2024-10-19": "efec22d8806869a32beb755713c99972b9ac34e6fdccf9a615336f7b0ac9b550"
+   },
+   "total_rows": 1462,
+   "weeks": {
+    "2024-10-12": 1030,
+    "2024-10-19": 432
+   }
+  },
+  "GRTUSD": {
+   "source_sha256": {
+    "2024-10-12": "2008e620f5c57fdec143dd7de3c639b9f00541cd035027e86f9419c2fa657c08",
+    "2024-10-19": "ece0d0bcfef20b8a40acd640072fe4a224451870e67208a2b051a307c0491b20"
+   },
+   "total_rows": 1465,
+   "weeks": {
+    "2024-10-12": 426,
+    "2024-10-19": 1039
+   }
+  },
+  "GSTUSD": {
+   "source_sha256": {
+    "2024-10-12": "96daeecac96d88080d7bcacdbd68367462c6f2ae452b8446ac61631de068e678",
+    "2024-10-19": "ceb83dd384a51f9c3cd93ab39cd70010d3de06b5b6f4e35b3b870994a523cda9"
+   },
+   "total_rows": 254,
+   "weeks": {
+    "2024-10-12": 50,
+    "2024-10-19": 204
+   }
+  },
+  "GTCUSD": {
+   "source_sha256": {
+    "2024-10-12": "96a9d58a774b33373848d6864b118eac99a34a1d9cabf071167ae606f69be52c",
+    "2024-10-19": "8b48db9df0761a2c53df383be27d70701123f303f2763babbed172c1c0c1f068"
+   },
+   "total_rows": 266,
+   "weeks": {
+    "2024-10-12": 19,
+    "2024-10-19": 247
+   }
+  },
+  "HDXUSD": {
+   "source_sha256": {
+    "2024-10-12": "f16e45975a2c721be93a32b9ff41c74fa3b5a041af24a7c7bf490fe6e6be29e8",
+    "2024-10-19": "71212e4dd80ad8dcc94d771866634297885d0cbfd3e4709ef72c2079922ac8c0"
+   },
+   "total_rows": 205,
+   "weeks": {
+    "2024-10-12": 88,
+    "2024-10-19": 117
+   }
+  },
+  "HFTUSD": {
+   "source_sha256": {
+    "2024-10-12": "b732e431be8ae64007916cae0308b337b0ed3d9a4709e295be18269f4f88f325",
+    "2024-10-19": "d593c598623e0a26cbbf779d0c6c1a0b7deecae407b78f807bc3dd1c8a156a82"
+   },
+   "total_rows": 53,
+   "weeks": {
+    "2024-10-12": 13,
+    "2024-10-19": 40
+   }
+  },
+  "ICPUSD": {
+   "source_sha256": {
+    "2024-10-12": "1ab6c503bda99f07d4d78467822b7d432b63fbf6bdb250f0265ca7b076c28bd9",
+    "2024-10-19": "d4f1300fb8deea26d28be7dad91c59c3eedcf92d0eb742218be961ddb414bcc1"
+   },
+   "total_rows": 4003,
+   "weeks": {
+    "2024-10-12": 1381,
+    "2024-10-19": 2622
+   }
+  },
+  "ICXUSD": {
+   "source_sha256": {
+    "2024-10-12": "bbe705728c641a4800f94e5eb0b56a0c1ebff56971fbcd4a9a331352d82050fc",
+    "2024-10-19": "13c612612929a6673e91b46b96933ff9c86d4fbeba6fc312db780967304b6d63"
+   },
+   "total_rows": 780,
+   "weeks": {
+    "2024-10-12": 286,
+    "2024-10-19": 494
+   }
+  },
+  "IDEXUSD": {
+   "source_sha256": {
+    "2024-10-12": "82ac7f5769fb7d2d2117ffe6888cee55fd9a5960d10d541a4040eee09935f4e8",
+    "2024-10-19": "b6b9b24fa7e152564e664b1abeb03cbbd81f14e3706b11d8812f64719c46fa26"
+   },
+   "total_rows": 54,
+   "weeks": {
+    "2024-10-12": 14,
+    "2024-10-19": 40
+   }
+  },
+  "IMXUSD": {
+   "source_sha256": {
+    "2024-10-12": "dcd8ace1cbc0644fb3268d6d8b58937c3497d20b79a3504f14d0a3b02c924fdb",
+    "2024-10-19": "1b2325cfa8a6da6fc254bf03331b015256df77ef7f7482b17a0e02aec1f3c443"
+   },
+   "total_rows": 2144,
+   "weeks": {
+    "2024-10-12": 808,
+    "2024-10-19": 1336
+   }
+  },
+  "INJUSD": {
+   "source_sha256": {
+    "2024-10-12": "51b57adf9b97c0af09c7228d270c818549246e1268d9a41fe1fba299e9eb2aa9",
+    "2024-10-19": "72fe65eaf9810a9a4932f9bb44569765371e214d57543dad117825a85530593b"
+   },
+   "total_rows": 6773,
+   "weeks": {
+    "2024-10-12": 2952,
+    "2024-10-19": 3821
+   }
+  },
+  "INTRUSD": {
+   "source_sha256": {
+    "2024-10-12": "407bb5653dd860c409a303b7ecbc580122c6e41a8809b72b27b510aeea10b273",
+    "2024-10-19": "a6d0269a96c8a278da1b10f9864ff9303151bfe25a05437732a1e08597817369"
+   },
+   "total_rows": 53,
+   "weeks": {
+    "2024-10-12": 23,
+    "2024-10-19": 30
+   }
+  },
+  "JASMYUSD": {
+   "source_sha256": {
+    "2024-10-12": "512bfaec15c5103fed02e5ff6a4071f0e564a08dd306ff7114022f29dea34685",
+    "2024-10-19": "1cf0486976065832f16382c25508e2937c026da0e050fbfc2cd700519003b88a"
+   },
+   "total_rows": 1343,
+   "weeks": {
+    "2024-10-12": 449,
+    "2024-10-19": 894
+   }
+  },
+  "JTOUSD": {
+   "source_sha256": {
+    "2024-10-12": "25ce15416ea581a8a334fd11e079a81e0cbc4cc0bf67e2f23d7b270aecbe0aaf",
+    "2024-10-19": "e48451dfbb2ddfe0accad8c9ca5cc57a2cc10a4b6d661a6cf34423057b657b5b"
+   },
+   "total_rows": 403,
+   "weeks": {
+    "2024-10-12": 206,
+    "2024-10-19": 197
+   }
+  },
+  "JUNOUSD": {
+   "source_sha256": {
+    "2024-10-12": "298497939d06d9089a9aaabd80f7b3da27f424279cd99dd546b71631f017d2b0",
+    "2024-10-19": "5080277d5a35deeac52a0af667ec8ccb2fe87491c24c6b16ce1caaa36e92715b"
+   },
+   "total_rows": 234,
+   "weeks": {
+    "2024-10-12": 30,
+    "2024-10-19": 204
+   }
+  },
+  "KARUSD": {
+   "source_sha256": {
+    "2024-10-12": "872e79758b457b37d86d60d2dc3da1c320fec576b9a1f2eb99ebc25c060c9f47",
+    "2024-10-19": "3aa7d2a9c01d46a19764f8895e387cbf67b48cf8526194ace4035a5dbc8c1255"
+   },
+   "total_rows": 142,
+   "weeks": {
+    "2024-10-12": 33,
+    "2024-10-19": 109
+   }
+  },
+  "KAVAUSD": {
+   "source_sha256": {
+    "2024-10-12": "c9741d714eba5a75bb0238fbcd949ec98daa7fb66633cf735c0852faf7e5f533",
+    "2024-10-19": "726f2f5b405203292ef9dfa482143a832ec951707ca7c43ffa72b8d35d4c45f8"
+   },
+   "total_rows": 546,
+   "weeks": {
+    "2024-10-12": 166,
+    "2024-10-19": 380
+   }
+  },
+  "KEEPUSD": {
+   "source_sha256": {
+    "2024-10-12": "ed4b4ba279b9d7b7cca5a87c7c8fdd6481a86715f2d692ed389f85bdb69a9254",
+    "2024-10-19": "195bc4ef66c37eb668427012bb565dc53e44015d50ac5a81f4ea74c2322d69c3"
+   },
+   "total_rows": 178,
+   "weeks": {
+    "2024-10-12": 36,
+    "2024-10-19": 142
+   }
+  },
+  "KEYUSD": {
+   "source_sha256": {
+    "2024-10-12": "d217b613b05b748abdd110118151f56d0c7c849cc185cc74fb151d1cf4ab0589",
+    "2024-10-19": "e0a280b15d31820767c58d028492e1303bd35194baf618ab042c20c915e63a61"
+   },
+   "total_rows": 378,
+   "weeks": {
+    "2024-10-12": 250,
+    "2024-10-19": 128
+   }
+  },
+  "KILTUSD": {
+   "source_sha256": {
+    "2024-10-12": "2373c9990b6891e42ddff67bdc94c430eb51ec362bb646abaddbe74d3e03a931",
+    "2024-10-19": "8ca2379858e0df211c99dfa4ddfcfa7992d853f560c3a28b2a58f6ee76baaa41"
+   },
+   "total_rows": 257,
+   "weeks": {
+    "2024-10-12": 145,
+    "2024-10-19": 112
+   }
+  },
+  "KINTUSD": {
+   "source_sha256": {
+    "2024-10-12": "8165ca7b45462648d0d20fbf3b1a7bb343dce3cde99ef91aaa0055a295f0a9b7",
+    "2024-10-19": "1baa36a6ca54328d696f5391b2f13417c282eb8d78001068e68bcb32468fa537"
+   },
+   "total_rows": 63,
+   "weeks": {
+    "2024-10-12": 21,
+    "2024-10-19": 42
+   }
+  },
+  "KINUSD": {
+   "source_sha256": {
+    "2024-10-12": "f7d0a3531e28561ba112f02cf8e64df8aada297480af51390f7faf3e5bd4abc8",
+    "2024-10-19": "94957b80821f4fb50fb9191709928aeffe284b4d355be8705734d7084aed0fc9"
+   },
+   "total_rows": 393,
+   "weeks": {
+    "2024-10-12": 150,
+    "2024-10-19": 243
+   }
+  },
+  "KNCUSD": {
+   "source_sha256": {
+    "2024-10-12": "5e78d39a6e8927b538ce52f5587f668739d0604847841c614d6ef6e953228e25",
+    "2024-10-19": "f19e6952a8fe81cfb1e3b72ff1d1f9913e264fcb7caf3fd1b3643c8b04d13d37"
+   },
+   "total_rows": 60,
+   "weeks": {
+    "2024-10-12": 25,
+    "2024-10-19": 35
+   }
+  },
+  "KP3RUSD": {
+   "source_sha256": {
+    "2024-10-12": "d2c9cc226632d74fcc1553dd0833dc0c3e3cec4140a7f0baebb23c381b61ecd7",
+    "2024-10-19": "4c4ff807dd750ad95aaf3597d1982a59816d6774ff2eb42689ecb27e61ac3895"
+   },
+   "total_rows": 88,
+   "weeks": {
+    "2024-10-12": 44,
+    "2024-10-19": 44
+   }
+  },
+  "KSMUSD": {
+   "source_sha256": {
+    "2024-10-12": "c784a2cd918aa1be3df77545281548be8350c42c683f5e4e6ea1a07a0e35fef1",
+    "2024-10-19": "39c5355cd8589bf6f300ce0a8451b430b98567152ff11bf61f9c99586696ff6f"
+   },
+   "total_rows": 1510,
+   "weeks": {
+    "2024-10-12": 527,
+    "2024-10-19": 983
+   }
+  },
+  "LCXUSD": {
+   "source_sha256": {
+    "2024-10-12": "a8e7a3aa4a9e16db4326b0daa12cbf608b77baaeb495afa8fdfca87a74f1fe84",
+    "2024-10-19": "364f015247452c159deba4524dc00269a244fd6df1b72db0b7e9ffd68c8b1946"
+   },
+   "total_rows": 2086,
+   "weeks": {
+    "2024-10-12": 452,
+    "2024-10-19": 1634
+   }
+  },
+  "LDOUSD": {
+   "source_sha256": {
+    "2024-10-12": "b17444ed8299ccfffd327264f30d14f3bbd425eb3f30a39f2cb6644141474bb6",
+    "2024-10-19": "eb385d57e44ad9ac1092762d481b33f06b5e53501273303258056caba3bb2269"
+   },
+   "total_rows": 1903,
+   "weeks": {
+    "2024-10-12": 457,
+    "2024-10-19": 1446
+   }
+  },
+  "LINKUSD": {
+   "source_sha256": {
+    "2024-10-12": "ff75b91204d23aa1bd40ae7070a9f9abb2046f253445611e80c0a4b848afaf27",
+    "2024-10-19": "fe589775e02fd71f6cead1b90540eae9cae0f7cfb608399e98c16e6f3bbcf4a4"
+   },
+   "total_rows": 5472,
+   "weeks": {
+    "2024-10-12": 2020,
+    "2024-10-19": 3452
+   }
+  },
+  "LMWRUSD": {
+   "source_sha256": {
+    "2024-10-12": "79fdad9beebc99d21efb94d88746d7c9ef1452bf2871bbb7b43f3f26dc0e0c74",
+    "2024-10-19": "eb5ca63fbdfccb286ffa0908265dda0a0dc4442e616836fe33b785be0b1dc128"
+   },
+   "total_rows": 1230,
+   "weeks": {
+    "2024-10-12": 750,
+    "2024-10-19": 480
+   }
+  },
+  "LPTUSD": {
+   "source_sha256": {
+    "2024-10-12": "9f9ecabbc9a9a014ba0d75dec35fc7704d44691b35c379ee3053c0b721d92a79",
+    "2024-10-19": "5d45546daf5635d6bb00e3a67abc0653fad175c879b6c6143679cb0c22bce5f8"
+   },
+   "total_rows": 708,
+   "weeks": {
+    "2024-10-12": 98,
+    "2024-10-19": 610
+   }
+  },
+  "LRCUSD": {
+   "source_sha256": {
+    "2024-10-12": "79258429a4dd9417ac922469d5424b54e75b88378fe3d2815fb7765ec3f9ca25",
+    "2024-10-19": "c37217fadb27db3735f53a7096ce9a6619cd4aa14f5ff16997b9cccfe5778ade"
+   },
+   "total_rows": 388,
+   "weeks": {
+    "2024-10-12": 111,
+    "2024-10-19": 277
+   }
+  },
+  "LSKUSD": {
+   "source_sha256": {
+    "2024-10-12": "3ca25b0146b82aecc9a277037b5c62178076c31257b5802cc6fc9df51198f8e0",
+    "2024-10-19": "e54bd6aa4dae865fde401712468043f8726d573fe504f3744df922791b6bfa77"
+   },
+   "total_rows": 772,
+   "weeks": {
+    "2024-10-12": 106,
+    "2024-10-19": 666
+   }
+  },
+  "LTCUSD": {
+   "source_sha256": {
+    "2024-10-12": "4150ac1658bf629ad822388e557352b53d7ef7f4e1db615ad1e302c0564c6e34",
+    "2024-10-19": "00d5595961da5b3ac5cb98311e4fba460084e2f013b34d394178c364b67d9966"
+   },
+   "total_rows": 15115,
+   "weeks": {
+    "2024-10-12": 6552,
+    "2024-10-19": 8563
+   }
+  },
+  "LUNA2USD": {
+   "source_sha256": {
+    "2024-10-12": "a057606bcaa872516ad2bde6105bc889709b07cea215cfa0ea5f9f9e103668e1",
+    "2024-10-19": "8084ffc28b47d27409b50c2e01d432f0aec6da63b35f1342673ac85ea2111973"
+   },
+   "total_rows": 612,
+   "weeks": {
+    "2024-10-12": 229,
+    "2024-10-19": 383
+   }
+  },
+  "LUNAUSD": {
+   "source_sha256": {
+    "2024-10-12": "b26ab1ba4fc2de368c91dbca76afb1be994c4d24a20c43dc639916da3834dd9e",
+    "2024-10-19": "71a46c4229532e2da93fbd68653232c7e7d56367e11c8c1139ad4c32f2737f4e"
+   },
+   "total_rows": 3147,
+   "weeks": {
+    "2024-10-12": 1466,
+    "2024-10-19": 1681
+   }
+  },
+  "MANAUSD": {
+   "source_sha256": {
+    "2024-10-12": "ad4e3f10855c27b35ed51830a04821c456dde615bffc39f8886225b28a35a2bc",
+    "2024-10-19": "f5c2b636b59adb5245aa9f01a3102e1e94f8ef885cf4eaddbad07899603957ce"
+   },
+   "total_rows": 2269,
+   "weeks": {
+    "2024-10-12": 834,
+    "2024-10-19": 1435
+   }
+  },
+  "MASKUSD": {
+   "source_sha256": {
+    "2024-10-12": "acca752802a4bde5f140f80634c8d1fc411ec0cd7b00f2540a11a256f426f621",
+    "2024-10-19": "a779d6769e6f2f75417c461b0c6ff4126930550ad2a3ec08b87203ffdd9ec246"
+   },
+   "total_rows": 227,
+   "weeks": {
+    "2024-10-12": 138,
+    "2024-10-19": 89
+   }
+  },
+  "MATICUSD": {
+   "source_sha256": {
+    "2024-10-12": "f11b2d445108355e90ef1b01298b8fb534e0ae0e44c7b3f936b6d3943b7adf19",
+    "2024-10-19": "0656167b395d0641cc99ef75460aa95cd1511b771d06c34270f8d523446d3af4"
+   },
+   "total_rows": 3022,
+   "weeks": {
+    "2024-10-12": 1126,
+    "2024-10-19": 1896
+   }
+  },
+  "MCUSD": {
+   "source_sha256": {
+    "2024-10-12": "b0ce73d8206f06486a4d4014f19a7c9a95e219edc7c23de0250248a968f6de1c",
+    "2024-10-19": "2f7ab885923c752c98541d8b8ecad590c79686e05298164fa32d97a9c1cceec2"
+   },
+   "total_rows": 92,
+   "weeks": {
+    "2024-10-12": 34,
+    "2024-10-19": 58
+   }
+  },
+  "MINAUSD": {
+   "source_sha256": {
+    "2024-10-12": "e6423bb9cc469122d52eaa27b9e95247d54eb1d688ca9a9b664da7b379cc1a35",
+    "2024-10-19": "a08f03ff34b2290b2aa0f73b126ff487e6a62eda131e8f64c1a2a47ad7207b50"
+   },
+   "total_rows": 1996,
+   "weeks": {
+    "2024-10-12": 354,
+    "2024-10-19": 1642
+   }
+  },
+  "MIRUSD": {
+   "source_sha256": {
+    "2024-10-12": "057d06656a3b972aeab9fcb7f58bd3ccad392107873b719d5ba39220fd4381bf",
+    "2024-10-19": "2ee4561da35f3366d3f6304ed87ba7866077c6c9e95ebb4dccf4d6c7291d9916"
+   },
+   "total_rows": 113,
+   "weeks": {
+    "2024-10-12": 43,
+    "2024-10-19": 70
+   }
+  },
+  "MKRUSD": {
+   "source_sha256": {
+    "2024-10-12": "5715a2db45d022d605899770af31c7cc669f20beeca8387adf7410bbc67b6980",
+    "2024-10-19": "fdcc47398e2ba173e3ab939dfd5e4573095c53d32b4b6363ad74873115364510"
+   },
+   "total_rows": 1884,
+   "weeks": {
+    "2024-10-12": 805,
+    "2024-10-19": 1079
+   }
+  },
+  "MLNUSD": {
+   "source_sha256": {
+    "2024-10-12": "d249d3d8e01a71d4a48f83fa301c150f889fb88d12ca0211a9e6b280eaa548f8",
+    "2024-10-19": "c7a58ecd9ed5c7b00a5bd3af03e3aed5bb6af6555cdd7ad2a30de3416d02d36b"
+   },
+   "total_rows": 252,
+   "weeks": {
+    "2024-10-12": 114,
+    "2024-10-19": 138
+   }
+  },
+  "MNGOUSD": {
+   "source_sha256": {
+    "2024-10-12": "cb327f062f968175d67374d0d129b5804460fcefabaafaefc9ec19a5ec44a3f9",
+    "2024-10-19": "55ceb5400c539d170cbc194503ccd1027196604ca3f800766690354f2ab6c2d2"
+   },
+   "total_rows": 90,
+   "weeks": {
+    "2024-10-12": 38,
+    "2024-10-19": 52
+   }
+  },
+  "MOONUSD": {
+   "source_sha256": {
+    "2024-10-12": "0ca71ac7c23e7ba2b22ead2e11d6a19e49bde5d83aaee682a42f7919184688ee",
+    "2024-10-19": "f1da3ce029caf7db476610ca9fa84348fc64b5736b5d2c727a36018d4d05ffed"
+   },
+   "total_rows": 436,
+   "weeks": {
+    "2024-10-12": 123,
+    "2024-10-19": 313
+   }
+  },
+  "MOVRUSD": {
+   "source_sha256": {
+    "2024-10-12": "9d94c81bade51ea350c2439e55225b9c9744a5071ff76622a5a615356ae6bd96",
+    "2024-10-19": "c2386d25c500c1c2cea980556c8e7ef5790b3916d138ce278a3ce871266cdf36"
+   },
+   "total_rows": 1134,
+   "weeks": {
+    "2024-10-12": 107,
+    "2024-10-19": 1027
+   }
+  },
+  "MSOLUSD": {
+   "source_sha256": {
+    "2024-10-12": "4f9e7ac4985748a96aa9a28bc8e96edd31ef710d317ec038c2c395c1c89cfde1",
+    "2024-10-19": "98ebd338d1482bf53b8d5d4fd5eec060dde7c120b96de48eb84488d4dd3fc81e"
+   },
+   "total_rows": 1367,
+   "weeks": {
+    "2024-10-12": 296,
+    "2024-10-19": 1071
+   }
+  },
+  "MULTIUSD": {
+   "source_sha256": {
+    "2024-10-12": "353a909100cfed99eeadabf7c1ffc074cfc449c4f8ca43f9697a463acea67bf7",
+    "2024-10-19": "ef7520d657ca761a2becb703a45ef45dbf83dfaead247961ade29a119b6b759f"
+   },
+   "total_rows": 198,
+   "weeks": {
+    "2024-10-12": 68,
+    "2024-10-19": 130
+   }
+  },
+  "MVUSD": {
+   "source_sha256": {
+    "2024-10-12": "b12b50c455ebc8ee67d4a5a41bdba473808c3b07f5726f495ca3dec0d94f75d0",
+    "2024-10-19": "e48f8f6d27fac94dd44f2f1b08c623c43a44b31589f9403df3ffb5d0f94bdb4e"
+   },
+   "total_rows": 471,
+   "weeks": {
+    "2024-10-12": 66,
+    "2024-10-19": 405
+   }
+  },
+  "MXCUSD": {
+   "source_sha256": {
+    "2024-10-12": "208ae8030eb3ecb12b67ec2b3a53287ee3bd5cdd020b08fdec4b24a70e032e7c",
+    "2024-10-19": "3aed6bd6634a210938aa0152ac15308a22fbfe547f9ebd830829dce68c19c838"
+   },
+   "total_rows": 82,
+   "weeks": {
+    "2024-10-12": 26,
+    "2024-10-19": 56
+   }
+  },
+  "NANOUSD": {
+   "source_sha256": {
+    "2024-10-12": "b036ee04d23375ee4b5d93ad8442dd1e984b36f9a039074bbac5087354cfd44e",
+    "2024-10-19": "712395e385f9574aa777ba637b884175c1a7c9578b991ac2e04f7dea7e72b650"
+   },
+   "total_rows": 1060,
+   "weeks": {
+    "2024-10-12": 507,
+    "2024-10-19": 553
+   }
+  },
+  "NEARUSD": {
+   "source_sha256": {
+    "2024-10-12": "d5e82de8642c3b4faae0dfc4a0b6857301346fabe0b433248ae6e806248ab1c8",
+    "2024-10-19": "8163c1ec53030c16bb7078d7248794c57442a60e6b5f405597545cb6b6730f1c"
+   },
+   "total_rows": 4582,
+   "weeks": {
+    "2024-10-12": 1532,
+    "2024-10-19": 3050
+   }
+  },
+  "NMRUSD": {
+   "source_sha256": {
+    "2024-10-12": "9c01d11f44478b2e1abba5494181a4f2b5ba59e4bdaf58522402bd753b195427",
+    "2024-10-19": "636cce91f7d7e7c85bd8562009181647bb2ef3b58998f4e56eaaa48e74405833"
+   },
+   "total_rows": 90,
+   "weeks": {
+    "2024-10-12": 48,
+    "2024-10-19": 42
+   }
+  },
+  "NODLUSD": {
+   "source_sha256": {
+    "2024-10-12": "64c261d2f24b76848b8771f7af2e3f63c717ee3b6205539c9e4ffb25b080371c",
+    "2024-10-19": "3cb6ffac1ba11e87fccaa784560516b8cb173e5fc7f85e34cac66a9210627998"
+   },
+   "total_rows": 163,
+   "weeks": {
+    "2024-10-12": 72,
+    "2024-10-19": 91
+   }
+  },
+  "NYMUSD": {
+   "source_sha256": {
+    "2024-10-12": "2c34fe996ea89605b6f6af0296a782a750547ef32dde6296371964270dc39671",
+    "2024-10-19": "71b2aa27b97fc30427d897f69f177932d1e43d5451fd7dfd9bc49a2bfe95becd"
+   },
+   "total_rows": 1255,
+   "weeks": {
+    "2024-10-12": 236,
+    "2024-10-19": 1019
+   }
+  },
+  "OCEANUSD": {
+   "source_sha256": {
+    "2024-10-12": "62f86b2aa656dc0d184a8c9b48f710e15f0d2e1cce6f128150f6d23e36616b07",
+    "2024-10-19": "2b3c02f5359f0724ac0a786d5070e778a71beebc386cbccb416ff3bf77cbe8c3"
+   },
+   "total_rows": 981,
+   "weeks": {
+    "2024-10-12": 226,
+    "2024-10-19": 755
+   }
+  },
+  "OGNUSD": {
+   "source_sha256": {
+    "2024-10-12": "91151ce9f7189bae057a479a18d2acab7f38b75f513d781722d2db5d5b0f567f",
+    "2024-10-19": "8997e7e33540fa0b3b0e6076726c2db2431f5e5a1e7eea9ecca595ddbff30762"
+   },
+   "total_rows": 195,
+   "weeks": {
+    "2024-10-12": 49,
+    "2024-10-19": 146
+   }
+  },
+  "OMGUSD": {
+   "source_sha256": {
+    "2024-10-12": "667791b2192e026f0a70e30b434fabf88700ae70df049a1c695d68a2a3b3ddb6",
+    "2024-10-19": "aef08a4ba69ffb2792e6ab0e4d36fd85df14101f0e1b899aa12f333f4e1b0d9f"
+   },
+   "total_rows": 350,
+   "weeks": {
+    "2024-10-12": 174,
+    "2024-10-19": 176
+   }
+  },
+  "OPUSD": {
+   "source_sha256": {
+    "2024-10-12": "8e16f9a761306456974be07f7cce829aa34a9e727215806b991120de01cd860c",
+    "2024-10-19": "d9e761567f25007d081003dec10bd4cbb75a00cda3f6d4e4ccf75003b559050e"
+   },
+   "total_rows": 1488,
+   "weeks": {
+    "2024-10-12": 500,
+    "2024-10-19": 988
+   }
+  },
+  "ORCAUSD": {
+   "source_sha256": {
+    "2024-10-12": "805c182837d9980600f06140d65730e946838d444c76ed37857f5cf792ddbe68",
+    "2024-10-19": "2a58fd13e9187a91b1c6bf39c25053293d000163b22bc21a197aab0a8837c2ab"
+   },
+   "total_rows": 127,
+   "weeks": {
+    "2024-10-12": 30,
+    "2024-10-19": 97
+   }
+  },
+  "OXTUSD": {
+   "source_sha256": {
+    "2024-10-12": "31f862ed8c4c1edf188ec19b975f4fa72f4fb2b266a8e7a4838aef602dd09f4a",
+    "2024-10-19": "c31a2867cc09e87f849e1730c33d11bfdbbb85e586c584623b394c4f6620bfec"
+   },
+   "total_rows": 140,
+   "weeks": {
+    "2024-10-12": 20,
+    "2024-10-19": 120
+   }
+  },
+  "OXYUSD": {
+   "source_sha256": {
+    "2024-10-12": "e19780efb45f1ed1fa484e355fc3e18028f68660ac74f5546e3165270ab0c170",
+    "2024-10-19": "7191fa023043bf4651d398f90dfbd36dc6aeb40592e83da48a00bb859e0c49e3"
+   },
+   "total_rows": 270,
+   "weeks": {
+    "2024-10-12": 135,
+    "2024-10-19": 135
+   }
+  },
+  "PAXGUSD": {
+   "source_sha256": {
+    "2024-10-12": "49a96d464ef00c73fa6c289d1d34dd10eea58685cdab25eff83893868f8c2101",
+    "2024-10-19": "fc7291c7ed0f04711c8a8414fbc0710cc718b628b80896aa5179ee298b2d3836"
+   },
+   "total_rows": 2634,
+   "weeks": {
+    "2024-10-12": 836,
+    "2024-10-19": 1798
+   }
+  },
+  "PEPEUSD": {
+   "source_sha256": {
+    "2024-10-12": "3138c198c317305e99a2b1188efed82cbfe1a8c2f6eda9526cd71c6e0212a9ec",
+    "2024-10-19": "871e085214286bcc1a9418b7db41e1945ab061c87fc37461695f8b39127ff404"
+   },
+   "total_rows": 6364,
+   "weeks": {
+    "2024-10-12": 2612,
+    "2024-10-19": 3752
+   }
+  },
+  "PERPUSD": {
+   "source_sha256": {
+    "2024-10-12": "dfc9617024ad475764588886fb550e9a6c778dbeb135c7422756ca7ab1b7b0ab",
+    "2024-10-19": "e0728765ebfa37e4360961f80f36d147a8d6ee3be23e5df95f1caefd6215a53c"
+   },
+   "total_rows": 417,
+   "weeks": {
+    "2024-10-12": 77,
+    "2024-10-19": 340
+   }
+  },
+  "PHAUSD": {
+   "source_sha256": {
+    "2024-10-12": "443171ff4cd21c7deb707551d5ab989685cc5cfd921e1f3a68dea02aa8d4fb45",
+    "2024-10-19": "a852cf64ba81aa7a0098ed4e89059e397715257190e2edbaa4acee5b17e0f989"
+   },
+   "total_rows": 1130,
+   "weeks": {
+    "2024-10-12": 265,
+    "2024-10-19": 865
+   }
+  },
+  "POLISUSD": {
+   "source_sha256": {
+    "2024-10-12": "7fea6fb3afd6e9d67fd45755b8bf1095d170560d820de9c005e145c2550e3ae8",
+    "2024-10-19": "440868bb4b2f0b11a615ec4f08e5709b61dcf99ec6a4b6321a313f3bf499bf0e"
+   },
+   "total_rows": 716,
+   "weeks": {
+    "2024-10-12": 213,
+    "2024-10-19": 503
+   }
+  },
+  "POLSUSD": {
+   "source_sha256": {
+    "2024-10-12": "2c0d1539473d0576dfab3176a4420019bb2cbf1ead32250deaf1cf948b04872c",
+    "2024-10-19": "4096c46ba173728aa122b1c3930e4121c430f0df4ff39e81914ebee0a650530d"
+   },
+   "total_rows": 504,
+   "weeks": {
+    "2024-10-12": 338,
+    "2024-10-19": 166
+   }
+  },
+  "POLUSD": {
+   "source_sha256": {
+    "2024-10-12": "dc86d3e8a67372078db3a70f74be796e4c437a5b0fbfcf2cbc07159d1e25a101",
+    "2024-10-19": "67b9773d194ebb0bb8d53e4df9a36c5a836221fdcce3618f18e762a15dbe759e"
+   },
+   "total_rows": 1423,
+   "weeks": {
+    "2024-10-12": 514,
+    "2024-10-19": 909
+   }
+  },
+  "PONDUSD": {
+   "source_sha256": {
+    "2024-10-12": "f89c896662e2df11b80ce9dd1c2634b2052eb16648a91e67a6699f361073de8f",
+    "2024-10-19": "b3e2d803c1b4691b20def1006fa9846f5e4c93af087415e97fbe3472eb116149"
+   },
+   "total_rows": 132,
+   "weeks": {
+    "2024-10-12": 48,
+    "2024-10-19": 84
+   }
+  },
+  "POWRUSD": {
+   "source_sha256": {
+    "2024-10-12": "625c6050853f73e4e73514edcce1231d80f4b768cbb1c0907b9128f7561f5c0a",
+    "2024-10-19": "015254cf96b8b5aed82c089cb50e283f8b047b158fb3dea592ffec4a105a023d"
+   },
+   "total_rows": 441,
+   "weeks": {
+    "2024-10-12": 66,
+    "2024-10-19": 375
+   }
+  },
+  "PSTAKEUSD": {
+   "source_sha256": {
+    "2024-10-12": "ed0c34f95ed46b920b46c0561e84bd485d8b61b22f163b5790fa5c72166dec5c",
+    "2024-10-19": "1ad0910caf8f083850745b759db43b4b734b48adcacc33dcf374473059a3dce4"
+   },
+   "total_rows": 46,
+   "weeks": {
+    "2024-10-12": 31,
+    "2024-10-19": 15
+   }
+  },
+  "PYTHUSD": {
+   "source_sha256": {
+    "2024-10-12": "1ba7f2ad4b511d073a9379cd058f544671b3ec4d4b0a3a38706d97438a979e2b",
+    "2024-10-19": "69b5ee4e60eb0cae45f82acc5206f1527a82b16eb23a83b26125ded942638f27"
+   },
+   "total_rows": 1177,
+   "weeks": {
+    "2024-10-12": 570,
+    "2024-10-19": 607
+   }
+  },
+  "PYUSDUSD": {
+   "source_sha256": {
+    "2024-10-12": "0fb787225eff22566349796c9929632cdb97c274f7b8cba8efb3b2f07805bf9d",
+    "2024-10-19": "274f85009a6e7d1cf5a2d74aefbd1d2ab647272ae69a07209b514d211637c6b2"
+   },
+   "total_rows": 92,
+   "weeks": {
+    "2024-10-12": 34,
+    "2024-10-19": 58
+   }
+  },
+  "QNTUSD": {
+   "source_sha256": {
+    "2024-10-12": "ce17f623805f1a85f3caec60ab83750388331f5b13e627f6117d1ec9d88022b1",
+    "2024-10-19": "d88b97d5663a3f7b62615e412166cc55193d63d8b917356319b8f179c8b8fe1f"
+   },
+   "total_rows": 984,
+   "weeks": {
+    "2024-10-12": 255,
+    "2024-10-19": 729
+   }
+  },
+  "QTUMUSD": {
+   "source_sha256": {
+    "2024-10-12": "08a6fd929886ce3b5d58c873edbc9b301a90f0e93518bad32dbc6bd43e96d41e",
+    "2024-10-19": "05e68dd80559e47b4315965a00827e0afaf439e77761faa03f08f673a7df7519"
+   },
+   "total_rows": 195,
+   "weeks": {
+    "2024-10-12": 43,
+    "2024-10-19": 152
+   }
+  },
+  "RADUSD": {
+   "source_sha256": {
+    "2024-10-12": "3ad9a46b5ee0aa4dced21f8ae0a210d1c338317da6bcd1b7d99bf840ed716968",
+    "2024-10-19": "50cc6f00e14b08d1032654048e8300236f432e8b03ae58f0a9e6efb20287de8d"
+   },
+   "total_rows": 146,
+   "weeks": {
+    "2024-10-12": 33,
+    "2024-10-19": 113
+   }
+  },
+  "RAREUSD": {
+   "source_sha256": {
+    "2024-10-12": "cabb35277069767a4b91c9ac347c26f0f1299ab782b3dec57279959b8393b166",
+    "2024-10-19": "8e824dfa4c853746753578407ce8f48ae42091c3c2ec82e8a5e1c81b026bf65a"
+   },
+   "total_rows": 1880,
+   "weeks": {
+    "2024-10-12": 544,
+    "2024-10-19": 1336
+   }
+  },
+  "RARIUSD": {
+   "source_sha256": {
+    "2024-10-12": "aefa584e1111e2e97becae00f07780e81e87322aae3aa7142cddf9cb23a4e566",
+    "2024-10-19": "0115ce461e8871a407705443504119494880956bc81ac1109b346ed33eee9aea"
+   },
+   "total_rows": 194,
+   "weeks": {
+    "2024-10-12": 128,
+    "2024-10-19": 66
+   }
+  },
+  "RAYUSD": {
+   "source_sha256": {
+    "2024-10-12": "1c5e4368550f6bf3238736575d3c8eaa772a241c286e125f86342fb6703be129",
+    "2024-10-19": "78c04c5b18357ed11803cf9926d908d49cb69ca1c19e91e5a4b1bf2b07187218"
+   },
+   "total_rows": 1161,
+   "weeks": {
+    "2024-10-12": 360,
+    "2024-10-19": 801
+   }
+  },
+  "RBCUSD": {
+   "source_sha256": {
+    "2024-10-12": "59a12334c9648c94d935b628cbddab267ba59e0480021a5095725376b74ec4ff",
+    "2024-10-19": "cd2d871cb80e505a3a7f3d2d683af6ed826d31b1f1eb1c7727af346cbbc2b972"
+   },
+   "total_rows": 103,
+   "weeks": {
+    "2024-10-12": 38,
+    "2024-10-19": 65
+   }
+  },
+  "RENUSD": {
+   "source_sha256": {
+    "2024-10-12": "151b52ea7b045e64798172de54b3f6880586192ad68542c56d919a467bcf3faa",
+    "2024-10-19": "c0ac9f28517c6ff920b3bffa082758676f1da79db798efae0bcfafd6679fd6d8"
+   },
+   "total_rows": 344,
+   "weeks": {
+    "2024-10-12": 147,
+    "2024-10-19": 197
+   }
+  },
+  "REPUSD": {
+   "source_sha256": {
+    "2024-10-12": "3249500d8b88c10dc75869345b509c323e56e9932e372ab876733a662225416d",
+    "2024-10-19": "b42596b6416bb0105c29012f0f3a79a3f37a26289fd023e91d993401b60aa0fc"
+   },
+   "total_rows": 72,
+   "weeks": {
+    "2024-10-12": 34,
+    "2024-10-19": 38
+   }
+  },
+  "REPV2USD": {
+   "source_sha256": {
+    "2024-10-12": "fa443eb919280621c72d0168029eec972266849eb2bdc540c0c73c99cf36e0f0",
+    "2024-10-19": "0296f05d811a1359c4ea9098f20248e444e66fcba5aac41044f17e8196cefe94"
+   },
+   "total_rows": 629,
+   "weeks": {
+    "2024-10-12": 172,
+    "2024-10-19": 457
+   }
+  },
+  "REQUSD": {
+   "source_sha256": {
+    "2024-10-12": "7ade1be7eedd9e08cd18e74f55c3304023b4c6af901f8e4991e539a413e47f14",
+    "2024-10-19": "02899265764ecbd461d2200ba159969706a046fc117cae470045496fa41fd632"
+   },
+   "total_rows": 4,
+   "weeks": {
+    "2024-10-12": 1,
+    "2024-10-19": 3
+   }
+  },
+  "RLCUSD": {
+   "source_sha256": {
+    "2024-10-12": "b497d278542a2b9e199734293da7ce3a5a1e45e94a1b3477721f678b22139089",
+    "2024-10-19": "53d7d8da732b2fb34ca5dd8511e23a6ce0e13569b1064b03edb50b65b69b6ea5"
+   },
+   "total_rows": 328,
+   "weeks": {
+    "2024-10-12": 49,
+    "2024-10-19": 279
+   }
+  },
+  "ROOKUSD": {
+   "source_sha256": {
+    "2024-10-12": "f979c547c42cafa33d9f75517be7773a3673a9c8d5955df66f8b796b31b7d810",
+    "2024-10-19": "d0f4b88151b4a3b16dbf9d0ee2b4a5c70a4f80a950d0305b366999ce4b6e535f"
+   },
+   "total_rows": 33,
+   "weeks": {
+    "2024-10-12": 12,
+    "2024-10-19": 21
+   }
+  },
+  "RPLUSD": {
+   "source_sha256": {
+    "2024-10-12": "02926d73e02ec248f19f6b75704fbf39b754413d7c80a253af0c30d6c9da8111",
+    "2024-10-19": "2c356f6d3b349f8d7b990205110cdbcbd51c2af6c9715da279a77d4b01068f34"
+   },
+   "total_rows": 343,
+   "weeks": {
+    "2024-10-12": 217,
+    "2024-10-19": 126
+   }
+  },
+  "RUNEUSD": {
+   "source_sha256": {
+    "2024-10-12": "b6a0d9aa779bc71690541adfc6c66ca3a84152a9100da9fb379beda867880758",
+    "2024-10-19": "2c5a775ea9e908c8cb9a2444b2e5a9147a6c150b5e21ac3b3ce1cc4cc9f6f9e6"
+   },
+   "total_rows": 3396,
+   "weeks": {
+    "2024-10-12": 1500,
+    "2024-10-19": 1896
+   }
+  },
+  "SAMOUSD": {
+   "source_sha256": {
+    "2024-10-12": "ffd130381bbcd35cdcca7e79e01c177a00b32106a94cd7c732591a285f1f79e2",
+    "2024-10-19": "adab476f90ac5a18a516400c672911fd7dcea5d2aa03db892b2488db6bf08dab"
+   },
+   "total_rows": 443,
+   "weeks": {
+    "2024-10-12": 103,
+    "2024-10-19": 340
+   }
+  },
+  "SANDUSD": {
+   "source_sha256": {
+    "2024-10-12": "c4a3ecc71dc19fc6f6c8397397eb5145eef64c4dd27b8d017a2ed61841521413",
+    "2024-10-19": "d2a22ef87e623d2d21c26a1ba7ed1e49646be1a66a53888de132d70bb323f617"
+   },
+   "total_rows": 6263,
+   "weeks": {
+    "2024-10-12": 1607,
+    "2024-10-19": 4656
+   }
+  },
+  "SBRUSD": {
+   "source_sha256": {
+    "2024-10-12": "6ea429111d9040e5e361a425377e977aaaf6b8703eaeb73db14c97dcc016d1d9",
+    "2024-10-19": "a1edf198ea78d8ed66b9d14ef3719b838bdc32a8322ddae19b88ad93ef5e6d01"
+   },
+   "total_rows": 2569,
+   "weeks": {
+    "2024-10-12": 1280,
+    "2024-10-19": 1289
+   }
+  },
+  "SCRTUSD": {
+   "source_sha256": {
+    "2024-10-12": "3181ca5e7ffad9a0d22c795b6e63c50b19df7db30441abeca91916ed33ee2cd8",
+    "2024-10-19": "6b87232284c8eabffc381f45f04ed7f6b7f24f5b67a18615ca3a8a584842df99"
+   },
+   "total_rows": 4672,
+   "weeks": {
+    "2024-10-12": 1189,
+    "2024-10-19": 3483
+   }
+  },
+  "SCUSD": {
+   "source_sha256": {
+    "2024-10-12": "bcc715e7d1920dba275224fd57363b843ee842a58c13266dcab1262ea5d9e739",
+    "2024-10-19": "441dc7d4a615e7354518c514ab95ae89d12a8573c7966f25dfab8835056ab7e3"
+   },
+   "total_rows": 3284,
+   "weeks": {
+    "2024-10-12": 340,
+    "2024-10-19": 2944
+   }
+  },
+  "SDNUSD": {
+   "source_sha256": {
+    "2024-10-12": "4afb488b5813739b54ca2b8b25c01d24f5543f9d79cc1202fae3e2aa154c97cd",
+    "2024-10-19": "15ff6628431c4c3dd142acd94462abb02e889e2b6b9de2f8698806f30559e3cf"
+   },
+   "total_rows": 37,
+   "weeks": {
+    "2024-10-12": 15,
+    "2024-10-19": 22
+   }
+  },
+  "SEIUSD": {
+   "source_sha256": {
+    "2024-10-12": "ebc489311fc120a338b4b5f1f897382943c06496d8fef63e02d61176945dd807",
+    "2024-10-19": "56da942652b3ee4b8dde26868bdfafddcc421dd551e1fa634969b8025c1ac9d9"
+   },
+   "total_rows": 12576,
+   "weeks": {
+    "2024-10-12": 4870,
+    "2024-10-19": 7706
+   }
+  },
+  "SGBUSD": {
+   "source_sha256": {
+    "2024-10-12": "f830597cca7fb34629fb738370ea4ba5eb0e24634a97f033f2cccc70d1ae5d16",
+    "2024-10-19": "fb2ba7cf9cdaaf2b3a8040d96d9b10e15efdff405a1717e2a2f370ed7a98c6d6"
+   },
+   "total_rows": 5268,
+   "weeks": {
+    "2024-10-12": 2974,
+    "2024-10-19": 2294
+   }
+  },
+  "SHIBUSD": {
+   "source_sha256": {
+    "2024-10-12": "af89430d8c6a828afbcb0e205fe361f83268719c65652d30409cc0f805c076fd",
+    "2024-10-19": "f315f457e8c73d86f3fea09a2f862a6f9b76ed566002a0428cc5f6f07a83f645"
+   },
+   "total_rows": 8350,
+   "weeks": {
+    "2024-10-12": 3674,
+    "2024-10-19": 4676
+   }
+  },
+  "SNXUSD": {
+   "source_sha256": {
+    "2024-10-12": "44bd8693ddb037db10e113fcac6c63350f5b050de14c24dddb1c0430c793f8a5",
+    "2024-10-19": "d09ac06e32030d06a3f10f93bac2e7f9c2fc33e424a475b3749b1068fc67b5e9"
+   },
+   "total_rows": 1257,
+   "weeks": {
+    "2024-10-12": 259,
+    "2024-10-19": 998
+   }
+  },
+  "SOLUSD": {
+   "source_sha256": {
+    "2024-10-12": "b6e0fc2502b2960ba4dde6c4d1b4bb360d6ae68ddb583982dfa79575bb05cbd6",
+    "2024-10-19": "7316b01cae812cda6211c0345459df465ebd037e343fc86afbb571edec1ac596"
+   },
+   "total_rows": 59888,
+   "weeks": {
+    "2024-10-12": 20069,
+    "2024-10-19": 39819
+   }
+  },
+  "SPELLUSD": {
+   "source_sha256": {
+    "2024-10-12": "053e7eac4aa28de35a277f6cfabbd624bf04ca8791b6de517fccd5fe620c652d",
+    "2024-10-19": "a4775e1009110e210b0ab464a41286f197a96a5e810484c24bcd81a22dbd9fa9"
+   },
+   "total_rows": 203,
+   "weeks": {
+    "2024-10-12": 88,
+    "2024-10-19": 115
+   }
+  },
+  "SRMUSD": {
+   "source_sha256": {
+    "2024-10-12": "ae27481da78f20eb32fd3342effa4493906e49f44a4b7fb5bbf91b4dad277ac2",
+    "2024-10-19": "979a01c0e23528b46e41cee7aee8e3553f6bf749a0a1217e6ed8cb52cdd5d29e"
+   },
+   "total_rows": 316,
+   "weeks": {
+    "2024-10-12": 66,
+    "2024-10-19": 250
+   }
+  },
+  "STEPUSD": {
+   "source_sha256": {
+    "2024-10-12": "95afd0fa1f578bd19356d0fdb8535f879a364d0feb31f70aa747f5e9f480a4d8",
+    "2024-10-19": "d9647d3acce327c430c4f8520500a183a22164c00932d6b14d8a54beb57dc441"
+   },
+   "total_rows": 157,
+   "weeks": {
+    "2024-10-12": 61,
+    "2024-10-19": 96
+   }
+  },
+  "STGUSD": {
+   "source_sha256": {
+    "2024-10-12": "90e83b029218a8fde5a1f15d1a06a8eee532245a74b3a8032416394c730e586d",
+    "2024-10-19": "ebd369c36a6df5a9902f4ef32719c0c542fb6d92a58ce69f2cab033dbb79e579"
+   },
+   "total_rows": 47,
+   "weeks": {
+    "2024-10-12": 19,
+    "2024-10-19": 28
+   }
+  },
+  "STORJUSD": {
+   "source_sha256": {
+    "2024-10-12": "204c2512f8a0c72ec4b09ec25ca38dab8e19fc4e57aae0e6ddd777333e330b43",
+    "2024-10-19": "abb2df432b45dbdda070198f7e93a7f652fc0e9382423441122379c17c311fb8"
+   },
+   "total_rows": 8314,
+   "weeks": {
+    "2024-10-12": 2013,
+    "2024-10-19": 6301
+   }
+  },
+  "STXUSD": {
+   "source_sha256": {
+    "2024-10-12": "a19abee198fa0dcc1b373a035d2a941681518f0e0e29a2758b9d201ea22e3e2a",
+    "2024-10-19": "be4aaff94e7a63d36e718240d3d4355fc689588fbf787a74af51fbe9e8914dab"
+   },
+   "total_rows": 2858,
+   "weeks": {
+    "2024-10-12": 1412,
+    "2024-10-19": 1446
+   }
+  },
+  "SUIUSD": {
+   "source_sha256": {
+    "2024-10-12": "6d198ce21d93f48a166d04318a8b213b026dd9b5cdcd0229c506a5529dd2fde7",
+    "2024-10-19": "2ccc6847c4b82fdf69f8b2f9089eaf9401acb664b1743f9a510ca7344377d11f"
+   },
+   "total_rows": 13397,
+   "weeks": {
+    "2024-10-12": 6050,
+    "2024-10-19": 7347
+   }
+  },
+  "SUPERUSD": {
+   "source_sha256": {
+    "2024-10-12": "7b7e465900512b807c5fbe02773b97bcd46c4ab22f874013f429c7fab5696646",
+    "2024-10-19": "ccf16c50e992359547d1ea412070db49abffe4df723d7b8e54930a15b1c8e5d6"
+   },
+   "total_rows": 1680,
+   "weeks": {
+    "2024-10-12": 720,
+    "2024-10-19": 960
+   }
+  },
+  "SUSHIUSD": {
+   "source_sha256": {
+    "2024-10-12": "cdd006ca8a60a4c004d6cf0d46930a47f311912e1de2f6f677d43107b0261633",
+    "2024-10-19": "1f0a85d567b23c927a41de10853768137bd95e0668f8ec7c10e3320ab093612e"
+   },
+   "total_rows": 1058,
+   "weeks": {
+    "2024-10-12": 200,
+    "2024-10-19": 858
+   }
+  },
+  "SYNUSD": {
+   "source_sha256": {
+    "2024-10-12": "7e178112060800ea54a3b389199b7713b07cdcb7ad78b4fbf53d2d30f9f3fb81",
+    "2024-10-19": "6fcf83ec9ce2e6cb9c71125182cdb30681f4fb3235948b58986f5c1bd21d273b"
+   },
+   "total_rows": 1923,
+   "weeks": {
+    "2024-10-12": 476,
+    "2024-10-19": 1447
+   }
+  },
+  "TBTCUSD": {
+   "source_sha256": {
+    "2024-10-12": "1e869edfcc7278ab195a18c315cb73359ae7dde3c5fbcf6645458c8b64758f15",
+    "2024-10-19": "139fdd61bbe02798ce9c3d8d70136eaa48c27b4e4ba6aa645b02727ab1e86e6d"
+   },
+   "total_rows": 11,
+   "weeks": {
+    "2024-10-12": 5,
+    "2024-10-19": 6
+   }
+  },
+  "TEERUSD": {
+   "source_sha256": {
+    "2024-10-12": "0d57b4da348f7917f27fde4a6bad24b3e6d0592256cac104886ac8ababe30c1a",
+    "2024-10-19": "1c7360ccc364035d717ffce676f6cc102ac7efa6b719d2fcd499d9ad7115a1a9"
+   },
+   "total_rows": 148,
+   "weeks": {
+    "2024-10-12": 123,
+    "2024-10-19": 25
+   }
+  },
+  "TIAUSD": {
+   "source_sha256": {
+    "2024-10-12": "e5c5fc884c949f829fa1c5768cd027cf68287c8e5f67a35692b887bea287727a",
+    "2024-10-19": "4177109bd686b481864f035ba053463b2a4485eded1860ec254c7907afab7576"
+   },
+   "total_rows": 10665,
+   "weeks": {
+    "2024-10-12": 5989,
+    "2024-10-19": 4676
+   }
+  },
+  "TLMUSD": {
+   "source_sha256": {
+    "2024-10-12": "af09a6b78b41ea830f4c70768cf22ea8d5eceea728810b95cfc85e7056bb0ca3",
+    "2024-10-19": "c55f5447e373d9d8c762185e2f96848e44dba68d3a5d8ffc2959f89d7ca38a0f"
+   },
+   "total_rows": 169,
+   "weeks": {
+    "2024-10-12": 34,
+    "2024-10-19": 135
+   }
+  },
+  "TOKEUSD": {
+   "source_sha256": {
+    "2024-10-12": "fa8c6e495156710f12666e824c04ded55b00c224f3dec0862e3ba5386243cd28",
+    "2024-10-19": "1175bdfb425e9fb25a16848c992fbf79057ef48cceee77e2119b6c70490887b8"
+   },
+   "total_rows": 246,
+   "weeks": {
+    "2024-10-12": 30,
+    "2024-10-19": 216
+   }
+  },
+  "TRUUSD": {
+   "source_sha256": {
+    "2024-10-12": "ea11eb66375ec8681ccf4178ce6daf448d0920ba72970b4103223e37289130c5",
+    "2024-10-19": "28461193b212a04123610ed2120fb1778d6339196a3389a9faeb222759287ff8"
+   },
+   "total_rows": 414,
+   "weeks": {
+    "2024-10-12": 185,
+    "2024-10-19": 229
+   }
+  },
+  "TRXUSD": {
+   "source_sha256": {
+    "2024-10-12": "1944cc9d1ab0a30a9ee66f50aa04ddbbe1ac11896a664c2e51f82065770246e9",
+    "2024-10-19": "6849fb7914f8b81f35a747e16913c120ecebbfc1a53eb1c115b885001a69d7c8"
+   },
+   "total_rows": 3082,
+   "weeks": {
+    "2024-10-12": 1167,
+    "2024-10-19": 1915
+   }
+  },
+  "TUSD": {
+   "source_sha256": {
+    "2024-10-12": "3a8a3afd1636dc22d6588edcea40a184f9c947fd3f567043d521d87acbd4da0c",
+    "2024-10-19": "1a4acf599dbcec9c7f66010c6500de31ffefca398aaa661a48b4f73f7fc71ac4"
+   },
+   "total_rows": 96,
+   "weeks": {
+    "2024-10-12": 14,
+    "2024-10-19": 82
+   }
+  },
+  "TUSDUSD": {
+   "source_sha256": {
+    "2024-10-12": "976322d236786a6f13eb251041714b3d158ecf8bfe2c54e4f9187b965ca92c28",
+    "2024-10-19": "3fb5a6bbd4ccf76ca9b9b12486a01fbe13fe8e8281ae3823b1ed8ae0e78991b8"
+   },
+   "total_rows": 29,
+   "weeks": {
+    "2024-10-12": 15,
+    "2024-10-19": 14
+   }
+  },
+  "TVKUSD": {
+   "source_sha256": {
+    "2024-10-12": "f4baf402f0dbae17093c4ec0338cf4b4c81f767b9a83be092eee1e578523742e",
+    "2024-10-19": "d0a4fd581e0f0b1f22e20c6b383ccb6a3382947cd68ce817b53c15fd087195f3"
+   },
+   "total_rows": 1114,
+   "weeks": {
+    "2024-10-12": 310,
+    "2024-10-19": 804
+   }
+  },
+  "UMAUSD": {
+   "source_sha256": {
+    "2024-10-12": "bf31d81afda4e6e582411f80d4df49d9954885ff1add4c232d5ae7969802f544",
+    "2024-10-19": "dd0a6e135e4750db93d8a8655f8f4c663f927845b934a2e665ec456ebac7c60e"
+   },
+   "total_rows": 852,
+   "weeks": {
+    "2024-10-12": 601,
+    "2024-10-19": 251
+   }
+  },
+  "UNFIUSD": {
+   "source_sha256": {
+    "2024-10-12": "d72f2525a4bc9cc069548271e4c6732a22a1c58e13bf2791afb5250186224960",
+    "2024-10-19": "693c315630c88eac19d74c5be3ab7e867daba30a7a6f350690e4be78c40df241"
+   },
+   "total_rows": 166,
+   "weeks": {
+    "2024-10-12": 96,
+    "2024-10-19": 70
+   }
+  },
+  "UNIUSD": {
+   "source_sha256": {
+    "2024-10-12": "c03ec21b6952fa332d407830f551149bde6dca7f8c2c3ae5574af4ca622bc9ec",
+    "2024-10-19": "8ec990aa7263e8f8b2a70fdfebb1ac3b05affe8bc84a5aea7a4fcd0be25483f7"
+   },
+   "total_rows": 3555,
+   "weeks": {
+    "2024-10-12": 1213,
+    "2024-10-19": 2342
+   }
+  },
+  "USDCUSD": {
+   "source_sha256": {
+    "2024-10-12": "9632223d54851f0e728a0ee6f3d3d38c7af1b70d23336ba5846d9a7db9c38943",
+    "2024-10-19": "beaec5a6cea92208ccb90f255785951e21505d87446d03fca48e2acb814c3f00"
+   },
+   "total_rows": 18981,
+   "weeks": {
+    "2024-10-12": 7820,
+    "2024-10-19": 11161
+   }
+  },
+  "USDTUSD": {
+   "source_sha256": {
+    "2024-10-12": "909e41eee5b1698f6da2c26e07070590613b8fda2a154de7980c04828fe2af2f",
+    "2024-10-19": "32206ec3c4093245fffa6fe5043e1093455739386167c4ebb58d655dccc7efbe"
+   },
+   "total_rows": 60941,
+   "weeks": {
+    "2024-10-12": 26928,
+    "2024-10-19": 34013
+   }
+  },
+  "USTUSD": {
+   "source_sha256": {
+    "2024-10-12": "f7eed0262f5fb43106b41858d4d48128d0af8cc8498849d3196df95e12876717",
+    "2024-10-19": "c95eab007f619e5db215d4702d5275a14a5835bfd76241dfeb877099a96f4a22"
+   },
+   "total_rows": 229,
+   "weeks": {
+    "2024-10-12": 59,
+    "2024-10-19": 170
+   }
+  },
+  "WAXLUSD": {
+   "source_sha256": {
+    "2024-10-12": "3a47a7dd56fb5921fb7505a1713ef8b136d98294d37d49ceb8b45be7b4534435",
+    "2024-10-19": "6c3816dbbd782db43157c20ff99c06e7526e8a3759d7eb3899ebec48341ad3cc"
+   },
+   "total_rows": 1662,
+   "weeks": {
+    "2024-10-12": 365,
+    "2024-10-19": 1297
+   }
+  },
+  "WBTCUSD": {
+   "source_sha256": {
+    "2024-10-12": "05ce56e67df31a612be73faae4224f48d1c923ca5f5e2b20ee3deb4a5ce28521",
+    "2024-10-19": "6f05e2c4dedd10b4fc92ead87a3d4c4acef458f048fa797537a9721aae3fb6dc"
+   },
+   "total_rows": 138,
+   "weeks": {
+    "2024-10-12": 60,
+    "2024-10-19": 78
+   }
+  },
+  "WOOUSD": {
+   "source_sha256": {
+    "2024-10-12": "c26f20a9be27639bfd903232eb148b5b379996a48529772564f6364adb814235",
+    "2024-10-19": "2e05929197d608c6ad9026f05d4aef4797052497bc3b8c2b0abbd80da0ebb050"
+   },
+   "total_rows": 402,
+   "weeks": {
+    "2024-10-12": 158,
+    "2024-10-19": 244
+   }
+  },
+  "XBTPYUSD": {
+   "source_sha256": {
+    "2024-10-12": "6b7f74812d3b7424fad8eaf344472c338b58d6791ff1d9fc5075ad88820ca4ee",
+    "2024-10-19": "404395478dbe1bef9da49af4e620ab7dfe2b16799eda1b9aecf82554e51fb712"
+   },
+   "total_rows": 11,
+   "weeks": {
+    "2024-10-12": 1,
+    "2024-10-19": 10
+   }
+  },
+  "XBTUSD": {
+   "source_sha256": {
+    "2024-10-12": "1fe3d68b4865f870dbbb402808fd1fe6136c04b42970e41582b819b3769687dc",
+    "2024-10-19": "9b9cedda43a22b4a99954cdf019c344d359c373f64bf4b7ce32097418191d421"
+   },
+   "total_rows": 71636,
+   "weeks": {
+    "2024-10-12": 35102,
+    "2024-10-19": 36534
+   }
+  },
+  "XCNUSD": {
+   "source_sha256": {
+    "2024-10-12": "9b2ff37add556e37ee2de776d1d90a5dbc6a803e1382eff0e5ff0c8ed69e695d",
+    "2024-10-19": "15955f94feb98817d3e414118608589df0ec021370587bd31a4789c424b0bc8c"
+   },
+   "total_rows": 281,
+   "weeks": {
+    "2024-10-12": 106,
+    "2024-10-19": 175
+   }
+  },
+  "XDGUSD": {
+   "source_sha256": {
+    "2024-10-12": "2e402a1484ffc9b25b8e4c5a8b4a8f0b90defd13e656ec5e2e1b1852da6d4355",
+    "2024-10-19": "bca14abe53942c9f4446edab171449a1345539870e71d65a60625841cd421197"
+   },
+   "total_rows": 60336,
+   "weeks": {
+    "2024-10-12": 27638,
+    "2024-10-19": 32698
+   }
+  },
+  "XLMUSD": {
+   "source_sha256": {
+    "2024-10-12": "7d2692367ed9723bb538dc91bdb70dad55721d06ae3565b91afbc5d3f518857f",
+    "2024-10-19": "06c45687891d1c0fc5a73d1142cf2905ad8eac515235388e8563c37ff3afc618"
+   },
+   "total_rows": 1755,
+   "weeks": {
+    "2024-10-12": 794,
+    "2024-10-19": 961
+   }
+  },
+  "XMRUSD": {
+   "source_sha256": {
+    "2024-10-12": "6a5fd9c66bed2fe945d13b67374a39f5f44954054f36041c1fa958ed900a5df5",
+    "2024-10-19": "456974b12ee170b6feac399a26c2184cf1fa6951bd659a1a036fef407e9bbf00"
+   },
+   "total_rows": 10682,
+   "weeks": {
+    "2024-10-12": 5010,
+    "2024-10-19": 5672
+   }
+  },
+  "XRPUSD": {
+   "source_sha256": {
+    "2024-10-12": "8625398dfd03d9c2f8a791deb0e3766a65d9dd310ce0eb38812f7176f6584074",
+    "2024-10-19": "ba3de15fe85de1de4eb5e7e9bc49dd7a94a53cdda3f282a33f33f9e2a9cfe1cc"
+   },
+   "total_rows": 12565,
+   "weeks": {
+    "2024-10-12": 5683,
+    "2024-10-19": 6882
+   }
+  },
+  "XRTUSD": {
+   "source_sha256": {
+    "2024-10-12": "9f3da60a335165a2eab1c39961b67238dc2ee9a5b1921467b3f51902e12b1208",
+    "2024-10-19": "6ec4d40416679a4945b0d35e41f225deed9551454d293dd3c77cbdc0f80f03eb"
+   },
+   "total_rows": 62,
+   "weeks": {
+    "2024-10-12": 21,
+    "2024-10-19": 41
+   }
+  },
+  "XTZUSD": {
+   "source_sha256": {
+    "2024-10-12": "409b8b9f6bc7ca9247c6c33f0392de0466bc901916a554aa0f5150d542b39534",
+    "2024-10-19": "9548cb288445e382261e4ee17b7d5f24c1700a7370301502b9567dc21c617f2f"
+   },
+   "total_rows": 522,
+   "weeks": {
+    "2024-10-12": 167,
+    "2024-10-19": 355
+   }
+  },
+  "YFIUSD": {
+   "source_sha256": {
+    "2024-10-12": "bbdb8605fc213d5e3d2d9254b5987ec1faa8df6efc86d9c0a27cbc4dca0eb89e",
+    "2024-10-19": "66f577a2c5b6cef5b523040e636405492089e919897a6a518a72ad5a59d072c9"
+   },
+   "total_rows": 143,
+   "weeks": {
+    "2024-10-12": 48,
+    "2024-10-19": 95
+   }
+  },
+  "YGGUSD": {
+   "source_sha256": {
+    "2024-10-12": "e425d550c64ce9fabd1612f89ec4176244a8cab0ebc99b31626e54c07a9f74e8",
+    "2024-10-19": "742723641aa02f854de9bfeebf656815ab08bb919a3b3559fb20bd6e775b9cfc"
+   },
+   "total_rows": 251,
+   "weeks": {
+    "2024-10-12": 35,
+    "2024-10-19": 216
+   }
+  },
+  "ZECUSD": {
+   "source_sha256": {
+    "2024-10-12": "98fd706f582f21a55900201dcdadbd19b1884d4e08c04593f5e4b4f61b04f6dd",
+    "2024-10-19": "5bdc7e9c07144050ee7e7863b56600d16500c5c6c1d082b1031206f8b06d6895"
+   },
+   "total_rows": 720,
+   "weeks": {
+    "2024-10-12": 299,
+    "2024-10-19": 421
+   }
+  },
+  "ZRXUSD": {
+   "source_sha256": {
+    "2024-10-12": "179567f6bb0fbb2ff09718e9b70ac66a78745d1e17a6a6e76385197a9973a7c2",
+    "2024-10-19": "8922f191dbaa160d1a977beccc6fd37000362baa98f453739df6a9bfcd627884"
+   },
+   "total_rows": 314,
+   "weeks": {
+    "2024-10-12": 120,
+    "2024-10-19": 194
+   }
+  }
+ },
+ "row_order": "source file order; ties within a second keep file order",
+ "schema_version": 1,
+ "script_sha256": "f3d5346219deb10f7bab8f6e6026f492f244b33d9353bf9514fe3a910ca742cd",
+ "start": "2024-10-17T21:00:00+00:00",
+ "total_rows": 720585,
+ "week_starts": [
+  "2024-10-12",
+  "2024-10-19"
+ ]
+}

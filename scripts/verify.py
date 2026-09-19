@@ -674,11 +674,14 @@ def check_orchestrator_empty_registry(ctx: VerifyContext) -> Outcome:
 # db_migrates_from_empty - spec 01
 # --------------------------------------------------------------------------- #
 
-# The nine tables of the storage model in context/architecture-context.md, which is
+# The ten tables of the storage model in context/architecture-context.md, which is
 # the authority. B's runner exports the same set as EXPECTED_TABLES; the criterion
 # cross-checks the two so a drift between the declaration and the SQL is caught.
+# `approvals` joined with migration 0006 (spec 132, Phase 7): why an entry was approved,
+# held between the placing tick and the trade row.
 DOCUMENTED_TABLES = frozenset(
     {
+        "approvals",
         "trades",
         "rejections",
         "runs",
@@ -3716,29 +3719,54 @@ def _decimal_or_none(value: Any) -> Decimal | None:
         return None
 
 
-def _pair_tick_sizes(root: Path) -> tuple[dict[str, Decimal] | None, Outcome | None]:
-    """`tick_size` per pair, as the **fake** exchange's `AssetPairs` serves it.
+#: Spec 127's recording of Kraken's public `AssetPairs`, and its recorded name join from REST
+#: names (`XXBTZUSD`) to v2 symbols (`BTC/USD`). Newest date wins when there are several.
+RECORDED_ASSET_PAIRS_GLOB: Final = "asset_pairs_recorded_*.json"
+RECORDED_PAIR_NAMES_GLOB: Final = "pair_names_recorded_*.json"
 
-    Read through the fake Kraken client rather than out of the JSON directly, so the
-    criterion reads a pair rule the same way the engines do and a change in how one is
-    parsed reaches this gate too. **That is all going through the client buys.** The
-    phase row says "as reported by `AssetPairs`", meaning an exchange value; what the
-    fake serves is invented Phase 0 test data (the fixture's `provenance`), so this is a
-    number somebody here chose, reached by the same path a fetched one would take. An
-    earlier docstring said the tolerance was "an exchange value the system fetches" and
-    that was never true. Operator ruling S2, 2026-09-18.
+
+def _pair_tick_sizes(root: Path) -> tuple[dict[str, Decimal] | None, str, Outcome | None]:
+    """`(tick_size per v2 pair, where it came from, problem)`, from the **recorded** AssetPairs.
+
+    Phase 7 prerequisite 9 and spec 141 step 5. Until 2026-09-19 this read the fake
+    exchange's `asset_pairs.json`, invented Phase 0 test data (operator ruling S2). It now
+    reads spec 127's recording of Kraken's public `AssetPairs`, the response body exactly as
+    received, keyed by v2 symbol through spec 127's recorded name join. **No fallback to the
+    invented file**: without a recording this is PENDING, never the old number. The rules
+    are 2026's, which is what the recording is. A `tick_size` that is absent, unparseable or
+    not positive is not a tolerance, and the pair is left out rather than given one; spec
+    127's own test holds the recording to the live client's parser.
     """
-    fixture = root / "tests" / "fixtures" / "kraken" / "asset_pairs.json"
-    if not fixture.is_file():
-        return None, pending("tests/fixtures/kraken/asset_pairs.json does not exist yet")
-    module, problem = try_import("tests.harness.fake_kraken")
-    if module is None:
-        return None, problem
-    client_cls, missing = module_attr(module, "FakeKrakenClient")
-    if client_cls is None:
-        return None, pending("test doubles unavailable: " + missing)
-    snapshot = asyncio.run(client_cls().asset_pairs())
-    return {pair: rule.tick_size for pair, rule in snapshot.pairs.items()}, None
+    kraken = root / "tests" / "fixtures" / "kraken"
+    recordings = sorted(kraken.glob(RECORDED_ASSET_PAIRS_GLOB))
+    names = sorted(kraken.glob(RECORDED_PAIR_NAMES_GLOB))
+    if not recordings or not names:
+        return None, "", pending(
+            "no recorded AssetPairs and name join under tests/fixtures/kraken/ yet (spec 127, "
+            "prerequisite 9); the invented asset_pairs.json is no longer read"
+        )
+    recording = recordings[-1]
+    try:
+        captured = json.loads(recording.read_bytes().decode("utf-8"))
+        envelope = json.loads(captured["payload"])
+        if envelope.get("error"):
+            return None, "", failed(f"{recording.name} recorded an error: {envelope['error']}")
+        result = envelope["result"]
+        joined = json.loads(names[-1].read_bytes().decode("utf-8"))["pairs"]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return None, "", failed(f"{recording.name} could not be read as a recording: {exc}")
+    tick_sizes: dict[str, Decimal] = {}
+    for entry in joined.values():
+        rule = result.get(str(entry.get("rest_key"))) if isinstance(entry, Mapping) else None
+        tick = _decimal_or_none(rule.get("tick_size")) if isinstance(rule, Mapping) else None
+        if tick is not None and tick > 0 and entry.get("v2_symbol"):
+            tick_sizes[str(entry["v2_symbol"])] = tick
+    captured_at = str((captured.get("provenance") or {}).get("captured_at", "an unstated time"))
+    source = (
+        f"Kraken's public AssetPairs as recorded at {captured_at} "
+        f"(tests/fixtures/kraken/{recording.name}, 2026 rules)"
+    )
+    return tick_sizes, source, None
 
 
 def _candle_builder() -> tuple[Any, Outcome | None]:
@@ -3766,12 +3794,13 @@ def check_candles_match_independent_reduction_of_recorded_trades(ctx: VerifyCont
     volume within 0.1%. Confirming the bars against Kraken's published OHLC is a
     `--live` task.
 
-    **The tolerance is a chosen number, not a fetched one.** It is read through the fake
-    client out of `asset_pairs.json`, which is invented Phase 0 test data. It is also
-    never engaged on the committed fixture: open, high, low and close are each *selected*
-    from the trades, not computed, so two correct reductions agree to the digit, and on
-    2026-09-18 all 9 bars did. The PASS reports the largest difference it saw so that
-    stays visible rather than implied.
+    **The tolerance is Kraken's recorded `tick_size`** since spec 141 step 5 (Phase 7
+    prerequisite 9): spec 127's recording of the public `AssetPairs`, parsed by the live
+    client's mapper. Until 2026-09-19 it was read out of the fake exchange's invented
+    `asset_pairs.json`. It is never engaged on the committed fixture: open, high, low and
+    close are each *selected* from the trades, not computed, so two correct reductions agree
+    to the digit, and on 2026-09-18 all 9 bars did. The PASS reports the largest difference
+    it saw so that stays visible rather than implied.
 
     Until 2026-09-18 this docstring said the tolerance was "fetched, never hardcoded" and
     the messages compared against "Kraken's own OHLC". Both were false from the day it was
@@ -3805,7 +3834,7 @@ def check_candles_match_independent_reduction_of_recorded_trades(ctx: VerifyCont
         return failed("ohlc.json `interval_s` is not a positive integer")
 
     with root_import_path(ctx.root):
-        tick_sizes, early = _pair_tick_sizes(ctx.root)
+        tick_sizes, tolerance_source, early = _pair_tick_sizes(ctx.root)
         if tick_sizes is None:
             return early or pending("no pair rules to read a tolerance from")
         builder, early = _candle_builder()
@@ -3817,9 +3846,8 @@ def check_candles_match_independent_reduction_of_recorded_trades(ctx: VerifyCont
         for pair, payload in pairs.items():
             if pair not in tick_sizes:
                 return failed(
-                    f"{pair} is in ohlc.json and not in asset_pairs.json, so the fake "
-                    "exchange serves no tick_size for it and this criterion will not "
-                    "have one invented"
+                    f"{pair} is in ohlc.json and not in {tolerance_source}, so there is no "
+                    "recorded tick_size for it and this criterion will not have one invented"
                 )
             tick = tick_sizes[pair]
             if not isinstance(payload, Mapping):
@@ -3858,8 +3886,8 @@ def check_candles_match_independent_reduction_of_recorded_trades(ctx: VerifyCont
                     if abs(got - want) > tick:
                         return failed(
                             f"{pair} at ts={ts}: {name} {got} vs the reference reduction's "
-                            f"{want}, more than one tick_size ({tick}, from the fake "
-                            "exchange's invented AssetPairs)"
+                            f"{want}, more than one tick_size ({tick}, from "
+                            f"{tolerance_source})"
                         )
                 want_vol = _decimal_or_none(_field(expected, "volume"))
                 got_vol = _decimal_or_none(_field(candle, "volume"))
@@ -3877,8 +3905,8 @@ def check_candles_match_independent_reduction_of_recorded_trades(ctx: VerifyCont
         f"{len(pairs)} pairs, {checked} bar(s): the builder matches an independent reduction "
         "of real recorded Kraken trades (scripts/ohlc_fixture.py - not Kraken's published "
         f"OHLC), largest OHLC difference {widest}, inside the one-tick_size tolerance taken "
-        "from the fake exchange's invented AssetPairs; volume within 0.1%. Confirming against "
-        "Kraken's published OHLC is a --live task"
+        f"from {tolerance_source}; volume within 0.1%. Confirming against Kraken's published "
+        "OHLC is a --live task"
     )
 
 
@@ -14000,6 +14028,759 @@ def check_equity_row_never_values_positions_it_does_not_hold(ctx: VerifyContext)
 
 
 # --------------------------------------------------------------------------- #
+# Phase 7 - evaluation. Spec 141, registered PENDING-first ahead of its subjects.
+# --------------------------------------------------------------------------- #
+
+#: The committed trial ledger spec 139's gate reads its N from (ruling R9).
+PHASE7_LEDGER: Final = Path("docs") / "dataset" / "phase-7-trial-ledger.json"
+
+#: Spec 139's fabricated model: fifteen non-overlapping trades whose unwidened 95% lower
+#: bound is above zero and whose Bonferroni-widened bound at the ledger's count is not. Net
+#: returns on a 1,000 entry notional (10 units at 100).
+PROMOTION_FIXTURE_RETURNS: Final[tuple[str, ...]] = (
+    "0.004", "-0.002", "0.006", "0.001", "0.003", "-0.001", "0.005", "0.002", "0.000",
+    "0.004", "0.003", "-0.002", "0.006", "0.001", "0.002",
+)
+
+PHASE7_NOW: Final = datetime(2026, 9, 20, 9, 30, tzinfo=UTC)
+
+
+def _promotion_trades(contracts: Any, run_id: str) -> list[Any]:
+    """The fixture's trades as real `TradeRow`s, an hour apart, ten minutes each."""
+    start = 1_720_000_000_000_000
+    minute = 60_000_000
+    rows = []
+    for index, net in enumerate(PROMOTION_FIXTURE_RETURNS):
+        opened = start + index * 60 * minute
+        realised = Decimal(net) * Decimal(1000)
+        rows.append(
+            contracts.TradeRow(
+                trade_id=f"verify-promotion-{index:02d}",
+                position_id=f"verify-position-{index:02d}",
+                run_id=run_id,
+                cycle_id=index + 1,
+                pair=f"P{index:02d}/USD",
+                base=f"P{index:02d}",
+                quote="USD",
+                qty=Decimal(10),
+                entry_price=Decimal(100),
+                exit_price=Decimal(100),
+                entry_fee=Decimal(0),
+                exit_fee=Decimal(0),
+                opened_at=opened,
+                closed_at=opened + 10 * minute,
+                outcome="target" if Decimal(net) > 0 else "stop",
+                realised_pnl=realised,
+                realised_pnl_pct=Decimal(net),
+                realised_pnl_quote=realised,
+                reporting_currency="USD",
+                fx_rate_entry=Decimal(1),
+                fx_rate_exit=Decimal(1),
+                updated_at=opened + 10 * minute,
+            )
+        )
+    return rows
+
+
+def _judge_fixture(
+    tmp: Path, name: str, engine_cls: Any, ledger: Path, run_id: str
+) -> tuple[Any, list[Any], Outcome | None]:
+    """Engine 20's promotion gate over the fixture in a fresh store: `(result, rows, problem)`."""
+    contracts, problem = try_import("acsoe.clients.store.contracts")
+    if contracts is None:
+        return None, [], problem or pending("clients.store.contracts does not exist yet")
+    db_path, store_cls, problem = _migrated_db(tmp, name)
+    if db_path is None:
+        return None, [], problem or pending("the store could not be migrated")
+    store = store_cls(db_path)
+    try:
+        for trade in _promotion_trades(contracts, run_id):
+            store.write_trade(trade)
+        clients, problem = _fake_clients(store=store)
+        if clients is None:
+            return None, [], problem or pending("the shared test doubles are unavailable")
+        config, problem = _phase3_config()
+        if config is None:
+            return None, [], problem or pending("the committed config could not be loaded")
+        context, problem = _engine_context(config, clients, run_id="verify-phase-7", now=PHASE7_NOW)
+        if context is None:
+            return None, [], problem or pending("acsoe.core.contracts does not exist yet")
+        result = engine_cls(promote_run_id=run_id, ledger_path=ledger).process(context, {})
+        rows = list(
+            store.leaderboard_entries(model_id="chain_run", model_version=run_id, fold=None)
+        )
+    finally:
+        store.close()
+    return result, rows, None
+
+
+def check_promotion_gate_rejects_haircut_edge(ctx: VerifyContext) -> Outcome:
+    """Spec 139's fabricated model, judged through the real engine 20 and the real store.
+
+    The Phase 7 row's second clause: "promotion gate rejects a model whose edge does not
+    survive the trial haircut". Fifteen trades whose unwidened 95% lower bound on net
+    return per trade is above zero are rejected at the committed ledger's trial count and
+    promoted at a count of one, so the rejection is shown to be the haircut's doing and not
+    a gate that refuses everything. The N used is the committed ledger's, read here.
+    """
+    ledger = ctx.root / PHASE7_LEDGER
+    with root_import_path(ctx.root):
+        promotion, problem = try_import("acsoe.modelling.promotion")
+        if promotion is None:
+            # Not `problem or pending(...)`: `try_import`'s PENDING is truthy and would win,
+            # and the spec that owes the subject would never reach the operator.
+            if problem is not None and problem.result is Result.FAIL:
+                return problem
+            return pending("acsoe.modelling.promotion does not exist yet (spec 139)")
+        engine_cls, problem = _phase5_engine_class("tournament")
+        if engine_cls is None:
+            if problem is not None and problem.result is Result.FAIL:
+                return problem
+            return pending("engine 20 `tournament` does not exist yet (spec 74; gate spec 139)")
+        if "promote_run_id" not in inspect.signature(engine_cls).parameters:
+            return pending(
+                "engine 20 `tournament` has no promotion gate yet: it takes no "
+                "`promote_run_id` (spec 139)"
+            )
+        if not ledger.is_file():
+            return pending(f"{PHASE7_LEDGER.as_posix()} does not exist yet (spec 139, R9)")
+        payload = json.loads(ledger.read_bytes().decode("utf-8"))
+        trials = payload.get("trial_count") if isinstance(payload, Mapping) else None
+        if not isinstance(trials, int) or trials < 2:
+            return failed(
+                f"{PHASE7_LEDGER.as_posix()} states a trial_count of {trials!r}. The haircut "
+                "can only be shown against a count above one."
+            )
+        with tempfile.TemporaryDirectory(prefix="acsoe-verify-promotion-") as raw_tmp:
+            tmp = Path(raw_tmp)
+            one = tmp / "ledger-one.json"
+            one.write_bytes(
+                json.dumps(
+                    {"trial_count": 1, "trials": [{"family": "verify", "source": "verify"}]}
+                ).encode("utf-8")
+            )
+            at_n, rows_n, problem = _judge_fixture(
+                tmp, "at-n.sqlite", engine_cls, ledger, "verify-haircut"
+            )
+            if problem is not None:
+                return problem
+            at_one, rows_one, problem = _judge_fixture(
+                tmp, "at-one.sqlite", engine_cls, one, "verify-haircut"
+            )
+            if problem is not None:
+                return problem
+        values = [float(Decimal(net)) for net in PROMOTION_FIXTURE_RETURNS]
+        n = len(values)
+        mean = sum(values) / n
+        unwidened = mean - promotion.student_t_quantile(0.975, n - 1) * (
+            promotion.hac_standard_error(values, 0)
+        )
+
+    for label, result in (("at the ledger's count", at_n), ("at one trial", at_one)):
+        if str(getattr(result, "status", "")) != "OK":
+            return failed(
+                f"engine 20 did not judge the fixture {label}: "
+                f"{getattr(result, 'status', None)} - {str(getattr(result, 'reason', ''))[:300]}"
+            )
+    if unwidened <= 0:
+        return failed(
+            f"the fixture's unwidened 95% lower bound is {unwidened:.6f}, not above zero, so "
+            "a rejection could not be attributed to the haircut; the fixture is wrong"
+        )
+    data_n, data_one = at_n.data, at_one.data
+    if len(rows_n) != 1 or len(rows_one) != 1:
+        return failed(
+            f"engine 20 wrote {len(rows_n)} and {len(rows_one)} verdict rows; one per judged "
+            "run is the record the leaderboard screen and the report read"
+        )
+    if data_n.get("trial_count") != trials:
+        return failed(
+            f"engine 20 judged with N = {data_n.get('trial_count')!r}; the committed ledger "
+            f"says {trials}"
+        )
+    if data_n.get("promoted") is not False or rows_n[0].promoted is not False:
+        return failed(
+            f"at the ledger's {trials} trials the fabricated model was promoted (lower bound "
+            f"{data_n.get('lower_bound')!r}); its edge does not survive the haircut and the "
+            "gate let it through"
+        )
+    if data_n.get("promotion_reason_code") != "promotion_lower_bound_not_above_zero":
+        return failed(
+            f"the rejection carries reason {data_n.get('promotion_reason_code')!r}, not "
+            "promotion_lower_bound_not_above_zero"
+        )
+    if data_one.get("promoted") is not True or rows_one[0].promoted is not True:
+        return failed(
+            f"at one trial the same trades were not promoted (lower bound "
+            f"{data_one.get('lower_bound')!r}), so the gate refuses what the haircut should "
+            "decide and the rejection above proves nothing about the haircut"
+        )
+    return passed(
+        f"spec 139's fabricated model, {n} non-overlapping trades, mean net return "
+        f"{mean:.4%} per trade: unwidened 95% lower bound {unwidened:.4%}, above zero. At the "
+        f"committed ledger's {trials} trials the interval is widened to confidence "
+        f"{data_n['confidence']:.6f} (t quantile {data_n['t_quantile']:.3f}, HAC lag "
+        f"{data_n['hac_lag']}) and its lower bound is {data_n['lower_bound']:.4%}: rejected, "
+        f"promotion_lower_bound_not_above_zero, deflated Sharpe ratio "
+        f"{data_n['deflated_sharpe']:.4f} reported beside it. The same trades at one trial: "
+        f"lower bound {data_one['lower_bound']:.4%}, promoted. Real engine 20, real store"
+    )
+
+
+#: The two modules allowed to read the declared fee schedule (invariant 2's amendment).
+FEE_SCENARIO_READERS: Final = (
+    Path("src") / "acsoe" / "clients" / "kraken" / "replay.py",
+    Path("src") / "acsoe" / "clients" / "kraken" / "replay_scenario.py",
+)
+#: What "reads the scenario fixtures" looks like in a module: a declared fixture's name, their
+#: directory, or a loader. The set may widen and never narrow (lead ruling 2026-09-19, when the
+#: directory marker first caught a module writing a trade slice beside the fixtures: the slice
+#: moved, and the fixtures' and loaders' own names were added alongside the directory).
+FEE_SCENARIO_MARKERS: Final = (
+    "kraken_fee_schedule",
+    "spread_book_table",
+    "fixtures/replay",
+    "load_fee_scenario",
+    "load_spread_table",
+)
+FEE_SCENARIO_LOADERS: Final = frozenset({"load_fee_scenario", "load_spread_table"})
+FEE_SCENARIO_MODULE: Final = "acsoe.clients.kraken.replay_scenario"
+#: The one module that **writes** a declared fixture, pinned by exact path to the only markers
+#: its job needs (lead ruling D22, 2026-09-19). `scripts/build_bucket_table.py` is spec 130's
+#: builder of the declared spread and depth table: it writes
+#: `tests/fixtures/replay/spread_book_table_<stamp>.json` and reads no fee and prices nothing.
+#: Any other marker in it is still a hit, and no other module is covered. Rejected: moving the
+#: builder into the replay client (an offline builder in a runtime client, another lane), a
+#: "writes but never reads" rule (not provable from an AST), and scanning `src/` only (narrows
+#: the check).
+FEE_SCENARIO_PRODUCERS: Final[dict[Path, frozenset[str]]] = {
+    Path("scripts") / "build_bucket_table.py": frozenset({"spread_book_table", "fixtures/replay"}),
+}
+
+
+def _joined_path_pieces(node: ast.AST) -> str | None:
+    """The string pieces of a path built with `/` or passed to one call, joined with `/`.
+
+    Catches `Path("tests") / "fixtures" / "replay"` and `Path("tests", "fixtures", "replay")`,
+    which name the directory without ever spelling `fixtures/replay` in one constant.
+    """
+    pieces: list[str] = []
+
+    def flatten(item: ast.AST) -> None:
+        if isinstance(item, ast.BinOp) and isinstance(item.op, ast.Div):
+            flatten(item.left)
+            flatten(item.right)
+        elif isinstance(item, ast.Call):
+            for argument in item.args:
+                flatten(argument)
+        elif isinstance(item, ast.Constant) and isinstance(item.value, str):
+            pieces.append(item.value)
+        else:
+            pieces.append("<not a string>")
+
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        flatten(node)
+    elif isinstance(node, ast.Call) and len(node.args) > 1:
+        for argument in node.args:
+            flatten(argument)
+    else:
+        return None
+    return "/".join(pieces) if len(pieces) > 1 else None
+
+
+def _fee_scenario_readers(root: Path) -> list[str]:
+    """Every module under `src/` and `scripts/` that names the declared fee, bar the two.
+
+    Read off the syntax tree: a string constant carrying a marker, a name or attribute
+    spelled like the loader, or an import of the scenario module. `scripts/verify.py` is
+    skipped, because it names the markers in order to look for them.
+    """
+    allowed = {(root / path).resolve() for path in FEE_SCENARIO_READERS}
+    producers = {(root / path).resolve(): marks for path, marks in FEE_SCENARIO_PRODUCERS.items()}
+    found: list[str] = []
+    for base in (root / "src", root / "scripts"):
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.py")):
+            if path.resolve() in allowed or path.name == "verify.py":
+                continue
+            try:
+                tree = ast.parse(path.read_bytes().decode("utf-8"))
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            excused = producers.get(path.resolve(), frozenset())
+            for node in ast.walk(tree):
+                hit = None
+                joined = _joined_path_pieces(node)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    text = node.value.replace("\\", "/")
+                    hit = next((m for m in FEE_SCENARIO_MARKERS if m in text), None)
+                elif joined is not None:
+                    hit = next((m for m in FEE_SCENARIO_MARKERS if m in joined), None)
+                elif isinstance(node, ast.Name | ast.Attribute):
+                    name = node.id if isinstance(node, ast.Name) else node.attr
+                    hit = name if name in FEE_SCENARIO_LOADERS else None
+                elif isinstance(node, ast.ImportFrom) and (
+                    node.module == FEE_SCENARIO_MODULE
+                    or any(f"{node.module}.{a.name}" == FEE_SCENARIO_MODULE for a in node.names)
+                ):
+                    hit = FEE_SCENARIO_MODULE
+                elif isinstance(node, ast.Import):
+                    hit = next(
+                        (a.name for a in node.names if a.name == FEE_SCENARIO_MODULE), None
+                    )
+                if hit is not None and hit not in excused:
+                    found.append(f"{path.relative_to(root).as_posix()}: {hit}")
+                    break
+    return found
+
+
+def check_fee_scenario_is_replay_only(ctx: VerifyContext) -> Outcome:
+    """Invariant 2's amendment of 2026-09-19, enforced by test as ruled.
+
+    A declared fee may price a replay and nothing else. Two halves: the replay client
+    refuses construction in paper and in live (through its constructor and through
+    `from_config`, the latter before it opens any fixture), and accepts it in replay; and
+    no module outside the replay client names the declared fee schedule.
+    """
+    with root_import_path(ctx.root):
+        replay, problem = try_import("acsoe.clients.kraken.replay")
+        if replay is None:
+            if problem is not None and problem.result is Result.FAIL:
+                return problem
+            return pending(
+                "acsoe.clients.kraken.replay does not exist yet (spec 129, the replay client)"
+            )
+        client_cls, missing = module_attr(replay, "ReplayKrakenClient")
+        if client_cls is None:
+            return pending(missing)
+        refusal, missing = module_attr(replay, "ReplayModeError")
+        if refusal is None:
+            return pending(missing)
+
+        class _Rules:
+            rules: Mapping[str, Any] = {}
+
+        class _Scenario:
+            rules = _Rules()
+
+        class _Untouchable:
+            """A config any read of which is a fixture opened before the mode check."""
+
+            def __init__(self, mode: str) -> None:
+                self.mode = mode
+                self.reads: list[str] = []
+
+            def get(self, key: str) -> Any:
+                self.reads.append(key)
+                raise AssertionError(f"read {key} before refusing mode {self.mode}")
+
+        verdicts: list[str] = []
+        for mode in ("paper", "live"):
+            try:
+                client_cls(
+                    mode=mode, clock=None, scenario=_Scenario(), tape=None,
+                    interval_s=900, published_bars=200,
+                )
+            except refusal:
+                pass
+            else:
+                return failed(f"the replay client was constructed in mode {mode!r}")
+            config = _Untouchable(mode)
+            try:
+                client_cls.from_config(config, clock=None, root=ctx.root)
+            except refusal:
+                pass
+            except AssertionError:
+                return failed(
+                    f"from_config in mode {mode!r} read {config.reads} before refusing: a "
+                    "paper or live process opened the declared scenario"
+                )
+            else:
+                return failed(f"from_config built a replay client in mode {mode!r}")
+            if config.reads:
+                return failed(f"from_config in mode {mode!r} read {config.reads} first")
+            verdicts.append(mode)
+        try:
+            client_cls(
+                mode="replay", clock=None, scenario=_Scenario(), tape=None,
+                interval_s=900, published_bars=200,
+            )
+        except refusal as exc:
+            return failed(f"the replay client refused mode 'replay' too: {exc}")
+    readers = _fee_scenario_readers(ctx.root)
+    if readers:
+        return failed(
+            "outside the replay client, these modules name the declared fee schedule: "
+            + "; ".join(readers[:5])
+            + ". Invariant 2 permits a declared fee in replay mode only, and the replay "
+            "client is the one reader that refuses every other mode."
+        )
+    return passed(
+        "the replay client refused construction in "
+        + " and ".join(verdicts)
+        + " (constructor, and from_config before reading any key) and accepted replay; no "
+        "module under src/ or scripts/ outside clients/kraken/replay.py and "
+        "replay_scenario.py names the declared fee schedule "
+        "(tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json)"
+    )
+
+
+#: Where spec 143 commits one attribution digest per run: the JSON of
+#: `python -m acsoe.research.attribution --db <run> --json <file>`, i.e.
+#: `AttributionReport.to_dict()`.
+ALPHA_DIGESTS: Final = Path("tests") / "fixtures" / "phase7"
+ALPHA_DIGEST_GLOB: Final = "run-digest-*.json"
+ALPHA_DAY_US: Final = 86_400 * 1_000_000
+#: How far a stated fit may sit from the one recomputed from the digest's own series. Both
+#: are the same double arithmetic over the same numbers, so anything wider is a disagreement.
+ALPHA_FIT_TOLERANCE: Final = 1e-9
+ALPHA_DIGEST_KEYS: Final[tuple[str, ...]] = (
+    "grid_us", "equity_levels", "btc_levels", "basket_levels", "btc", "basket", "flat_days",
+    "window_start_us", "window_end_us", "tail_excluded_s", "coverage", "scenario_digest",
+    "scenario_description", "run_ids",
+)
+ALPHA_FIT_FIELDS: Final[tuple[str, ...]] = (
+    "n_days", "alpha_daily", "alpha_ci", "beta", "beta_ci", "alpha_se_hac", "hac_lag",
+    "significant",
+)
+
+
+def _alpha_iso(micros: int) -> str:
+    return datetime.fromtimestamp(micros / 1_000_000, UTC).strftime("%Y-%m-%dT%H:%MZ")
+
+
+def _alpha_fit_disagreements(stated: Any, recomputed: Any, label: str) -> list[str]:
+    """Every field of a stated fit that the recomputation from the series does not reproduce."""
+    if recomputed is None or stated is None:
+        if (recomputed is None) != (stated is None):
+            return [
+                (
+                    f"the {label} fit is {'absent' if stated is None else 'stated'} in the "
+                    f"digest and {'absent' if recomputed is None else 'present'} when recomputed"
+                )
+            ]
+        return []
+    out = []
+    for name in ALPHA_FIT_FIELDS:
+        want, got = stated.get(name), getattr(recomputed, name)
+        if isinstance(got, bool) or isinstance(want, bool) or isinstance(got, int):
+            same = want == got
+        else:
+            pairs = list(zip(want, got, strict=True)) if isinstance(got, tuple) else [(want, got)]
+            same = all(
+                isinstance(w, int | float)
+                and math.isclose(float(w), g, rel_tol=ALPHA_FIT_TOLERANCE, abs_tol=1e-15)
+                for w, g in pairs
+            )
+        if not same:
+            out.append(f"the {label} fit states {name} {want!r}; its series give {got!r}")
+    return out
+
+
+def _alpha_digest_problems(attribution: ModuleType, digest: Any) -> list[str]:
+    """Why a digest is not internally consistent, or nothing.
+
+    Checked from the digest's own contents, never by trusting a figure it states about
+    itself: the grid is whole days from the window's start; every day is regressed, flat ones
+    included, so both fits count every grid day; every decision bar of the window carries an
+    equity row; both regressions recompute from the series (spec 138's `regress_digest`); and
+    the scenario digest is the sha256 of the description it travels with.
+    """
+    if not isinstance(digest, Mapping):
+        return ["the digest is not a JSON object"]
+    missing = [key for key in ALPHA_DIGEST_KEYS if key not in digest]
+    if missing:
+        return ["the digest carries no " + ", ".join(missing)]
+    problems: list[str] = []
+    grid = [int(v) for v in digest["grid_us"]]
+    if len(grid) < 4:
+        return [f"the grid holds {len(grid)} point(s); a regression needs at least four"]
+    steps = {grid[i + 1] - grid[i] for i in range(len(grid) - 1)}
+    if steps != {ALPHA_DAY_US}:
+        problems.append("the grid is not whole days apart")
+    start, end = int(digest["window_start_us"]), int(digest["window_end_us"])
+    if grid[0] != start:
+        problems.append(
+            f"the grid starts {_alpha_iso(grid[0])} and the window {_alpha_iso(start)}: the "
+            "benchmark was not marked over the run's own window"
+        )
+    tail = end - grid[-1]
+    if not 0 <= tail < ALPHA_DAY_US or int(digest["tail_excluded_s"]) != tail // 1_000_000:
+        problems.append(
+            f"the grid ends {_alpha_iso(grid[-1])} against a window ending {_alpha_iso(end)}, "
+            f"and the digest states a tail of {digest['tail_excluded_s']} s"
+        )
+    series = {name: digest[name] for name in ("equity_levels", "btc_levels", "basket_levels")}
+    for name, values in series.items():
+        if len(values) != len(grid):
+            problems.append(f"{name} has {len(values)} points against a grid of {len(grid)}")
+    if problems:
+        return problems
+    equity = [float(v) for v in series["equity_levels"]]
+    returns = [equity[i + 1] / equity[i] - 1.0 for i in range(len(equity) - 1)]
+    flat = sum(1 for r in returns if r == 0.0)
+    if int(digest["flat_days"]) != flat:
+        problems.append(
+            f"the digest states {digest['flat_days']} flat day(s); its equity series has {flat}"
+        )
+    for label in ("btc", "basket"):
+        fit = digest[label]
+        if fit is not None and int(fit.get("n_days", -1)) != len(returns):
+            problems.append(
+                f"the {label} fit regressed {fit.get('n_days')} day(s) of {len(returns)}: days "
+                "were dropped, and a regression that drops the flat days is not one over the "
+                "full curve including cash periods"
+            )
+    coverage = digest["coverage"]
+    bars = coverage.get("decision_bars") if isinstance(coverage, Mapping) else None
+    expected = coverage.get("decision_bars_expected") if isinstance(coverage, Mapping) else None
+    if not isinstance(bars, int) or bars != expected:
+        problems.append(
+            f"{bars!r} decision bars carry an equity row of {expected!r} in the window: a tick "
+            "with no row is a day the curve does not cover"
+        )
+    floor = max(1, attribution.newey_west_rule(len(returns)))
+    for label in ("btc", "basket"):
+        fit = digest[label]
+        if fit is not None and int(fit.get("hac_lag", -1)) < floor:
+            problems.append(
+                f"the {label} fit's HAC lag is {fit.get('hac_lag')}, below the Newey-West rule's "
+                f"{floor} for {len(returns)} days: consecutive days that share positions were "
+                "treated as independent"
+            )
+    recomputed = attribution.regress_digest(digest)
+    problems += _alpha_fit_disagreements(digest["btc"], recomputed["btc"], "BTC/USD")
+    problems += _alpha_fit_disagreements(digest["basket"], recomputed["basket"], "basket")
+    description = digest["scenario_description"]
+    stated = digest["scenario_digest"]
+    if not isinstance(description, Mapping) or not isinstance(stated, str):
+        problems.append("the digest names no replay scenario, so its window, tier and ranking are unknown")
+    else:
+        canonical = json.dumps(description, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        actual = hashlib.sha256(canonical.encode("ascii")).hexdigest()
+        if actual != stated:
+            problems.append(
+                f"the scenario digest {stated[:12]} is not the sha256 of the description the "
+                f"digest carries ({actual[:12]})"
+            )
+    return problems
+
+
+def _alpha_digest_summary(digest: Mapping[str, Any]) -> str:
+    """Window, tier, ranking, scenario and both benchmarks, as the spec asks the message to."""
+    description = digest["scenario_description"]
+    fee = description.get("fee") if isinstance(description, Mapping) else None
+    tier = fee.get("tier") if isinstance(fee, Mapping) else None
+    ranking = description.get("ranking") if isinstance(description, Mapping) else None
+
+    def fit(label: str, value: Any) -> str:
+        if value is None:
+            return f"{label}: not regressed (the run held nothing)"
+        verdict = "significant" if value["significant"] else "not significant"
+        low, high = value["alpha_ci"]
+        return (
+            f"{label}: alpha {value['alpha_daily']:+.6f}/day (95% CI {low:+.6f} to "
+            f"{high:+.6f}, {verdict}), beta {value['beta']:.3f}, {value['n_days']} days"
+        )
+
+    return (
+        f"window {_alpha_iso(int(digest['window_start_us']))} to "
+        f"{_alpha_iso(int(digest['window_end_us']))}, tier {tier}, ranking {ranking}, scenario "
+        f"{str(digest['scenario_digest'])[:12]}; "
+        + fit("BTC/USD buy-and-hold", digest["btc"])
+        + "; "
+        + fit("held-pairs basket", digest["basket"])
+    )
+
+
+def _alpha_pipeline(attribution: ModuleType, config: Any, tmp: Path) -> tuple[Any, Outcome | None]:
+    """A fabricated six-day run through the real store, the real partition reader and the
+    real report, returned as the JSON digest spec 143 would commit.
+
+    The run is the subject and is fabricated; the store, its row models, the report and the
+    partition reader are the real ones. A bar tick every fifteen minutes, one position held
+    over days 1 to 4 with the equity moving only then, so days 0 and 5 are flat, and a BTC
+    tape with a trade every bar. The report's window must be exactly the run's.
+    """
+    contracts, problem = try_import("acsoe.clients.store.contracts")
+    if contracts is None:
+        return None, problem or pending("clients.store.contracts does not exist yet")
+    import polars as pl
+
+    db_path, store_cls, problem = _migrated_db(tmp, "alpha-pipeline.sqlite")
+    if db_path is None:
+        return None, problem or pending("the store could not be migrated")
+    bar_s = int(config.get("timeframes.decision_bar_s"))
+    start_s = 1_720_224_000  # 2024-07-06 00:00 UTC, a Saturday and a partition week's start
+    bars = 6 * 86_400 // bar_s
+    partitions = tmp / "trades_weekly"
+    weeks: dict[str, dict[str, int]] = {}
+    for archive, base in (("XBTUSD", 57_000.0), ("AAAUSD", 2.0)):
+        (partitions / archive).mkdir(parents=True)
+        stamps = [start_s + k * bar_s for k in range(bars + 1)]
+        prices = [f"{base * (1 + 0.004 * math.sin(k / 7.0) + 0.0001 * k):.4f}" for k in range(bars + 1)]
+        pl.DataFrame({"ts": stamps, "price": prices, "volume": ["1"] * len(stamps)}).write_parquet(
+            partitions / archive / "2024-07-06.parquet"
+        )
+        weeks[archive] = {"2024-07-06": len(stamps)}
+    manifest = partitions / "manifest.json"
+    manifest.write_bytes(json.dumps({"pairs": {a: {"weeks": w} for a, w in weeks.items()}}).encode())
+    names = tmp / "pair_names.json"
+    names.write_bytes(
+        json.dumps(
+            {"pairs": {"XBTUSD": {"v2_symbol": "BTC/USD"}, "AAAUSD": {"v2_symbol": "AAA/USD"}}}
+        ).encode()
+    )
+
+    def sha(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    description = {
+        "kind": "acsoe-replay-scenario",
+        "fee": {"tier": 3},
+        "ranking": "expected_move",
+        "partitions": {
+            "manifest": manifest.relative_to(tmp).as_posix(),
+            "sha256": sha(manifest),
+            "archive_pairs_without_rules": ["ZZZUSD"],
+        },
+        "pair_rules": {"files": [{"file": names.relative_to(tmp).as_posix(), "sha256": sha(names)}]},
+    }
+    text = json.dumps(description, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    store = store_cls(db_path)
+    try:
+        store.start_run(
+            "replay-verify-alpha", mode="replay", started_at=start_s * 1_000_000,
+            scenario_digest=hashlib.sha256(text.encode("ascii")).hexdigest(),
+            scenario_description=text,
+        )
+        level = Decimal("10000")
+        for k in range(bars + 1):
+            ts = (start_s + k * bar_s) * 1_000_000
+            if 96 <= k < 480 and k % 5 == 0:
+                level += Decimal("1.5") if k % 3 else Decimal("-0.9")
+            store.write_equity_snapshot(
+                contracts.EquitySnapshotRow(
+                    cycle_id=k + 1, run_id="replay-verify-alpha", ts=ts, currency="USD",
+                    equity=level, peak_equity=level, cash=level, positions_value=Decimal(0),
+                    unrealised_pnl=Decimal(0), realised_pnl_cum=Decimal(0),
+                    open_position_count=0, cash_source=contracts.CashSource.CYCLE_START,
+                    updated_at=ts,
+                )
+            )
+        opened, closed = (start_s + 96 * bar_s) * 1_000_000, (start_s + 480 * bar_s) * 1_000_000
+        store.write_position(
+            contracts.PositionRow(
+                position_id="verify-alpha-1", run_id="replay-verify-alpha", cycle_id=97,
+                pair="AAA/USD", base="AAA", quote="USD",
+                status=contracts.PositionStatus.CLOSED, qty=Decimal("10"),
+                entry_price=Decimal("2"), target_price=Decimal("2.06"),
+                stop_price=Decimal("1.97"), timeout_at=closed, opened_at=opened,
+                closed_at=closed, updated_at=closed,
+            )
+        )
+    finally:
+        store.close()
+    report = attribution.attribute(
+        db_path, marks=attribution.marks_from_description(description, tmp), decision_bar_s=bar_s
+    )
+    digest = json.loads(json.dumps(report.to_dict()))
+    window = (start_s * 1_000_000, (start_s + bars * bar_s) * 1_000_000)
+    stated = (digest.get("window_start_us"), digest.get("window_end_us"))
+    if stated != window:
+        return None, failed(
+            f"the report's window is {_alpha_iso(int(stated[0]))} to {_alpha_iso(int(stated[1]))} "
+            f"for a fabricated run spanning {_alpha_iso(window[0])} to {_alpha_iso(window[1])}: "
+            "the benchmark is not following the run's own window"
+        )
+    return digest, None
+
+
+def check_backtest_emits_alpha_report(ctx: VerifyContext) -> Outcome:
+    """The Phase 7 row's first clause: an alpha-versus-benchmark report from the full equity
+    curve including cash periods, judged on the committed digest of each real run.
+
+    `data/` is gitignored, so each run is judged through the digest spec 143 commits under
+    `tests/fixtures/phase7/` (`run-digest-*.json`, the JSON of spec 138's report), checked
+    for internal consistency by `_alpha_digest_problems`. Before any digest is read, a
+    fabricated six-day run is taken through the real store, partition reader and report, and
+    its digest must pass the same check, so the check is shown to accept a genuine report on
+    a fresh clone. PENDING until a digest is committed, which is after the run ends.
+
+    **The one-day pipeline run spec 141 names is this criterion's `--live` half** (lead
+    ruling 2026-09-19): the chain needs each fold's model artefacts, which live under the
+    gitignored `models/`, so it cannot run on a fresh clone. The fresh-clone half is the
+    fabricated run and the digest check above. The `--live` half is not built yet.
+    """
+    with root_import_path(ctx.root):
+        attribution, problem = try_import("acsoe.research.attribution")
+        if attribution is None:
+            if problem is not None and problem.result is Result.FAIL:
+                return problem
+            return pending(
+                "acsoe.research.attribution does not exist yet (spec 138, alpha against both "
+                "benchmarks)"
+            )
+        for attr in ("attribute", "regress_digest", "marks_from_description", "newey_west_rule"):
+            if not callable(getattr(attribution, attr, None)):
+                return pending(f"acsoe.research.attribution has no {attr} yet (spec 138)")
+        config, problem = _phase3_config()
+        if config is None:
+            return problem or pending("the committed config could not be loaded")
+        with tempfile.TemporaryDirectory(prefix="acsoe-verify-alpha-") as raw_tmp:
+            try:
+                fabricated, problem = _alpha_pipeline(attribution, config, Path(raw_tmp))
+            except attribution.AttributionError as exc:
+                return failed(
+                    "the report refused a fabricated run taken through the real store: "
+                    + str(exc)[:300]
+                )
+            if fabricated is None:
+                return problem or pending("the fabricated run could not be built")
+            own = _alpha_digest_problems(attribution, fabricated)
+        if own:
+            return failed(
+                "a fabricated run taken through the real store and report produced a digest "
+                "the consistency check refuses: " + "; ".join(own[:3])
+            )
+        digests = sorted((ctx.root / ALPHA_DIGESTS).glob(ALPHA_DIGEST_GLOB))
+        if not digests:
+            return pending(
+                "no committed digest of a Phase 7 run exists yet under tests/fixtures/phase7/ "
+                "(spec 143 commits one per run when it ends); the report pipeline itself ran "
+                "on a fabricated six-day run and its digest checked consistent"
+            )
+        verdicts = []
+        for path in digests:
+            try:
+                digest = json.loads(path.read_bytes().decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                return failed(f"{path.name} is not JSON: {exc}")
+            found = _alpha_digest_problems(attribution, digest)
+            if found:
+                return failed(f"{path.name}: " + "; ".join(found[:4]))
+            verdicts.append(f"{path.name}: {_alpha_digest_summary(digest)}")
+    return passed(
+        f"{len(digests)} run digest(s), each internally consistent (whole-day grid from the "
+        "run's own window, every day regressed with flat days included, every decision bar "
+        "carrying an equity row, both fits recomputed from the series, the scenario digest the "
+        "sha256 of its description). " + " | ".join(verdicts)
+    )
+
+
+def check_research_screens_render(ctx: VerifyContext) -> Outcome:
+    """The Phase 7 row's third clause: the leaderboard and SHAP view render from a seeded
+    database, the SHAP rows written by engine 19. PENDING until spec 140 lands the writer:
+    nothing writes a SHAP row today, so there is nothing for the view to render."""
+    del ctx
+    return pending(
+        "nothing writes a SHAP row yet, so the SHAP view has nothing to render (spec 140, the "
+        "SHAP writer and the research screens)"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Registration
 # --------------------------------------------------------------------------- #
 
@@ -14303,6 +15084,18 @@ register(
         check_equity_row_never_values_positions_it_does_not_hold,
     ),
 )
+
+# Phase 7 - evaluation. Spec 141, registered PENDING-first ahead of the subjects it judges,
+# for the reason every phase since Phase 0 has done so: a phase with nothing in it must
+# not be able to report as finished. The row's three clauses first, in the row's order,
+# then invariant 2's amendment of 2026-09-19.
+register(7, Criterion("backtest_emits_alpha_report", check_backtest_emits_alpha_report))
+register(
+    7,
+    Criterion("promotion_gate_rejects_haircut_edge", check_promotion_gate_rejects_haircut_edge),
+)
+register(7, Criterion("research_screens_render", check_research_screens_render))
+register(7, Criterion("fee_scenario_is_replay_only", check_fee_scenario_is_replay_only))
 
 
 # --------------------------------------------------------------------------- #

@@ -39,6 +39,7 @@ from acsoe.platform.config import (
     Config,
     ConfigError,
     ConfigKeyError,
+    TrainingConfig,
     arm_secret_redaction,
     load_config,
     load_dotenv,
@@ -337,11 +338,13 @@ def test_mode_live_is_refused_naming_the_invariant_and_the_phase(tmp_path: Path)
     assert "live_guard" in message
 
 
-def test_mode_replay_is_refused(tmp_path: Path) -> None:
+def test_mode_replay_is_accepted_since_phase_7(tmp_path: Path) -> None:
+    """Spec 129: the offline replay runs the registered chains in mode replay. Only the
+    live half of the Phase 0 refusal stands (invariant 1); the daemon refuses replay
+    itself, `tests/cli/test_entrypoints.py` proves it."""
     raw = complete_config_dict()
     raw["mode"] = "replay"
-    with pytest.raises(ConfigError, match="paper"):
-        Config.load(write_config(tmp_path, raw))
+    assert Config.load(write_config(tmp_path, raw)).mode == "replay"
 
 
 def test_an_unknown_mode_is_refused(tmp_path: Path) -> None:
@@ -1265,6 +1268,9 @@ BAD_VALUES: tuple[tuple[str, str, Any, str], ...] = (
     ("training", "learning_rate", "1.5", "Input should be less than 1"),
     ("training", "num_leaves", 0, "Input should be greater than 1"),
     ("training", "min_data_in_leaf", 0, "Input should be greater than 0"),
+    # Spec 136: the skeptic's fold cap. A cap of zero is a skeptic trained on nothing.
+    ("training", "skeptic_cap_folds", 0, "Input should be greater than or equal to 1"),
+    ("training", "skeptic_cap_folds", -13, "Input should be greater than or equal to 1"),
 )
 #: Phase 6's sections keep their own table at the bottom of the file
 #: (`BAD_ORDER_BOOK_VALUES`), because a row here is loaded through `load_phase_5` and
@@ -1542,3 +1548,120 @@ def test_the_order_book_landing_is_closed_and_the_section_is_required() -> None:
         "order_book has landed but is not in LANDED_SECTIONS, so nothing asserts "
         "that deleting the section is refused at startup."
     )
+
+
+
+# --- Phase 7: the `replay` section, the config view and derived configs -------------
+#
+# Spec 129 and 131. The section is optional at rest: only the offline replay reads it,
+# and a paper daemon must start without it. The committed file carries none until the
+# lead pastes it, and nothing here depends on whether it has.
+
+REPLAY_SECTION: dict[str, Any] = {
+    "asset_pairs_file": "tests/fixtures/kraken/asset_pairs_recorded.json",
+    "instrument_file": "tests/fixtures/kraken/instrument_recorded_2026-09-19.json",
+    "pair_names_file": "tests/fixtures/kraken/pair_names_recorded_2026-09-19.json",
+    "spread_table_file": "tests/fixtures/replay/spread_book_table.json",
+    "fee_schedule_file": "tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json",
+    "fee_tier": 3,
+    "partitions_dir": "data/derived/trades_weekly",
+    "first_fold": 379,
+    "last_fold": 404,
+    "run_id_format": "train-20260913T205245-067b2b9d-f{fold}-p7",
+}
+
+
+def with_replay(**changes: Any) -> dict[str, Any]:
+    raw = complete_config_dict()
+    raw["replay"] = {**copy.deepcopy(REPLAY_SECTION), **changes}
+    return raw
+
+
+def test_the_replay_section_parses_and_every_leaf_reads(tmp_path: Path) -> None:
+    config = Config.load(write_config(tmp_path, with_replay()))
+    assert config.get("replay.fee_tier") == 3
+    assert config.get("replay.run_id_format").format(fold=379).endswith("-f379-p7")
+
+
+def test_the_replay_section_is_optional(tmp_path: Path) -> None:
+    raw = complete_config_dict()
+    raw.pop("replay", None)
+    assert Config.load(write_config(tmp_path, raw)).replay is None
+    assert not Config.model_fields["replay"].is_required()
+
+
+#: One row per constraint on the section, matched on the constraint's own words.
+BAD_REPLAY_VALUES: tuple[tuple[str, Any, str], ...] = (
+    ("fee_tier", 0, "greater than 0"),
+    ("first_fold", -1, "greater than or equal to 0"),
+    ("last_fold", -1, "greater than or equal to 0"),
+    ("last_fold", 378, "is before replay.first_fold"),
+    ("run_id_format", "train-f379", "must contain {fold}"),
+)
+
+
+@pytest.mark.parametrize(("leaf", "value", "constraint"), BAD_REPLAY_VALUES)
+def test_a_bad_replay_value_is_refused_by_its_constraint(
+    tmp_path: Path, leaf: str, value: Any, constraint: str
+) -> None:
+    with pytest.raises(ConfigError, match=constraint):
+        Config.load(write_config(tmp_path, with_replay(**{leaf: value})))
+
+
+@pytest.mark.parametrize("leaf", sorted(REPLAY_SECTION))
+def test_a_replay_section_missing_a_leaf_is_refused(tmp_path: Path, leaf: str) -> None:
+    raw = with_replay()
+    del raw["replay"][leaf]
+    with pytest.raises(ConfigError, match=rf"replay\.{leaf}"):
+        Config.load(write_config(tmp_path, raw))
+
+
+def test_derive_config_replaces_a_leaf_and_leaves_the_base_untouched(complete: Path) -> None:
+    from acsoe.platform.config import derive_config
+
+    base = Config.load(complete)
+    derived = derive_config(base, {"mode": "replay", "models.prediction_run_id": "run-a"})
+    assert derived.mode == "replay"
+    assert derived.get("models.prediction_run_id") == "run-a"
+    assert base.mode == "paper"
+    assert base.get("models.prediction_run_id") is None
+
+
+def test_derive_config_validates_what_it_builds(complete: Path) -> None:
+    from acsoe.platform.config import derive_config
+
+    base = Config.load(complete)
+    with pytest.raises(ConfigError, match="mode: live is refused"):
+        derive_config(base, {"mode": "live"})
+    with pytest.raises(ConfigError, match="bare run id"):
+        derive_config(base, {"models.prediction_run_id": "../elsewhere"})
+    with pytest.raises(ConfigError, match="Extra inputs are not permitted"):
+        derive_config(base, {"models.invented_key": 1})
+    with pytest.raises(ConfigKeyError, match="is not a section"):
+        derive_config(base, {"mode.nested": 1})
+
+
+def test_the_config_view_delegates_and_refuses_a_change_of_mode(complete: Path) -> None:
+    from acsoe.platform.config import ConfigView, derive_config
+
+    base = derive_config(Config.load(complete), {"mode": "replay"})
+    view = ConfigView(base)
+    assert view.mode == "replay"
+    assert view.get("models.prediction_run_id") is None
+    fold = derive_config(base, {"models.prediction_run_id": "run-b"})
+    view.use(fold)
+    assert view.get("models.prediction_run_id") == "run-b"
+    assert view.current is fold
+    with pytest.raises(ValueError, match="cannot change mode"):
+        view.use(Config.load(complete))
+    assert view.mode == "replay"
+
+
+def test_the_skeptic_cap_is_optional_and_reads_as_set(tmp_path: Path) -> None:
+    """Spec 136. Absent is uncapped (`None`, not zero); present is the number of folds."""
+    raw = complete_config_dict()
+    raw.setdefault("training", {}).pop("skeptic_cap_folds", None)
+    assert Config.load(write_config(tmp_path, raw)).get("training.skeptic_cap_folds") is None
+    raw["training"]["skeptic_cap_folds"] = 13
+    assert Config.load(write_config(tmp_path, raw)).get("training.skeptic_cap_folds") == 13
+    assert not TrainingConfig.model_fields["skeptic_cap_folds"].is_required()

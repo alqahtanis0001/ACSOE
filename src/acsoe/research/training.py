@@ -184,6 +184,7 @@ def _config_digest(config: _Config) -> str:
         "training.learning_rate",
         "training.num_leaves",
         "training.min_data_in_leaf",
+        "training.skeptic_cap_folds",
         "prediction.calibration_days",
         "prediction.threads",
         "prediction.di_window_days",
@@ -613,6 +614,7 @@ def train_walkforward(
     assets = _assets_in(dataset)
     names = feature_columns(dataset, assets)
     seed = int(_required(config, "seeds.train"))
+    cap_folds = skeptic_cap_folds(config)
     digest = _config_digest(config)
 
     rows = dataset.select(["decision_ts", "label_window_end_ts"]).to_dicts()
@@ -647,6 +649,7 @@ def train_walkforward(
             now=now,
             store=store,
             assets=assets,
+            cap_folds=cap_folds,
             # Every out-of-sample row produced **so far**, which is folds strictly before
             # this one. The skeptic for fold k may learn only from calls the predictor made
             # out of sample and earlier: a skeptic trained on the predictor's own
@@ -761,6 +764,7 @@ def _train_one_fold(
     now: datetime,
     store: Any,
     assets: Sequence[str],
+    cap_folds: int | None,
     previous_oos: pl.DataFrame | None = None,
 ) -> tuple[dict[str, Any], pl.DataFrame, str]:
     """Train, calibrate, score and write one fold. Returns its digest entry and its OOS rows."""
@@ -877,6 +881,7 @@ def _train_one_fold(
         scaler=scaler,
         oos=oos,
         buys=buys,
+        cap_folds=cap_folds,
     )
 
     anomaly, anomaly_report = _fit_anomaly(config, train, test, scaler, names, seed)
@@ -1218,6 +1223,28 @@ def _skeptic_training_rows(
     ).sort(["decision_ts", "pair"])
 
 
+KEY_SKEPTIC_CAP_FOLDS: Final = "training.skeptic_cap_folds"
+
+
+def skeptic_cap_folds(config: _Config) -> int | None:
+    """``training.skeptic_cap_folds``: a positive number of folds, or ``None`` for uncapped.
+
+    The one reader of the key, shared with `research/skeptic_cap.py`. Read through
+    ``Config.get``, which raises on a key the config model does not declare, so a process
+    whose model lacks the field stops here rather than training uncapped by default.
+    Absent in the YAML is ``None``, the uncapped skeptic every Phase 5 fold trained.
+    """
+    value = config.get(KEY_SKEPTIC_CAP_FOLDS)
+    if value is None:
+        return None
+    cap = int(value)
+    if cap <= 0:
+        raise TrainingError(
+            f"{KEY_SKEPTIC_CAP_FOLDS} is {value!r}; a cap is a positive number of folds"
+        )
+    return cap
+
+
 def _capped(
     previous_oos: pl.DataFrame | None, fold_index: int, cap_folds: int | None
 ) -> pl.DataFrame | None:
@@ -1248,7 +1275,7 @@ def _fit_skeptic(
     scaler: Scaler,
     oos: pl.DataFrame,
     buys: Sequence[bool],
-    cap_folds: int | None = None,
+    cap_folds: int | None,
 ) -> tuple[Any, dict[str, Any]]:
     """Meta-labelling: how likely is this BUY call to be wrong.
 

@@ -2184,6 +2184,10 @@ and is not to be built. Teammates do not commit and I restart nothing until the 
   unsubscribed by the disk guard. `tests/platform/test_record_instrument.py` has 4 tests, the
   mutation sweep killed 7 of 7, and it was proved live in the scratchpad (a 1,450-pair snapshot
   on the combined socket). The one switchover comes after P1 is committed, on the lead's word.
+- [x] **Switchover done 2026-09-19 05:08:44Z** (commits b2119fd and 4b32655). The recorder's gap
+  was 62.79 s (05:08:44.099Z to 05:09:46.891Z). The new PIDs are: `master.bat` cmd 54168,
+  supervisor 43264/40848, record.py 46220/46912, funding.py 18684/39376, fees.py 28860/34472.
+  All three children have written. The status block was not directly observed.
 - [x] **P2, built 2026-09-19, awaiting the lead's gate and commit.**
   `scripts/recording/fees.py`: hourly signed TradeVolume plus public AssetPairs, verbatim, into
   `data/raw/fees/`. It uses a copied `.env` reader and signer, per the lead's how-decision.
@@ -2206,7 +2210,27 @@ one replayed day).** Also: every new config model field this phase goes through 
 - [x] 131 — built: `research/backtest.py` (`ChainReplay`), `cli/research.py`
   (`acsoe research backtest`, `fold_config`), `cli/main.py` (arguments), tests in
   `tests/research/test_chain_replay.py` and `tests/cli/test_research_backtest.py`.
-- [ ] 142 — next.
+- [x] 142 — rehearsed 2024-10-20 (fold 394) at tiers 3 and 5 with `expected_move`. The two
+  clean runs are identical, and every recomputation (friction, hurdle, fills) is equal. The
+  resumed run is identical in content, but another lane changed the schema mid-run, so it
+  **must be re-run on a quiet tree before 143**:
+  `scripts/rehearse_replay_day.py --day 2024-10-20 --fixture tests/fixtures/replay/rehearsal_2024-10-20 --out <dir> --tier 3 --fold 394`,
+  about 1.5 h. It now reports `tree_unchanged`. Measured: 4.9 s per bar tick, 4.1 s per minute
+  tick, 2.1 GB per process. Fixture: `tests/fixtures/replay/rehearsal_2024-10-20/` (7.3 MB).
+  Scripts: `scripts/cut_replay_fixture.py`, `scripts/rehearse_replay_day.py`.
+- Preliminary rehearsal on the working tree, quiet (`tree_unchanged`): clean runs identical,
+  resumed run identical, every recomputation equal, 68 of 75 bars agreeing with the grid and
+  7 inside a tie. 4.44 s per bar tick, 4.09 s per minute tick, 2.1 GB. Launch preconditions:
+  digest set and approvals present; details and SHAP at 0, waiting on spec 140's writer.
+  The fixture is at `tests/fixtures/phase7/rehearsal_2024-10-20/` (D17).
+- Also landed: `training.skeptic_cap_folds`; the `test_trade_chain_rehearsal.py` fix for 133;
+  `derived_dir` wiring; the `run_id` now carries the database's name; the quote rule is in the
+  scenario description. The consolidated DONE was sent; it depends on B's 0006 and 140 store
+  changes.
+- FINDING to the lead and C: the replay's features differ from the dataset in the last bits
+  on flat pairs, and one tree split turns on it (build log).
+- Observed for the lead, not a defect of mine: a target exit fills at the next tick's book
+  (+2.0% realised against the +3.0% label). Build log, "Observed in the rehearsal".
 - Config (A's lane): `replay:` section (optional), `mode: replay` accepted, `ConfigView`,
   `derive_config`. The daemon refuses a replay config (`cli/engine.py`). The YAML block was
   sent to the lead.

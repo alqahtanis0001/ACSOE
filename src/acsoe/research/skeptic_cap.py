@@ -58,7 +58,7 @@ __all__ = [
     "train_fold_skeptic",
 ]
 
-CAP_KEY: Final = "training.skeptic_cap_folds"
+CAP_KEY: Final = training.KEY_SKEPTIC_CAP_FOLDS
 SKEPTIC_NAME: Final = "skeptic.txt"
 #: Written **last**, so its presence is what says a staged fold is complete.
 SKEPTIC_META_NAME: Final = "skeptic.json"
@@ -116,13 +116,7 @@ def read_cap(config: Any) -> int | None:
     Read through ``Config.get``, which raises on a key the config model does not declare, so a
     process without the key's model field stops here rather than training uncapped by default.
     """
-    value = config.get(CAP_KEY)
-    if value is None:
-        return None
-    cap = int(value)
-    if cap <= 0:
-        raise CappedSkepticError(f"{CAP_KEY} is {value!r}; a cap is a positive number of folds")
-    return cap
+    return training.skeptic_cap_folds(config)
 
 
 def train_fold_skeptic(

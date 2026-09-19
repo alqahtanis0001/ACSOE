@@ -869,3 +869,240 @@ producer that raises. A16 (exact fields always agree) survived because no plante
 only a boolean or integer field of a fit. Added a flipped significance verdict, and a HAC lag below
 the Newey-West rule, which the check did not look at at all before (a digest could state lag 0 and
 pass, since `regress_digest` recomputes at the stated lag). The floor is now checked.
+
+### The b5 gate's red: a Phase 5 mutation anchor that spec 139 made ambiguous
+
+**Agent:** c-eval · **Task:** b5 gate fix (spec 139's engine 20) · **Date:** 2026-09-19
+
+**What happened.** `tests/verify/test_phase5_criteria.py::test_a_write_routed_around_the_store_client_is_a_fail`
+plants `import sqlite3` before the line `    from acsoe.clients.store.contracts import LeaderboardRow`
+in engine 20. Spec 139's promotion writer imports `LeaderboardRow` the same way, so the anchor now
+occurs twice, and the patcher correctly refused ("anchor appears 2 times"). None of my own
+targeted runs included the Phase 5 criteria tests, which is why I didn't see it before handing
+139 back.
+
+**Fix.** The anchor now carries the Phase 5 writer's next statement (`run_id = str(digest[...])`),
+which is unique and keeps the mutation's meaning. A second test plants the same mutation in the
+promotion writer (anchored on its `leaderboard_entries(model_id=CHAIN_RUN_MODEL_ID` line), because
+that writer must stay store-only too; the Phase 5 criterion reads the whole engine source, so it
+catches both. The engine was not restructured.
+
+**Proof.** The criterion is PASS on the real tree and FAIL (naming contract rule 4) on both mutants.
+Each test was then mutated to plant nothing, from a byte copy restored and verified by hash: both
+went red (B1, B2 KILLED; baseline 2 passed).
+
+### Spec 136, last piece: the walk-forward reads `training.skeptic_cap_folds`, and the key joins the config digest
+
+**Agent:** C-models · **Task:** spec 136 · **Date:** 2026-09-19
+
+A-replay's model field has landed, and the lead's YAML carries `skeptic_cap_folds: 13`.
+`train_walkforward` now reads the key once, through `training.skeptic_cap_folds`, which is the
+only reader: `skeptic_cap.read_cap` delegates to it. The walk-forward then passes the value through
+`_train_one_fold` to `_fit_skeptic`, where `cap_folds` is now **required**, so no caller can train
+uncapped by leaving it out. The key joins `_config_digest`'s list (lead's approval), because it
+changes what the skeptic trains on.
+
+**The guard the lead asked for:** does anything at load time compare a manifest's
+`config_digest` with the live config? That would make the change refuse the `-p7` directories.
+**Checked, and nothing does.** `grep -rn config_digest src/ scripts/` outside `research/`
+finds only the store's `runs` row (`clients/store/client.py`, `contracts.py`) and the
+`Manifest` field itself (`modelling/artefacts.py`). No engine, and not `modelling/ranking.py`,
+reads a manifest's digest. `load_run` checks hashes, the feature order and the feature version,
+and never the digest. The `-p7` manifests record `threshold_config_digest` as provenance only.
+
+### Engine 5 batched: one `compute_many` call a tick, bit-identical, 2.45 s to 0.17 s on the rehearsal day
+
+**Agent:** C-criteria · **Task:** engine 5 speed-up (lead decision D16) · **Date:** 2026-09-19
+
+**Fix.** `modelling/features.py`: the arithmetic moved into one grouped implementation
+(`_compute_grouped`). Every rolling window, the rank and the return's `shift` are window
+expressions `.over(key)`. `compute(candles)` runs it with the pair as a single group, and the new
+`compute_many(candles, key="pair")` runs it for every pair at once. So there is still one
+arithmetic and two ways to call it, not two implementations. `engines/feature/engine.py` builds
+the tick's candles as columns (the per-candle Python loop was half the remaining cost) and calls
+`compute_many` once. The per-pair implementation is kept verbatim as the oracle in
+`tests/modelling/features_oracle.py`, never in `src/`. `modelling/` gained no import.
+
+**A finding on the way, which hypothesis found and 2.1 million synthetic values did not.** Polars
+evaluates `sin` and `cos` over a **one-row** series through a scalar path whose result differs in
+the last bit from its vectorised kernel. The kernel is what that same row meets inside a longer
+frame: `hour_sin` came out -0.2588190451025207 alone and -0.25881904510252157 batched. The old
+engine computed a single-bar pair in a one-row frame, so batching changed its clock features by
+one ulp. **Fixed by computing single-bar pairs alone inside `compute_many`**, which is the old
+path exactly and costs nothing measurable (a handful of pairs a tick at most). *Rejected:* accepting
+a one-ulp difference on a clock feature, which the "exact equality" condition rules out and which
+would have made "bit for bit" a claim with an exception nobody reads. **A consequence worth
+stating, not fixed because it is not this task's:** the same one-ulp split already exists between
+the live path (a pair with one candle is a one-row frame) and training (every pair's history is
+long). It touches only the four clock features of a pair with a single bar, and such a pair is
+blanked on every lookback feature anyway.
+
+**Equality, every comparison on the bytes of each float with NaN positions compared as
+positions:**
+- the property test (hypothesis, 200 examples, up to 4 pairs of up to 130 bars, arbitrary gaps,
+  fills 0.01 to 1.0), for `compute` and `compute_many` against the oracle on every row;
+- synthetic ticks (40 to 190 pairs, dense, holed, near-empty, single-bar and constant-price pairs)
+  for every row, and engine 5's published payload against the old per-pair loop;
+- 2,400 tiny-pair series across 30 seeds (1 to 9 bars each), ad hoc;
+- **the rehearsal day, 2024-10-20, on engine 3's own output**: a-replay's harness (the replay
+  client over the real partitions, then `MarketSensorEngine`), copied into my folder as
+  `engine3_day.py`, run at 8 bar closes three hours apart. 190 pairs each, about 19,000 candles
+  each, 59,280 published feature values, 0 differing.
+- the same day from my own reduction of the partitions (`rehearsal_day.py`, 12 ticks, up to 231
+  pairs, before a-replay's harness reached me): 108,108 values, 0 differing.
+
+**Timing, per bar tick, medians with the order alternated between the two paths** (the Phase 4
+benchmark rule), and a mutation sweep running on the machine at the same time, which inflates both
+sides:
+
+| Input | Old (per pair) | New (batched) |
+|---|---|---|
+| Rehearsal day, engine 3's output, 8 ticks, 190 pairs | 1,636 ms | 124 ms |
+| Rehearsal day, own reduction, 12 ticks, up to 231 pairs | 2,451 ms | 169 ms |
+| Synthetic, 190 pairs x 200 bars, 7 runs | 1,609 ms | 131 to 202 ms |
+
+At 17,500 bars a run and 190 pairs, that is about 8.0 hours of engine 5 down to about 0.6.
+
+**Every Phase 5 criterion that reads features still PASSes**, each run on its own against the real
+tree: `features_reproduce_in_replay` (live path and `modelling.features` agree EXACTLY),
+`feature_lookbacks_are_time_not_rows`, `predictor_trains_and_calibrates`,
+`training_is_reproducible_from_config_and_data`, `di_fitted_on_predictor_training_set`,
+`di_leave_one_out_excludes_48_bars`, `skeptic_trains_only_on_predictor_buy_rows`,
+`walkforward_weekly_retrain_reports_oos`, and the four others registered for Phase 5.
+
+**One behaviour that is not a number but did move:** with two different malformed candles in one
+tick, the `MissingInputError` now names the missing pair or timestamp before a missing money field,
+where the old loop named whichever came first in arrival order. The tick errors either way.
+
+**Mutation sweep**, in a private copy of the tree (`PYTHONPATH` at the copy's `src`, so no
+teammate's run could import a mutant), against the four files that test the feature path, 100 to
+102 tests: **13 applied, 12 killed, 1 checked negative.** Killed: the return shifted across pairs,
+windows not per pair, the rank not per pair, single-bar pairs left in the batch, the duplicate check
+taken across pairs, the earliest row published, the look-ahead filter removed, a missing money field
+not refused, gaps not counted, trades zeroed, pairs out of order, and rows sorted by time before
+pair. **Two survived the first pass.** Sorting by time before pair gave every pair the right values
+in the wrong row order, so `test_compute_many_returns_rows_by_pair_then_time` now pins the order
+the docstring promises. A candle missing a money field still errored the tick through
+`float(None)`, but as a `TypeError` naming nothing, so
+`test_a_candle_missing_a_money_field_is_refused_by_name` now asserts the refusal. **Checked
+negative:** dropping `min_samples=2` from the rolling standard deviations is an equivalent mutant.
+Polars already returns null for a one-sample standard deviation (checked directly), so the argument
+states the rule rather than enforcing it.
+
+**Tests and sweep.** Four new tests in `tests/research/test_skeptic_cap.py` (23 passed):
+- the walk-forward, capped at one fold by config, records the identity recomputed from the ruling;
+- the digest differs between cap 13 and uncapped;
+- the committed config reads 13 through the shared reader;
+- the reader refuses 0.
+
+Mutations: 5 applied, 5 killed:
+- W1, the walk-forward drops the cap;
+- W2, the key is left out of the digest;
+- W3, `read_cap` ignores the config;
+- W4, the reader accepts a non-positive cap;
+- W5, the fold passes no cap to the skeptic.
+
+The wider run (`tests/research/`, `tests/modelling/`, engines 8, 13, 15, `test_scout_ranking.py`,
+`tests/verify/test_phase5_criteria.py`) gave 716 passed and 1 failed. The failure is
+`test_a_lookback_counted_in_rows_is_a_fail`, with "`src/acsoe/modelling/features.py`: anchor
+appears 0 times". Both `features.py` and that test file are being edited in the working tree by
+c-criteria's engine 5 speed-up (D16), and neither is touched by this change.
+
+### F6 sized: the flat-pair feature residue over folds 379-404 (analysis only, no code changed)
+
+**Agent:** C-models · **Task:** lead's request (a-replay's F6) · **Date:** 2026-09-19
+
+**Method** (`scratchpad/c-models/skew_rolling.py`, read-only). Every out-of-sample row of the
+window (2,216,920) was scored with the 117 predictor inputs from the dataset the trainer scored. A
+value counts as a *residue* when 0 < |x| <= 1e-12. Each row carrying one was scored twice through
+its fold's `-p7` artefacts (scaler, booster, calibrators, `expected_move_pct`): once as trained,
+and once with every residue set to exact 0.0, which is what engine 5 computes on a flat pair. The
+as-trained recomputation equals the recorded move exactly (largest difference 0.0).
+
+**Calendar columns are excluded, and the reason matters.** A first pass counted residues in
+`hour_sin`, `hour_cos` and their macro copies too, 46,251 rows each: `cos(pi/2)` is 6e-17. Those
+columns are pure functions of the timestamp and are computed identically by both paths, so their
+residue is not a skew. Counting them roughly quadrupled the affected rows (91,733 against 23,155).
+The numbers below count **only rolling-window columns.**
+
+- **Columns with a residue** (row counts): log_return_96 9,580; efficiency_ratio_96 9,510;
+  log_return_48 8,852; efficiency_ratio_48 8,852; log_return_16 8,281; efficiency_ratio_16 8,259;
+  log_return_4 4,264; efficiency_ratio_4 3,624; range_atr_4 3,126; range_atr_16 671;
+  range_atr_48 27; volume_z_4 2. That is 12 columns, not 30. No macro column carries one.
+- **Rows:** 23,155 carry a residue (1.04% of the window). Of those, 17,171 are complete vectors,
+  the only kind engines 13 and 8 score.
+- **Effect:** the expected move changes on 2,308 of the 23,155. The largest change is 0.453
+  percentage points, the 99th percentile 0.127 points, and the median zero. The largest change in
+  P(target) is 0.097.
+- **Against a cost bar:**
+
+  | Bar | Crossings, all rows | Crossings, complete rows |
+  |---|---|---|
+  | 1.00% | 16 | 5 |
+  | 1.05% | — | 1 |
+  | 1.10% | — | 1 |
+  | 1.15% | — | 2 |
+  | 1.20% | — | 1 |
+  | 1.25% | 14 | 0 |
+  | 1.50% | 11 | 0 |
+
+  Every crossing at 1.25% and above is an **incomplete** vector, which the gates refuse whatever
+  its move. The largest move over the complete affected rows is 1.6254% both ways.
+
+**What this does not measure.** It assumes the live value is exactly 0.0 wherever the dataset
+has a residue. That is a-replay's observation on flat pairs, and not proven for every affected
+row: engine 5 over 200 bars can carry a residue of its own. It measures the predictor's move
+only. The DI and anomaly scores move by the same order of magnitude and were not re-scored.
+
+### Decision (lead ruling D22): the bucket table's builder is named as the one producer; paths built from pieces are now caught
+
+**Agent:** C-criteria · **Task:** spec 141 · **Date:** 2026-09-19
+
+**What happened.** Once the marker set was widened, `fee_scenario_is_replay_only` named
+`scripts/build_bucket_table.py` (a-data, spec 130). That script **writes** the declared spread and
+depth table into `tests/fixtures/replay/`. It had never been caught, because it builds the directory
+from pieces (`Path("tests") / "fixtures" / "replay"`), and no single string constant spelled
+`fixtures/replay`. That was the blind spot I had flagged when the marker ruling was made.
+
+**Ruled (D22): (a).** `FEE_SCENARIO_PRODUCERS` names that one file by exact path, pinned to the only
+two markers its job needs (`spread_book_table`, `fixtures/replay`). It sits in a constant separate
+from the readers, with spec 130 and the reason beside it. Any other marker in it is still a hit, and
+no other file is covered. *Rejected:* (b) moving the builder into the replay client, which puts an
+offline builder in a runtime client in another lane; (c) a "writes but never reads" rule, which an
+AST cannot prove; and scanning `src/` only, which would narrow the check.
+
+**Also closed: the blind spot itself.** The walk now joins the string pieces of a path built with
+`/`, or passed as several arguments to one call (`Path("tests", "fixtures", "replay")`), and matches
+the markers against the joined form. Tests: both spellings in an unnamed module FAIL; the named
+producer with its own table PASSes; the same source under three other paths FAILs; the producer
+naming a fee schedule, the scenario module or a loader FAILs; and the constant is pinned to exactly
+one path and two markers. Sweep: 5 applied, 5 killed (the excuse ignored, the excuse applied to
+every file, the excuse widened to every marker, pieces not checked, call arguments not joined).
+
+**Still FAIL on the shared tree for one reason, not mine:** the module docstring of
+`scripts/cut_replay_fixture.py` contains the literal directory in the sentence explaining its move.
+a-replay is rewording it.
+
+**Found while writing the patch:** an escaped `"\0"` sentinel in a heredoc arrived in
+`scripts/verify.py` as a real NUL byte (`grep` reported "Binary file matches"). It is the
+heredoc-escape mechanism again, and it produced valid Python. Replaced with a plain string and
+checked: 0 NUL bytes, 0 CRLF.
+
+### The engine 5 rewrite disarmed a Phase 5 proof by removing its anchor; re-anchored onto the same defect
+
+**Agent:** C-criteria · **Task:** engine 5 speed-up (D16) · **Date:** 2026-09-19
+
+**What happened.** `tests/verify/test_phase5_criteria.py::test_a_lookback_counted_in_rows_is_a_fail`
+failed with "anchor appears 0 times" (found by c-models). My rewrite changed the bars counter from
+`pl.col("_one").rolling_sum_by(...)` to `window(pl.col("_one"), "rolling_sum_by")`, so the literal
+the proof mutates no longer existed. **Why I missed it:** I ran the tests that exercise the feature
+path and the Phase 5 criteria themselves, but not the tests that *mutate* `features.py` by literal
+anchor. `code-standards.md` names exactly this: every literal-anchor patcher is a reader of the
+source text, and a rewrite of that text is a change to the patcher's input.
+
+**Fix.** The anchor now matches `        window(pl.col("_one"), "rolling_sum_by")\n`, which occurs
+exactly once. The mutant is `pl.col("_one").rolling_sum(window_size=bars, min_samples=1).over(key)`:
+the same defect as before, rows for time, with the per-pair grouping kept so nothing else changes.
+The criterion FAILs on it ("counted in ROWS") and PASSes on the real file. The whole of
+`test_phase5_criteria.py`: 38 passed. I edited only this one test; c-eval's anchor fix in the same
+file was left as it was.

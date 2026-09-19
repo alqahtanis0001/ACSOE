@@ -351,7 +351,7 @@ def test_db_passes_against_a_runner_that_builds_the_documented_tables(
     fabricate_migrations(bare_tree)
     outcome = run(verify_module, "db_migrates_from_empty", bare_tree)
     assert outcome.result is verify_module.Result.PASS, outcome.message
-    assert "all 9 documented tables" in outcome.message
+    assert "all 10 documented tables" in outcome.message
 
 
 def test_db_is_pending_when_the_sql_exists_but_the_runner_does_not(

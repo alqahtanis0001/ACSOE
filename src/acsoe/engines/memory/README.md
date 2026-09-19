@@ -2,9 +2,9 @@
 
 **Manage chain, last of three. Not a gate. Runs every tick, in every mode.**
 
-The single writer of relational rows. `block_records`, `positions`, `orders`, `trades`,
-`rejections` and `equity_snapshots` are all written here, from `state`, and by nothing
-else. Every other engine describes what happened; this one records it.
+The single writer of relational rows. `block_records`, `approvals`, `positions`, `orders`,
+`trades`, `rejections` and `equity_snapshots` are all written here, from `state`, and by
+nothing else. Every other engine describes what happened; this one records it.
 
 Keeping one writer is what makes the manage chain's "always runs" guarantee sufficient
 for invariant 12, and it is why this engine sits underneath the whole of engine 17
@@ -47,6 +47,9 @@ contract rule 3 forbids importing another engine to find out what a key is calle
 | `state["exchange"]["balances"]` | 1 `exchange` (A) | cash, and therefore whether an equity row can be written at all |
 | `state["position_manager"]` | 21 (B), Phase 6 | positions, resting orders, position value, `hold_reason` |
 | `state["execution"]["orders"]` | 18 (B), Phase 6 | the entry order it placed, on the **opportunity** chain, same tick |
+| `state["execution"]["placed"]`, `["userref"]`, `["pair"]` | 18 (B) | whether **this tick** placed an entry, and so whether to write its `approvals` row (spec 133) |
+| `state["cost"]` economics | 10 `cost` (B) | the approval's four figures, the ones compared against the hurdle |
+| `state["prediction"]`, `["anomaly"]`, `["skeptic"]` `model_run_id` | 8, 13, 15 (C) | the approval's three model run ids |
 | `state["exit"]["closed_trades"]` | 22 (B), Phase 6 | one `trades` row per closed round trip; each row's `net_proceeds` is the exit tick's cash |
 | `state["exit"]["orders"]`, `["positions"]` | 22 (B), Phase 6 | the exit orders it placed and the positions it closed — the `position_id`s dropped from engine 21's valuation |
 | `state["position_manager"]["positions"][*]["value"]` | 21 (B), Phase 6 | per-row `qty × last_price`, summed over the positions that remain open on an exit tick |
@@ -74,6 +77,25 @@ Two neighbouring cases keep their treatment, and the tests name them apart:
   the console renders a rejection with no code as silence. It looks exactly like an errored
   engine's empty payload, which is why the status is read rather than inferred.
 
+## Why a trade was approved (spec 133)
+
+The economics exist in `state` only on the tick engine 18 places an entry; the `trades` row is
+written ticks later, when engine 22 closes it. So on a tick where engine 18 published
+`placed: true`, engine 19 writes one `approvals` row (B's migration 0006) keyed by the entry's
+`userref`: engine 10's `expected_move_pct`, `friction_pct`, `net_edge_pct` and `hurdle_pct`, the
+`model_run_id` of engines 8, 13 and 15, and the placing tick's `(run_id, cycle_id, ts)`. When it
+writes the trade it reads `approval(entry_userref)` and copies the seven fields onto the row.
+
+- **Absent is written absent, never zero.** A figure the placing tick did not publish is `NULL`
+  on the approval and on the trade, and a trade with no approval, or no `entry_userref`, is
+  written with all seven `NULL`. It is never refused for it.
+- **A float is refused**, as everywhere money crosses `state`: `str()` would launder it into a
+  string the column accepts, after the digits the hurdle was decided on are already gone.
+- **An engine 18 that errored gets no approval**, whatever its payload says: the status decides.
+- **Insert, never upsert.** A second approval for one `userref` is `sqlite3.IntegrityError`
+  from the store and is not caught. That is why the approval's `cycle_id` is always the placing
+  tick, where `orders.cycle_id` is the last tick that wrote the row (prerequisite 8).
+
 ## What it writes into `state`
 
 `state["memory"]` only — contract rule 2. It carries per-table counts (zeros included,
@@ -83,8 +105,9 @@ equity row when it did not, and `hold_reason` passed through for the console.
 
 ## Order of writes, which is load-bearing
 
-`block_records` → `positions` → `orders` → `trades` → `rejections` →
-`equity_snapshots`.
+`block_records` → `approvals` → `positions` → `orders` → `trades` → `rejections` →
+`equity_snapshots`. (`approvals` before `trades`, which reads them; an entry cannot be placed
+and closed on one tick, so this one is kept for clarity, not because anything breaks today.)
 
 The snapshot is last because its `open_position_count` and `realised_pnl_cum` are read
 back **out of the store** once this tick's rows have landed. `peak_equity` is likewise

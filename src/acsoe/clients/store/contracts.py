@@ -183,6 +183,18 @@ class CommandSource(StrEnum):
     SAFETY = "safety"
 
 
+def _text_or_null(value: str | None, what: str) -> str | None:
+    """Refuse a blank string where `None` is the way to say "not recorded".
+
+    Mirrors the `trim(...) <> ''` CHECKs of migration 0006. A blank string is how
+    "unknown" gets past a nullable column: it is non-null, so every `is not None` read
+    takes it for a value.
+    """
+    if value is not None and not value.strip():
+        raise ValueError(f"{what} is a value or None; a blank string is neither")
+    return value
+
+
 class _Row(BaseModel):
     """Base for every row model."""
 
@@ -205,6 +217,9 @@ class RunRow(_Row):
     `system_mode` the caller happened to have and silently overwrite the real one. One
     column, one writer. A read-modify-write through `write_run` is therefore a no-op on
     the mode, which is the behaviour a caller expects and not a clobber.
+
+    **`scenario_digest` and `scenario_description` are read-only here too** (migration
+    0006). :meth:`StoreClient.start_run` is their only writer, for the same reason.
     """
 
     id: int | None = None
@@ -217,6 +232,19 @@ class RunRow(_Row):
     updated_at: Micros
     system_mode: SystemMode | None = None
     system_mode_at: Micros | None = None
+    scenario_digest: str | None = None
+    """The declared replay scenario's digest (migration 0006, the lead's spec 134).
+
+    `None` for paper and live runs, and never a placeholder, so a blank string is refused.
+    """
+    scenario_description: str | None = None
+    """What the digest covers, in words: fee tier and schedule, book parameters, rules
+    file, window and ranking. `None` whenever `scenario_digest` is."""
+
+    @field_validator("scenario_digest", "scenario_description")
+    @classmethod
+    def _a_scenario_or_null(cls, value: str | None) -> str | None:
+        return _text_or_null(value, "a run's scenario")
 
 
 class SystemModeRow(_Row):
@@ -439,12 +467,73 @@ class TradeRow(_Row):
     fallbacks_used: tuple[str, ...] = ()
     updated_at: Micros
 
+    # Why the trade was approved (migration 0006, spec 132). Copied by engine 19 from the
+    # entry's :class:`ApprovalRow`. **`None` means "not recorded", never zero**: every row
+    # written before 0006 has none, and so does a trade whose placing tick recorded none.
+    expected_move_pct: Money | None = None
+    friction_pct: Money | None = None
+    net_edge_pct: Money | None = None
+    hurdle_pct: Money | None = None
+    prediction_run_id: str | None = None
+    anomaly_run_id: str | None = None
+    skeptic_run_id: str | None = None
+
     @field_validator("side")
     @classmethod
     def _long_only(cls, value: str) -> str:
         if value != "long":
             raise ValueError("the system is long-only; see context/project-overview.md")
         return value
+
+    @field_validator("prediction_run_id", "anomaly_run_id", "skeptic_run_id")
+    @classmethod
+    def _a_run_id_or_null(cls, value: str | None) -> str | None:
+        return _text_or_null(value, "a model run id")
+
+
+class ApprovalRow(_Row):
+    """Why one entry was approved, as its placing tick knew it (migration 0006, spec 132).
+
+    Written by engine 19 `memory` on the tick engine 18 places the entry, and keyed by that
+    entry's `userref`. Read back when engine 19 writes the `trades` row, ticks later.
+    `state` no longer holds these figures by then, which is why the row exists.
+
+    **Written once.** :meth:`StoreClient.write_approval` inserts and never upserts, so
+    `cycle_id` is always the placing tick. On `orders` the same column is overwritten by
+    every later tick (prerequisite 8).
+
+    The four economics are :data:`Money` and refuse a float, as on :class:`RejectionRow`.
+    `None` means "not recorded", never zero.
+    """
+
+    userref: int
+    run_id: str
+    cycle_id: int
+    ts: Micros
+    pair: str
+    expected_move_pct: Money | None = None
+    friction_pct: Money | None = None
+    net_edge_pct: Money | None = None
+    hurdle_pct: Money | None = None
+    prediction_run_id: str | None = None
+    anomaly_run_id: str | None = None
+    skeptic_run_id: str | None = None
+    details: str | None = None
+    """Every gate's verdict on the approving tick, as canonical JSON written by engine 19
+    (spec 145, operator ruling 2026-09-19). The approval-side twin of
+    `RejectionRow.details`. `None` means not recorded, and a blank string is refused.
+    The store keeps the text exactly as given and does not parse it."""
+    updated_at: Micros
+
+    @field_validator("prediction_run_id", "anomaly_run_id", "skeptic_run_id")
+    @classmethod
+    def _a_run_id_or_null(cls, value: str | None) -> str | None:
+        return _text_or_null(value, "a model run id")
+
+    @field_validator("details")
+    @classmethod
+    def _details_or_null(cls, value: str | None) -> str | None:
+        return _text_or_null(value, "an approval's details")
 
 
 class RejectionRow(_Row):
@@ -509,6 +598,24 @@ class LeaderboardRow(_Row):
     promoted: bool = False
     notes: str | None = None
     updated_at: Micros
+
+
+class ShapRecord(_Row):
+    """One decision's feature attributions, read back from Parquet (spec 140).
+
+    Written by :meth:`StoreClient.write_shap` and read by :meth:`StoreClient.read_shap`.
+    **Not a table row:** `architecture-context.md` keeps SHAP in Parquet, and a
+    `rejections` row points here through `shap_ref`. `contributions` is
+    `(feature, contribution)` in the order they were written, which is the order engine 8
+    published them. Contributions are statistics, so they are floats.
+    """
+
+    run_id: str
+    cycle_id: int
+    ts: Micros
+    pair: str
+    model_run_id: str | None = None
+    contributions: tuple[tuple[str, float], ...]
 
 
 class DataGuardOutage(_Row):

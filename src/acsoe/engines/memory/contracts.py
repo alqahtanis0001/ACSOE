@@ -30,11 +30,13 @@ from pydantic import BaseModel, ConfigDict
 from acsoe.clients.store.contracts import Money
 
 __all__ = [
+    "APPROVAL_TRADE_FIELDS",
     "BALANCES_FIELD",
     "BLOCK_REASON_KEY",
     "BLOCK_STATUS_KEY",
     "CANDIDATE_PAIR_PATH",
     "CLOSED_TRADES_FIELD",
+    "COST_KEY",
     "CYCLE_ID_KEY",
     "ECONOMICS_FIELDS",
     "EXCHANGE_KEY",
@@ -42,8 +44,12 @@ __all__ = [
     "EXIT_KEY",
     "GUARD_BLOCKERS_KEY",
     "HOLD_REASON_FIELD",
+    "MODEL_RUN_ID_FIELD",
+    "MODEL_RUN_KEYS",
     "NET_PROCEEDS_FIELD",
     "ORDERS_FIELD",
+    "PAIR_FIELD",
+    "PLACED_FIELD",
     "POSITIONS_FIELD",
     "POSITIONS_VALUE_FIELD",
     "POSITION_ID_FIELD",
@@ -56,6 +62,7 @@ __all__ = [
     "STATE_KEY",
     "TRADING_BLOCKED_BY_KEY",
     "UNREALISED_PNL_FIELD",
+    "USERREF_FIELD",
     "WRITTEN_TABLES",
     "MemoryState",
     "MissingInputError",
@@ -193,8 +200,39 @@ ECONOMICS_FIELDS: Final[tuple[tuple[str, str], ...]] = (
     ("hurdle_pct", "hurdle_pct"),
 )
 
+# --------------------------------------------------------------------------- #
+# Why an entry was approved — spec 133, with B's migration 0006 (spec 132)
+# --------------------------------------------------------------------------- #
+
+#: Engine 18 `execution` (B). `placed` is **this tick's** placement and nothing else, so it
+#: is the one signal that the economics in `state` right now are the ones that approved an
+#: entry. An order found already recorded publishes `placed: false` and gets no approval.
+PLACED_FIELD: Final = "placed"
+USERREF_FIELD: Final = "userref"
+PAIR_FIELD: Final = "pair"
+
+#: Engine 10 `cost` (B). The four economics come from its payload, through
+#: `ECONOMICS_FIELDS`: they are the figures it compared against the hurdle.
+COST_KEY: Final = "cost"
+
+#: Engines 8 `prediction`, 13 `anomaly` and 15 `skeptic` (C) each publish the model run
+#: they scored with as `model_run_id`, as ``(approvals column, state key)``.
+MODEL_RUN_ID_FIELD: Final = "model_run_id"
+MODEL_RUN_KEYS: Final[tuple[tuple[str, str], ...]] = (
+    ("prediction_run_id", "prediction"),
+    ("anomaly_run_id", "anomaly"),
+    ("skeptic_run_id", "skeptic"),
+)
+
+#: The columns an `approvals` row hands to the `trades` row of the same entry, by name.
+APPROVAL_TRADE_FIELDS: Final[tuple[str, ...]] = (
+    *(column for column, _ in ECONOMICS_FIELDS),
+    *(column for column, _ in MODEL_RUN_KEYS),
+)
+
 #: Every table engine 19 writes, in the order it writes them. The order is load-bearing
-#: three times over, and every one of the three is silent when it is wrong.
+#: three times over, and every one of the three is silent when it is wrong; a fourth rule,
+#: below them, is kept for clarity rather than because anything breaks today.
 #:
 #: 1. `positions` and `trades` before `equity_snapshots`, because the snapshot's
 #:    ``open_position_count`` and ``realised_pnl_cum`` are read back out of the store
@@ -209,8 +247,12 @@ ECONOMICS_FIELDS: Final[tuple[tuple[str, str], ...]] = (
 #:    keyed on `userref`: an entry 18 placed and 21 immediately cancelled must end as
 #:    cancelled. 18 runs on the opportunity chain and 21 and 22 on the manage chain, so
 #:    this is chain order, not a preference.
+#: 4. **`approvals` before `trades`**, which reads them. An entry cannot be placed and
+#:    closed on one tick, so today the order changes nothing; it is kept so that it never
+#:    has to be reasoned about.
 WRITTEN_TABLES: Final[tuple[str, ...]] = (
     "block_records",
+    "approvals",
     "positions",
     "orders",
     "trades",

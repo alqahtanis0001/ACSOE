@@ -826,6 +826,46 @@ def test_a_tick_records_its_run_through_a_real_store_client(tmp_path: Any) -> No
         store.close()
 
 
+class _ReplayClients(_RealClients):
+    """The replay driver's container: a real store plus the scenario's two strings."""
+
+    scenario_digest = "a" * 64
+    scenario_description = '{"declared":true,"fee_tier":3}'
+
+
+def test_a_replay_run_row_carries_its_scenario_and_a_paper_row_carries_null(
+    tmp_path: Any,
+) -> None:
+    """Spec 134: a replay result can never be read without its declared inputs.
+
+    Against the real `StoreClient`, not a double: the property is that the strings
+    reach the column, and a double would only show that the keywords were passed.
+    The paper half is the other side of the same rule: null, never a placeholder.
+    """
+    from acsoe.clients.store.client import StoreClient
+
+    store = StoreClient(str(tmp_path / "acsoe.sqlite"))
+    store.migrate()
+    try:
+        replay = Orchestrator(
+            config=_Config(), clock=_Clock(), clients=_ReplayClients(store),
+            chains=Chains(), run_id="replay-run",
+        )
+        replay.tick()
+        paper = Orchestrator(
+            config=_Config(), clock=_Clock(), clients=_RealClients(store),
+            chains=Chains(), run_id="paper-run",
+        )
+        paper.tick()
+        rows = {r.run_id: r for r in store.latest_runs(5)}
+        assert rows["replay-run"].scenario_digest == _ReplayClients.scenario_digest
+        assert rows["replay-run"].scenario_description == _ReplayClients.scenario_description
+        assert rows["paper-run"].scenario_digest is None
+        assert rows["paper-run"].scenario_description is None
+    finally:
+        store.close()
+
+
 def test_the_run_record_failure_branch_logs_instead_of_killing_the_loop(
     tmp_path: Any,
 ) -> None:

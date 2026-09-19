@@ -340,11 +340,31 @@ training:                        # research/training.py, spec 67. LightGBM hyper
   min_data_in_leaf: 200          # Rows per leaf; large, because rows overlap at a 48-bar
                                  # horizon and the effective sample is far smaller than the
                                  # row count (uniqueness weights, spec 59 decision 5).
+  skeptic_cap_folds: 13          # OPERATOR, ruled 2026-09-16 (spec 83); applied from Phase 7
+                                 # (R2, 2026-09-19): fold k's skeptic trains only on folds
+                                 # k-13..k-1. The Phase 7 window's skeptics were staged with
+                                 # --cap 13 before this key landed (D20); same value.
 
 scout:                           # Engine 7's ranking, spec 76.
   rank_descending: true          # Direction for rank_feature when it is set.
   # rank_feature: OPERATOR, absent until spec 75's study reports. Alphabetical until
   # then, and the engine publishes rank_feature: null so nobody reads a choice into it.
+
+replay:                          # Phase 7, specs 126, 129, 131. Read ONLY by the offline replay
+                                 # (invariant 2, "In replay mode"); the replay client refuses
+                                 # construction in paper and live. Every value it serves that the
+                                 # archive did not record is DECLARED, never measured.
+  asset_pairs_file: tests/fixtures/kraken/asset_pairs_recorded_2026-09-19.json   # spec 127
+  instrument_file: tests/fixtures/kraken/instrument_recorded_2026-09-19.json     # spec 127
+  pair_names_file: tests/fixtures/kraken/pair_names_recorded_2026-09-19.json     # spec 127
+  spread_table_file: tests/fixtures/replay/spread_book_table_2026-09-19.json    # spec 130, declared
+  fee_schedule_file: tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json  # fetched 2026-09-19, declared
+  fee_tier: 3                    # R3, operator 2026-09-19: tiers 3 and 5, one per run. The driver's
+                                 # --fee-tier sets each run's tier; this file is never edited between runs.
+  partitions_dir: data/derived/trades_weekly   # spec 128, runtime output (gitignored)
+  first_fold: 379                # R4, operator 2026-09-19: six months ending at fold 404's
+  last_fold: 404                 # test close, 2025-01-04 00:00 UTC.
+  run_id_format: "train-20260913T205245-067b2b9d-f{fold}-p7"   # spec 135's run directories
 
 seeds:
   global: 20260908               # Every random seed comes from config, so a training run

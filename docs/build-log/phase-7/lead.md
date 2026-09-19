@@ -202,3 +202,42 @@ anchor went stale.**
 the new file, keeping the mutation's meaning (a raw `sqlite3` route beside the store's
 `LeaderboardRow`). Either widen the anchor with neighbouring lines, or mutate both writers in two
 tests. **First red on this boundary.**
+
+### Gate b6 (132, 133, 134, 138, `DOCUMENTED_TABLES`) RED on one test: the same stale-anchor shape as b5, in engine 19
+
+**Agent:** Lead · **Date:** 2026-09-19
+
+**What happened.** `logs/verify/gate-b6-132-133-134-138-doctables.log`: one failure,
+`tests/verify/test_phase4_criteria.py::test_a_rejection_written_without_its_economics_is_a_fail`,
+with "anchor appears 3 times, expected exactly once". The anchor is
+`            economics[column] = None if value is None else str(value)` in engine 19.
+
+**Why.** Spec 133 harvests the approval economics with the same statement engine 19 already used
+for rejections, so the literal now occurs three times. The patcher refuses rather than mutating the
+first match, which is why this is a red and not a proof that silently moved to the wrong writer.
+The second instance of this shape tonight: **a new writer that copies an existing writer's idiom
+makes every mutation anchored on that idiom ambiguous.** Neither author ran the Phase 3–5
+criterion tests that read engine source, and both were caught by the gate.
+
+**Fix.** Sent to c-eval, whose change caused it: re-anchor onto the rejection writer only, and add
+a twin test that plants the same defect in the approval writer. First red on this boundary.
+
+### The combined gate's first launch never ran, and its background task reported success
+
+**Agent:** Lead · **Date:** 2026-09-19
+
+**What happened.** The first launch of gate b67 passed the 463 fixture files as separate
+arguments. The Windows command line overflowed, the interpreter never started (`exit 126`), and no
+log was written. The background task still reported "completed (exit code 0)", because its last
+command was a `tail` that ran regardless. **A gate that never ran reported a clean exit.**
+
+**Why.** The wrapper chained `...; echo; tail` with no `set -e`, so the task's exit status was the
+last command's, not the gate's. The lead noticed because the gate finished in seconds and not in
+the 30 minutes a real one takes. It was confirmed by reading the output (`exit 126`, "cannot open
+... log").
+
+**Fix.** `gate.py` accepts a directory as one argument (copytree, and a directory hash for the
+moved-in-main check). The re-launch was confirmed to have started by reading its log's file list
+20 s in, not by the command returning. **The standing check after any launch: read the evidence
+it has started, never the return code alone.** This is the operator's rule about confirming a
+detached run is alive, applied to a gate.

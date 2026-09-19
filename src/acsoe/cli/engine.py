@@ -118,7 +118,9 @@ def build_clients(config: Config, clock: Clock, paths: RuntimePaths) -> Clients:
     # `ensure_runtime_directories` before this runs, so the store is never handed
     # a path that does not exist — and B's client still refuses a missing root,
     # because tests and scripts construct it directly rather than through here.
-    store = StoreClient(paths.db / DB_FILENAME, models_dir=paths.models)
+    store = StoreClient(
+        paths.db / DB_FILENAME, models_dir=paths.models, derived_dir=paths.derived
+    )
     store.migrate()
     real = KrakenClient(rest=rest, stream=stream)
     # `== "paper"`, not `!= "live"`. The two read the same today because there are
@@ -326,6 +328,17 @@ def run(args: argparse.Namespace) -> int:
         # exit code so a supervisor can tell "operator has not configured this"
         # from "the daemon crashed".
         print(f"acsoe engine: refusing to start.\n{exc}", file=sys.stderr)
+        return 2
+    if config.mode != "paper":
+        # The loader refuses `live` itself (invariant 1). It accepts `replay` since
+        # Phase 7 because the offline replay needs it, and a replay is
+        # `acsoe research backtest`, never the daemon: here it would wire the real
+        # exchange client under a mode that says it is history.
+        print(
+            f"acsoe engine: refusing to start in mode {config.mode}. The daemon runs in "
+            "paper mode; a replay is `acsoe research backtest`.",
+            file=sys.stderr,
+        )
         return 2
 
     paths: RuntimePaths = ensure_runtime_directories()

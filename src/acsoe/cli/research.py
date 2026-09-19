@@ -55,20 +55,27 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
+from acsoe.bootstrap import build_chains
+from acsoe.clients.kraken.replay import ReplayKrakenClient
+from acsoe.clients.paper.broker import PaperBroker
 from acsoe.clients.store.client import StoreClient
+from acsoe.clients.store.contracts import CommandRow, CommandSource
 from acsoe.core.contracts import BaseEngine, EngineContext, EngineResult, EngineStatus, State
-from acsoe.platform.clock import Clock, SystemClock
-from acsoe.platform.config import Config, ConfigError, load_config
+from acsoe.core.orchestrator import Orchestrator
+from acsoe.platform.clock import Clock, FixedClock, SystemClock
+from acsoe.platform.config import Config, ConfigError, ConfigView, derive_config, load_config
 from acsoe.platform.logging import configure_logging, get_logger
 from acsoe.platform.paths import DB_FILENAME, RuntimePaths, ensure_runtime_directories
-from acsoe.research.backtest import BacktestEngine
+from acsoe.research.backtest import BacktestEngine, ChainReplay, FoldWindow
 
 __all__ = [
     "OFFLINE_CHAIN",
@@ -272,7 +279,9 @@ def run_offline_chain(
 
 
 def _build_clients(paths: RuntimePaths) -> ResearchClients:
-    store = StoreClient(paths.db / DB_FILENAME, models_dir=paths.models)
+    store = StoreClient(
+        paths.db / DB_FILENAME, models_dir=paths.models, derived_dir=paths.derived
+    )
     # The schema has to exist before engine 20 writes a leaderboard row, and a
     # research run on a fresh clone is exactly the case where it does not.
     # Migrations are forward-only and idempotent, so this is safe on a database
@@ -282,6 +291,8 @@ def _build_clients(paths: RuntimePaths) -> ResearchClients:
 
 
 def run(args: argparse.Namespace) -> int:
+    if getattr(args, "action", None) == "backtest":
+        return run_backtest(args)
     config_path: Path = args.config
     try:
         config = load_config(config_path)
@@ -346,3 +357,302 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# `acsoe research backtest` — spec 131: the registered chains over history
+# --------------------------------------------------------------------------- #
+#
+# This is the wiring, and it lives here rather than in `research/backtest.py` for one
+# reason: it needs `bootstrap.py`, the orchestrator, the store, the paper broker and the
+# replay client, and this module is the only one allowed to import both the live loop's
+# modules and `acsoe.research` (architecture invariant 5). The driver it wires is
+# `research.backtest.ChainReplay`, which makes no decision and imports none of them.
+
+#: The ranking names `--ranking` accepts, and what each sets `scout.rank_feature` to.
+#: `alphabetical` is the baseline (R4): the key absent, engine 7's stated default.
+RANKINGS: Final[Mapping[str, str | None]] = {
+    "expected_move": "expected_move",
+    "alphabetical": None,
+}
+
+
+@dataclass(frozen=True)
+class ReplayRunClients:
+    """The clients a replay run's orchestrator sees. Satisfies the `Clients` Protocol.
+
+    `kraken` is the paper broker wrapping the replay client, exactly as paper mode
+    wraps the live one. `recorder` is `None`: a replay never writes the archive
+    (invariant 11), and the replay client drains no frame for it to write.
+
+    `scenario_digest` and `scenario_description` are what the orchestrator writes to
+    the `runs` row (spec 134). They sit on the container because the broker wraps the
+    replay client and forwards no attribute it does not know.
+    """
+
+    kraken: Any
+    store: Any
+    scenario_digest: str
+    scenario_description: str
+    recorder: Any = None
+
+
+def replay_store(db_path: Path, paths: RuntimePaths) -> StoreClient:
+    """A replay run's own store: its database, the artefact root, and the derived root.
+
+    `derived_dir` is where engine 19 writes SHAP (spec 140). Without it every `write_shap`
+    refuses and engine 19 carries on by design, so a run would record no explanations
+    and nothing would say so; the replay's test writes one through this store.
+    """
+    store = StoreClient(db_path, models_dir=paths.models, derived_dir=paths.derived)
+    store.migrate()
+    return store
+
+
+def fold_config(run_config: Config, fold: FoldWindow) -> Config:
+    """The run's config with this fold's Phase 7 run directory in all three model keys.
+
+    One directory per fold holds the predictor, the anomaly detector and the capped
+    skeptic (spec 135), so engines 8, 13 and 15 are pointed at the same run id, and each
+    reloads when it changes. Built fresh; `run_config` is never touched.
+    """
+    return derive_config(
+        run_config,
+        {
+            "models.prediction_run_id": fold.run_id,
+            "models.anomaly_run_id": fold.run_id,
+            "models.skeptic_run_id": fold.run_id,
+        },
+    )
+
+
+def _fold_windows(config: Any, store: Any) -> list[FoldWindow]:
+    """Each fold's test window, read from its Phase 7 run directory's manifest."""
+    fmt = str(config.get("replay.run_id_format"))
+    folds: list[FoldWindow] = []
+    for fold in range(int(config.get("replay.first_fold")), int(config.get("replay.last_fold")) + 1):
+        run_id = fmt.format(fold=fold)
+        manifest_path = Path(str(store.model_run_dir(run_id))) / "manifest.json"
+        if not manifest_path.is_file():
+            raise RuntimeError(
+                f"fold {fold}'s run directory {run_id!r} has no manifest; the replay "
+                "refuses rather than score that week with another fold's models"
+            )
+        block = json.loads(manifest_path.read_text(encoding="utf-8")).get("fold") or {}
+        if int(block.get("fold_index", -1)) != fold:
+            raise RuntimeError(f"{run_id}'s manifest is for fold {block.get('fold_index')}")
+        folds.append(
+            FoldWindow(
+                fold=fold,
+                run_id=run_id,
+                test_start_s=int(block["test_start_ts"]),
+                test_end_s=int(block["test_end_ts"]),
+            )
+        )
+    return folds
+
+
+def _utc_seconds(moment: datetime | None) -> int | None:
+    """A command-line instant as epoch seconds. A naive one is read as UTC, which is the
+    only zone this system writes, and an aware one is converted rather than relabelled."""
+    if moment is None:
+        return None
+    aware = moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
+    return int(aware.timestamp())
+
+
+def _last_recorded_tick_s(store: Any, record_path: Path) -> int | None:
+    """Where a killed run stopped: the latest tick the run record or the store saw.
+
+    Both, because each can be one tick ahead of the other when a process dies: the store
+    commits inside engine 19 before the run record's line is written, and a tick that
+    wrote no equity row (a position with no mark) is in the record only. The later of
+    the two is never re-run, which is what keeps a resumed run from deciding a tick twice.
+    """
+    seen: list[int] = []
+    if record_path.is_file():
+        for line in record_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            if entry.get("event") == "tick":
+                seen.append(int(entry["tick_s"]))
+    latest = store.latest_equity_snapshot()
+    if latest is not None:
+        seen.append(int(latest.ts) // 1_000_000)
+    blocks = store.recent_block_records(1)
+    if blocks:
+        seen.append(int(blocks[0].ts) // 1_000_000)
+    return max(seen) if seen else None
+
+
+def run_backtest(args: argparse.Namespace) -> int:
+    """`acsoe research backtest`: one run, one process, one database (spec 131 step 4)."""
+    config_path: Path = args.config
+    try:
+        committed = load_config(config_path)
+    except ConfigError as exc:
+        print(f"acsoe research backtest: refusing to start.\n{exc}", file=sys.stderr)
+        return 2
+    if committed.get("replay") is None:
+        print("acsoe research backtest: the config has no `replay:` section.", file=sys.stderr)
+        return 2
+
+    root = Path.cwd().resolve()
+    paths = ensure_runtime_directories(root)
+    configure_logging(
+        log_dir=paths.logs,
+        level=committed.logging.level,
+        retention_days=committed.logging.retention_days,
+        also_stderr=False,
+    )
+    ranking = RANKINGS[args.ranking]
+    tier = int(args.fee_tier) if args.fee_tier is not None else int(committed.get("replay.fee_tier"))
+    run_config = derive_config(
+        committed,
+        {"mode": "replay", "replay.fee_tier": tier, "scout.rank_feature": ranking},
+    )
+
+    if args.db is None:
+        print(
+            "acsoe research backtest: --db is required. A run owns its own database "
+            "(spec 131 step 4), and no default could keep two runs apart.",
+            file=sys.stderr,
+        )
+        return 2
+    db_path: Path = args.db
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path = db_path.with_name(db_path.name + ".runrecord.jsonl")
+    store = replay_store(db_path, paths)
+    try:
+        folds = _fold_windows(run_config, store)
+
+        def config_for(fold: FoldWindow) -> Config:
+            return fold_config(run_config, fold)
+
+        view = ConfigView(config_for(folds[0]))
+        start_s = min(fold.test_start_s for fold in folds)
+        clock = FixedClock(datetime.fromtimestamp(start_s, UTC))
+        begin_s = _utc_seconds(args.begin)
+        stop_after_s = _utc_seconds(args.until)
+        extras = {
+            "window": {
+                "first_fold": folds[0].fold,
+                "last_fold": folds[-1].fold,
+                "begin_s": begin_s,
+                "stop_after_s": stop_after_s,
+            },
+            "ranking": ranking if ranking is not None else "alphabetical_baseline",
+            "alphabetical_baseline": ranking is None,
+            "run_id_format": str(run_config.get("replay.run_id_format")),
+        }
+        replay = ReplayKrakenClient.from_config(view, clock=clock, root=root, extras=extras)
+        broker = PaperBroker(replay, store=store, config=view, clock=clock)
+        clients = ReplayRunClients(
+            kraken=broker,
+            store=store,
+            scenario_digest=replay.scenario_digest,
+            scenario_description=replay.scenario_description,
+        )
+        resume_after_s = _last_recorded_tick_s(store, record_path) if args.resume else None
+        if not args.resume and (store.latest_equity_snapshot() is not None or record_path.exists()):
+            print(
+                f"acsoe research backtest: {db_path} already holds a run. Pass --resume "
+                "to continue it, or name a new database; a run never shares one.",
+                file=sys.stderr,
+            )
+            return 2
+        # One `run_id` per process, named for its database and the replay instant it
+        # starts from. The orchestrator would otherwise mint it from the clock at
+        # construction, which is the window's start for every process of every run: a
+        # resumed process would reuse the killed one's id, its `cycle_id` would restart
+        # at 1, and engine 19's once-per-tick constraints would refuse every row it
+        # wrote. The database's name is in it because four runs over one window start at
+        # the same instant, and engine 19's SHAP files are keyed by `run_id` under one
+        # shared `data/derived/shap/`, where a second writer of a path is refused.
+        anchor_s = resume_after_s if resume_after_s is not None else (begin_s or start_s)
+        stem = "".join(c if c.isalnum() or c in "-_" else "-" for c in db_path.stem)
+        run_id = (
+            f"replay-{stem}-"
+            + datetime.fromtimestamp(anchor_s, UTC).strftime("%Y%m%dT%H%M%SZ")
+        )
+        if resume_after_s is not None:
+            run_id += "-resumed"
+        orchestrator = _replay_orchestrator(
+            view, clock, clients, run_id=run_id, previous_now_s=resume_after_s
+        )
+
+        def append(entry: Mapping[str, Any]) -> None:
+            with record_path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(json.dumps(dict(entry), sort_keys=True) + "\n")
+
+        def activate(tick_s: int) -> None:
+            store.append_command(
+                CommandRow(
+                    command="activate",
+                    source=CommandSource.CONSOLE,
+                    reason="replay driver: activate before the first tick of this process",
+                    created_at=tick_s * 1_000_000,
+                    updated_at=tick_s * 1_000_000,
+                )
+            )
+
+        def exposed() -> bool:
+            return store.count_open_positions() > 0 or store.count_resting_orders() > 0
+
+        driver = ChainReplay(
+            folds=folds,
+            bar_s=int(run_config.get("timeframes.decision_bar_s")),
+            loop_s=int(run_config.get("timeframes.loop_tick_s")),
+            tick=orchestrator.tick,
+            set_clock=lambda tick_s: clock.set(datetime.fromtimestamp(tick_s, UTC)),
+            use_config=view.use,
+            config_for=config_for,
+            exposed=exposed,
+            activate=activate,
+            record=append,
+        )
+        append(
+            {"event": "run", "run_id": orchestrator.run_id, "scenario_digest": replay.scenario_digest,
+             "db": db_path.as_posix(), "resume_after_s": resume_after_s}
+        )
+        summary = driver.run(
+            resume_after_s=resume_after_s,
+            begin_s=begin_s,
+            stop_after_s=stop_after_s,
+            max_ticks=args.max_ticks,
+        )
+        append({"event": "end", "finished": summary.finished, "ticks": summary.ticks})
+        print(
+            f"acsoe research backtest: {summary.ticks} ticks ({summary.bar_ticks} bar, "
+            f"{summary.minute_ticks} minute), finished={summary.finished}, "
+            f"scenario {replay.scenario_digest[:12]}",
+            flush=True,
+        )
+        return 0
+    finally:
+        store.close()
+
+
+def _replay_orchestrator(
+    config: Any, clock: Any, clients: Any, *, run_id: str, previous_now_s: int | None
+) -> Orchestrator:
+    """The registered chains, unchanged, under `core/`'s orchestrator, unchanged.
+
+    **On a resume, the last recorded tick is passed as `previous_now`** so that the
+    first resumed tick measures its trade range from where the killed process stopped.
+    Live, a restart's first tick has `previous_now = None` because nothing watched the
+    gap. In a replay the gap is history, fully on disk, and a resumed run that missed a
+    stop touched in its first minute would not reproduce the uninterrupted one (spec 131
+    step 6). The lead added the keyword to `core/` for this on 2026-09-19; the daemon
+    never passes it.
+    """
+    return Orchestrator(
+        config=config,
+        clock=clock,
+        clients=clients,
+        chains=build_chains(),
+        run_id=run_id,
+        logger=get_logger("acsoe.orchestrator"),
+        previous_now=(
+            None if previous_now_s is None else datetime.fromtimestamp(previous_now_s, UTC)
+        ),
+    )

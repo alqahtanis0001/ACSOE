@@ -219,7 +219,14 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
         # Operator ruling 2026-09-17 on the exit-tick equity row.
         "equity_row_never_values_positions_it_does_not_hold",
     }
-    for phase in range(7, verify_module.MAX_PHASE + 1):
+    # Spec 141, registered PENDING-first in Phase 7 ahead of the subjects it judges.
+    assert {c.name for c in verify_module._REGISTRY[7]} == every_phase | {
+        "backtest_emits_alpha_report",
+        "promotion_gate_rejects_haircut_edge",
+        "research_screens_render",
+        "fee_scenario_is_replay_only",
+    }
+    for phase in range(8, verify_module.MAX_PHASE + 1):
         assert {c.name for c in verify_module._REGISTRY[phase]} == every_phase
 
 

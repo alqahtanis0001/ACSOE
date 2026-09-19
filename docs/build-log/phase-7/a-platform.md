@@ -1183,3 +1183,346 @@ the interface: every tick rebuilds all its candles from a tuple of about 400k tr
 Recommendation (a), speeding up engine 3, is withdrawn, and the lead was told the same hour.
 What remains is (b), accepting about 40 to 45 hours per run, or (c), a shorter window, which I
 do not recommend.
+
+### A-recorder — The one switchover: P1, P2 and P3 live at 05:08:44Z, with a 62.8 s gap in the archive
+
+**Agent:** A-recorder · **Task:** switchover, on the lead's GO (b2119fd, 4b32655) · **Date:** 2026-09-19
+
+**What was done, in this order.** Every process here is a `.venv` launcher with a child
+interpreter, and on Windows killing a parent does not kill its child, so each pair was stopped
+explicitly.
+1. **05:08:34Z.** Stopped the hand-started funding poller (42044, and its child 51648) and the
+   old supervisor (34472/34540). The old recorder kept writing through this, so it cost nothing.
+2. **05:08:44.150Z.** Stopped the old recorder (34416/14508). `master.bat` was started 76 ms
+   later, in its own console, with the same target as the startup shortcut. The recording
+   manager (52180) was not touched.
+3. The old `master.bat` console (cmd 33180) was still open at its `pause` prompt, saying "The
+   supervisor has stopped. Nothing is being recorded." — false by then, and misleading to anyone
+   who looked at the screen. It had no children except its console host, so I closed it.
+
+**The gap.**
+
+| | `ts_recv` |
+|---|---|
+| Last line from the old recorder | 05:08:44.099487Z |
+| New `session` start marker | 05:09:44.991246Z |
+| First market tick (ticker, USDT/USD) | 05:09:46.891189Z |
+
+**62.79 s with no market data.** 60.89 s of that is before the new start marker, which is the
+new recorder's discovery pass: the instrument and ticker snapshots it ranks by. The old
+recorder was killed, so it wrote no `stop` marker. Its last line is complete, since the file
+ends in a newline at the kill length, so nothing is partial at the seam.
+
+**Verified, not assumed.**
+- **Recorder** (46220/46912): it is writing to `data/raw`, with a last `ts_recv` of
+  05:10:20.83Z checked at 05:10:20.
+  - The start marker's `subscriptions[0]` is `{"channel": "instrument"}`.
+  - The first `instrument` snapshot landed at 05:09:47.133Z: 1,450 pairs, 842 assets, a
+    554,902-byte line with `pair` and `ts_exchange` null.
+  - Tier 2 summary rows for the 05:09 minute are written.
+- **Tier 1 was re-ranked on the new start.** NEAR/USD is in and ADA/USD is out, which is the
+  ordinary 24-hour-volume ranking. It is not a fault, but the tier-1 set changed at 05:09:44Z.
+- **funding.py** (18684/39376): it polled at start, at 05:08:45Z. That wrote 7 funding lines
+  (PF_XBTUSD, ETH, ZEC, XRP, SOL, HYPE, ADA) and its start marker, and it holds its lock.
+- **fees.py** (28860/34472): it polled at start, at 05:08:45Z. That wrote the `asset_pairs`
+  line (1,450 pairs), the `trade_volume` line (fees for all 10 tier-1 pairs,
+  `schedules_returned: true`) and its start marker, and it holds its lock. Its next slot is
+  06:00Z. **PID 34472 was reused by Windows.** It is now `fees.py`'s launcher, not the old
+  supervisor.
+- **Both pollers' first polls used the old tier-1 list**, with ADA rather than NEAR. They
+  started before the new recorder's first heartbeat and read the old one. Each re-reads the
+  heartbeat before every poll, so the 06:00Z polls follow the new list.
+- **The supervisor log** shows `poller_listed` for fees and funding, a launch for each of the
+  three children, and no exit, restart, lock wait or `list not applied` since.
+- **Not directly observed: the status block.** It renders in the new console window, and I
+  cannot read another console's screen buffer. The code draws one line per poller, and the log
+  shows three children running, but nobody has looked at the lines themselves. Worth one glance
+  at the window.
+
+**A correction to my P1 decision entry**, which said that sending `instrument` first means "the
+archive then holds the rules before any market data priced against them". **False in arrival
+order.** The subscriptions are *sent* in that order, but Kraken *answered* the ticker
+subscription first: the first ticker frame came 242 ms before the snapshot. The rules land within
+a second of a connect, not strictly before the first tick. A replay that needs rules in force at a
+tick should take the most recent `instrument` frame at or before that tick, and for the first
+fraction of a second after a connect it may have to look ahead to the snapshot that follows. This
+changes no code; it corrects a claim.
+
+
+## a-replay: spec 142, rehearsing one replayed day
+
+### Decision: the rehearsal day is 2024-10-20 (fold 394)
+
+**Agent:** A-replay · **Task:** spec 142 · **Date:** 2026-09-19
+
+**How it was chosen.** A read-only pass over folds 379-404, using `oos_…parquet`, the Phase 5
+study's anomaly and DI outputs, the archive's 15-minute bars for trailing 24-hour volume, and
+the committed bucket table. On each bar it takes the expected-move leader among pairs the
+anomaly and DI gates pass (R11, as `q_emrank.py` does). It then tests engine 10's bar against
+the friction the replay will actually serve: the tier's fees plus the bucket spread plus the
+$5,000 slippage engine 9 walks from the declared book.
+
+**Result.** At tier 3, 28 bars in six months clear, on 13 days. 2024-10-20 has the most, 7, all
+on STORJUSD, with both targets and stops among them. At tier 5 it has 10. The runner-up is
+2024-09-02, with 4 bars across three pairs.
+
+**Rejected.** 2024-09-02, which has fewer clearing bars, though they span more pairs. The spec
+asks for a day on which a candidate clears; the day with the most clearances gives the
+skeptic, which this pass does not model, the most chances to let one through.
+
+**Caveat.** The capped skeptic (spec 136) was not on disk, so the pass says nothing about
+whether any of the 7 survives it. `q_emrank.py` itself cannot be re-run: it reads
+`per_pair_spread_depth.parquet` and the capped-skeptic outputs from its own directory, and
+neither was committed.
+
+**Served slippage, recorded.** Ten evenly spaced levels from the half-spread to the declared
+depth give engine 9, at $5,000, 15.8 / 19.5 / 6.5 / 1.4 bps by bucket. The table's check-only
+figures, which assume a continuous book, are 17.7 / 20.8 / 7.5 / 1.7. The gap comes from spec
+129's ten discrete levels.
+
+### The committed day: `tests/fixtures/replay/rehearsal_2024-10-20/`
+
+Cut by `scripts/cut_replay_fixture.py`: 720,585 trades over 231 pairs, from 51 hours before
+the day to its end, byte for byte from the partitions, with each source partition's sha256 in
+the manifest. That is 7.3 MB of zstd parquet. The lookback is 51 hours, not the spec's "96
+bars", because the replay client serves engine 3 a window of `published_bars` (200) bars.
+
+
+### Dry run of the rehearsal harness: determinism holds, 6.0 s per bar tick, 1.3 GB per process
+
+**Agent:** A-replay · **Task:** spec 142 · **Date:** 2026-09-19
+
+`scripts/rehearse_replay_day.py` ran over the committed day with the source run directories
+standing in for spec 135's (which do not exist yet) and alphabetical ranking. So engine 13
+refuses every bar (`anomaly_unavailable`, 96 rejections, all on the alphabetical first pair) and
+nothing trades. This is a check of the harness, not the rehearsal.
+
+- The two clean runs wrote **identical** rows.
+- The run killed at 40 ticks and resumed wrote the **same** rows, excluding `run_id` and `cycle_id`.
+- 97 bar ticks. **Mean 5,955 ms per bar tick, max 10,752 ms** (the first tick, which loads the
+  tape). About 580 s of wall clock per day.
+- **Peak working set 1.30-1.32 GB per process.** Four runs in parallel is about 5.3 GB, well
+  inside what the recorder leaves free.
+
+The full-chain figure, with engines 8 to 18 and the batched ranking, waits on specs 135 and 144.
+
+
+### Observed in the rehearsal: a target exit realised +2.0%, not the +3.0% the label books
+
+**Agent:** A-replay · **Task:** spec 142 · **Date:** 2026-09-19
+
+**What happened.** On 2024-10-20 at tier 3, a STORJ/USD position entered at 0.55419 with
+target 0.5708157 was recorded with `outcome = target` and an exit fill of 0.56532. That is
++2.0% before fees, against the +3.0% the triple-barrier label assumes for a target.
+
+**Why, from the fixture's own prints.** Between the 06:41 and 06:42 ticks, STORJ printed as
+high as 0.57264 (06:41:12), through the target, and then fell back. Its last print before the
+06:42 tick was 0.56552. Engine 21 sees the touch in `trade_ranges` and triggers. Engine 22 then
+exits as a market sell (Phase 6's rule for every exit, target included). The paper broker walks
+the declared book, which is centred on the **last** price, 0.56552, at the tick, so the fill
+lands below the target. The stop exit the same day filled at 0.55555 against a stop of
+0.55577, which is the ordinary taker slippage.
+
+**Why it matters.** It is not a replay artefact. A live daemon exits at the next tick's book in
+the same way. But every offline figure in `phase-7-findings.md` books a target at exactly
++3.0%. The chain's realised return on targets will therefore sit systematically below the
+labels the models were trained on and the grids were measured with. The rehearsal was run to
+find exactly this kind of thing, so it is reported to the lead before spec 143 launches, and
+nothing is changed.
+
+
+### The rehearsal, 2024-10-20 at tiers 3 and 5, with fold 394's Phase 7 run directory
+
+**Agent:** A-replay · **Task:** spec 142 · **Date:** 2026-09-19
+
+`scripts/rehearse_replay_day.py --day 2024-10-20 --fold 394 --tier {3,5}` ran with ranking
+`expected_move`, over the committed day and spec 135's `train-…-f394-p7`. The two tiers ran in
+parallel as separate processes, like the four runs will.
+
+**What the day did, both tiers alike in shape.**
+- 97 bar ticks and 328 minute ticks. Four approvals, all at the cost gate with the hurdle
+  cleared: three on STORJ/USD and one on DOGE/USD.
+- One entry, placed at 04:30, filled at its limit at 04:34 and was later stopped out.
+- One entry rested five minutes, had no print below its limit, and was cancelled by engine 21.
+- One entry filled and exited on target.
+- One DOGE/USD entry, filled at 13:20, exited on target at 17:10 (fill 0.14161 against an entry of 0.13731).
+- In all: 7 orders, 3 positions, 3 trades, 71 rejections, and 425 equity rows (one per tick). Ending equity: 5,058.50 at tier 3 and 5,073.71 at tier 5, from 5,000.00.
+
+**Every check by recomputation passed, at both tiers.**
+- Friction and hurdle, recomputed in exact rationals from the fixtures alone, equal the
+  `approvals` row and the `trades` row for all 4 approvals. The inputs are the fee tier, the
+  bucket (from 24 h of the fixture's own prints), and the declared book walked at the ledger's
+  balance.
+- Every filled entry filled at its limit, on the first tick at or after the first print
+  strictly below it. The cancelled entry had no such print.
+- The two clean runs wrote **identical** rows.
+
+**Resumed run: identical in content, but not proven on a quiet tree.** The run killed at 40 ticks
+and resumed differed from the clean run in one way only: its `approvals` table had an extra
+`details` column. B edited migration 0006 in the shared checkout while the rehearsal ran. My
+digest over `src/` and the fold directory changed between the start and the end of the rehearsal,
+and C's feature engine also changed on disk in that time. Ignoring that column, the resumed rows
+equal the clean run's at both tiers. **So the resume identity holds on this evidence, but the
+three runs did not all see the same source.** The harness now digests `src/`, the migrations and
+the fold directories before and after every run, and reports `tree_unchanged`. The rehearsal
+should be re-run on the committed tree before spec 143 launches.
+
+**Measured cost** (tier 3; tier 5 within 2%).
+- Bar tick: mean **4,911 ms**, max 14,195 ms (the first tick, which loads the tape and the models).
+- Minute tick: mean **4,109 ms**.
+- About 28 minutes of wall clock for the day.
+- **Peak working set 2.1 GB per process** (1.84 GB for the 40-tick process).
+
+**Projection for spec 143, stated as an estimate.**
+- Bar ticks: 26 weeks at 672 per week is 17,472, at 4.9 s each, **about 24 h per run**.
+- Minute ticks depend on exposure. On this, the window's busiest day, each placed entry brought
+  about 82 exposed minutes. At tier 3, where the offline pass found 28 clearing bars, that is
+  about 2,300 minute ticks, or **about 3 h**. At tier 5, which has 183 clearing bars before the
+  skeptic, the upper bound is about 15,000 minute ticks, or **about 17 h**.
+- So: **tier 3 about 27 h, tier 5 somewhere from 27 to 41 h**, and the alphabetical baselines
+  lower (no batched ranking, fewer trades).
+- Four processes need about 8.5 GB between them.
+
+**Mutation sweep on the two scripts:** 9 arms, 9 killed. The half-spread, the ledger's sign,
+fills counted only by then, the tolerance, the digest covering migrations, the slippage term,
+the cut's inclusive start, the refusal to overwrite, and the refusal of a start before the
+partitions. `C1` (the inclusive start) survived at first, because no trade sat exactly on the
+start. The test gained one, and the re-run killed it.
+
+
+### a-replay: the lead's rulings applied, and a second `run_id` collision found
+
+**Agent:** A-replay · **Date:** 2026-09-19
+
+- **`training.skeptic_cap_folds`** (spec 136, c-models) is an optional int of at least 1.
+  Absent means uncapped. It has two BAD_VALUES rows and a test that it is optional.
+- **Cost stop ruled (b):** the run goes ahead as specified and engine 3 is not changed. The
+  prototype stayed in the scratchpad and never touched a repository file (entry above).
+- **The rehearsal slice moved** to `tests/fixtures/phase7/rehearsal_2024-10-20/` (D17), because
+  `tests/fixtures/replay/` holds only the declared scenario fixtures. It was re-cut with the
+  final script, so the manifest's `script_sha256` matches it. `.gitattributes`'
+  `tests/fixtures/** -text` covers it (`git check-attr` reports `text: unset`). The first cut
+  had written the manifest in text mode, which gave CRLF on Windows inside a `-text`
+  directory. The cutter now writes bytes.
+- **`derived_dir=paths.derived`** is passed to `StoreClient` at all three construction sites
+  (`cli/engine.py`, and `cli/research.py` twice) for spec 140's SHAP writer. Without it every
+  `write_shap` refuses and engine 19 carries on, so the run would silently record no SHAP. The
+  daemon's `build_clients` test asserts it.
+- **The no-quote window is named in the scenario identity (D7):** `quote_rule.trailing_window_s
+  = 86400`, with the reason (it is the window the bucket's volume is defined over) and the
+  `now` stamp.
+- **`test_trade_chain_rehearsal.py` after spec 133.** The expected `trades` row now carries
+  the seven approval fields, recomputed from the placing tick's **published** payloads
+  (engine 18's `placed`/`userref`, engine 10's four figures, engines 8/13/15's
+  `model_run_id`), not read back from `approvals`. Two arms, dropping the merge and misreading
+  one figure, were each killed with `4 failed, 3 passed`.
+
+**Found: four runs over one window would all have shared one `run_id`.** The driver named a
+run `replay-<start instant>`. All four spec 143 runs start at the window's first bar, so all
+four would have carried the same `run_id`. Their databases are separate, so the rows would
+not collide, but engine 19's SHAP files (spec 140) sit under one shared
+`data/derived/shap/<run_id>/`, where `write_shap` refuses a second writer of a path. The
+second run's explanations would have been refused while its engine 19 carried on, and a
+rehearsal's second clean run would have lost its SHAP to the first. **Fix:** the name now
+carries the database's stem, `replay-<db stem>-<instant>`. Two clean runs therefore differ in
+`run_id` by construction, so the row comparison drops the run-id columns and replaces the run
+id inside any text value (a SHAP reference, a detail) with a placeholder. Row ids and tick
+numbers must still match exactly between clean runs.
+
+
+### Found in the preliminary rehearsal: the replay's features differ from the dataset's in the last bits, and one tree split turns on it
+
+**Agent:** A-replay · **Task:** spec 142 (spec 144's grid check) · **Date:** 2026-09-19
+
+**What happened.** On the preliminary rehearsal's first 18 ranked bars, engine 7's candidate
+matched the offline grid's (`research/ranking_check.grid_order`, names mapped through the
+recorded join) on 17. At bar 2024-10-20 00:15 (`bar_ts` 1729383300) engine 7 took USDC/USD, where
+the grid takes EUR/USD. Engine 8 scored USDC/USD at 0.0047706; the out-of-sample file has
+0.0046550 for USDCUSD on that bar, the same figure it gives EUR, GBP and USDT.
+
+**Why.** I rebuilt engine 8's 117-column input for USDC/USD on that bar (engines 3, 5 and 6 run
+in-process over the committed day) and compared it with the dataset row. Within 1e-9 the
+two agree in every column. Exactly, they do not. The replay has `log_return_16 = 0.0`,
+`efficiency_ratio_16 = 0.0`, `log_return_96 = 0.0` and `efficiency_ratio_96 = 0.0` where the
+dataset has −2.7e-20, 2.7e-17, −2.4e-18 and 5.5e-16. The z-scores and ranges differ at
+1e-16 to 1e-14. The fold 394 booster fed each vector gives P(target) 0.287 for the replay's
+against 0.176 for the dataset's: a tree split sits between an exact zero and a rounding
+residue. The residue comes from `modelling/features.py`'s rolling sums and standard
+deviations (`rolling_sum_by` and its siblings), which carry floating-point error forward
+along the series. The dataset computed them over the whole archive, and engine 5 over the
+200 bars engine 3 publishes, so the error differs, and on a pair whose price did not move it
+is the whole value. **A live daemon computes exactly as the replay does**, so the chain
+agrees with what a live system would decide. It is the offline grid, and the training
+data, that carry the residue.
+
+**Consequence.** Spec 144's "the simulation matches the measurement" fails on bars where a
+flat pair's features sit at a split threshold. This is not a replay defect, and nothing is
+changed. The owner of `modelling/features.py` (C) is the one to judge: rounding before a
+split, exact summation, or accepting the effect as a stated limitation. Reported to the lead
+and to c-criteria, who is working in engine 5.
+
+
+### The grid comparison over the whole rehearsal day: 68 of 75 bars agree, 7 differ inside a tie
+
+**Agent:** A-replay · **Task:** spec 142 (spec 144's check) · **Date:** 2026-09-19
+
+Over the 75 bars on which engine 7 ranked a candidate, its choice equals the grid's, within
+engine 7's own universe, on 68. On the other 7 the chosen pair sits in the grid's tied top
+group. On those bars six or more pairs (EUR, GBP, TRX, USDC, USDT, XBT against USD) carry the
+same expected move, 0.004654988, the all-timeout plateau of the calibrators. Both sides
+break a tie by name, but the grid spells names as the archive does (`EURUSD` sorts before
+`XBTUSD`) and engine 7 as the feed does (`BTC/USD` sorts before `EUR/USD`). Six of the seven
+are exactly that. The seventh is the USDC/USD bar above, where the replay's exact-zero
+features lift USDC off the plateau. **No bar differs outside a tie.** The harness now reports
+the ties apart from the disagreements, so neither can hide the other. Whether the grid
+or the engine should spell the tie-break differently is not mine to choose. It changes which
+tied pair is examined, and a tied pair on this plateau clears no hurdle.
+
+
+### The preliminary rehearsal (2024-10-20, tier 3, `expected_move`, fold 394): clean on a quiet tree
+
+**Agent:** A-replay · **Task:** spec 142 · **Date:** 2026-09-19
+
+The harness digested `src/`, the migrations and the fold directory before and after every
+run, and `tree_unchanged` is true. On that basis:
+- The **two clean runs are identical.**
+- The **run killed at 40 ticks and resumed is identical** to them, apart from the run-id
+  columns and `cycle_id`.
+- Every recomputation is equal: friction and hurdle for all 4 approvals, equal to both the
+  approvals row and the trades row; 3 fills at their limit on the expected tick; 1
+  cancellation with no print below its limit.
+- Trades: STORJ stop (−71.03 USD), STORJ target (+45.98), DOGE target (+83.55). 71
+  rejections, all `cost:net_edge_below_hurdle`.
+- Every placed entry has an approvals row, and the `runs` row carries its scenario digest.
+  **`approvals.details`, `rejections.details` and SHAP files are all 0:** spec 140's writer
+  is not yet in engine 19 on disk. That is expected for a preliminary run, and it is a launch
+  precondition for the gating one.
+- Cost: bar tick mean **4,444 ms** (max 11,049), minute tick mean **4,093 ms**, and peak working
+  set **2.07-2.11 GB** per process.
+- The report's own `ranking_check` ran on the in-memory code from before the capture fix and
+  reads 0 of 75. It was recomputed afterwards, from the same `scout.jsonl`, with the fixed
+  code: 68 of 75 bars agree, 7 fall inside a tie, and 0 differ (entry above).
+
+
+### The F6 stop criterion is in the harness; `replay_store`; the cutter's docstring
+
+**Agent:** A-replay · **Task:** spec 142 · **Date:** 2026-09-19
+
+- **The lead's F6 ruling, in code.** `ranking_check` now lists `stops`. A stop is a grid
+  disagreement, or a tie, in which either pick's expected move clears `(1 +
+  hurdle_multiple) x fees` at the run's tier. That fees-only floor sits below every pair's
+  real bar, so the check can only flag more bars than the true rule would, never fewer. The
+  report carries `ranking_stop`.
+  - On the preliminary capture: tier 3 (floor 1.5%) and tier 5 (floor 1.125%) give **0
+    stops** from 7 ties. A planted fee of 0.1% (floor 0.25%) turns all 7 into stops.
+  - Two arms on the condition (never a stop, and the engine pick only at ten times the
+    floor) were each killed by the new test.
+  - Rejected: the per-pair bar with spread and slippage. It needs each pair's bucket and
+    walk on the grid's side too, and a floor that is conservative by construction is enough
+    for a stop rule.
+- **Launch precondition 1 is testable.** The replay's store construction is now
+  `cli.research.replay_store`. A test writes one SHAP explanation through it and finds the
+  parquet under the derived root.
+- **The cutter's docstring no longer names the declared-scenario directory.** The criterion's
+  AST walk reads a docstring as a string constant. The fixture was re-cut, so the manifest's
+  `script_sha256` still matches the script.

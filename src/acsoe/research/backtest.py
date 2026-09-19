@@ -1,4 +1,11 @@
-"""Engine 23 `backtest` — replay the archive and label it. Offline only.
+"""Engine 23 `backtest` — replay the archive and label it, and drive the chain. Offline only.
+
+**Two jobs since Phase 7.** `BacktestEngine` below is Phase 4's labeller and is unchanged.
+`ChainReplay`, at the end of this module, is spec 131's driver: it steps the registered
+guard, opportunity and manage chains over a window of history, one tick at a time on an
+injected clock, and decides nothing but *when* the next tick is and *which fold's* models
+are in force. `acsoe research backtest` (in `cli/research.py`) wires it. The paragraphs
+below describe the labeller as Phase 4 built it.
 
 Spec 55. In **this** phase a backtest is **replay plus triple-barrier labelling and
 nothing more**: it produces the dataset Phase 5 trains on. It does not run historical
@@ -48,8 +55,10 @@ way moves the stop barrier in the sixteenth decimal and nothing would ever find 
 from __future__ import annotations
 
 import importlib
+import itertools
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Final, Protocol, runtime_checkable
 
@@ -70,7 +79,14 @@ __all__ = [
     "LABELLER_MODULE",
     "STATE_KEY",
     "BacktestEngine",
+    "ChainReplay",
+    "FoldWindow",
     "Labeller",
+    "ReplaySummary",
+    "closed_bar_open",
+    "fold_for_tick",
+    "next_tick_s",
+    "replay_bounds",
 ]
 
 #: The one key this engine writes into ``state``. Contract rule 2.
@@ -537,3 +553,222 @@ class BacktestEngine(BaseEngine):
         """
         stamp = context.now.strftime("%Y%m%dT%H%M%SZ")
         return self._derived_dir / f"labelled_{context.run_id}_{stamp}.parquet"
+
+
+# --------------------------------------------------------------------------- #
+# Phase 7, spec 131: engine 23 drives the registered chains over history
+# --------------------------------------------------------------------------- #
+#
+# Everything below is the *driver*. It makes no decision: it chooses when the next tick
+# happens, which fold's models are in force, and nothing else. The chains are
+# `bootstrap.py`'s, unchanged, and the orchestrator is `core/`'s, unchanged, stepped one
+# tick at a time on an injected clock. Engine 19 writes every row.
+#
+# It is written against callables and duck types rather than the store, the clients or
+# `bootstrap.py`, because this module is under `research/` and architecture invariant 5
+# keeps the live loop's modules out of it. `cli/research.py` is the one place allowed
+# to import both sides, and it does the wiring.
+
+
+@dataclass(frozen=True)
+class FoldWindow:
+    """One fold's test week and the Phase 7 run directory that scores it."""
+
+    fold: int
+    run_id: str
+    test_start_s: int
+    test_end_s: int
+
+    def holds_bar(self, bar_open_s: int) -> bool:
+        return self.test_start_s <= bar_open_s < self.test_end_s
+
+
+def closed_bar_open(tick_s: int, *, bar_s: int) -> int:
+    """The opening second of the latest bar closed at or before `tick_s`.
+
+    The bar a decision on this tick is about. Its fold is the one whose test window
+    holds that opening, which is how the out-of-sample file assigned rows to folds.
+    """
+    return (tick_s // bar_s) * bar_s - bar_s
+
+
+def fold_for_tick(folds: Sequence[FoldWindow], tick_s: int, *, bar_s: int) -> FoldWindow:
+    bar_open = closed_bar_open(tick_s, bar_s=bar_s)
+    matches = [fold for fold in folds if fold.holds_bar(bar_open)]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"{len(matches)} folds hold the bar opening at {bar_open}; exactly one must, "
+            "or the driver would score a bar with a model it was not tested with"
+        )
+    return matches[0]
+
+
+def replay_bounds(folds: Sequence[FoldWindow], *, bar_s: int) -> tuple[int, int]:
+    """The first and last tick of a window: the close of its first bar and of its last.
+
+    Checked contiguous, because a gap between two folds' test weeks would be a week the
+    driver silently skipped.
+    """
+    ordered = sorted(folds, key=lambda fold: fold.test_start_s)
+    for earlier, later in itertools.pairwise(ordered):
+        if earlier.test_end_s != later.test_start_s:
+            raise RuntimeError(
+                f"fold {earlier.fold} ends at {earlier.test_end_s} and fold {later.fold} "
+                f"starts at {later.test_start_s}; the window must be contiguous"
+            )
+    return ordered[0].test_start_s + bar_s, ordered[-1].test_end_s
+
+
+def next_tick_s(
+    last_s: int | None, *, exposed: bool, start_s: int, end_s: int, bar_s: int, loop_s: int
+) -> int | None:
+    """When the next tick happens, or `None` once the window is over.
+
+    Spec 131 step 1. A tick at every bar close, whether or not anything traded, because
+    engine 3 owns the bar clock and engines 4 and 17 must see the quiet bars. Between bar
+    closes, a tick every `loop_s` **only** while exposure exists (an open position or a
+    resting order), because a stop touched in a skipped minute would be missed. The
+    minute grid and the bar grid coincide (`loop_s` divides `bar_s`, which the config
+    enforces), so an exposed run still lands exactly on every bar close.
+    """
+    if last_s is None:
+        candidate = start_s
+    elif exposed:
+        candidate = last_s + loop_s
+    else:
+        candidate = (last_s // bar_s + 1) * bar_s
+    return candidate if candidate <= end_s else None
+
+
+@dataclass
+class ReplaySummary:
+    ticks: int = 0
+    bar_ticks: int = 0
+    minute_ticks: int = 0
+    first_tick_s: int | None = None
+    last_tick_s: int | None = None
+    fold_switches: list[tuple[int, int, str]] = field(default_factory=list)
+    finished: bool = False
+
+
+class ChainReplay:
+    """Engine 23's chain mode: step the registered orchestrator over a window.
+
+    :param tick: runs one orchestrator tick. The orchestrator itself is untouched.
+    :param set_clock: moves the injected clock the orchestrator and the clients share.
+    :param use_config: points the config view at a freshly built per-fold config.
+    :param exposed: reads the store: is a position open or an order resting?
+    :param activate: writes one `activate` command through the store, as an operator
+        would, before the first tick of a process.
+    :param record: appends one line to the run record, a JSON-able mapping.
+    :param config_for: builds the config for one fold, never by mutating a loaded one.
+    """
+
+    def __init__(
+        self,
+        *,
+        folds: Sequence[FoldWindow],
+        bar_s: int,
+        loop_s: int,
+        tick: Callable[[], Any],
+        set_clock: Callable[[int], None],
+        use_config: Callable[[Any], None],
+        config_for: Callable[[FoldWindow], Any],
+        exposed: Callable[[], bool],
+        activate: Callable[[int], None],
+        record: Callable[[Mapping[str, Any]], None],
+        wall: Callable[[], float] = time.perf_counter,
+    ) -> None:
+        if bar_s <= 0 or loop_s <= 0 or bar_s % loop_s:
+            raise ValueError("the loop tick must divide the decision bar")
+        self._folds = tuple(sorted(folds, key=lambda fold: fold.test_start_s))
+        self._bar_s = bar_s
+        self._loop_s = loop_s
+        self._tick = tick
+        self._set_clock = set_clock
+        self._use_config = use_config
+        self._config_for = config_for
+        self._exposed = exposed
+        self._activate = activate
+        self._record = record
+        self._wall = wall
+        self.start_s, self.end_s = replay_bounds(self._folds, bar_s=bar_s)
+
+    def run(
+        self,
+        *,
+        resume_after_s: int | None = None,
+        begin_s: int | None = None,
+        stop_after_s: int | None = None,
+        max_ticks: int | None = None,
+    ) -> ReplaySummary:
+        """Tick from the window's start, or from the tick after `resume_after_s`.
+
+        `begin_s` and `stop_after_s` cut a sub-window out of the ruled one, the
+        rehearsal's one day (spec 142): the first tick is the first bar close at or
+        after `begin_s`, and the last is at or before `stop_after_s`. `max_ticks` exists
+        for a test that kills a run part-way. None of the three skips a tick the
+        schedule requires inside the span it runs: they bound the run, never thin it.
+        """
+        summary = ReplaySummary()
+        end_s = self.end_s if stop_after_s is None else min(self.end_s, stop_after_s)
+        start_s = self.start_s
+        if begin_s is not None:
+            aligned = -(-begin_s // self._bar_s) * self._bar_s
+            if aligned < self.start_s or aligned > self.end_s:
+                raise ValueError("begin_s lies outside the window the folds cover")
+            start_s = aligned
+        last_s = resume_after_s
+        exposed = self._exposed() if resume_after_s is not None else False
+        current: FoldWindow | None = None
+        activated = False
+        while True:
+            tick_s = next_tick_s(
+                last_s,
+                exposed=exposed,
+                start_s=start_s,
+                end_s=end_s,
+                bar_s=self._bar_s,
+                loop_s=self._loop_s,
+            )
+            if tick_s is None:
+                summary.finished = True
+                break
+            if max_ticks is not None and summary.ticks >= max_ticks:
+                break
+            fold = fold_for_tick(self._folds, tick_s, bar_s=self._bar_s)
+            if fold != current:
+                self._use_config(self._config_for(fold))
+                summary.fold_switches.append((tick_s, fold.fold, fold.run_id))
+                self._record(
+                    {"event": "fold_switch", "tick_s": tick_s, "fold": fold.fold,
+                     "run_id": fold.run_id}
+                )
+                current = fold
+            self._set_clock(tick_s)
+            if not activated:
+                # Before this process's first tick, exactly as an operator would press
+                # Activate. On a resume the new process starts idle like any restarted
+                # daemon, so it is written again, and the run record says it was a restart.
+                self._activate(tick_s)
+                self._record(
+                    {"event": "restart" if resume_after_s is not None else "start",
+                     "tick_s": tick_s, "resume_after_s": resume_after_s}
+                )
+                activated = True
+            started = self._wall()
+            self._tick()
+            wall_ms = (self._wall() - started) * 1000.0
+            exposed = self._exposed()
+            bar_tick = tick_s % self._bar_s == 0
+            self._record(
+                {"event": "tick", "tick_s": tick_s, "fold": fold.fold, "bar_tick": bar_tick,
+                 "exposed_after": exposed, "wall_ms": round(wall_ms, 3)}
+            )
+            summary.ticks += 1
+            summary.bar_ticks += int(bar_tick)
+            summary.minute_ticks += int(not bar_tick)
+            summary.first_tick_s = summary.first_tick_s or tick_s
+            summary.last_tick_s = tick_s
+            last_s = tick_s
+        return summary

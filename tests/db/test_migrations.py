@@ -61,6 +61,17 @@ _BLOCK_INSERT = (
 #: PnL through them into the reporting currency.
 EXPECTED_MONEY_COLUMNS: frozenset[tuple[str, str]] = frozenset(
     {
+        # Migration 0006, spec 132: the approval economics, on the write-once table and on
+        # the trade they are copied to. They are money for the same reason the rejection
+        # economics are.
+        ("approvals", "expected_move_pct"),
+        ("approvals", "friction_pct"),
+        ("approvals", "net_edge_pct"),
+        ("approvals", "hurdle_pct"),
+        ("trades", "expected_move_pct"),
+        ("trades", "friction_pct"),
+        ("trades", "net_edge_pct"),
+        ("trades", "hurdle_pct"),
         ("equity_snapshots", "equity"),
         ("equity_snapshots", "peak_equity"),
         ("equity_snapshots", "cash"),

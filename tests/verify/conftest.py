@@ -216,6 +216,7 @@ def registry_bootstrap(guard: str = "", opportunity: str = "", manage: str = "")
 #: statement of the same fact - a fabrication that imported the expectation it is
 #: meant to satisfy would pass no matter what the criterion asserted.
 DOCUMENTED_TABLES = (
+    "approvals",
     "trades",
     "rejections",
     "runs",

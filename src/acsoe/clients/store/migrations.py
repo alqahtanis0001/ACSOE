@@ -30,11 +30,12 @@ BOOKKEEPING_TABLE = "schema_migrations"
 
 MIGRATION_FILENAME = re.compile(r"^(?P<version>\d{4})_(?P<name>[a-z0-9_]+)\.sql$")
 
-#: The nine relational tables of `context/architecture-context.md`. Does not include
-#: :data:`BOOKKEEPING_TABLE`, so this is exactly the set a caller wants to compare
-#: against.
+#: The ten relational tables of `context/architecture-context.md`. `approvals` comes from
+#: migration 0006 (spec 132). The set does not include :data:`BOOKKEEPING_TABLE`, so it is
+#: exactly the set a caller wants to compare against.
 EXPECTED_TABLES: frozenset[str] = frozenset(
     {
+        "approvals",
         "block_records",
         "commands",
         "equity_snapshots",
@@ -54,6 +55,7 @@ ALL_TABLES: frozenset[str] = EXPECTED_TABLES | {BOOKKEEPING_TABLE}
 #: constraints are named `sqlite_autoindex_*` by SQLite and are excluded.
 EXPECTED_INDEXES: frozenset[str] = frozenset(
     {
+        "idx_approvals_run_cycle",
         "idx_block_records_blocked_by_ts",
         "idx_block_records_run_cycle",
         "idx_block_records_status_ts",

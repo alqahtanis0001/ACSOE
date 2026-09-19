@@ -305,6 +305,19 @@ def test_engine_refuses_an_unset_operator_key_and_names_every_one(
     assert NEVER_OPERATOR_REQUIRED not in stderr
 
 
+def test_engine_refuses_a_replay_config(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The loader accepts mode replay since Phase 7 (spec 129), for the offline replay.
+    The daemon does not: it would wire the real exchange client under a mode that says
+    it is history. Exit 2, and no tick runs, so no `data/` or `logs/` work is done."""
+    raw = yaml.safe_load(DEFAULT_YAML.read_text(encoding="utf-8"))
+    raw["mode"] = "replay"
+    code = cli_main.main(["--config", str(write_config(tmp_path, raw)), "engine", "--ticks", "1"])
+    assert code == 2
+    assert "refusing to start in mode replay" in capsys.readouterr().err
+
+
 def test_engine_starts_against_the_committed_config(capsys: pytest.CaptureFixture[str]) -> None:
     """The other half: a fresh clone runs the daemon with no edits at all.
 
@@ -472,6 +485,9 @@ def test_the_daemon_builds_three_real_clients_and_needs_no_credentials(
     assert clients.store.db_path == paths.db / "acsoe.sqlite"
     assert DB_FILENAME == "acsoe.sqlite"
     assert clients.store.db_path.is_file()
+    # Spec 140: engine 19's SHAP rows go under the derived root. Without it every
+    # `write_shap` refuses and the daemon silently records no SHAP.
+    assert clients.store.derived_dir == paths.derived
     # Spec 61 step 3, asserted here and not against a hand-built store, because the
     # question is whether the DAEMON hands the artefact root over — B's client has
     # its own tests for what it does with one. Engines 8, 13 and 15 reach an

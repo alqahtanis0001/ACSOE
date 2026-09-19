@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Final
 
@@ -72,6 +73,52 @@ def build_parser() -> argparse.ArgumentParser:
             "path to a training digest for engine 20 (tournament); "
             "the engine reports that it cannot score without one"
         ),
+    )
+    # Phase 7, spec 131: `acsoe research backtest` replays the ruled window through the
+    # registered chains. Without the word, `acsoe research` runs the offline chain as
+    # it always has.
+    research.add_argument(
+        "action",
+        nargs="?",
+        choices=("backtest",),
+        default=None,
+        help="`backtest`: replay the window through the registered chains (spec 131)",
+    )
+    research.add_argument(
+        "--db", type=Path, default=None, help="backtest: this run's own database file"
+    )
+    research.add_argument(
+        "--ranking",
+        choices=("expected_move", "alphabetical"),
+        default="expected_move",
+        help="backtest: engine 7's ranking; `alphabetical` is the baseline",
+    )
+    research.add_argument(
+        "--fee-tier",
+        type=int,
+        default=None,
+        help="backtest: the declared fee tier; replay.fee_tier when omitted",
+    )
+    research.add_argument(
+        "--begin",
+        type=datetime.fromisoformat,
+        default=None,
+        help="backtest: first bar close to run, UTC (the rehearsal's day)",
+    )
+    research.add_argument(
+        "--until",
+        type=datetime.fromisoformat,
+        default=None,
+        help="backtest: last tick to run, UTC",
+    )
+    research.add_argument(
+        "--resume", action="store_true", help="backtest: continue a killed run's database"
+    )
+    research.add_argument(
+        "--max-ticks",
+        type=int,
+        default=None,
+        help="backtest: stop after this many ticks (tests only)",
     )
 
     return parser

@@ -32,7 +32,15 @@ def run(args: list[str], cwd: Path) -> str:
 
 
 def sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16] if path.exists() else "ABSENT"
+    if not path.exists():
+        return "ABSENT"
+    if path.is_dir():
+        h = hashlib.sha256()
+        for f in sorted(p for p in path.rglob("*") if p.is_file()):
+            h.update(f.relative_to(path).as_posix().encode())
+            h.update(hashlib.sha256(f.read_bytes()).digest())
+        return h.hexdigest()[:16]
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
 
 
 def main() -> int:
@@ -42,8 +50,19 @@ def main() -> int:
     run(["git", "reset", "--hard", head], GATE)
     run(["git", "clean", "-fd", "--exclude=logs/"], GATE)
     lines = [f"gate {label} phase {phase} at {datetime.now(timezone.utc).isoformat()} HEAD {head}"]
-    for rel in files:
-        src, dst = MAIN / rel, GATE / rel
+    for spec in files:
+        # "rel::alt" copies the alternate file alt to rel: a boundary that commits only
+        # part of a file's working-tree changes gates exactly the blob it will commit.
+        rel, _, alt = spec.partition("::")
+        src, dst = (Path(alt) if alt else MAIN / rel), GATE / rel
+        if src.is_dir():
+            # A whole directory (a fixture tree): one argument instead of hundreds, which
+            # overflowed the Windows command line (exit 126) on the b67 gate.
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+            lines.append(f"  {rel}/  (directory, {sum(1 for _ in src.rglob('*') if _.is_file())} files)")
+            continue
         if src.exists():
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dst)
@@ -62,7 +81,7 @@ def main() -> int:
                               stdout=out, stderr=subprocess.STDOUT)
         out.write(f"\nexit {done.returncode}\n")
     # hashes again after the gate: the boundary's files must not have moved in main meanwhile
-    moved = [rel for rel in files if sha(MAIN / rel) != sha(GATE / rel)]
+    moved = [s for s in files if sha(Path(s.partition("::")[2]) if "::" in s else MAIN / s) != sha(GATE / s.partition("::")[0])]
     with log.open("a", encoding="utf-8", newline="") as out:
         out.write(f"moved in main during the gate: {moved or 'none'}\n")
     print(f"exit {done.returncode}; moved {moved or 'none'}; log {log}")

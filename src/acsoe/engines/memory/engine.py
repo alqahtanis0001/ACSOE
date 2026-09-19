@@ -43,6 +43,7 @@ from decimal import Decimal
 from typing import Any, NamedTuple
 
 from acsoe.clients.store.contracts import (
+    ApprovalRow,
     BlockRecordRow,
     BlockStatus,
     CashSource,
@@ -56,11 +57,13 @@ from acsoe.clients.store.contracts import (
 )
 from acsoe.core.contracts import BaseEngine, EngineContext, EngineResult, EngineStatus, State
 from acsoe.engines.memory.contracts import (
+    APPROVAL_TRADE_FIELDS,
     BALANCES_FIELD,
     BLOCK_REASON_KEY,
     BLOCK_STATUS_KEY,
     CANDIDATE_PAIR_PATH,
     CLOSED_TRADES_FIELD,
+    COST_KEY,
     CYCLE_ID_KEY,
     ECONOMICS_FIELDS,
     EXCHANGE_KEY,
@@ -68,8 +71,12 @@ from acsoe.engines.memory.contracts import (
     EXIT_KEY,
     GUARD_BLOCKERS_KEY,
     HOLD_REASON_FIELD,
+    MODEL_RUN_ID_FIELD,
+    MODEL_RUN_KEYS,
     NET_PROCEEDS_FIELD,
     ORDERS_FIELD,
+    PAIR_FIELD,
+    PLACED_FIELD,
     POSITION_ID_FIELD,
     POSITION_MANAGER_KEY,
     POSITION_STATUS_FIELD,
@@ -81,6 +88,7 @@ from acsoe.engines.memory.contracts import (
     STATE_KEY,
     TRADING_BLOCKED_BY_KEY,
     UNREALISED_PNL_FIELD,
+    USERREF_FIELD,
     WRITTEN_TABLES,
     MemoryState,
     MissingInputError,
@@ -132,6 +140,10 @@ class MemoryEngine(BaseEngine):
         manager = self._payload(state, POSITION_MANAGER_KEY)
         exiting = self._payload(state, EXIT_KEY)
         exchange = self._payload(state, EXCHANGE_KEY)
+
+        written["approvals"] = self._write_approval(
+            store, context, state, executing, cycle_id=cycle_id, ts=ts
+        )
 
         # Positions and trades land before the equity snapshot, because the snapshot's
         # `open_position_count` and `realised_pnl_cum` are read back out of the store
@@ -464,10 +476,98 @@ class MemoryEngine(BaseEngine):
             )
             stamped = self._stamped(row, context, cycle_id=cycle_id, ts=ts)
             stamped.pop(NET_PROCEEDS_FIELD, None)
+            stamped.update(self._approved_as(store, stamped.get("entry_userref")))
             trade = TradeRow.model_validate(stamped)
             store.write_trade(trade)
             closed.append(ClosedTrade(row=trade, net_proceeds=proceeds))
         return closed
+
+    # -------------------------------------------------------------- approvals
+
+    def _write_approval(
+        self,
+        store: Any,
+        context: EngineContext,
+        state: State,
+        executing: Mapping[str, Any] | None,
+        *,
+        cycle_id: int,
+        ts: int,
+    ) -> int:
+        """Why this tick's entry was approved, written on the tick it was placed. Spec 133.
+
+        **Only when engine 18 placed an entry on this tick** (`placed: true`). An order
+        found already recorded is not this tick's approval, and the economics in `state`
+        now are not the ones that approved it.
+
+        The four economics are engine 10's, the figures it compared against the hurdle, and
+        the three run ids are the models engines 8, 13 and 15 scored with. **An absent
+        figure is written absent, never zero** (spec 133): a fill whose placing tick
+        published none is still recorded, with nothing claimed about why.
+
+        The store inserts and never upserts: a second approval for one `userref` raises
+        `sqlite3.IntegrityError`, which is not caught here, for the same reason a second
+        primary block record is not — it is the database refusing a second answer to a
+        question that has one.
+        """
+        if executing is None or executing.get(PLACED_FIELD) is not True:
+            return 0
+        if self._errored_opportunity_engine(state) == EXECUTION_KEY:
+            # An engine that raised decided nothing, whatever its payload says (invariant
+            # 12's reading, which `_write_rejection` applies to reason codes too).
+            return 0
+        userref = executing.get(USERREF_FIELD)
+        pair = executing.get(PAIR_FIELD)
+        if not isinstance(userref, int) or isinstance(userref, bool) or not pair:
+            raise MissingInputError(
+                f"engine 18 placed an entry and published userref {userref!r} and pair "
+                f"{pair!r}; the approval is keyed by the userref and cannot be written "
+                "without it"
+            )
+        cost = self._payload(state, COST_KEY) or {}
+        economics: dict[str, Any] = {}
+        for column, field in ECONOMICS_FIELDS:
+            value = cost.get(field)
+            if isinstance(value, float):
+                # Contract rule 8: money crosses `state` as an exact decimal string. A float
+                # here has already lost the digits the hurdle was decided on, and `str()`
+                # would launder it into a string the column then accepts.
+                raise MissingInputError(
+                    f"state[{COST_KEY!r}][{field!r}] is the float {value!r}; money crosses "
+                    "state as an exact decimal string"
+                )
+            # `str` and not `decimal_field`: the column is `Money`, which parses the string
+            # exactly, and `decimal_field` would turn absent into zero.
+            economics[column] = None if value is None else str(value)
+        for column, key in MODEL_RUN_KEYS:
+            payload = self._payload(state, key) or {}
+            value = payload.get(MODEL_RUN_ID_FIELD)
+            economics[column] = None if value is None else str(value)
+        store.write_approval(
+            ApprovalRow(
+                userref=userref,
+                run_id=context.run_id,
+                cycle_id=cycle_id,
+                ts=ts,
+                pair=str(pair),
+                updated_at=ts,
+                **economics,
+            )
+        )
+        return 1
+
+    def _approved_as(self, store: Any, entry_userref: Any) -> dict[str, Any]:
+        """The seven approval fields for a trade, from its entry's approval, or all absent.
+
+        No `entry_userref`, or no approval recorded for it (an entry placed before
+        migration 0006, or a placing tick that published nothing), gives every field
+        `None`. The trade is written either way: spec 133 never refuses a fill for it.
+        """
+        approval = None if entry_userref is None else store.approval(int(entry_userref))
+        return {
+            field: None if approval is None else getattr(approval, field)
+            for field in APPROVAL_TRADE_FIELDS
+        }
 
     # ------------------------------------------------------------- rejections
 

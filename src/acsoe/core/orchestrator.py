@@ -311,17 +311,29 @@ class Orchestrator:
         if start is None:
             self._log("run_record_skipped", reason="store exposes no start_run")
             return
+        # Spec 134: a replay run names the declared scenario that priced it, so a result can
+        # never be read without its inputs. The replay driver's clients container carries
+        # both strings; the daemon's carries neither, so paper and live write null, never a
+        # placeholder. The keywords are passed only when present: an unconditional pass
+        # into a store that lacked them would raise inside this broad handler and lose the
+        # whole row silently, which is the one failure a bookkeeping row must not have.
+        scenario: dict[str, str] = {}
+        for attribute in ("scenario_digest", "scenario_description"):
+            value = getattr(self._clients, attribute, None)
+            if value is not None:
+                scenario[attribute] = str(value)
         try:
             start(
                 self._run_id,
                 mode=str(self._config.mode),
                 started_at=_to_micros(self._clock.now()),
+                **scenario,
             )
         # Broad by intent: a bookkeeping row must never stop the loop. See the docstring.
         except Exception as exc:
             self._log("run_record_failed", error=repr(exc))
             return
-        self._log("run_recorded", mode=str(self._config.mode))
+        self._log("run_recorded", mode=str(self._config.mode), scenario=sorted(scenario))
 
     def _persist_mode(self, store: Any, stamp: int) -> None:
         """Record the system mode this run is now in, for the console to read.

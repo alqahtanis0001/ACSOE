@@ -7,6 +7,7 @@ rather than from the submodules, so the seam stays one name.
 from acsoe.clients.store.client import DATA_GUARD_ENGINE, StoreClient, StoreError
 from acsoe.clients.store.connection import close_connection, open_connection
 from acsoe.clients.store.contracts import (
+    ApprovalRow,
     BlockRecordRow,
     BlockStatus,
     CashSource,
@@ -27,6 +28,7 @@ from acsoe.clients.store.contracts import (
     RejectionRow,
     RunMode,
     RunRow,
+    ShapRecord,
     TradeOutcome,
     TradeRow,
     from_micros,
@@ -53,6 +55,7 @@ __all__ = [
     "EXPECTED_INDEXES",
     "EXPECTED_TABLES",
     "TIMESTAMP_TYPE",
+    "ApprovalRow",
     "BlockRecordRow",
     "BlockStatus",
     "CashSource",
@@ -77,6 +80,7 @@ __all__ = [
     "RejectionRow",
     "RunMode",
     "RunRow",
+    "ShapRecord",
     "StoreClient",
     "StoreError",
     "TradeOutcome",

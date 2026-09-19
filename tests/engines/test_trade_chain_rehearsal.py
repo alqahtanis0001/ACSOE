@@ -110,6 +110,16 @@ from acsoe.engines.feature.engine import FeatureEngine
 from acsoe.engines.macro_context.engine import MacroContextEngine
 from acsoe.engines.market_data_recorder.engine import MarketDataRecorderEngine
 from acsoe.engines.market_sensor.engine import MarketSensorEngine
+from acsoe.engines.memory.contracts import (
+    APPROVAL_TRADE_FIELDS,
+    COST_KEY,
+    ECONOMICS_FIELDS,
+    EXECUTION_KEY,
+    MODEL_RUN_ID_FIELD,
+    MODEL_RUN_KEYS,
+    PLACED_FIELD,
+    USERREF_FIELD,
+)
 from acsoe.engines.memory.engine import MemoryEngine
 from acsoe.engines.order_book.engine import OrderBookEngine
 from acsoe.engines.position_manager.contracts import (
@@ -396,8 +406,33 @@ def ruled_equity(
     return cash + proceeds, value, unrealised, CashSource.AFTER_EXIT
 
 
+def published_approval(state: dict[str, Any]) -> tuple[int, dict[str, Any]] | None:
+    """The approval this tick's published payloads license, or `None` when none was placed.
+
+    Read from what engines 18, 10, 8, 13 and 15 **published** on the placing tick, never
+    from the store: engine 18's `placed` and `userref`, engine 10's four economics as it
+    compared them against the hurdle, and each model engine's `model_run_id`. The trade row
+    engine 19 later writes for this entry must carry exactly these (spec 133). A read-back
+    of the `approvals` row instead would let the test agree with whatever engine 19 wrote.
+    """
+    executing = state.get(EXECUTION_KEY)
+    if not isinstance(executing, dict) or executing.get(PLACED_FIELD) is not True:
+        return None
+    cost = state[COST_KEY]
+    figures: dict[str, Any] = {column: cost.get(key) for column, key in ECONOMICS_FIELDS}
+    for column, engine in MODEL_RUN_KEYS:
+        figures[column] = (state.get(engine) or {}).get(MODEL_RUN_ID_FIELD)
+    return int(executing[USERREF_FIELD]), figures
+
+
 def check_recorded(
-    state: dict[str, Any], before: Tables, after: Tables, *, run_id: str, ts: int
+    state: dict[str, Any],
+    before: Tables,
+    after: Tables,
+    *,
+    run_id: str,
+    ts: int,
+    approvals: dict[int, dict[str, Any]] | None = None,
 ) -> None:
     """Engine 19 recorded exactly what 18, 21 and 22 published this tick, and nothing else.
 
@@ -426,8 +461,20 @@ def check_recorded(
         positions[str(row["position_id"])] = PositionRow.model_validate(
             {**without(row, POSITION_VALUE_FIELD), **stamp, "hold_reason": hold}
         )
+    # A closed trade carries its entry's approval (spec 133), captured from the placing
+    # tick's published payloads by the rehearsal; an entry with none carries nulls.
+    approved = approvals or {}
     trades = {
-        str(row["trade_id"]): TradeRow.model_validate({**without(row, NET_PROCEEDS_FIELD), **stamp})
+        str(row["trade_id"]): TradeRow.model_validate(
+            {
+                **without(row, NET_PROCEEDS_FIELD),
+                **stamp,
+                **{
+                    field_name: approved.get(int(row["entry_userref"]), {}).get(field_name)
+                    for field_name in APPROVAL_TRADE_FIELDS
+                },
+            }
+        )
         for _, row in published(state, ("exit",), "closed_trades")
     }
 
@@ -535,6 +582,8 @@ class Rehearsal:
     orchestrator: Orchestrator | None = None
     tables: Tables = field(default_factory=Tables)
     commands: int = 0
+    #: Each placed entry's approval, from its placing tick's published payloads.
+    approvals: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     # -- moments ---------------------------------------------------------- #
 
@@ -608,6 +657,9 @@ class Rehearsal:
         self.clock.set(at)
         before = self.tables
         state = self.orchestrator.tick()
+        approval = published_approval(state)
+        if approval is not None:
+            self.approvals[approval[0]] = approval[1]
         if check:
             self.check(state, before, at)
         return state
@@ -616,7 +668,12 @@ class Rehearsal:
         assert self.orchestrator is not None
         self.tables = read_tables(self.store)
         check_recorded(
-            state, before, self.tables, run_id=self.orchestrator.run_id, ts=to_micros(at)
+            state,
+            before,
+            self.tables,
+            run_id=self.orchestrator.run_id,
+            ts=to_micros(at),
+            approvals=self.approvals,
         )
 
     def open_orders(self) -> tuple[Any, ...]:

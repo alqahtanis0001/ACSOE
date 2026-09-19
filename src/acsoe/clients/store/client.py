@@ -18,6 +18,7 @@ what a drawdown or a loss streak means; this file only knows how to fetch one.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 from collections.abc import Iterator, Mapping, Sequence
@@ -27,9 +28,11 @@ from enum import Enum
 from pathlib import Path, PureWindowsPath
 from types import TracebackType
 from typing import Any, Final, Self
+from urllib.parse import quote
 
 from acsoe.clients.store.connection import close_connection, open_connection
 from acsoe.clients.store.contracts import (
+    ApprovalRow,
     BlockRecordRow,
     BlockStatus,
     CommandRow,
@@ -44,9 +47,11 @@ from acsoe.clients.store.contracts import (
     RejectionRow,
     RunMode,
     RunRow,
+    ShapRecord,
     SystemMode,
     SystemModeRow,
     TradeRow,
+    to_micros,
 )
 from acsoe.clients.store.migrations import apply_migrations
 
@@ -202,9 +207,16 @@ class StoreClient:
     Satisfies the `store` member of the `Clients` Protocol declared in `core/`.
     """
 
-    def __init__(self, db_path: Path, *, models_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        models_dir: Path | None = None,
+        derived_dir: Path | None = None,
+    ) -> None:
         self._db_path = Path(db_path)
         self._models_dir = None if models_dir is None else Path(models_dir)
+        self._derived_dir = None if derived_dir is None else Path(derived_dir)
         self._conn: sqlite3.Connection | None = None
 
     # ------------------------------------------------------------------
@@ -226,6 +238,15 @@ class StoreClient:
         name the run id nobody can serve.
         """
         return self._models_dir
+
+    @property
+    def derived_dir(self) -> Path | None:
+        """The Parquet root (`data/derived/`), or `None` when this client was built without one.
+
+        The same posture as :attr:`models_dir`. A client built without it is legal, and the
+        refusal comes when someone asks to read or write Parquet through it.
+        """
+        return self._derived_dir
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -738,8 +759,15 @@ class StoreClient:
         started_at: int,
         acsoe_version: str | None = None,
         config_digest: str | None = None,
+        scenario_digest: str | None = None,
+        scenario_description: str | None = None,
     ) -> None:
         """Record one daemon process, at startup, before the first tick.
+
+        `scenario_digest` and `scenario_description` name the declared replay scenario
+        that priced the run (migration 0006, the lead's spec 134). Leave both `None` for a
+        paper or live run. A blank string is refused with :class:`StoreError`, because a
+        placeholder is exactly what a null exists to avoid.
 
         **Refuses a duplicate `run_id` rather than upserting.** `write_run` upserts
         because the orchestrator legitimately writes that row more than once — stamping
@@ -766,18 +794,29 @@ class StoreClient:
         except ValueError as exc:
             legal = ", ".join(sorted(member.value for member in RunMode))
             raise StoreError(f"unknown run mode {mode!r}; expected one of {legal}") from exc
+        for name, value in (
+            ("scenario_digest", scenario_digest),
+            ("scenario_description", scenario_description),
+        ):
+            if value is not None and not str(value).strip():
+                raise StoreError(
+                    f"{name} is a value or None; a blank string would be a placeholder"
+                )
 
         try:
             self.connection.execute(
                 "INSERT INTO runs "
-                "(run_id, mode, started_at, acsoe_version, config_digest, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(run_id, mode, started_at, acsoe_version, config_digest, "
+                "scenario_digest, scenario_description, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     recognised.value,
                     int(started_at),
                     acsoe_version,
                     config_digest,
+                    scenario_digest,
+                    scenario_description,
                     int(started_at),
                 ),
             )
@@ -870,10 +909,24 @@ class StoreClient:
         `system_mode` the caller's stale `RunRow` happened to hold and silently
         overwrite the real one. Excluded from the INSERT they default to NULL, and
         excluded from the `DO UPDATE` set they are left exactly as they were.
+
+        **Nor does it write the scenario** (migration 0006), for the same reason.
+        :meth:`start_run` is the only writer of `scenario_digest` and
+        `scenario_description`. The scenario is fixed for the life of a run. If a shutdown
+        write from a `RunRow` built without it were allowed to write, it would erase the
+        record of which declared inputs priced every trade in the run.
         """
         self._upsert(
             "runs",
-            row.model_dump(exclude={"id", "system_mode", "system_mode_at"}),
+            row.model_dump(
+                exclude={
+                    "id",
+                    "system_mode",
+                    "system_mode_at",
+                    "scenario_digest",
+                    "scenario_description",
+                }
+            ),
             key=("run_id",),
         )
 
@@ -901,6 +954,17 @@ class StoreClient:
 
     def write_rejection(self, row: RejectionRow) -> int:
         return self._insert("rejections", row.model_dump())
+
+    def write_approval(self, row: ApprovalRow) -> None:
+        """Record why one entry was approved, on the tick it was placed. **Insert, never upsert.**
+
+        A second approval for the same `userref` raises `sqlite3.IntegrityError`, and it
+        is not to be caught and smoothed over. An approval is a fact about one tick. An
+        upsert would let a later tick rewrite `cycle_id` and the economics, which is the
+        overwrite `orders` already suffers (prerequisite 8) and the reason this table
+        exists. Migration 0006 and `docs/build-log/phase-7/b-store.md` explain the choice.
+        """
+        self._insert("approvals", row.model_dump())
 
     def write_leaderboard_entry(self, row: LeaderboardRow) -> int:
         return self._insert("leaderboard", row.model_dump())
@@ -986,6 +1050,18 @@ class StoreClient:
             "SELECT * FROM orders WHERE userref = ?", (int(userref),)
         ).fetchone()
         return None if row is None else OrderRow(**_row_to_dict(row))
+
+    def approval(self, userref: int) -> ApprovalRow | None:
+        """The approval recorded for the entry with this `userref`, or `None`.
+
+        `None` means no approval was recorded: the entry was placed before migration 0006,
+        or its placing tick published no economics. Engine 19 then writes the trade's
+        economics as absent, never as zero (spec 133).
+        """
+        row = self.connection.execute(
+            "SELECT * FROM approvals WHERE userref = ?", (int(userref),)
+        ).fetchone()
+        return None if row is None else ApprovalRow(**_row_to_dict(row))
 
     def recent_rejections(self, limit: int) -> tuple[RejectionRow, ...]:
         rows = self.connection.execute(
@@ -1226,3 +1302,134 @@ class StoreClient:
                 f"could not create the directory for model run {run_id!r} under {root}: {exc}"
             ) from exc
         return path
+
+    # ------------------------------------------------------------------
+    # SHAP explanations, in Parquet (spec 140)
+    #
+    # `architecture-context.md`: SHAP explanations live in Parquet, joined by decision id,
+    # never in SQLite. One file per decision, `shap/<run_id>/<cycle_id>/<pair>.parquet`
+    # under `derived_dir`, so `(run_id, cycle_id, pair)` is unique because it is the path.
+    # The relative path is the `shap_ref` a `rejections` row carries.
+    # ------------------------------------------------------------------
+
+    def _parquet(self, action: str) -> Any:
+        """A `ParquetStore` over `derived_dir`, or a refusal naming what was asked."""
+        if self._derived_dir is None:
+            raise StoreError(
+                f"cannot {action}: this store client was built without a derived_dir, so it "
+                "has no Parquet root"
+            )
+        from acsoe.clients.store.parquet import ParquetStore
+
+        return ParquetStore(self._derived_dir)
+
+    def write_shap(
+        self,
+        *,
+        run_id: str,
+        cycle_id: int,
+        ts: int,
+        pair: str,
+        model_run_id: str | None,
+        contributions: Mapping[str, float],
+    ) -> str:
+        """Write one decision's feature attributions. Returns its `shap_ref`. **Write-once.**
+
+        One row per feature, in the mapping's order: `run_id`, `cycle_id`, `ts` (UTC
+        microseconds), `pair`, `model_run_id`, `feature`, `contribution`.
+
+        Refuses with :class:`StoreError`, each with its own message:
+        - no `derived_dir`;
+        - an unusable `run_id`, by the rule `model_run_dir` applies, since it becomes one
+          directory name;
+        - a blank `pair`;
+        - **empty `contributions`.** Engine 8 publishes `{}` when it cannot read `shap`'s
+          output. That is "no explanation", and it stays absent: an empty file would look
+          like an explanation that says nothing;
+        - a contribution that is not a finite number, with a bool counted as not a number.
+          A NaN would read back as a value and sort unpredictably;
+        - a file already at that path. An explanation is a fact about one decision and is
+          never overwritten, like a model run directory.
+        """
+        store = self._parquet("write a SHAP explanation")
+        name = _validated_run_id(run_id)
+        if not pair or not pair.strip():
+            raise StoreError("refusing a SHAP explanation with a blank pair")
+        if not contributions:
+            raise StoreError(
+                f"refusing an empty SHAP explanation for {pair} on {run_id} cycle "
+                f"{cycle_id}: no attribution is recorded as no file, never an empty one"
+            )
+        features: list[str] = []
+        values: list[float] = []
+        for feature, value in contributions.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise StoreError(f"SHAP contribution for {feature!r} is not a number: {value!r}")
+            if not math.isfinite(value):
+                raise StoreError(f"SHAP contribution for {feature!r} is not finite: {value!r}")
+            features.append(str(feature))
+            values.append(float(value))
+
+        relative = f"shap/{name}/{int(cycle_id)}/{quote(pair, safe='')}.parquet"
+        if store.exists(relative):
+            raise StoreError(
+                f"refusing to overwrite the SHAP explanation at {relative}: one decision has "
+                "one explanation"
+            )
+
+        import pyarrow as pa  # type: ignore[import-untyped]
+
+        from acsoe.clients.store.parquet import TIMESTAMP_TYPE
+
+        rows = len(features)
+        table = pa.table(
+            {
+                "run_id": pa.array([run_id] * rows, pa.string()),
+                "cycle_id": pa.array([int(cycle_id)] * rows, pa.int64()),
+                "ts": pa.array([int(ts)] * rows, pa.int64()).cast(TIMESTAMP_TYPE),
+                "pair": pa.array([pair] * rows, pa.string()),
+                "model_run_id": pa.array([model_run_id] * rows, pa.string()),
+                "feature": pa.array(features, pa.string()),
+                "contribution": pa.array(values, pa.float64()),
+            }
+        )
+        store.write(relative, table)
+        return relative
+
+    def read_shap(self, shap_ref: str) -> ShapRecord:
+        """Read one decision's explanation back by its `shap_ref`.
+
+        Refuses with :class:`StoreError` when there is no `derived_dir`, when the ref escapes
+        the Parquet root, when no file is there, or when the file does not describe exactly
+        one decision.
+        """
+        from acsoe.clients.store.parquet import ParquetError
+
+        store = self._parquet("read a SHAP explanation")
+        try:
+            table = store.read(shap_ref)
+        except ParquetError as exc:
+            raise StoreError(f"cannot read SHAP explanation {shap_ref!r}: {exc}") from exc
+        columns = table.to_pydict()
+        keys = {
+            (columns["run_id"][i], columns["cycle_id"][i], columns["pair"][i],
+             columns["model_run_id"][i])
+            for i in range(table.num_rows)
+        }
+        if len(keys) != 1:
+            raise StoreError(
+                f"SHAP file {shap_ref!r} holds {len(keys)} decisions; it must hold exactly one"
+            )
+        ((run_id, cycle_id, pair, model_run_id),) = keys
+        stamp = columns["ts"][0]
+        return ShapRecord(
+            run_id=str(run_id),
+            cycle_id=int(cycle_id),
+            ts=to_micros(stamp),
+            pair=str(pair),
+            model_run_id=None if model_run_id is None else str(model_run_id),
+            contributions=tuple(
+                (str(feature), float(value))
+                for feature, value in zip(columns["feature"], columns["contribution"], strict=True)
+            ),
+        )

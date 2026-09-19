@@ -3021,3 +3021,42 @@ directories are `models/train-20260913T205245-067b2b9d-f{k}-p7`.
 - **Still open for the lead:** the `training.skeptic_cap_folds` field and YAML value. When they
   land, `train_walkforward` must be wired to the key and it must join `_config_digest`. Nothing in
   Phase 7 retrains, so this is not on the critical path.
+
+### c-criteria — engine 5 speed-up (lead decision D16) DONE, not committed (2026-09-19)
+
+`modelling.features.compute` and the new `compute_many` share one grouped implementation, and
+engine 5 calls `compute_many` once a tick. Output is bit-identical to the per-pair path, which is
+kept as the oracle in `tests/modelling/features_oracle.py`. On engine 3's real output for the
+rehearsal day it went from 1,636 ms to 124 ms per bar tick. Files:
+`src/acsoe/modelling/features.py`, `src/acsoe/engines/feature/engine.py`,
+`src/acsoe/engines/feature/README.md`, `tests/modelling/features_oracle.py` (new),
+`tests/modelling/test_features_batched.py` (new). Sweep: 13 applied, 12 killed, 1 equivalent.
+Every Phase 5 criterion PASSes, each run on its own.
+
+### c-criteria — spec 141 state
+
+`backtest_emits_alpha_report` is built: PENDING until spec 143 commits
+`tests/fixtures/phase7/run-digest-*.json`, with the fabricated-run check before it. Its sweep was
+18 applied, 18 killed. The `fee_scenario_is_replay_only` markers were widened as ruled. The
+one-day run is the `--live` half, not built. Still to do: `research_screens_render` (spec 140,
+after the run) and the `--live` half.
+
+### c-criteria — STOP, with the lead: the bucket table's producer trips `fee_scenario_is_replay_only`
+
+After the marker set was widened as ruled, the criterion names `scripts/build_bucket_table.py`
+(a-data, spec 130). It is the script that **writes** the declared bucket table into
+`tests/fixtures/replay/`. It builds that path from pieces, so the old directory marker never saw it.
+It reads no fee and prices nothing. Options sent to the lead: (a) name the one producer in the
+criterion, beside the two readers, with its reason (recommended; the case against is that it is a
+narrow form of the exemption already rejected); (b) move the write into the replay client's module
+(a-data's lane; an offline builder inside a runtime client); (c) a "writes only" rule, which cannot
+be proven from an AST. No change until the lead rules. The second hit, a docstring naming the
+directory in `scripts/cut_replay_fixture.py`, is a-replay's to reword. I asked them.
+
+### c-models — spec 136 wiring DONE, 2026-09-19
+
+`train_walkforward` reads `training.skeptic_cap_folds` through `training.skeptic_cap_folds`, the
+one reader, which `skeptic_cap.read_cap` delegates to. `_fit_skeptic`'s `cap_folds` is required.
+The key is in `_config_digest`. Tests: 23 passed. Mutations: 5 applied, 5 killed. No load-time
+path compares a manifest's config digest with the live config (grep, in the build log), so the
+`-p7` directories are unaffected.

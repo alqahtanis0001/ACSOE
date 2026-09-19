@@ -363,9 +363,23 @@ def test_iso_8601_moments_are_accepted(verify_module: ModuleType, bare_tree: Pat
 # candles_match_independent_reduction_of_recorded_trades
 # --------------------------------------------------------------------------- #
 
-#: Three pairs that are all in the committed `tests/fixtures/kraken/asset_pairs.json`,
-#: so the tolerance can be read from `AssetPairs` for every one of them.
+#: Three pairs that are all in spec 127's recorded `AssetPairs` and its name join, so the
+#: tolerance can be read from the recording for every one of them.
 OHLC_PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD")
+
+#: Spec 127's recording and the REST key each v2 pair joins to in its recorded name map.
+RECORDED_ASSET_PAIRS = Path("tests") / "fixtures" / "kraken" / "asset_pairs_recorded_2026-09-19.json"
+REST_KEY = {"BTC/USD": "XXBTZUSD", "ETH/USD": "XETHZUSD", "SOL/USD": "SOLUSD"}
+
+
+def edit_recorded_pairs(root: Path, edit: Any) -> None:
+    """Apply `edit` to the recorded `AssetPairs` result in a copied tree, payload kept as text."""
+    path = root / RECORDED_ASSET_PAIRS
+    captured = json.loads(path.read_text(encoding="utf-8"))
+    envelope = json.loads(captured["payload"])
+    edit(envelope["result"])
+    captured["payload"] = json.dumps(envelope)
+    path.write_text(json.dumps(captured), encoding="utf-8")
 
 #: A builder that reproduces the fixture exactly. `_offsets` shifts one field of one
 #: bar so a test can walk the criterion over its tolerance without a second module.
@@ -490,7 +504,9 @@ def test_the_candle_pass_says_what_it_compared_against_and_what_it_measured(
     assert "independent reduction of real recorded Kraken trades" in message, message
     assert "not Kraken's published OHLC" in message, message
     assert "largest OHLC difference 0," in message, message
-    assert "fake exchange's invented AssetPairs" in message, message
+    assert "Kraken's public AssetPairs as recorded at" in message, message
+    assert "asset_pairs_recorded_2026-09-19.json" in message, message
+    assert "invented" not in message, message
     assert "--live task" in message, message
     for false_claim in ("as AssetPairs reports it", "Kraken's own OHLC", "vs Kraken"):
         assert false_claim not in message, (false_claim, message)
@@ -505,14 +521,17 @@ def test_a_candle_fail_names_the_reference_reduction_and_not_kraken(
     outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
     assert_fail(outcome, verify_module)
     assert "vs the reference reduction's" in outcome.message, outcome.message
-    assert "invented AssetPairs" in outcome.message, outcome.message
-    assert "Kraken" not in outcome.message, outcome.message
+    assert "AssetPairs as recorded at" in outcome.message, outcome.message
+    # The tolerance is Kraken's recorded rule since spec 141 step 5; what must never appear
+    # is the deviation described as one from Kraken's OHLC, which the reference is not.
+    for false_claim in ("vs Kraken", "Kraken's own OHLC", "Kraken's OHLC"):
+        assert false_claim not in outcome.message, outcome.message
 
 
 def test_a_close_outside_the_pairs_own_tick_size_is_a_fail(
     verify_module: ModuleType, tree_with_harness: Path
 ) -> None:
-    """BTC/USD's `tick_size` is 0.1 in the committed `AssetPairs` fixture."""
+    """BTC/USD's `tick_size` is 0.1 in spec 127's recorded `AssetPairs`."""
     ohlc_fixture(tree_with_harness)
     fabricate_builder(tree_with_harness, offsets=(("BTC/USD", "close", 0.5),))
     outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
@@ -534,10 +553,9 @@ def test_the_tolerance_really_comes_from_asset_pairs(
     fabricate_builder(tree_with_harness, offsets=(("BTC/USD", "close", 0.5),))
     assert_fail(run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness), verify_module)
 
-    pairs_path = tree_with_harness / "tests" / "fixtures" / "kraken" / "asset_pairs.json"
-    envelope = json.loads(pairs_path.read_text(encoding="utf-8"))
-    envelope["result"]["BTC/USD"]["tick_size"] = "1.0"
-    pairs_path.write_text(json.dumps(envelope), encoding="utf-8")
+    edit_recorded_pairs(
+        tree_with_harness, lambda result: result[REST_KEY["BTC/USD"]].update(tick_size="1.0")
+    )
 
     assert_pass(run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness), verify_module)
 
@@ -567,13 +585,23 @@ def test_a_pair_absent_from_asset_pairs_is_a_fail_not_an_invented_tolerance(
     """There is no honest tolerance for a pair the exchange did not describe."""
     ohlc_fixture(tree_with_harness)
     fabricate_builder(tree_with_harness)
-    pairs_path = tree_with_harness / "tests" / "fixtures" / "kraken" / "asset_pairs.json"
-    envelope = json.loads(pairs_path.read_text(encoding="utf-8"))
-    del envelope["result"]["SOL/USD"]
-    pairs_path.write_text(json.dumps(envelope), encoding="utf-8")
+    edit_recorded_pairs(tree_with_harness, lambda result: result.pop(REST_KEY["SOL/USD"]))
     outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
     assert_fail(outcome, verify_module)
-    assert "invented" in outcome.message
+    assert "SOL/USD is in ohlc.json and not in Kraken's public AssetPairs" in outcome.message
+    assert "will not have one invented" in outcome.message
+
+
+def test_with_no_recorded_asset_pairs_the_candles_are_pending_and_the_invented_file_unread(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """Prerequisite 9: the invented `asset_pairs.json` is never a fallback for the recording."""
+    ohlc_fixture(tree_with_harness)
+    fabricate_builder(tree_with_harness)
+    (tree_with_harness / RECORDED_ASSET_PAIRS).unlink()
+    outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
+    assert_pending(outcome, verify_module)
+    assert "spec 127" in outcome.message, outcome.message
 
 
 # --------------------------------------------------------------------------- #
@@ -1766,3 +1794,24 @@ def test_a_commands_row_the_store_never_wrote_is_named_rather_than_unpacked(
 
     with pytest.raises(LookupError, match="`commands` has no such row"):
         verify_module._command_row(db_path, 4242)
+
+
+def test_the_newest_recording_is_the_one_read(
+    verify_module: ModuleType, tree_with_harness: Path
+) -> None:
+    """An older recording beside the newest must not supply the tolerance. Planted: a
+    2026-01-01 recording in which BTC/USD's tick is 1.0, wide enough to pass a 0.5 shift that
+    the newest recording's 0.1 tick fails."""
+    ohlc_fixture(tree_with_harness)
+    fabricate_builder(tree_with_harness, offsets=(("BTC/USD", "close", 0.5),))
+    newest = tree_with_harness / RECORDED_ASSET_PAIRS
+    older = newest.with_name("asset_pairs_recorded_2026-01-01.json")
+    shutil.copy(newest, older)
+    captured = json.loads(older.read_text(encoding="utf-8"))
+    envelope = json.loads(captured["payload"])
+    envelope["result"][REST_KEY["BTC/USD"]]["tick_size"] = "1.0"
+    captured["payload"] = json.dumps(envelope)
+    older.write_text(json.dumps(captured), encoding="utf-8")
+    outcome = run(verify_module, "candles_match_independent_reduction_of_recorded_trades", tree_with_harness)
+    assert_fail(outcome, verify_module)
+    assert "asset_pairs_recorded_2026-09-19.json" in outcome.message, outcome.message
