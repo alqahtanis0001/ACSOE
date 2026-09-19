@@ -1625,6 +1625,16 @@ the reason in the YAML comment and in `DatasetConfig`.
 
 ## Open Questions
 
+- **OPEN, Phase 8, by operator instruction 2026-09-19 (not for the Phase 7 launch): the mutation
+  harness can leave a mutant on disk.** c-eval's `mutate.py` (the Phase 7 sweep harness, in the
+  session scratchpad) keeps the original bytes **in memory only** and writes them back in a
+  `try/finally`. A hard kill (a closed session, `TerminateProcess`) skips `finally`, so the mutant
+  stays in the source file and the original is gone with the process. Nothing was lost: on
+  2026-09-19 the closed session's sweeps had finished, and every arm of `sweep140` and `sweep146`
+  was checked in its original state afterwards (`docs/build-log/phase-7/lead.md`, "The previous
+  lead was still running"). **The fix: write the byte copy to disk before mutating**, restore from
+  it, and on start refuse to run while a stale copy exists. Every sweep harness copied from it
+  carries the same defect.
 - **OPEN, for the operator's ruling (2026-09-19): the committed daemon still ranks
   alphabetically.** `scout.rank_feature` is **absent** from `config/default.yaml`, so engine 7's
   `rank_universe` (`src/acsoe/engines/scout/contracts.py`, "With `feature` `None` the ordering is

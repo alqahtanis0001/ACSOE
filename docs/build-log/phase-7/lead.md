@@ -266,3 +266,37 @@ four runs has been rewritten or struck through; this entry is the authority.**
   selects expected move through the driver's `--ranking expected_move`. Removing the path, or
   setting the key in the committed config, changes what the daemon does, so it is not done
   without a ruling.
+
+### The previous lead was still running when its successor started; the b11 gate is void
+
+**Agent:** Lead (new session) · **Date:** 2026-09-19
+
+**What happened.** A new lead session was started from the handover, on the premise that the old
+one had run out of context. Checking the processes before acting showed that the old session
+(`claude.exe` PID 1056, started 04:19) was still alive and still working through the handover's
+steps 1 and 2 itself: its `b11-140-shap-writer` gate had been running since 17:59. From 18:03,
+c-eval applied spec 146 to engine 19 (the handover said "not applied"), swept it and edited the
+README. So `engine.py` changed after the gate had copied it. The handover also disagreed with the
+tree on steps 3 and 5, which were already done (`490f0d2`, `6f242e0`). The new lead stopped
+without writing anything and asked the operator which session would continue.
+
+**Why it mattered.** Two leads and two engine-19 writers in one tree, with competing gates and
+commits, is the collision the ownership map and D15 exist to prevent. The handover had been
+written as a snapshot and never updated while the old session carried on.
+
+**Fix.** The operator closed PID 1056 after confirming no `mutate.py` was running. Checked
+read-only before any write:
+- every arm of `sweep140` (9) and `sweep146` (8) is in its original state;
+- `engine.py`, `contracts.py` and `README.md` still hash `53e16db0`, `dcde37cd` and `5dd015bd`,
+  as before the close;
+- no process from 1056 survives;
+- the recorder, supervisor, `funding.py`, `fees.py` and the manager are alive, and the raw
+  files are being written.
+
+**The b11 gate is void**, because `engine.py` moved under it. 140 is re-gated as **b12**, on
+exactly the blobs b11 had captured. c-eval's `pre146/` copies hash `c0a7fd5b`, `603ee59e` and
+`3b7d4601`, equal to b11's, and are passed to `gate.py` as `rel::alt`. So the 140 commit carries
+the 140 state alone, and 146 follows as its own boundary.
+
+**Found on the way, for Phase 8 (operator instruction).** `mutate.py` restores from an in-memory
+copy in a `try/finally`, and a hard kill skips it. The fix is in the tracker's Open Questions.
