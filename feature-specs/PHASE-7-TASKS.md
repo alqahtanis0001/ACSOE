@@ -1,72 +1,12 @@
 # Phase 7 — shared task list
 
-## HANDOFF 1 — LIVE STATE, 2026-09-19 overnight (the lead updates this block at every boundary)
+## HANDOFF 2 — the authority is `docs/build-log/phase-7/handover-2026-09-19.md`
 
-**The operator is asleep. The instruction: build, rehearse one calendar day of the window (96 bars,
-same client, config and engines as the full run), then launch the six-month run detached.** If
-the rehearsal shows anything the operator would want escalated, stop, write it down, and do not
-launch. Take how-decisions; stop on anything that changes what the system does or what a number
-means, or costs more than 3 h. **Every decision is logged in
-`docs/build-log/phase-7/overnight-decisions-2026-09-19.md`, and the morning report reads it in
-order.** Morning report order: the decision list, the run's status and progress, the recorder audit,
-and anything stopped.
-
-**If you are a fresh session after a lost connection: do not restart anything that is running.**
-Check first, then resume from here:
-- **Recording: SWITCHED OVER 2026-09-19 05:08:44Z** to the committed supervisor. It supervises
-  `record.py` (P1 `instrument`), `funding.py` and `fees.py` (P2), all started by `master.bat` in
-  its own console. PIDs at switchover: cmd 54168, supervisor 43264/40848, record.py 46220/46912,
-  funding 18684/39376, fees 28860/34472. The recording manager (`serve.py`, port 8766) is PID
-  52180. The supervisor restarts its own children; a whole-supervisor death needs `master.bat`. **A dead one of these is restarted, never a live one** (operator's
-  reading of the standing rule).
-- **The run, once launched:** two detached processes (tiers 3 and 5, expected move). The launch
-  command, PIDs, logs and expected finish are written HERE when launched.
-- **Gates** run in clean worktrees, `../ACSOE-gate` and `../ACSOE-gate2`, through `gate.py` (the
-  lead's scratchpad; its logic is in D11). Logs: `logs/verify/gate-<label>.log`.
-
-**Pushed state:** `04bc511` on origin/main (11:05 local). **Everything is committed except spec 145
-and 140's SHAP writer**, both c-eval's in engine 19, in that order, each gated alone (operator
-ruling). The boundaries so far: b1, b2, b3, b4 (red once), b5 (red once), b8 (engine 5 13× faster),
-and b67 (132, 133, 134, 138, 141, 129, 131, 142, config; b6 red once). The Phase 7 criteria on the
-committed tree: 4 PASS, 2 PENDING (the run's digest, and the SHAP writer).
-
-**The path to launch:**
-1. c-eval's 145 → its gate → commit.
-2. c-eval's 140 writer → its gate → commit.
-3. **The gating rehearsal** (a-replay):
-   `python scripts/rehearse_replay_day.py --day 2024-10-20 --fixture tests/fixtures/phase7/rehearsal_2024-10-20 --out <dir> --tier 3 --fold 394`
-   on the committed tree, about 1.6 h. It must SHOW the six launch preconditions (overnight log),
-   `tree_unchanged`, and `ranking_stop` false.
-4. **Launch:** four detached runs, `acsoe research backtest --db data/db/<name>.sqlite --ranking
-   {expected_move|alphabetical} --fee-tier {3|5}`, from a detached worktree at the launch commit,
-   through WMI (the Phase 5 pattern), each verified alive. Expected about 22–28 h per run after the
-   engine 5 speed-up.
-
-**The preliminary rehearsal is clean** (two passes; overnight log). Findings F4 (the capped skeptic
-adds no selection beyond p_target), F5 (a target exit realises +2.0% against the label's +3.0%) and
-F6 (the flat-pair feature residue, ranking-only) are recorded; none is a stop.
-
-**Teammates (background agents in the lead's session; a fresh session has none, so re-spawn from
-the team brief):**
-- a-data: 127, 128, 130. Done.
-- a-replay: 129, 131, 142, and the config fields.
-- b-store: 132 and engine 7's half of 144.
-- c-models: 137 and the modelling half of 144 (done); 136, then 135.
-- c-eval: 139 (done); 133 (done); next 145, then 140's writer.
-- c-criteria: 141, 138, and 140's screens (after the run).
-- a-recorder: P1, P2 and P3 (built). The switchover waits on the lead's word.
-
-**The team brief is committed at `docs/build-log/phase-7/team-brief.md`**: give it to any
-re-spawned teammate. **The gate script is committed at `docs/build-log/phase-7/gate.py.txt`**:
-copy it to a scratch location, and run it as `python gate.py <label> 7 <files...>`, with
-`ACSOE_GATE_TREE=ACSOE-gate2` to select the second worktree.
-
-**Operator rulings of the night that are not yet in the authority files:**
-- P1, P2 and P3 approved.
-- F-new-1 fixed (spec 145), before the run.
-- 140's writer before the run.
-- If C is the bottleneck, cut the SHAP writer rather than compress engine 19's three changes.
-- The account's tier-1 fees were measured and recorded (tracker).
+**Read the handover file, not an older block here.** It holds the state of the build, the fixed
+rulings, the remaining steps in order, the measured timing inputs, the launch procedure, the PID table
+and the open questions. The older overnight block that stood here (four runs, six months) is
+superseded. **The simulation is two runs, tiers 3 and 5, expected move, THREE months (folds 392–404),
+and has not been launched until the handover's PID table says so.**
 
 ## HANDOFF 0, 2026-09-19 — specs written, every ruling answered, AWAITING OPERATOR APPROVAL TO BUILD. Nothing is claimed or built.
 
