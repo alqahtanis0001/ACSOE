@@ -57,9 +57,11 @@ __all__ = [
     "POSITION_MANAGER_KEY",
     "POSITION_STATUS_FIELD",
     "POSITION_VALUE_FIELD",
+    "PREDICTION_KEY",
     "REASON_CODE_FIELD",
     "REASON_ENGINE_ERRORED",
     "SCOUT_KEY",
+    "SHAP_FIELD",
     "STATE_KEY",
     "TRADING_BLOCKED_BY_KEY",
     "UNREALISED_PNL_FIELD",
@@ -236,6 +238,11 @@ APPROVAL_TRADE_FIELDS: Final[tuple[str, ...]] = (
 # Every gate's verdict, on both sides of every decision - spec 145
 # --------------------------------------------------------------------------- #
 
+#: Engine 8 `prediction` (C). Its payload names the pair it scored, the model run it scored
+#: with, and the per-feature contributions (`shap`) spec 140 persists as Parquet.
+PREDICTION_KEY: Final = "prediction"
+SHAP_FIELD: Final = "shap"
+
 #: The version of the snapshot's shape, written into every one.
 DETAILS_VERSION: Final = 1
 
@@ -335,6 +342,11 @@ class MemoryState(BaseModel):
     silent gap in the curve is indistinguishable from a silent bug."""
 
     hold_reason: str | None = None
+    #: Where this tick's SHAP explanation was written (spec 140), or ``None`` when none was.
+    shap_ref: str | None = None
+    #: Why an explanation engine 8 published was not written: the store's refusal, verbatim.
+    #: ``None`` when one was written, and when there was nothing to write.
+    shap_skipped_reason: str | None = None
 
     def to_state_data(self) -> dict[str, Any]:
         """The JSON-serialisable payload for ``state["memory"]``. Money as strings."""
@@ -349,6 +361,8 @@ class MemoryState(BaseModel):
             ),
             "equity_skipped_reason": self.equity_skipped_reason,
             "hold_reason": self.hold_reason,
+            "shap_ref": self.shap_ref,
+            "shap_skipped_reason": self.shap_skipped_reason,
             "rows_written": sum(self.written.values()),
         }
 

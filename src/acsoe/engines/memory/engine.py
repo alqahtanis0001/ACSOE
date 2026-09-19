@@ -85,8 +85,10 @@ from acsoe.engines.memory.contracts import (
     POSITION_VALUE_FIELD,
     POSITIONS_FIELD,
     POSITIONS_VALUE_FIELD,
+    PREDICTION_KEY,
     REASON_CODE_FIELD,
     REASON_ENGINE_ERRORED,
+    SHAP_FIELD,
     STATE_KEY,
     TRADING_BLOCKED_BY_KEY,
     UNREALISED_PNL_FIELD,
@@ -111,6 +113,14 @@ class ClosedTrade(NamedTuple):
 
     row: TradeRow
     net_proceeds: Decimal | None
+
+
+class WrittenShap(NamedTuple):
+    """This tick's SHAP write: the ref and the pair it explains, or why nothing was written."""
+
+    ref: str | None = None
+    pair: str | None = None
+    skipped: str | None = None
 
 
 class Account(NamedTuple):
@@ -167,8 +177,9 @@ class MemoryEngine(BaseEngine):
         )
         closed = self._write_trades(store, context, exiting, cycle_id=cycle_id, ts=ts)
         written["trades"] = len(closed)
+        shap = self._write_shap(store, context, state, cycle_id=cycle_id, ts=ts)
         written["rejections"] = self._write_rejection(
-            store, context, state, cycle_id=cycle_id, ts=ts
+            store, context, state, cycle_id=cycle_id, ts=ts, shap=shap
         )
 
         equity, peak, skipped = self._write_equity(
@@ -201,6 +212,8 @@ class MemoryEngine(BaseEngine):
             peak_equity=peak,
             equity_skipped_reason=skipped,
             hold_reason=self._hold_reason(manager),
+            shap_ref=shap.ref,
+            shap_skipped_reason=shap.skipped,
         )
         return EngineResult(
             engine=self.name,
@@ -485,6 +498,46 @@ class MemoryEngine(BaseEngine):
             closed.append(ClosedTrade(row=trade, net_proceeds=proceeds))
         return closed
 
+    # ------------------------------------------------------------------- shap
+
+    def _write_shap(
+        self, store: Any, context: EngineContext, state: State, *, cycle_id: int, ts: int
+    ) -> WrittenShap:
+        """Engine 8's per-feature contributions, written as Parquet through the store. Spec 140.
+
+        On every tick engine 8 scored a candidate, approved or refused. **Nothing is written,
+        and no ref is set**, when engine 8 did not run, raised (the status decides, whatever
+        its payload says), refused (it publishes no `shap` then), or published an empty
+        explanation: an empty file would look like an explanation of nothing.
+
+        A refusal **by the store** (no Parquet root configured, an unusable run id, a
+        non-finite contribution, a file already there) is recorded as the skip reason and
+        never fails the tick: engine 19 is the single writer, and a lost tick is worse than a
+        missing explanation. Any other exception still raises (contract rule 7).
+        """
+        from acsoe.clients.store import StoreError
+
+        prediction = self._payload(state, PREDICTION_KEY)
+        if prediction is None or self._errored_opportunity_engine(state) == PREDICTION_KEY:
+            return WrittenShap()
+        contributions = prediction.get(SHAP_FIELD)
+        if not isinstance(contributions, Mapping) or not contributions:
+            return WrittenShap()
+        pair = str(prediction.get(PAIR_FIELD) or "")
+        run_id = prediction.get(MODEL_RUN_ID_FIELD)
+        try:
+            ref = store.write_shap(
+                run_id=context.run_id,
+                cycle_id=cycle_id,
+                ts=ts,
+                pair=pair,
+                model_run_id=None if run_id is None else str(run_id),
+                contributions=contributions,
+            )
+        except StoreError as refused:
+            return WrittenShap(skipped=str(refused))
+        return WrittenShap(ref=str(ref), pair=pair)
+
     # -------------------------------------------------------------- approvals
 
     def _write_approval(
@@ -625,6 +678,7 @@ class MemoryEngine(BaseEngine):
         *,
         cycle_id: int,
         ts: int,
+        shap: WrittenShap,
     ) -> int:
         """One row for a candidate the **opportunity chain** refused.
 
@@ -688,6 +742,9 @@ class MemoryEngine(BaseEngine):
                 reason_code=str(reason_code),
                 reason=str(state.get(BLOCK_REASON_KEY) or ""),
                 candidate_score=self._score(blocker),
+                # Only the explanation of this candidate: engine 8 scores the pair engine 7
+                # chose, and a ref for any other pair would explain a different decision.
+                shap_ref=shap.ref if shap.pair == str(pair) else None,
                 details=self._verdicts(state, refused_by=str(blocked_by)),
                 updated_at=ts,
                 **economics,

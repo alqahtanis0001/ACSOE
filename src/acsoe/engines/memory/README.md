@@ -112,6 +112,22 @@ at the refuser, which is included and named in `refused_by`; no engine after it 
 - `shap` is not in it; that is spec 140's Parquet. A test walks every listed engine's
   `contracts.py` so a renamed field goes red instead of recording nothing.
 
+## Engine 8's explanation, written as Parquet (spec 140)
+
+On every tick engine 8 scored a candidate, approved or refused, engine 19 hands engine 8's
+published `shap` to `StoreClient.write_shap`, which writes one file under the store's
+`derived_dir` (`shap/<run_id>/<cycle_id>/<pair>.parquet`, write-once) and returns its ref. A
+refusal of that same pair carries the ref in `rejections.shap_ref`; an approval joins it through
+`approvals`' `(run_id, cycle_id, pair)`. `state["memory"]` publishes `shap_ref` and
+`shap_skipped_reason`.
+
+- **Nothing is written, and no ref set,** when engine 8 did not run, raised (the status decides),
+  refused (it publishes no `shap`), or published an empty explanation. Absent stays absent.
+- **A refusal by the store** (no `derived_dir`, an unusable run id, a non-finite contribution, a
+  file already there) is published as `shap_skipped_reason` and **never fails the tick**. Any
+  other exception still raises.
+- **A rejection of a different pair gets no ref:** the file explains the pair engine 8 scored.
+
 ## What it writes into `state`
 
 `state["memory"]` only — contract rule 2. It carries per-table counts (zeros included,
