@@ -329,3 +329,38 @@ Changing it changes behaviour.
 **Consequence for the launch check.** The live-run check is read after each run has passed tick
 1. It still requires that every tick on which engine 7 published a universe is ranked by
 expected move. The bar itself is unchanged.
+
+### The gating rehearsal at `19c5a11` crashed natively in polars on its 55th tick
+
+**Agent:** Lead · **Date:** 2026-09-19
+
+**What happened.** The gating rehearsal (2024-10-20, tier 3, fold 394, expected move) started
+at 19:17. Its run "a" died at 19:19, after tick 54 (a minute tick at 05:05Z, with exposure open).
+The process exited `0xC0000005`, an access violation, straight after a Rust panic:
+`polars-python/src/dataframe/export.rs:59`, "Attempted to create PyTuple but `elements` was
+smaller than reported by its `ExactSizeIterator` implementation", with `left: 0` and `right: 0`.
+The rehearsal then stopped ("backtest failed"). Polars 1.44.1, CPython 3.13.5.
+
+Both preliminary rehearsals of this same day ran clean, on code from before 145, 140 and 146
+reached engine 19. An assertion that fails with equal sides means native memory corruption or
+a race, not a logic error. So this could be nondeterministic, and it could hit the real runs.
+**No launch until it is understood.** Diagnosis follows.
+
+**It is not deterministic.** The same backtest (the rehearsal's own `config.yaml`, tier 3,
+00:00–05:30Z) ran twice in parallel with `-X faulthandler`, and both finished cleanly past the
+crash point: 72 ticks each, the same scenario digest, the same tick costs. The replay tape is
+pure Python (`TradeTape.row` reads a list). The polars calls that go through the row-tuple export
+on every tick are `to_dicts()` in engine 3 (`candles.py:214`) and engine 5 (`engine.py:160`).
+The Python stack is not yet known.
+
+**Next, running now:** the gating rehearsal again (`rehearsal2-19c5a11`), and two full-day stress
+runs at tiers 3 and 5 (`repro\s1`, `repro\s2`). All three run with `PYTHONFAULTHANDLER=1` and
+`RUST_BACKTRACE=1`. They are diagnostic only and change nothing the system computes, so a repeat
+crash names its stack.
+
+**Why this goes to the operator.** The real runs are about 10,000–17,000 ticks each, against
+about 200 ticks to this first crash. The earlier preliminary rehearsals ran thousands of ticks
+without one, so the rate is low, but it is not zero. A crash kills the run mid-tick. The handover's
+recovery is `--resume`, which is proven identical by the rehearsal's kill-and-resume check. The
+operator's rule, though, is never to restart a launched run. So whether a dead run may be resumed,
+and by whom, is a ruling.
