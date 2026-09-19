@@ -13,11 +13,11 @@ and anything stopped.
 
 **If you are a fresh session after a lost connection: do not restart anything that is running.**
 Check first, then resume from here:
-- **Recording.** The recorder runs under `scripts/recording/supervise.py` (old code, started
-  2026-09-16). It is pending ONE switchover to the committed supervisor plus P1's `record.py`. See
-  "Recorder" below.
-- **Funding poller.** Hand-started 04:42 local, PID 42044. The recording manager (`serve.py`,
-  port 8766) is PID 52180. **A dead one of these is restarted, never a live one** (operator's
+- **Recording: SWITCHED OVER 2026-09-19 05:08:44Z** to the committed supervisor. It supervises
+  `record.py` (P1 `instrument`), `funding.py` and `fees.py` (P2), all started by `master.bat` in
+  its own console. PIDs at switchover: cmd 54168, supervisor 43264/40848, record.py 46220/46912,
+  funding 18684/39376, fees 28860/34472. The recording manager (`serve.py`, port 8766) is PID
+  52180. The supervisor restarts its own children; a whole-supervisor death needs `master.bat`. **A dead one of these is restarted, never a live one** (operator's
   reading of the standing rule).
 - **The run, once launched:** four detached processes (two rankings × tiers 3 and 5). The launch
   command, PIDs, logs and expected finish are written HERE when launched.
@@ -52,12 +52,6 @@ the team brief):**
 re-spawned teammate. **The gate script is committed at `docs/build-log/phase-7/gate.py.txt`**:
 copy it to a scratch location, and run it as `python gate.py <label> 7 <files...>`, with
 `ACSOE_GATE_TREE=ACSOE-gate2` to select the second worktree.
-
-**Recorder, the single switchover (after b2 is committed and pushed):** stop PID 42044; stop the
-old supervisor (PIDs 34472/34540, which takes `record.py` 34416/14508 with it); start
-`scripts/recording/master.bat` in its own console. Then verify: the recorder is writing, and an
-`instrument` line has landed; funding and fees each write their first line. Then record the cut-off
-time in the tracker ("Recordings made before the recorder gap fix").
 
 **Operator rulings of the night that are not yet in the authority files:**
 - P1, P2 and P3 approved.

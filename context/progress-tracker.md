@@ -38,9 +38,14 @@ would exclude every pair as `pair_rules_missing` and engine 10 would block every
 over those recordings needs declared substitutes, not recorded facts**. They would be a declared
 `AssetPairs` and a declared fee scenario, labelled as declared wherever they appear, as in Phase 7's
 replay of the 2023–24 archive. A's recorder audit (`docs/build-log/phase-7/a-platform.md`, the
-recorder gap audit) lists what else the recording lacks. **The exact first recording that carries
-the new frames is written here when the recorder is restarted with them.** Until then the cut-off is
-open.
+recorder gap audit) lists what else the recording lacks. **THE CUT-OFF: 2026-09-19 05:08:44Z.** The
+last line of the old recorder was written at 05:08:44.099Z. The new recorder's start marker is at
+05:09:44.991Z, and its first `instrument` snapshot, 1,450 pairs, landed at 05:09:47.133Z. **The
+recorder gap across the switchover is 62.79 s.** The hourly `fees.py` poll (AssetPairs and
+TradeVolume) and the supervised `funding.py` began at 05:08:45Z. **Recordings before 05:08:44Z
+have no recorded pair rules and no recorded fee tier; recordings after it have both** (the rules
+from the connect onward, within about a second of each connect). Commits: P3 `b2119fd`, P1 and P2
+`4b32655`. A's switchover entry is in `docs/build-log/phase-7/a-platform.md`.
 
 *The second round of rulings, as recorded when the specs were first revised:* Ruled on 2026-09-19 and
 carried by spec 126:
