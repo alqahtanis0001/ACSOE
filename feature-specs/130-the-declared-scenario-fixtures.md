@@ -33,11 +33,16 @@ reads:
    - the script's sha256;
    - the statement that it is a **declared** value applied to a different period, never a
      measurement of that period.
-3. **The fee schedule** (lead): when the operator supplies it, commit it at
-   `tests/fixtures/replay/fee_schedule_<YYYY-MM-DD>.json` with the source URL, the capture date,
-   the tiers exactly as published, and the operator's name for the tiers the simulation will use.
-   **No figure is typed from memory or from this conversation.** The tier-4 and tier-5 marks in
-   `phase-7-findings.md` §2 are replaced by the fixture's figures once it lands.
+3. **The fee schedule: DONE by the lead, 2026-09-19.** Fetched from
+   `https://www.kraken.com/features/fee-schedule` at 2026-09-19T02:59:51Z. The raw page is committed
+   gzipped. The tables are extracted verbatim by
+   `docs/dataset/phase-7-recon-2026-09-19/scripts/extract_fee_schedule.py` into
+   `tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json`, with the sha256 of the raw page.
+   Kraken's 9 July 2026 restructuring article is committed beside it. Tier 3 is 0.22%/0.38% and
+   tier 5 is 0.15%/0.30%. **What remains for A:** the replay client must decide which of the page's
+   tables applies to each pair. The "Stablecoin, Pegged Token & FX Pairs" table covers about eleven
+   archive USD pairs (`phase-7-findings.md` §7). Map them by the page's own rule, and record every
+   mapping in the fixture's companion, not in code.
 
 ## Scope Limits
 

@@ -1,0 +1,340 @@
+{
+ "_provenance": {
+  "source_url": "https://www.kraken.com/features/fee-schedule",
+  "fetched_at_utc": "2026-09-19T02:59:51Z",
+  "http_status": 200,
+  "raw_page": "kraken_fee_schedule_2026-09-19.html.gz",
+  "raw_page_sha256_uncompressed": "032c56fe08f51132dc732a440fdf2da7a0da8d08ad84448415ba99cf2505a6e7",
+  "extracted_by": "docs/dataset/phase-7-recon-2026-09-19/scripts/extract_fee_schedule.py",
+  "restructure": {
+   "statement": "On July 9, 2026, Kraken changed how the fee tier is determined: the best of spot volume, futures volume and Assets on Platform, across the platform.",
+   "source_url": "https://support.kraken.com/articles/cross-platform-fee-tier-changes",
+   "fetched_at_utc": "2026-09-19T03:00:49Z",
+   "raw_page": "kraken_cross_platform_fee_tiers_2026-09-19.html.gz"
+  },
+  "use": "A DECLARED fee scenario for offline replay only (invariant 2 amendment, operator ruling 2026-09-19). Never read by the live or paper path. This is the schedule in force on the fetch date; nothing on disk dates any earlier schedule, so applying it to a 2023-24 window is a stated assumption.",
+  "scope_notes": [
+   "The page's 'Spot Crypto' table applies to almost all cryptocurrency pairs.",
+   "FX pairs, stablecoins in the base currency and pegged tokens follow a separate 'Stablecoin, Pegged Token & FX Pairs' schedule, included below.",
+   "A separate 'Maker Rebate' table exists on the page; it is included for completeness and is not the standard schedule."
+  ]
+ },
+ "spot_crypto": [
+  {
+   "Tier": "Tier 1",
+   "Spot 30-Day Vol (USD) OR": "$0+",
+   "Futures 30-Day Vol (USD) OR": "< $5M",
+   "AoP (USD)": "N/A",
+   "Spot Maker (%)": "0.40 %",
+   "Spot Taker (%)": "0.80 %"
+  },
+  {
+   "Tier": "Tier 2",
+   "Spot 30-Day Vol (USD) OR": "$2.5K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $5M",
+   "AoP (USD)": "N/A",
+   "Spot Maker (%)": "0.30 %",
+   "Spot Taker (%)": "0.60 %"
+  },
+  {
+   "Tier": "Tier 3",
+   "Spot 30-Day Vol (USD) OR": "$10K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $10M",
+   "AoP (USD)": "20k",
+   "Spot Maker (%)": "0.22 %",
+   "Spot Taker (%)": "0.38 %"
+  },
+  {
+   "Tier": "Tier 4",
+   "Spot 30-Day Vol (USD) OR": "$25K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $15M",
+   "AoP (USD)": "50k",
+   "Spot Maker (%)": "0.20 %",
+   "Spot Taker (%)": "0.35 %"
+  },
+  {
+   "Tier": "Tier 5",
+   "Spot 30-Day Vol (USD) OR": "$50K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $25M",
+   "AoP (USD)": "100k",
+   "Spot Maker (%)": "0.15 %",
+   "Spot Taker (%)": "0.30 %"
+  },
+  {
+   "Tier": "Tier 6",
+   "Spot 30-Day Vol (USD) OR": "$100K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $40M",
+   "AoP (USD)": "200k",
+   "Spot Maker (%)": "0.12 %",
+   "Spot Taker (%)": "0.25 %"
+  },
+  {
+   "Tier": "Tier 7",
+   "Spot 30-Day Vol (USD) OR": "$250K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $50M",
+   "AoP (USD)": "400k",
+   "Spot Maker (%)": "0.10 %",
+   "Spot Taker (%)": "0.22 %"
+  },
+  {
+   "Tier": "Tier 8",
+   "Spot 30-Day Vol (USD) OR": "$500K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $75M",
+   "AoP (USD)": "600k",
+   "Spot Maker (%)": "0.08 %",
+   "Spot Taker (%)": "0.20 %"
+  },
+  {
+   "Tier": "Tier 9",
+   "Spot 30-Day Vol (USD) OR": "$1M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $100M",
+   "AoP (USD)": "1m",
+   "Spot Maker (%)": "0.06 %",
+   "Spot Taker (%)": "0.18 %"
+  },
+  {
+   "Tier": "Tier 10",
+   "Spot 30-Day Vol (USD) OR": "$2.5M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $150M",
+   "AoP (USD)": "2.5m",
+   "Spot Maker (%)": "0.04 %",
+   "Spot Taker (%)": "0.15 %"
+  },
+  {
+   "Tier": "Tier 11",
+   "Spot 30-Day Vol (USD) OR": "$5M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $250M",
+   "AoP (USD)": "5m",
+   "Spot Maker (%)": "0.02 %",
+   "Spot Taker (%)": "0.12 %"
+  },
+  {
+   "Tier": "Tier 12",
+   "Spot 30-Day Vol (USD) OR": "$10M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $300M",
+   "AoP (USD)": "10m",
+   "Spot Maker (%)": "0.0 %",
+   "Spot Taker (%)": "0.10 %"
+  },
+  {
+   "Tier": "Pro 1",
+   "Spot 30-Day Vol (USD) OR": "$50M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $400M",
+   "AoP (USD)": "20m",
+   "Spot Maker (%)": "0.0 %",
+   "Spot Taker (%)": "0.09 %"
+  },
+  {
+   "Tier": "Pro 2",
+   "Spot 30-Day Vol (USD) OR": "$100M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $500M",
+   "AoP (USD)": "25m",
+   "Spot Maker (%)": "0.0 %",
+   "Spot Taker (%)": "0.08 %"
+  },
+  {
+   "Tier": "Pro 3",
+   "Spot 30-Day Vol (USD) OR": "$250M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $1B",
+   "AoP (USD)": "50m",
+   "Spot Maker (%)": "0.0 %",
+   "Spot Taker (%)": "0.07 %"
+  },
+  {
+   "Tier": "Pro 4",
+   "Spot 30-Day Vol (USD) OR": "$400M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $2B",
+   "AoP (USD)": "80m",
+   "Spot Maker (%)": "0.0 %",
+   "Spot Taker (%)": "0.06 %"
+  },
+  {
+   "Tier": "Pro 5",
+   "Spot 30-Day Vol (USD) OR": "$500M+",
+   "Futures 30-Day Vol (USD) OR": ">5B",
+   "AoP (USD)": "100m",
+   "Spot Maker (%)": "0.0 %",
+   "Spot Taker (%)": "0.05 %"
+  }
+ ],
+ "spot_maker_rebate_program": [
+  {
+   "Tier": "Tier 1",
+   "Spot 30-Day Vol (USD) OR": "$0+",
+   "Futures 30-Day Vol (USD) OR": "< $5M",
+   "AoP (USD)": "N/A",
+   "Spot Maker (%)": "0.38%",
+   "Spot Taker (%)": "0.80%"
+  },
+  {
+   "Tier": "Tier 2",
+   "Spot 30-Day Vol (USD) OR": "$2.5K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $5M",
+   "AoP (USD)": "N/A",
+   "Spot Maker (%)": "0.28%",
+   "Spot Taker (%)": "0.60%"
+  },
+  {
+   "Tier": "Tier 3",
+   "Spot 30-Day Vol (USD) OR": "$10K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $10M",
+   "AoP (USD)": "20k",
+   "Spot Maker (%)": "0.20%",
+   "Spot Taker (%)": "0.38%"
+  },
+  {
+   "Tier": "Tier 4",
+   "Spot 30-Day Vol (USD) OR": "$25K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $15M",
+   "AoP (USD)": "50k",
+   "Spot Maker (%)": "0.18%",
+   "Spot Taker (%)": "0.35%"
+  },
+  {
+   "Tier": "Tier 5",
+   "Spot 30-Day Vol (USD) OR": "$50K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $25M",
+   "AoP (USD)": "100k",
+   "Spot Maker (%)": "0.13%",
+   "Spot Taker (%)": "0.30%"
+  },
+  {
+   "Tier": "Tier 6",
+   "Spot 30-Day Vol (USD) OR": "$100K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $40M",
+   "AoP (USD)": "200k",
+   "Spot Maker (%)": "0.10%",
+   "Spot Taker (%)": "0.25%"
+  },
+  {
+   "Tier": "Tier 7",
+   "Spot 30-Day Vol (USD) OR": "$250K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $50M",
+   "AoP (USD)": "400k",
+   "Spot Maker (%)": "0.08%",
+   "Spot Taker (%)": "0.22%"
+  },
+  {
+   "Tier": "Tier 8",
+   "Spot 30-Day Vol (USD) OR": "$500K+",
+   "Futures 30-Day Vol (USD) OR": "≥ $75M",
+   "AoP (USD)": "600k",
+   "Spot Maker (%)": "0.06%",
+   "Spot Taker (%)": "0.20%"
+  },
+  {
+   "Tier": "Tier 9",
+   "Spot 30-Day Vol (USD) OR": "$1M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $100M",
+   "AoP (USD)": "1m",
+   "Spot Maker (%)": "0.04%",
+   "Spot Taker (%)": "0.18%"
+  },
+  {
+   "Tier": "Tier 10",
+   "Spot 30-Day Vol (USD) OR": "$2.5M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $150M",
+   "AoP (USD)": "2.5m",
+   "Spot Maker (%)": "0.02%",
+   "Spot Taker (%)": "0.15%"
+  },
+  {
+   "Tier": "Tier 11",
+   "Spot 30-Day Vol (USD) OR": "$5M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $250M",
+   "AoP (USD)": "5m",
+   "Spot Maker (%)": "0.00%",
+   "Spot Taker (%)": "0.12%"
+  },
+  {
+   "Tier": "Tier 12",
+   "Spot 30-Day Vol (USD) OR": "$10M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $300M",
+   "AoP (USD)": "10m",
+   "Spot Maker (%)": "-0.02%",
+   "Spot Taker (%)": "0.10%"
+  },
+  {
+   "Tier": "Pro 1",
+   "Spot 30-Day Vol (USD) OR": "$50M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $400M",
+   "AoP (USD)": "20m",
+   "Spot Maker (%)": "-0.02%",
+   "Spot Taker (%)": "0.09%"
+  },
+  {
+   "Tier": "Pro 2",
+   "Spot 30-Day Vol (USD) OR": "$100M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $500M",
+   "AoP (USD)": "25m",
+   "Spot Maker (%)": "-0.02%",
+   "Spot Taker (%)": "0.08%"
+  },
+  {
+   "Tier": "Pro 3",
+   "Spot 30-Day Vol (USD) OR": "$250M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $1B",
+   "AoP (USD)": "50m",
+   "Spot Maker (%)": "-0.02%",
+   "Spot Taker (%)": "0.07%"
+  },
+  {
+   "Tier": "Pro 4",
+   "Spot 30-Day Vol (USD) OR": "$400M+",
+   "Futures 30-Day Vol (USD) OR": "≥ $2B",
+   "AoP (USD)": "80m",
+   "Spot Maker (%)": "-0.02%",
+   "Spot Taker (%)": "0.06%"
+  },
+  {
+   "Tier": "Pro 5",
+   "Spot 30-Day Vol (USD) OR": "$500M+",
+   "Futures 30-Day Vol (USD) OR": ">5B",
+   "AoP (USD)": "100m",
+   "Spot Maker (%)": "-0.02%",
+   "Spot Taker (%)": "0.05%"
+  }
+ ],
+ "stablecoin_pegged_fx": [
+  {
+   "30- Day Volume (USD)": "$0 +",
+   "Maker": "0.20%",
+   "Taker": "0.20%"
+  },
+  {
+   "30- Day Volume (USD)": "$50,000 +",
+   "Maker": "0.16%",
+   "Taker": "0.16%"
+  },
+  {
+   "30- Day Volume (USD)": "$100,000 +",
+   "Maker": "0.12%",
+   "Taker": "0.12%"
+  },
+  {
+   "30- Day Volume (USD)": "$250,000 +",
+   "Maker": "0.08%",
+   "Taker": "0.08%"
+  },
+  {
+   "30- Day Volume (USD)": "$500,000 +",
+   "Maker": "0.04%",
+   "Taker": "0.04%"
+  },
+  {
+   "30- Day Volume (USD)": "$1,000,000 +",
+   "Maker": "0.02%",
+   "Taker": "0.02%"
+  },
+  {
+   "30- Day Volume (USD)": "$10,000,000 +",
+   "Maker": "0.00%",
+   "Taker": "0.01%"
+  },
+  {
+   "30- Day Volume (USD)": "$100,000,000 +",
+   "Maker": "0.00%",
+   "Taker": "0.001%"
+  }
+ ]
+}

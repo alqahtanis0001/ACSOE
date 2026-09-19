@@ -1,10 +1,10 @@
-# 137 — A batched DI score (parked spec 102, resumed only if R1 is expected move)
+# 137 — A batched DI score (parked spec 102, resumed)
 
 **Owner:** C — Interface and models
 
-**Phase:** 7. Phase 7 prerequisite 5. **Conditional:** built only if the operator rules R1 to rank
-engine 7's universe by engine 8's expected move, which also needs invariant 4 amended (spec 126
-step 4). Under `log_return_4`, engine 8 scores one candidate per bar and this spec stays parked.
+**Phase:** 7. Phase 7 prerequisite 5. **Required:** R1 was ruled expected move, batched
+(2026-09-19). Under spec 144's recommended arrangement (b), the ranking scores every universe pair's
+DI every bar. If the operator rules R11 (a), this spec reverts to optional.
 
 ## Goal
 
@@ -31,8 +31,7 @@ Measured on 2026-09-19 with fold 404's artefacts and 127 pairs
 
 - No change to the statistic, the exclusion, the threshold or its direction (strictly greater
   refuses).
-- The engine-side change, scoring every pair, belongs to the invariant 4 amendment's own specs.
-  It is not made here.
+- The engine-side use of it is spec 144, not this spec.
 
 ## Check When Done
 

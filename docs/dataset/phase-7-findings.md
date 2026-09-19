@@ -16,10 +16,74 @@ table says which chain behaviour it does and does not model.
 - **NOT MEASURED** marks a figure that would need a fresh computation. It was deliberately not
   computed for this document, and the slot is left empty rather than filled.
 
-Written 2026-09-19, at `f0e7514` plus this document. Scripts and their raw outputs are in
+Written 2026-09-19, at `f0e7514` plus this document. **Revised the same day** (§R) after four
+operator rulings made after the first version was written; every section below that the rulings
+touch now says so. Scripts and their raw outputs are in
 `docs/dataset/phase-7-recon-2026-09-19/` (`scripts/` and `outputs/`). Where an output was only
 printed to a terminal, it is transcribed verbatim in `outputs/transcribed-terminal-outputs.txt`,
 cited below as **[T]**.
+
+---
+
+## R. What the project ruled on 2026-09-19, after this document was first written
+
+**R.1 The tiers simulated are 3 and 5.** Operator ruling, overturning the lead's earlier
+recommendation of 3 and 4. The reason is the framing:
+
+- **Tier 3 is reachable by a small retail account.** It needs $10,000 of 30-day spot volume or
+  $20,000 of assets on platform.
+- **Tier 5 needs $50,000 of 30-day volume or $100,000 held**, a scale most retail accounts never
+  reach.
+
+The two runs state the cost-adaptive selectivity claim at both ends. Round-trip fees under the
+fetched schedule (§2) are 0.60% at tier 3 and 0.45% at tier 5.
+
+The contrast was first argued from `log_return_4` figures: 3 trades at 0.60% and about 35 at 0.45%.
+**Those belong to the ranking the next ruling replaced.** Under the ruled ranking, the measured grid
+has 46 trades at fees of 0.60%, 119 at 0.50% and 254 at 0.40% over 12 months (§4). Fees of 0.45%
+were not computed, so tier 5's count lies between the 0.40% and 0.50% rows and is **NOT MEASURED**.
+
+**R.2 Engine 7 ranks its universe by engine 8's expected move, batched.** Invariant 4 is amended to
+permit it, narrowly, in the operator's words: *a model's output may order candidates for
+examination, provided every gate judges the chosen candidate independently and no gate's verdict
+is influenced by the ranking. The prohibition on a model overriding or softening a gate is
+untouched.*
+
+- **Why expected move and not `log_return_4`.** `log_return_4` was chosen from a study computed
+  over the same out-of-sample data this report uses, and the lead had warned of exactly that.
+  Expected move is not a selected feature. It is the predictor's own output, and the number engine
+  10 already compares against the hurdle. In the operator's words, *the circularity is gone*.
+- **What remains, stated so that an examiner does not have to find it.** The decision to amend
+  was taken after the expected-move grid in §4 had been computed on the same out-of-sample data.
+  The ranking variable was not selected by a study. The decision to adopt it was still made with
+  that grid in view. Three things bound what that choice could have bought:
+  - the stated criterion was sample size, not return;
+  - the net stayed at about zero in every cell (§4);
+  - the promotion bar (R.4) was fixed before anything runs.
+- **What the amendment changed.** At tier 3 (fees 0.60%, 12 months, the bucket spread, the capped
+  skeptic at 0.50) it raises the trade count **from 3 under `log_return_4` to 46**. The net per
+  trade is roughly zero under every row of the grid (−0.30% to +0.04%, every interval including
+  zero). **It was made to obtain a measurable sample, not a favourable result.** The operator
+  records: *had the net moved from negative to positive, I would have treated that as a warning
+  and not amended.*
+- **Net-margin ranking is rejected on live feasibility, not cost.** Ranking by expected move minus
+  each pair's own friction needs every pair's slippage every bar: 127 order-book calls per bar,
+  unchecked against the rate limiter. Simulating it would measure a system that could not run live.
+
+**R.3 The fee schedule is sourced.** Kraken's published schedule was fetched on 2026-09-19 and is
+committed with its URL and fetch time (`tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json`,
+extracted verbatim from the committed raw page). It agrees with the figures the operator had from a
+web search: tier 3 0.22%/0.38%, tier 4 0.20%/0.35%, tier 5 0.15%/0.30%. **Kraken restructured its
+fee tiers on 9 July 2026.** Its support article, committed beside the schedule, says tiers are now
+set by the best of spot volume, futures volume and assets on platform. **Nothing on disk dates any
+earlier schedule, so the 2026 schedule is applied to a 2023–24 window.**
+
+**R.4 The promotion bar is set before anything runs.** In the operator's words: *a model is
+promoted only if the lower bound of the 95% interval on net return per trade is above zero, after
+friction, on the deflated metric.* The operator expects nothing to pass it, and setting it in
+advance is the point. **Its operational form is fixed in spec 139 before any run.** In particular,
+how the interval is widened for the number of trials, and which covariance allows for overlapping
+holds, are fixed there and not chosen after a result exists.
 
 ---
 
@@ -41,9 +105,15 @@ weeks from 2017-04 to 2025-01-03 and **no 2025 test week**.
 
 **The cost gate** (invariant 5): a candidate clears when its expected move exceeds
 `(1 + hurdle_multiple) × friction`, which is 2.5 × friction at `hurdle_multiple: 1.5`. **Friction**
-is round-trip fees plus spread plus slippage. **Tier 3's fees** are invariant 5's *reference*
-figures, maker 0.22% and taker 0.38% (0.60% round trip). The invariant marks those as
-sanity-check values; see §7 for what a sourced schedule changes.
+is round-trip fees plus spread plus slippage. **Tier 3's fees**, maker 0.22% and taker 0.38%
+(0.60% round trip), are invariant 5's reference figures. Kraken's published schedule, fetched
+2026-09-19, agrees (§R.3). The reconnaissance used the reference figures; the fetched schedule
+confirmed them rather than changing them.
+
+**The ranking.** Every table in §1 and §2, and the §3 inversion, was computed under alphabetical or
+`log_return_4` ranking, before §R.2 ruled expected-move ranking. Each says which. They stand as
+measurements of the arms they name. The ruled system's own figures are the expected-move rows of §4
+and the simulation's pending slots.
 
 **The alphabetical candidate.** With `scout.rank_feature` absent, engine 7 orders its universe by
 pair name. Offline, the candidate on each bar is the first pair by name among that bar's
@@ -132,29 +202,42 @@ the 1.5 years. Sources: (a) `outputs/q_window.out`; (b) [T] `q_hold.py`.
 | 0.30% | 659 | 267 | +0.05% ± 0.26% | |
 | 0.35% | 428 | 187 | −0.02% ± 0.31% | |
 | 0.40% | 298 | 127 | +0.04% ± 0.38% | |
-| 0.45% | 197 | 87 | +0.34% ± 0.46% | tier 5 (operator-stated) |
+| 0.45% | 197 | 87 | +0.34% ± 0.46% | **tier 5, simulated** (0.15% + 0.30%) |
 | 0.50% | 128 | 55 | +0.26% ± 0.59% | |
-| 0.55% | 98 | 43 | +0.23% ± 0.67% | tier 4 (operator-stated) |
-| 0.60% | 74 | 34 | +0.18% ± 0.75% | tier 3 (invariant 5 reference) |
+| 0.55% | 98 | 43 | +0.23% ± 0.67% | tier 4 (0.20% + 0.35%) |
+| 0.60% | 74 | 34 | +0.18% ± 0.75% | **tier 3, simulated** (0.22% + 0.38%) |
 | 0.65% | 44 | NOT MEASURED | — | |
 | 0.70% | 29 | 12 | −0.05% ± 1.29% | |
 | 0.85% | 10 | 6 | −0.10% (interval not meaningful) | |
 | 0.90% | 2 | NOT MEASURED | — | |
 | 0.95% | 1 | NOT MEASURED | — | |
 | 1.00% and above | 0 | 0 | — | |
-| 1.20% | 0 | 0 | — | tier 1 (invariant 5 reference) |
+| 1.20% | 0 | 0 | — | tier 1 (0.40% + 0.80%) |
 
-**The tier marks are fee-only.** A tier's round-trip fee sits at its mark, and its real friction
-sits to the right of it by the spread and slippage the pair pays. **The tier-4 (0.55%) and tier-5
-(0.45%) fees are the operator's figures of 2026-09-19. Nothing on disk yet sources them.** They are
-to be confirmed against the schedule fixture before the chapter cites them as Kraken's.
+This grid is the **alphabetical** arm at **zero spread**. The ruled system's counts are in §4.
+
+**The grid is indexed by total friction, and the tier labels are mapped onto it.** Each label
+marks that tier's round-trip fee from the fetched schedule (§R.3). Its real friction sits to the
+right of the mark by the spread and slippage the pair pays. Had the schedule differed, only the
+labels would have moved; the measurements are indexed by friction and stand either way.
+
+| Tier | Maker | Taker | Round-trip fee | Qualifies by (any one of) |
+|---|---|---|---|---|
+| 1 | 0.40% | 0.80% | 1.20% | $0+ of 30-day spot volume |
+| 3 | 0.22% | 0.38% | 0.60% | $10K+ spot volume, or $20k assets on platform, or ≥ $10M futures volume |
+| 4 | 0.20% | 0.35% | 0.55% | $25K+, or $50k, or ≥ $15M |
+| 5 | 0.15% | 0.30% | 0.45% | $50K+, or $100k, or ≥ $25M |
+
+Source: `tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json`, fetched 2026-09-19T02:59:51Z
+from `https://www.kraken.com/features/fee-schedule`, "Spot Crypto" table.
 
 **SIMULATED VALUE PENDING:** the chain's trade count and net per trade at each simulated tier.
 
 ### Tier 1 is provably zero. FINAL.
 
-At tier 1's reference fees (0.40% + 0.80% = 1.20%), the cost bar is 2.5 × 1.20% = **3.0%** before
-any spread or slippage, and spread and slippage only raise it. The expected move is
+**The primary proof is structural, not observed.** At tier 1's fees (0.40% + 0.80% = 1.20%, the
+fetched schedule and invariant 5 agreeing), the cost bar is 2.5 × 1.20% = **3.0%** before any
+spread or slippage, and spread and slippage only raise it. The expected move is
 
 `p_target × 3.0% − p_stop × 1.5% + p_timeout × m`,
 
@@ -162,8 +245,12 @@ where `m` is the fold's mean timeout return. The calibrated probabilities are re
 to one (`modelling/calibration.py`, `apply_calibration`), and `m` lies between 0.17% and 0.54% in
 all 405 fold manifests. So the expected move is a weighted average of 3.0%, −1.5% and `m`, and can
 never exceed 3.0%. The gate needs it to be **strictly greater** than 3.0%, so no candidate at tier 1
-can clear, whatever the market does. The model's observed maximum agrees: over all 15,978,803
-out-of-sample rows the highest expected move is **2.9999999930%** (`outputs/2026-09-18_q_em.log`).
+can clear, whatever the market does and whatever the model learns. This holds for any model the
+calibration and the barriers allow, not only the 405 trained.
+
+**Corroboration, observed.** Over all 15,978,803 out-of-sample rows, the highest expected move the
+model produced is **2.9999999930%** (`outputs/2026-09-18_q_em.log`): at the bound, and never past
+it.
 
 ---
 
@@ -248,6 +335,11 @@ that the cost gate's verdict would come from the model's error rather than the m
 It gets the direction right (thin pairs cost more) without claiming per-pair precision the data
 cannot support.
 
+**Under the ruled ranking.** Both arms above rank by `log_return_4`, computed before §R.2. The same
+flat-against-bucket comparison under expected-move ranking is **NOT MEASURED**. The finding stands
+as a statement about the arms it names. That a constant spread flatters thin-pair trades does not
+depend on which ranking produced the candidates.
+
 **Why this is FINAL.** The inversion is a comparison between two spread assumptions over identical
 candidates and outcomes. The simulation runs one arm, the bucket table, and does not repeat the
 comparison. **SIMULATED VALUE PENDING:** the bucket arm's chain figures, which add entry fills.
@@ -281,9 +373,12 @@ one position per pair with at most three open. Sources: alphabetical and `log_re
 - **Net margin:** the highest expected move minus 2.5 × its own friction, which is exactly what
   engine 10 tests.
 
-Neither of the last two is available to engine 7 as the contracts stand. Engine 7 runs before
-engine 8, and invariant 4 describes its ranking as "a deterministic score over features" with no
-model in it. These columns describe a system the operator has not ruled.
+**Expected move is the ruled ranking** (§R.2, with invariant 4 amended). The trade counts it gives
+at each friction are this document's best offline statement of what the simulated system will do,
+before entry fills are modelled. In the table above, anomaly and DI are applied to every pair before
+the choice. The engine arrangement that achieves this without any gate's verdict depending on the
+ranking is fixed in spec 144. **Net margin is rejected**, on live feasibility (§R.2), and its
+column is kept only as a measured comparison.
 
 **The finding: the ranking changes how many trades are taken, not what each trade earns.** Across
 the three rankings other than alphabetical, wherever there are enough trades for an interval, every net per
@@ -291,7 +386,8 @@ trade lies between −0.32% and +0.06%, and every interval includes zero. Alphab
 yields too few trades to say anything about its return. Its point estimates are worse, but they
 rest on one to twelve trades on two pairs.
 
-**SIMULATED VALUE PENDING:** the ruled ranking's chain trade count, pair count and net per trade.
+**SIMULATED VALUE PENDING:** the expected-move ranking's chain trade count, pair count and net per
+trade, at tiers 3 and 5.
 
 ---
 
@@ -386,6 +482,8 @@ is what the cost gate is left to absorb**, and at every tier the gate is priced 
 **The window was kinder.** The same selection realised +1.25% there, and +0.78% with one position
 per pair. The shortfall is real across eight years, and its size varies by period.
 
+The period difference has a section of its own, §6a.
+
 **Whether the most confident calls are the most overconfident is NOT MEASURED.** That would need
 the realised return by expected-move decile, or a calibration curve of expected move against
 realised return, and neither was computed. The measured statement is narrower: the calls above the
@@ -393,6 +491,42 @@ bar realise far less than the bar.
 
 **SIMULATED VALUE PENDING:** the chain trades' mean expected move at entry beside their realised
 return. That comparison needs the approval record Phase 7 prerequisite 7 adds.
+
+### 6a. The shortfall depends on the period. A caveat on §6, raised here rather than waited for
+
+The same selection (the alphabetical candidate clearing 1.50%, tier-3 fees, zero spread) realised
+very different means in different periods:
+
+| Period | Calls | Realised mean | How obtained |
+|---|---|---|---|
+| Full span, 405 folds (2017-04 to 2025-01) | 938 | +0.320% | measured ([T] `2026-09-18_q_net.py`) |
+| The 1.5-year window (2023-07 to 2025-01) | 74 | +1.251% | measured (`outputs/q_window.out`) |
+| The final 365 days (2024) | 71 | +1.177% | measured ([T] `2026-09-18_q_net.py`) |
+| Full span **excluding** the final 365 days | 867 | about +0.25% | derived: (938 × 0.320 − 71 × 1.177) / 867 |
+| Full span **excluding** the 1.5-year window | 864 | about +0.24% | derived: (938 × 0.320 − 74 × 1.251) / 864 |
+
+- The two derived rows are arithmetic on the published means, which are rounded to three decimals.
+  They are not a recomputation.
+- **71 of the window's 74 calls fall in its final 365 days.** The window's strength is
+  essentially 2024's.
+
+**What this means.** The full-span shortfall (+0.32% realised against at least 1.50% expected) is
+an average over periods that behave very differently: about +0.25% before 2024, about +1.2% in
+2024. It is therefore a caveat on §6. It is possibly a property of the early years rather than of
+the model. The skeptic's survivor target rates at 0.50 point the same way (§5b): 0.58 and 0.57 in
+2023 and 2024, against 0.43 to 0.51 in 2017 to 2022.
+
+**What cannot be separated from what is on disk.** Two explanations fit:
+
+- a model that improves as its training history lengthens and the universe widens;
+- a market in 2023–24 that happened to reward the same calls.
+
+The per-year realised mean of cost-clearing calls, for years other than the final 365 days, is
+**NOT MEASURED**, and neither is any control that separates the two explanations.
+
+**Why it matters for the simulation.** The simulated window is the six months ending 2025-01-04,
+inside the strong period. A simulated result, favourable or not, describes that period. It must not
+be read as the full span's behaviour.
 
 ---
 
@@ -407,11 +541,12 @@ substitution costs.
 | **The order book.** Engine 9 has no depth to walk, so it would publish nothing and engine 10 would refuse every candidate. | A synthetic book with declared depth from the same buckets, walked by engine 9 unchanged. | Slippage rests on an evenly-spread-book assumption fitted to one depth point per pair ($10,000). The one real walk on file is a single BTC/USD fixture. For a tenth of the 72 recorded archive pairs the 10-level book held $10,000 in fewer than 19% of minutes ([T] `q_depth.py`), so live, engine 9 would refuse some of them as too thin, and the synthetic book will not. |
 | **Pair rules for the window.** The only `AssetPairs` on disk is invented Phase 0 data. | A genuine `AssetPairs` recorded in 2026 (Phase 7 prerequisite 9). | **Tick size, checked:** of 72 pairs comparable between the 2023–24 archive and the 2026 recording, 57 have the same price grid, 15 are finer in 2026, none coarser (`outputs/q_ticks.out`), so entries can sit between historical ticks on about a fifth of pairs. **`ordermin` and `costmin`: unverifiable**; the smallest prints are not the minimum order, because partial fills print below it. |
 | **Survivorship.** A 2026 `AssetPairs` omits pairs delisted since 2023–24, and engine 7 excludes a pair with no rules. | Nothing: those pairs leave the universe. | The count of window pairs missing from the recorded `AssetPairs` is **NOT MEASURED**; it can only be taken once the file is recorded. The recorder's own pair list cannot answer it, since it holds only USD pairs above a volume floor. |
-| **Fees for the period.** No `TradeVolume` response was ever recorded, and nothing on disk dates any Kraken fee schedule. | A schedule the operator supplies with its URL and date, as a scenario fixture read only in replay mode (invariant 2 amendment). | A current schedule is applied to a 2023–24 window. At tier 3 the difference between 0.60% and 0.40% of fees is the difference between 3 trades and 58 (§4), so the result is more sensitive to this input than to any other. |
+| **Fees for the period.** No `TradeVolume` response was ever recorded, and nothing on disk dates any schedule before the one in force on 2026-09-19. Kraken restructured its tiers on 9 July 2026. | Kraken's published schedule fetched 2026-09-19, committed with its URL and time, read only in replay mode (invariant 2 amendment). | The 2026 schedule is applied to a 2023–24 window. The fee is the input the result is most sensitive to: under the ruled ranking, 46 trades at fees of 0.60% against 254 at 0.40% over 12 months (§4). |
+| **The fee schedule's pair classes.** The published schedule has a separate table for FX pairs, stablecoins in the base currency and pegged tokens. | One tier from the "Spot Crypto" table for every pair, unless spec 130 maps the other class. | Eleven archive USD pairs would plausibly fall under that other table: AUDUSD, EURUSD, GBPUSD, USDTUSD, USDCUSD, DAIUSD, TUSDUSD, PYUSDUSD, TBTCUSD, WBTCUSD, and possibly PAXGUSD. Whether any of them is ever a candidate is NOT MEASURED. |
 | **Entry fills.** Every offline figure assumes the trade was entered at the bar's close. | The paper broker's pessimistic rule: a post-only buy fills only on a trade strictly below its limit, from the time-and-sales. | The offline counts are upper bounds on fills. Fills that do happen are selected towards falling markets (adverse selection). |
 | **Complete features.** 50.2% of out-of-sample rows carry an unfilled lookback (Phase 5, Finding 3). | Nothing: engines 13 and 8 refuse them, correctly. | The surviving population is the more liquid half, and 62% of window bars are refused before a prediction (§1b). |
 | **2025.** The walk-forward died at fold 405. | Nothing. | No test week after 2025-01-03. |
-| **Choosing configurations on the same data.** The grids above were searched on the out-of-sample file, and the ranking study behind `log_return_4` used it too. | Nothing can repair this after the fact. | The ranking, spread form and fee tier must be justified on grounds other than these tables. The multiple-testing haircut of Phase 7's deflated metric should count every cell searched here. |
+| **Choosing configurations on the same data.** The grids above were searched on the out-of-sample file, and the ranking study behind `log_return_4` used it too. | Expected-move ranking replaces the studied feature with the predictor's own output (§R.2), and the promotion bar is fixed in advance (§R.4). | The residual is stated in §R.2: the amendment was decided with the §4 grid in view. The deflated metric's trial count should include every cell searched here. |
 
 ---
 
@@ -439,20 +574,22 @@ not meaningful" or shows its n. Those include:
 | Section | Slot |
 |---|---|
 | §1a, §1b | The chain's stage-by-stage counts, including engine 9, entry fills, `ordermin`/`costmin` and engine 17 |
-| §2 | The chain's trade count and net per trade at each simulated tier |
+| §2 | The chain's trade count and net per trade at tiers 3 and 5 |
 | §3 | The bucket arm's chain figures |
-| §4 | The ruled ranking's chain trade count, pairs and net |
+| §4 | The expected-move ranking's chain trade count, pairs and net, at tiers 3 and 5 |
 | §6 | The chain trades' expected move at entry against realised return |
-| New | The equity curve including cash periods; alpha against the buy-and-hold benchmark; the per-trade reasons for approval (prerequisite 7) |
+| New | The equity curve including cash periods; alpha against the buy-and-hold benchmark; the per-trade reasons for approval (prerequisite 7); the promotion verdict against the bar fixed in §R.4 |
 
 ## 10. Findings the simulation will not change
 
-- **The tier-1 arithmetic (§2).** The cost bar exceeds the largest expected move the model can
-  produce.
+- **The tier-1 proof (§2).** Structural: the calibration and barriers cap the expected move at
+  3.0%, and the gate needs strictly more. The observed 2.9999999930% corroborates it.
 - **The spread inversion (§3).** A constant spread made thin-pair trades look profitable; a
   liquidity-dependent spread removed the gain.
 - **Alphabetical ordering's concentration (§4).** One pair on 56% of bars.
 - **The capped against uncapped skeptic (§5a)**, and the 2026-09-14 sweep for the skeptic it
   measured (§5b).
 - **The overconfidence of cost-clearing calls over the full span (§6).** +0.32% realised against at
-  least 1.50% expected.
+  least 1.50% expected, **with its caveat (§6a)**: about +0.25% before 2024 and about +1.2% in 2024.
+- **The fee schedule (§R.3).** The figures, and the fact that nothing dates a schedule before 9 July
+  2026.

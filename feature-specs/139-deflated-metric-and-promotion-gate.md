@@ -23,8 +23,19 @@ on the same data. The gate rejects a model that does not survive, and records wh
 3. **The gate** lives in engine 20. It reads the leaderboard and the run's report (spec 138) and
    writes `promoted` true only when the deflated metric clears the configured bar. Otherwise it
    writes a reason code, mapped in `REASON_PROSE` in the same change.
-4. **The bar** is a lead config key with the operator's value. **RULING REQUIRED (R10):** none is
-   proposed here.
+4. **The bar, RULED 2026-09-19 before anything runs (R10):** *a model is promoted only if the lower
+   bound of the 95% interval on net return per trade is above zero, after friction, on the deflated
+   metric.* The operator expects nothing to pass it; setting it in advance is the point.
+   - **Its operational form must be fixed here, before spec 143 launches, and confirmed by the
+     operator (R10b).** The ruling names two statistics: an interval on net return per trade, and
+     the deflated metric.
+   - The lead's proposed reading: the per-trade net return's 95% interval is computed with a
+     covariance that allows for overlapping holds (block bootstrap over non-overlapping trade
+     clusters, or HAC on the trade series; one is chosen here and stated). It is then widened for
+     the trial count exactly as the deflated Sharpe ratio is haircut for trials. A model is promoted
+     only if the widened interval's lower bound exceeds zero.
+   - Whatever form is confirmed is committed as code and a worked example **before** any simulated
+     figure exists.
 
 ## Scope Limits
 

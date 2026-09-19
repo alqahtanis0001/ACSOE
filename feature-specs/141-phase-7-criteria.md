@@ -24,7 +24,8 @@ proven capable of FAIL.
 3. **`research_screens_render`:** the leaderboard and SHAP view render from a seeded database.
 4. **`fee_scenario_is_replay_only`:** the replay client refuses construction in paper and live, and
    no module outside `clients/kraken/`'s replay client imports the scenario fixtures (an AST walk).
-   This is invariant 2's amendment, enforced by test as ruled.
+   This is invariant 2's amendment, enforced by test as ruled. The fixture is
+   `tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json`.
 5. **Prerequisite 9 closed:** `candles_match_independent_reduction_of_recorded_trades` reads its
    `tick_size` from spec 127's recorded `AssetPairs` instead of the invented file, and its message
    says so.
