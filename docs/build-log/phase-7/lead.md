@@ -430,6 +430,15 @@ The difference is no longer strong evidence against the writer. **The operator's
 case:** launch `19c5a11` with SHAP, with the watchdog at 40 resumes per run and 8 per hour, and
 report the crash counts in the morning.
 
+**CORRECTION to the result above (the operator, 21:45).** "The difference is no longer strong
+evidence against the writer" overstates it and is withdrawn. **The A/B exonerates nothing.** It
+establishes only that the crash rate is **lower** than the first estimate: low enough to launch
+on, not low enough to clear anything. The arithmetic, so the inference can be checked:
+- At the combined observed rate on `19c5a11` (2 in 3,531 ticks, about 1 in 1,765), each
+  1,700-tick arm **expected about 0.96 crashes**.
+- P(0 in one arm) ≈ e^−0.96 ≈ 0.38. P(0 in both, if the rates were equal) ≈ 0.15.
+- **Zero in both arms is an ordinary result whether or not the writer is implicated.**
+
 ### A hole in the SHAP check, found before it could pass on stale files
 
 **What happened.** SHAP files are keyed by `run_id`, and a rehearsal's run ids come only from its

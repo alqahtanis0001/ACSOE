@@ -773,12 +773,20 @@ literature.** No source was verified for such a claim.
     candle build, a different polars entry point. The operator then fixed a decision rule before
     any result, and the same full day ran four times at the commit without the SHAP writer
     (`3efe958`) and four times at the launch commit (`19c5a11`), in parallel. **Neither arm
-    crashed** (1,700 ticks each). Tonight's total on the launch commit is 2 crashes in 3,531
-    ticks, against 0 in 5,988 ticks on earlier code. The two crashes faulted in two different
-    Windows modules, with no hardware errors logged, which is consistent with heap corruption
-    and leaves the machine as suspect as the library. **By the pre-set rule, the runs launch
-    with SHAP**, with the watchdog allowed up to 40 resumes per run and 8 per hour. The loop
-    detector is unchanged: two consecutive resumes dying at the same tick stop a run.
+    crashed** (1,700 ticks each). **That exonerates nothing.**
+    - At the observed rate on the launch commit (2 crashes in 3,531 ticks, about 1 in 1,765),
+      each arm expected about 0.96 crashes.
+    - Zero in one arm has a probability of about 0.38. Zero in both, if the rates were equal,
+      about 0.15. So zero in both is ordinary whether or not the writer is implicated.
+    - What the A/B established is that **the rate is lower than the first estimate** (1 in
+      about 900 ticks): low enough to launch on, not low enough to clear anything.
+    - For comparison: 0 crashes in 5,988 ticks on earlier code.
+    - The two crashes faulted in two different Windows modules, with no hardware errors logged.
+      That is consistent with heap corruption, and leaves the machine as suspect as the library.
+
+    **By the pre-set rule, the runs launch with SHAP**, with the watchdog allowed up to 40
+    resumes per run and 8 per hour. The loop detector is unchanged: two consecutive resumes
+    dying at the same tick stop a run.
 - **Each run's first decision bar is skipped by design.** On a fresh database engine 7 has no
   stored equity to size positions against until engine 19 writes the first row at the end of
   tick 1. Engine 7 fails closed rather than fall back to a balance, so it blocks tick 1
