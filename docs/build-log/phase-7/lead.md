@@ -300,3 +300,32 @@ the 140 state alone, and 146 follows as its own boundary.
 
 **Found on the way, for Phase 8 (operator instruction).** `mutate.py` restores from an in-memory
 copy in a `try/finally`, and a hard kill skips it. The fix is in the tracker's Open Questions.
+
+### The launch check caught tick 1 of every fresh run: engine 7 blocks until an equity row exists
+
+**Agent:** Lead · **Date:** 2026-09-19
+
+**What happened.** The launcher's dry run at `19c5a11` (one tick per tier, 2024-10-05 00:15Z)
+recorded engine 7 as `scout_inputs_unavailable` at both tiers: a BLOCK, with no universe and no
+ranking stored. The run-mode check (`check_rehearsal.py.txt`, committed before any rehearsal
+output) refused to call that "ranked by expected move", which is its job. The rehearsal running
+beside it shows the same block on its own tick 1 (2024-10-20 00:00). From tick 2 onwards, every
+tick ranks by `expected_move`, with 1,450 pairs scanned and 190 entered.
+
+**Why.** `engines/scout/engine.py:516`: engine 7 sizes against the equity **engine 19 stored**,
+and deliberately has no fallback ("no snapshot is a block, never a fallback to a balance").
+Engine 19 writes the first `equity_snapshots` row at the end of tick 1, so on a fresh database
+tick 1 always blocks. The dry runs' databases hold 0 equity rows before their one tick and 1
+after it. A fresh daemon does the same live.
+
+**Not fixed, and not a stop.** It is the system as built, fail-closed as invariant 3 wants.
+Changing it changes behaviour.
+- **What it costs:** one decision bar per run (2024-10-05 00:15Z of 8,736), the same at both
+  tiers. It is recorded as engine 7's reason code in `scout_tallies`, not as a block record, so
+  engine 17's error rate is not touched.
+- **Not repeated per fold:** equity rows persist across fold switches.
+- **Not repeated on `--resume`:** the store already holds equity rows.
+
+**Consequence for the launch check.** The live-run check is read after each run has passed tick
+1. It still requires that every tick on which engine 7 published a universe is ranked by
+expected move. The bar itself is unchanged.
