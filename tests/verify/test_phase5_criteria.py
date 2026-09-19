@@ -378,12 +378,16 @@ def test_a_lookback_counted_in_rows_is_a_fail(
     actually writes. It does not raise — it reports a full window across a hole and
     computes every z-score over a stretch of market on the far side of a period with no
     trades.
+
+    Re-anchored 2026-09-19 onto the grouped implementation (lead decision D16): the counter
+    is now `window(pl.col("_one"), "rolling_sum_by")`, each window taken `.over(key)`, so the
+    defect keeps the per-pair grouping and changes only rows for time.
     """
     patch(
         phase5_tree,
         "src/acsoe/modelling/features.py",
-        '        pl.col("_one")\n        .rolling_sum_by("_dt", window_size=span, closed="right")\n',
-        '        pl.col("_one")\n        .rolling_sum(window_size=bars, min_samples=1)\n',
+        '        window(pl.col("_one"), "rolling_sum_by")\n',
+        '        pl.col("_one").rolling_sum(window_size=bars, min_samples=1).over(key)\n',
     )
     outcome = run(verify_module, "feature_lookbacks_are_time_not_rows", phase5_tree)
     assert_fail(outcome, verify_module)

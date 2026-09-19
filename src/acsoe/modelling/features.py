@@ -4,7 +4,10 @@ One function, two callers. Engine 5 `feature` shapes engine 3's published candle
 calls :func:`compute`; `research/training.py` shapes the historical archive and calls
 the same :func:`compute`. That is the whole reason `modelling/` exists as a package
 both sides may import, and `features_reproduce_in_replay` is the criterion that asks
-whether the two really did get the same numbers.
+whether the two really did get the same numbers. Engine 5 calls :func:`compute_many`, which
+is the same arithmetic run for every pair of a tick at once and returns, pair for pair, the
+bits :func:`compute` returns (lead decision D16, 2026-09-19; the per-pair implementation it
+replaced is kept as the oracle in `tests/modelling/features_oracle.py`).
 
 Five constraints, each of which is a defect this project has already met somewhere:
 
@@ -63,6 +66,7 @@ __all__ = [
     "OHLCVT_COLUMNS",
     "FeatureError",
     "compute",
+    "compute_many",
     "features_for_lookback",
     "lookback_of",
 ]
@@ -111,6 +115,10 @@ MAX_LOOKBACK_BARS: Final[int] = max(LOOKBACK_BARS)
 #: because a model fed the same feature names computed a different way is a model being
 #: given inputs it has never seen with nothing saying so.
 FEATURE_VERSION: Final[str] = "f1"
+
+#: The group column :func:`compute` gives its one pair, so that a single pair runs
+#: through exactly the arithmetic :func:`compute_many` runs for many.
+_SINGLE_GROUP: Final[str] = "_group"
 
 
 #: The per-lookback feature stems, in the order they appear for each window.
@@ -282,14 +290,91 @@ def compute(
             schema={"ts": pl.Int64, **dict.fromkeys(FEATURE_NAMES, pl.Float64)}
         )
 
-    frame = candles.sort("ts")
-    stamps = frame["ts"]
-    if stamps.n_unique() != frame.height:
+    if candles["ts"].n_unique() != candles.height:
         raise FeatureError(
             "candles carry duplicate timestamps; one bar per decision slot, and a "
             "duplicate would be counted twice inside every window that covers it"
         )
+    # One pair is one group: the arithmetic below is the one `compute_many` runs, so a
+    # single pair and a batch of pairs can never be computed two ways.
+    grouped = candles.with_columns(pl.lit(0, dtype=pl.Int64).alias(_SINGLE_GROUP))
+    return _compute_grouped(
+        grouped, key=_SINGLE_GROUP, interval_s=interval_s, min_lookback_fill=min_lookback_fill
+    ).drop(_SINGLE_GROUP)
 
+
+def compute_many(
+    candles: pl.DataFrame,
+    *,
+    interval_s: int,
+    min_lookback_fill: float,
+    key: str = "pair",
+) -> pl.DataFrame:
+    """:func:`compute` for many pairs at once, one frame in and one frame out.
+
+    ``candles`` is :func:`compute`'s input with one more column, ``key``, naming the
+    pair each bar belongs to. Every window is taken within its own pair (each rolling
+    expression and the return's shift is a window expression ``.over(key)``), so a pair's
+    rows are the numbers :func:`compute` returns for that pair alone, **bit for bit**: the
+    rolling kernel sees the same rows in the same order either way, and the order of an
+    incremental sum is what decides the last bits of the result. Engine 5 calls this once
+    a tick instead of calling :func:`compute` once a pair, which cost ~8 ms of fixed query
+    overhead per pair (2026-09-19, lead decision D16). Rows come back sorted by ``key``
+    then ``ts``, with ``key`` as the first column.
+    """
+    if interval_s <= 0:
+        raise FeatureError("interval_s must be positive")
+    if not 0.0 < min_lookback_fill <= 1.0:
+        raise FeatureError("min_lookback_fill must be in (0, 1]")
+    if key not in candles.columns:
+        raise FeatureError(f"candles carry no {key!r} column to group the pairs by")
+    _require_columns(candles)
+    if candles.height == 0:
+        return pl.DataFrame(
+            schema={
+                key: candles.schema[key],
+                "ts": pl.Int64,
+                **dict.fromkeys(FEATURE_NAMES, pl.Float64),
+            }
+        )
+    if candles.select(pl.struct(key, "ts").n_unique()).item() != candles.height:
+        raise FeatureError(
+            "candles carry a duplicate timestamp within one pair; one bar per decision "
+            "slot, and a duplicate would be counted twice inside every window that covers it"
+        )
+    batched = _compute_grouped(
+        candles, key=key, interval_s=interval_s, min_lookback_fill=min_lookback_fill
+    )
+    # A pair with a single bar is computed on its own. Polars evaluates `sin` and `cos`
+    # over a one-row series through a scalar path whose result can differ in the last bit
+    # from its vectorised kernel, which is what that row meets inside a batch; measured
+    # 2026-09-19 (hour_sin, -0.2588190451025207 against -0.25881904510252157). `compute`
+    # on that pair alone takes the scalar path, so the batch would disagree with it. Such
+    # pairs are rare on a tick, so this costs nothing measurable.
+    sizes = candles.group_by(key).len()
+    singles = sizes.filter(pl.col("len") == 1)[key].to_list()
+    if not singles:
+        return batched
+    alone = [
+        _compute_grouped(
+            candles.filter(pl.col(key) == single),
+            key=key,
+            interval_s=interval_s,
+            min_lookback_fill=min_lookback_fill,
+        )
+        for single in singles
+    ]
+    return (
+        pl.concat([batched.filter(~pl.col(key).is_in(singles)), *alone])
+        .sort([key, "ts"])
+    )
+
+
+def _compute_grouped(
+    candles: pl.DataFrame, *, key: str, interval_s: int, min_lookback_fill: float
+) -> pl.DataFrame:
+    """The arithmetic, with every window and every shift taken within ``key``'s groups."""
+    frame = candles.sort([key, "ts"])
     frame = frame.with_columns(
         pl.from_epoch("ts", time_unit="s").alias("_dt"),
         pl.lit(1, dtype=pl.Int64).alias("_one"),
@@ -297,7 +382,7 @@ def compute(
         # Across a hole this is a single jump rather than a series of small steps, which
         # is the truth about what the price did while nobody traded, and the window that
         # contains it will usually be under-filled and blanked anyway.
-        (pl.col("close").log() - pl.col("close").log().shift(1)).alias("_r"),
+        (pl.col("close").log() - pl.col("close").log().shift(1).over(key)).alias("_r"),
     ).with_columns(
         pl.col("_r").abs().alias("_abs_r"),
         ((pl.col("high") - pl.col("low")) / pl.col("close")).alias("bar_range_pct"),
@@ -317,8 +402,8 @@ def compute(
     )
 
     for bars in LOOKBACK_BARS:
-        frame = _add_lookback(frame, bars=bars, interval_s=interval_s)
-    frame = _add_regime_rank(frame, interval_s=interval_s)
+        frame = _add_lookback(frame, bars=bars, interval_s=interval_s, key=key)
+    frame = _add_regime_rank(frame, interval_s=interval_s, key=key)
 
     # Blank each window that is too empty to mean anything, and blank only that window.
     for bars in LOOKBACK_BARS:
@@ -336,43 +421,42 @@ def compute(
         )
 
     return frame.select(
-        ["ts", *[pl.col(name).cast(pl.Float64).alias(name) for name in FEATURE_NAMES]]
+        [key, "ts", *[pl.col(name).cast(pl.Float64).alias(name) for name in FEATURE_NAMES]]
     )
 
 
-def _add_lookback(frame: pl.DataFrame, *, bars: int, interval_s: int) -> pl.DataFrame:
+def _add_lookback(frame: pl.DataFrame, *, bars: int, interval_s: int, key: str) -> pl.DataFrame:
     """One window's eight features.
 
     ``closed="right"`` makes the window ``(t - bars * interval_s, t]``, which holds
     exactly ``bars`` candles on a contiguous series — the bar at ``t`` and the
     ``bars - 1`` before it — and fewer across a hole. That is the whole mechanism: the
-    window is defined in seconds and the count of what fell inside it is reported.
+    window is defined in seconds and the count of what fell inside it is reported. Every
+    window is taken within its own ``key`` group, so no pair's window reaches another's.
     """
     span = f"{bars * interval_s}s"
-    net = pl.col("_r").rolling_sum_by("_dt", window_size=span, closed="right")
-    path = pl.col("_abs_r").rolling_sum_by("_dt", window_size=span, closed="right")
-    lowest = pl.col("low").rolling_min_by("_dt", window_size=span, closed="right")
-    highest = pl.col("high").rolling_max_by("_dt", window_size=span, closed="right")
-    volume_mean = pl.col("volume").rolling_mean_by("_dt", window_size=span, closed="right")
-    volume_std = pl.col("volume").rolling_std_by(
-        "_dt", window_size=span, closed="right", min_samples=2
-    )
-    trades_mean = pl.col("trades").cast(pl.Float64).rolling_mean_by(
-        "_dt", window_size=span, closed="right"
-    )
-    trades_std = pl.col("trades").cast(pl.Float64).rolling_std_by(
-        "_dt", window_size=span, closed="right", min_samples=2
-    )
+
+    def window(expr: pl.Expr, how: str, *, min_samples: int | None = None) -> pl.Expr:
+        extra = {} if min_samples is None else {"min_samples": min_samples}
+        rolled: pl.Expr = getattr(expr, how)("_dt", window_size=span, closed="right", **extra)
+        return rolled.over(key)
+
+    trades = pl.col("trades").cast(pl.Float64)
+    net = window(pl.col("_r"), "rolling_sum_by")
+    path = window(pl.col("_abs_r"), "rolling_sum_by")
+    lowest = window(pl.col("low"), "rolling_min_by")
+    highest = window(pl.col("high"), "rolling_max_by")
+    volume_mean = window(pl.col("volume"), "rolling_mean_by")
+    volume_std = window(pl.col("volume"), "rolling_std_by", min_samples=2)
+    trades_mean = window(trades, "rolling_mean_by")
+    trades_std = window(trades, "rolling_std_by", min_samples=2)
 
     return frame.with_columns(
-        pl.col("_one")
-        .rolling_sum_by("_dt", window_size=span, closed="right")
+        window(pl.col("_one"), "rolling_sum_by")
         .cast(pl.Float64)
         .alias(f"bars_in_lookback_{bars}"),
         net.alias(f"log_return_{bars}"),
-        pl.col("_r")
-        .rolling_std_by("_dt", window_size=span, closed="right", min_samples=2)
-        .alias(f"realised_vol_{bars}"),
+        window(pl.col("_r"), "rolling_std_by", min_samples=2).alias(f"realised_vol_{bars}"),
         # Net move over path length: 1.0 is a straight line, 0.0 is a round trip that
         # went nowhere. It is the trend/chop measure engine 12 `regime` reads, and it is
         # scale-free, so it means the same thing on a $0.30 pair and a $60,000 one.
@@ -380,15 +464,15 @@ def _add_lookback(frame: pl.DataFrame, *, bars: int, interval_s: int) -> pl.Data
         .then(net.abs() / path)
         .otherwise(float("nan"))
         .alias(f"efficiency_ratio_{bars}"),
-        ((pl.col("high") - pl.col("low")) / pl.col("close"))
-        .rolling_mean_by("_dt", window_size=span, closed="right")
-        .alias(f"range_atr_{bars}"),
+        window((pl.col("high") - pl.col("low")) / pl.col("close"), "rolling_mean_by").alias(
+            f"range_atr_{bars}"
+        ),
         pl.when(volume_std > 0)
         .then((pl.col("volume") - volume_mean) / volume_std)
         .otherwise(float("nan"))
         .alias(f"volume_z_{bars}"),
         pl.when(trades_std > 0)
-        .then((pl.col("trades").cast(pl.Float64) - trades_mean) / trades_std)
+        .then((trades - trades_mean) / trades_std)
         .otherwise(float("nan"))
         .alias(f"trades_z_{bars}"),
         pl.when(highest > lowest)
@@ -398,7 +482,7 @@ def _add_lookback(frame: pl.DataFrame, *, bars: int, interval_s: int) -> pl.Data
     )
 
 
-def _add_regime_rank(frame: pl.DataFrame, *, interval_s: int) -> pl.DataFrame:
+def _add_regime_rank(frame: pl.DataFrame, *, interval_s: int, key: str) -> pl.DataFrame:
     """Where this bar's short-window volatility sits inside the long window's own history.
 
     ``0.0`` means calmer than anything in the window, ``1.0`` the most volatile bar in it.
@@ -441,6 +525,7 @@ def _add_regime_rank(frame: pl.DataFrame, *, interval_s: int) -> pl.DataFrame:
         pl.col(source)
         .round_sig_figs(_RANK_SIG_FIGS)
         .rolling_rank_by("_dt", window_size=span, closed="right")
+        .over(key)
     )
     # `rolling_rank_by` counts from 1, and its window holds at most as many values as
     # the candle counter reports, so the ratio lands in (0, 1].

@@ -15,6 +15,13 @@ that actually trades is for both sides to run one function over differently-shap
 inputs. `modelling/` is the package both may import, and
 `features_reproduce_in_replay` is the criterion that asks whether they agreed.
 
+**One call a tick, since 2026-09-19 (lead decision D16).** The engine hands every pair's
+candles to `modelling.features.compute_many` at once, rather than calling `compute` once per
+pair. Each window is taken within its own pair, and a pair's row is bit for bit what `compute`
+returns for that pair alone. That is proven against the per-pair implementation kept as the
+oracle in `tests/modelling/features_oracle.py`. The per-pair loop spent ~8 ms of polars overhead
+on every pair, about 1.6 s a tick at 190 pairs.
+
 This engine's job is the shaping: group by pair, turn decimal strings into floats, drop
 anything later than the closed bar, and turn NaN into `null` on the way into `state`.
 

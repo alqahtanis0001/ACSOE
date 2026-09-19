@@ -1,7 +1,9 @@
 """Engine 5 `feature` — the first engine of the opportunity chain, and its cadence.
 
 **It shapes inputs and publishes outputs. It computes nothing.** Every number it emits
-comes from `modelling.features.compute`, which `research/training.py` also calls, and
+comes from `modelling.features` (`compute_many`, every pair of the tick in one call, which
+returns for each pair exactly what `compute` returns for it alone), which
+`research/training.py` also calls, and
 that is the entire point: the live loop and the training pipeline may not import each
 other (architecture invariant 5), so the only way a backtest can describe the system
 that actually trades is for both to run the same function over differently-shaped
@@ -67,10 +69,11 @@ from acsoe.modelling.features import (
     FEATURE_NAMES,
     FEATURE_VERSION,
     MAX_LOOKBACK_BARS,
-    compute,
+    compute_many,
 )
 
 _CANDLE_SCHEMA: dict[str, Any] = {
+    CANDLE_PAIR_FIELD: pl.Utf8,
     CANDLE_TS_FIELD: pl.Int64,
     **dict.fromkeys(CANDLE_MONEY_FIELDS, pl.Float64),
     CANDLE_TRADES_FIELD: pl.Int64,
@@ -129,25 +132,33 @@ class FeatureEngine(BaseEngine):
                 "differ on every bar, silently, with the offline number looking right."
             )
 
-        by_pair = self._group(sensor.get(CANDLES_FIELD) or (), bar_ts=int(bar_ts))
+        columns = self._group(sensor.get(CANDLES_FIELD) or (), bar_ts=int(bar_ts))
 
         rows: dict[str, dict[str, float | None]] = {}
         row_ts: dict[str, int] = {}
         short: list[str] = []
         gaps: dict[str, int] = {}
 
-        for pair in sorted(by_pair):
-            candles = by_pair[pair]
-            frame = pl.DataFrame(candles, schema=_CANDLE_SCHEMA).sort(CANDLE_TS_FIELD)
-            gaps[pair] = _gaps_in_range(
-                [int(ts) for ts in frame[CANDLE_TS_FIELD]], interval_s=int(interval_s)
-            )
-            computed = compute(
-                frame, interval_s=int(interval_s), min_lookback_fill=min_fill
-            )
-            if computed.height == 0:
-                continue
-            last = computed.tail(1).to_dicts()[0]
+        stamps_by_pair: dict[str, list[int]] = {}
+        for pair, ts in zip(columns[CANDLE_PAIR_FIELD], columns[CANDLE_TS_FIELD], strict=True):
+            stamps_by_pair.setdefault(pair, []).append(ts)
+        for pair in sorted(stamps_by_pair):
+            gaps[pair] = _gaps_in_range(stamps_by_pair[pair], interval_s=int(interval_s))
+
+        # Every pair in one call: each window is taken within its own pair, so a pair's
+        # row is the one `compute` would return for that pair alone, bit for bit, at a
+        # fraction of the per-pair query overhead (lead decision D16, 2026-09-19).
+        computed = compute_many(
+            pl.DataFrame(columns, schema=_CANDLE_SCHEMA),
+            interval_s=int(interval_s),
+            min_lookback_fill=min_fill,
+            key=CANDLE_PAIR_FIELD,
+        )
+        latest = computed.filter(
+            pl.col(CANDLE_TS_FIELD) == pl.col(CANDLE_TS_FIELD).max().over(CANDLE_PAIR_FIELD)
+        )
+        for last in sorted(latest.to_dicts(), key=lambda row: str(row[CANDLE_PAIR_FIELD])):
+            pair = str(last[CANDLE_PAIR_FIELD])
             row_ts[pair] = int(last[CANDLE_TS_FIELD])
             row = {name: _jsonable(last.get(name)) for name in FEATURE_NAMES}
             rows[pair] = row
@@ -174,8 +185,9 @@ class FeatureEngine(BaseEngine):
     @staticmethod
     def _group(
         candles: Sequence[Mapping[str, Any]], *, bar_ts: int
-    ) -> dict[str, list[dict[str, Any]]]:
-        """Candles by pair, money cast to float, nothing later than the closed bar.
+    ) -> dict[str, list[Any]]:
+        """Candles as columns, pair kept, money cast to float, nothing later than the
+        closed bar.
 
         The ``ts <= bar_ts`` filter is belt and braces and is deliberately not trusted
         away: engine 3 does not publish the in-progress bar, so in a correct system this
@@ -183,30 +195,36 @@ class FeatureEngine(BaseEngine):
         phase would quietly start reading a partial bar — a look-ahead defect that makes
         a backtest *better*, which is the direction nothing downstream questions.
         """
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for candle in candles:
-            pair = candle.get(CANDLE_PAIR_FIELD)
-            ts = candle.get(CANDLE_TS_FIELD)
+        # Column by column rather than candle by candle: at ~190 pairs x 200 bars a tick
+        # carries ~38,000 candles, and a per-candle loop was half of this engine's time
+        # once the features were batched (lead decision D16).
+        pairs: list[Any] = [candle.get(CANDLE_PAIR_FIELD) for candle in candles]
+        stamps: list[Any] = [candle.get(CANDLE_TS_FIELD) for candle in candles]
+        for index, (pair, ts) in enumerate(zip(pairs, stamps, strict=True)):
             if pair is None or ts is None:
                 raise MissingInputError(
                     "a candle in state[market_sensor][candles] carries no "
-                    f"{CANDLE_PAIR_FIELD!r} or no {CANDLE_TS_FIELD!r}: {candle!r}"
+                    f"{CANDLE_PAIR_FIELD!r} or no {CANDLE_TS_FIELD!r}: {candles[index]!r}"
                 )
-            if int(ts) > bar_ts:
-                continue
-            row: dict[str, Any] = {CANDLE_TS_FIELD: int(ts)}
-            for field in CANDLE_MONEY_FIELDS:
-                value = candle.get(field)
+        kept = [index for index, ts in enumerate(stamps) if int(ts) <= bar_ts]
+        grouped: dict[str, list[Any]] = {
+            CANDLE_PAIR_FIELD: [str(pairs[index]) for index in kept],
+            CANDLE_TS_FIELD: [int(stamps[index]) for index in kept],
+        }
+        for field in CANDLE_MONEY_FIELDS:
+            values: list[Any] = [candles[index].get(field) for index in kept]
+            for index, value in zip(kept, values, strict=True):
                 if value is None:
                     raise MissingInputError(
-                        f"a candle for {pair} at {ts} carries no {field!r}"
+                        f"a candle for {pairs[index]} at {stamps[index]} carries no {field!r}"
                     )
-                # The one conversion. `float("20.24")` and `float(Decimal("20.24"))` are
-                # the same double, which is what makes the live and offline paths
-                # comparable for exact equality.
-                row[field] = float(value)
-            row[CANDLE_TRADES_FIELD] = int(candle.get(CANDLE_TRADES_FIELD) or 0)
-            grouped.setdefault(str(pair), []).append(row)
+            # The one conversion. `float("20.24")` and `float(Decimal("20.24"))` are the
+            # same double, which is what makes the live and offline paths comparable for
+            # exact equality.
+            grouped[field] = [float(value) for value in values]
+        grouped[CANDLE_TRADES_FIELD] = [
+            int(candles[index].get(CANDLE_TRADES_FIELD) or 0) for index in kept
+        ]
         return grouped
 
 
