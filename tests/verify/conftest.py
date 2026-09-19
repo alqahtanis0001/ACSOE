@@ -217,6 +217,7 @@ def registry_bootstrap(guard: str = "", opportunity: str = "", manage: str = "")
 #: meant to satisfy would pass no matter what the criterion asserted.
 DOCUMENTED_TABLES = (
     "approvals",
+    "scout_tallies",
     "trades",
     "rejections",
     "runs",

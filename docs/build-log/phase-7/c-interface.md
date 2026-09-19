@@ -1106,3 +1106,87 @@ the same defect as before, rows for time, with the per-pair grouping kept so not
 The criterion FAILs on it ("counted in ROWS") and PASSes on the real file. The whole of
 `test_phase5_criteria.py`: 38 passed. I edited only this one test; c-eval's anchor fix in the same
 file was left as it was.
+
+### Spec 145: every gate's verdict on both sides of every decision
+
+**Agent:** c-eval · **Task:** spec 145 · **Date:** 2026-09-19
+
+**Built.** `VERDICT_FIELDS` in `engines/memory/contracts.py` (engine to fields, chain order) and
+`MemoryEngine._verdicts`, written into `approvals.details` on the placing tick and into
+`rejections.details` on a refusal, which has been empty since migration 0001.
+
+**Decisions, each with the option rejected.**
+- *Engine 10's fields.* The spec lists "the fee, spread and slippage components it publishes";
+  engine 10 publishes none (its payload is the four economics, `clears_hurdle`, the pair and the
+  code), so only those five are listed. Rejected: reaching into engines 1, 3 and 9 for the
+  components under engine 10's name, which would record numbers engine 10 did not publish. Engine
+  9's slippage is recorded under engine 9.
+- *What "the fields exist" means for the contract walk.* A listed field must be a field of the
+  engine's published state model or the value of one of its `*_FIELD` key constants (engine 7
+  publishes its candidate under `CANDIDATE_FIELD = "pair"`, not a model field). Rejected:
+  constructing each engine's payload to read its keys, which needs a valid instance of ten
+  models and tests the fixture more than the contract.
+- *A refusal stops at the refuser even if a later engine's key is somehow in `state`.* The
+  orchestrator never leaves one, and the test plants one anyway so mutation V4 has something to
+  record.
+- *Unserialisable snapshot.* Recorded as `{"details_version", "unserialisable", "refused_by"}`
+  rather than raising, per the spec's scope limit.
+
+**Checked.** 22 new tests, including the Check When Done round trip through A's rehearsal
+harness: the approval's `details` equals each engine's payload on the placing tick restricted to
+`VERDICT_FIELDS`, recomputed from `state`. Sweep (tests `test_memory_verdicts.py`,
+`test_memory_approvals.py`, `test_memory_rows.py`; baseline 81 passed): 13 applied, 13 killed,
+including the spec's four named arms (the refuser dropped, absent fields null-filled, a money field
+recorded as a float, engines after the refuser recorded).
+
+### Spec 140 step 1: engine 19 writes engine 8's SHAP through the store
+
+**Agent:** c-eval · **Task:** spec 140 (writer) · **Date:** 2026-09-19
+
+**Built** against b-store's `write_shap`/`read_shap`, agreed by message with three amendments of
+theirs (an empty explanation refused rather than written; one file per run, tick and pair;
+`read_shap` returning a `ShapRecord`). Engine 19 writes on every tick engine 8 scored,
+approved or refused, sets `rejections.shap_ref` only on a refusal of the same pair, and publishes
+`shap_ref` and `shap_skipped_reason` in its own state.
+
+**Decisions, with the option rejected.**
+- *A store refusal is a skip, not a raise.* `StoreError` is caught and its message published;
+  any other exception still raises (contract rule 7). Rejected: letting it raise, because the
+  tick's block records, rejection and equity row would all be lost over a missing explanation.
+- *An empty explanation is not handed to the store.* It would be refused anyway, but a refusal
+  publishes a skip reason, and "engine 8 had nothing to explain" is not a refusal. The test pins
+  the difference.
+- *The Check When Done rehearsal.* A's `build()` constructs its store without a `derived_dir`,
+  so the test patches the module's `StoreClient` name with the real class partially applied to a
+  `derived_dir`, rather than editing A's file. The entry bar's quote is widened (3.0 on a BTC-ish
+  price) until engine 10 refuses; the test asserts it is engine 10 that refused before judging
+  the file.
+
+**Checked.** 11 tests in `tests/engines/test_memory_shap.py` against the real store, including the
+rehearsed refusal at engine 10 whose file reads back as engine 8's published contributions, in
+order. Sweep (baseline 92 passed): 9 applied, 9 killed. The first draft of the empty-explanation
+test would have survived W2 (the store's own refusal also leaves no file); it was strengthened to
+assert no skip reason before the sweep ran.
+
+### Spec 146: engine 19 stores engine 7's universe step on every tick it ran
+
+**Agent:** c-eval · **Task:** spec 146 (engine 19 half) · **Date:** 2026-09-19
+
+**Built** against b-store's revised migration 0007: one `scout_tallies` row per tick engine 7
+ran and did not error, candidate or not, copied from its payload verbatim, plus `scout_tallies`
+in `DOCUMENTED_TABLES` (now eleven) and its two test mirrors.
+
+**Two rulings shaped it, both the lead's, after c-eval raised them.** Engine 7 publishes no
+status, and the first store draft required one; the options were deriving it in engine 19
+(OK/PASS/BLOCK from the orchestrator's view) or not storing it. Ruled: not stored, because
+verbatim is the rule and `reason_code` plus `candidate` carry the outcome. And the bar: the
+first store draft took it from engine 5 and in microseconds; ruled engine 3's `closed_bar_ts`,
+stored as published (seconds). Both cost nothing to reverse later and nothing is inferred.
+
+**Checked.** 8 tests against the real store (candidate, no candidate, blocked engine 7 storing
+only its reason code with every count NULL, errored engine 7 writing nothing, exact decimal
+strings in `ranked`, never a rejection, and a rehearsed tick recomputed from `state`). The
+no-candidate case on the real chain is left to a-replay's 96-bar gating rehearsal, which checks
+every tally against engine 7's capture (the lead's call; A's harness was not extended). Sweep
+(baseline 88 passed): 8 applied, 8 killed, including the spec's three named arms (no-candidate
+ticks skipped, `ranked` only with a candidate, absent counts as zero).

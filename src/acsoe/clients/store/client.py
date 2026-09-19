@@ -47,6 +47,7 @@ from acsoe.clients.store.contracts import (
     RejectionRow,
     RunMode,
     RunRow,
+    ScoutTallyRow,
     ShapRecord,
     SystemMode,
     SystemModeRow,
@@ -94,7 +95,9 @@ _JSON_COLUMNS: Final[frozenset[str]] = frozenset({"fallbacks_used"})
 #: invites someone to loosen that field's type, which would silently accept a real bad
 #: value forever. Converting at the boundary makes the whole class unreachable and costs
 #: one dict lookup per row.
-_BOOLEAN_COLUMNS: Final[frozenset[str]] = frozenset({"is_primary", "promoted"})
+_BOOLEAN_COLUMNS: Final[frozenset[str]] = frozenset(
+    {"is_primary", "promoted", "rank_descending"}
+)
 
 
 def money_to_text(value: Decimal) -> str:
@@ -965,6 +968,26 @@ class StoreClient:
         exists. Migration 0006 and `docs/build-log/phase-7/b-store.md` explain the choice.
         """
         self._insert("approvals", row.model_dump())
+
+    def write_scout_tally(self, row: ScoutTallyRow) -> int:
+        """Record engine 7's universe step on one tick (spec 146). **Insert, never upsert.**
+
+        A second tally for the same `(run_id, cycle_id)` raises `sqlite3.IntegrityError`,
+        and it is not to be caught and smoothed over. One tick has one universe, and a
+        rewrite would let a later write change what the funnel counts.
+        """
+        return self._insert("scout_tallies", row.model_dump())
+
+    def scout_tallies(self, run_id: str) -> tuple[ScoutTallyRow, ...]:
+        """Every tally of one run, oldest first, with no limit.
+
+        The funnel is counted from these rows, so a truncating window would undercount it.
+        Ordered by `ts`, then by `id` to break ties, never by `cycle_id`.
+        """
+        rows = self.connection.execute(
+            "SELECT * FROM scout_tallies WHERE run_id = ? ORDER BY ts ASC, id ASC", (run_id,)
+        ).fetchall()
+        return tuple(ScoutTallyRow(**_row_to_dict(row)) for row in rows)
 
     def write_leaderboard_entry(self, row: LeaderboardRow) -> int:
         return self._insert("leaderboard", row.model_dump())

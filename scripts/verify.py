@@ -674,14 +674,16 @@ def check_orchestrator_empty_registry(ctx: VerifyContext) -> Outcome:
 # db_migrates_from_empty - spec 01
 # --------------------------------------------------------------------------- #
 
-# The ten tables of the storage model in context/architecture-context.md, which is
+# The eleven tables of the storage model in context/architecture-context.md, which is
 # the authority. B's runner exports the same set as EXPECTED_TABLES; the criterion
 # cross-checks the two so a drift between the declaration and the SQL is caught.
 # `approvals` joined with migration 0006 (spec 132, Phase 7): why an entry was approved,
-# held between the placing tick and the trade row.
+# held between the placing tick and the trade row. `scout_tallies` joined with migration 0007
+# (spec 146): engine 7's universe step on every tick it ran, candidate or not.
 DOCUMENTED_TABLES = frozenset(
     {
         "approvals",
+        "scout_tallies",
         "trades",
         "rejections",
         "runs",

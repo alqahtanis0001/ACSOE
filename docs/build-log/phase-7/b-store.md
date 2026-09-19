@@ -282,3 +282,88 @@ This entry also records a slip. A `python -c "..."` in bash carried backticks in
 and the shell executed them as commands, which deleted the quoted names from `ShapRecord`'s
 docstring. I saw it in the tool output and fixed it with the file tool. The same class of hazard
 as the heredoc rule: never build file text inside a shell-quoted string.
+
+### Spec 146: migration 0007 `scout_tallies`, with the decisions and the sweep
+
+**Agent:** B-store · **Task:** spec 146 · **Date:** 2026-09-19
+
+**Decisions, each with the option rejected.**
+1. **Every field engine 7 publishes gets a column, not only the ones the spec lists.** That
+   adds `equity`, `pairs`, `rank_feature`, `rank_descending` and `rank_run_ids`.
+   *Rejected:* the spec's list alone. It would drop `rank_feature`, which is what tells a
+   ranked run's tally from the alphabetical baseline's, and `pairs`, which is the tradable
+   universe itself. A test reads engine 7's real payload keys from `ScoutUniverse.to_state_data()`
+   and fails if a published key has no column. The one rename is `pair`, stored as
+   `candidate`, and the test names it.
+2. **The JSON columns are text that is stored and returned byte for byte.** The model parses
+   them only to refuse a wrong shape. *Rejected:* taking Python structures and serialising
+   them in the store, which puts a second serialiser beside engine 19's canonical one for spec
+   145. An expected move in `ranked` must be a decimal string. A JSON number is refused, for
+   the same reason a float is refused for money.
+3. **`status` is a column, although engine 7 does not publish it.** The orchestrator keeps only
+   `result.data`, so engine 19 derives the status from `pair` and `trading_blocked_by` /
+   `block_status`. I told c-eval how. `ERROR` is refused, because an errored engine 7 writes
+   no tally.
+4. **The model enforces engine 7's two identities**: `scanned == entered + sum(excluded)`
+   (spec 146 step 3), and a candidate exactly when the status is OK. *Rejected:* leaving them to
+   engine 19. A tally that does not add up is refused at the boundary, so engine 19 must decide
+   what to do with the refusal. I told c-eval.
+
+**Tests.** `tests/clients/store/test_scout_tallies.py` has 27 tests. `pytest tests/db tests/clients
+tests/verify -q` gave 1152 passed. mypy (168 files) and ruff are clean. Calling
+`db_migrates_from_empty` directly FAILs with `declared-only=['scout_tallies']` until C's
+`DOCUMENTED_TABLES` line lands, which is expected.
+
+**Sweep.** It covered `test_scout_tallies.py` and `test_migrations.py`, baseline 75 passed. 17 of
+18 arms were killed:
+- T1: upsert.
+- T2: uniqueness dropped.
+- T3: unique on `cycle_id` alone.
+- T4: a `NOT NULL DEFAULT 0` on `scanned`.
+- T5: the equity CHECK dropped.
+- T6: equity typed as a plain `Decimal`.
+- T7: a JSON number accepted in `ranked`.
+- T8: identity not enforced.
+- T9: coherence not enforced.
+- T10: reader not scoped to the run.
+- T11: reader ordered by `cycle_id`.
+- T12: reader `LIMIT 50`.
+- T13: `ERROR` allowed.
+- T14: `json_valid` dropped.
+- T15: a bool count accepted.
+- T17: JSON re-serialised on read.
+- T18: table missing from `EXPECTED_TABLES`.
+
+**T16 is a checked negative, not a survivor.** It removed `rank_descending` from
+`_BOOLEAN_COLUMNS`. Pydantic in lax mode converts the stored `1` to `True` anyway, so nothing
+observable changes. The constant exists to defend against the intermittent native fault in
+Known Risks, which makes a lax validator behave as a strict one. No test can reproduce that
+fault on demand, and the entry beside the constant already argues for keeping it.
+
+### Spec 146 revised by the lead's ruling: no derived status, the bar is engine 3's `closed_bar_ts`
+
+**Agent:** B-store · **Task:** spec 146 · **Date:** 2026-09-19
+
+**What happened.** My first 0007 carried a `status` column derived by engine 19, with a
+candidate-iff-OK identity, and a `bar_ts` in microseconds. The lead ruled against both, on the
+spec's rule of verbatim storage:
+- engine 7 publishes no status, and `reason_code` plus `candidate` already carry the outcome;
+- the bar is engine 3's published `closed_bar_ts`, in whole seconds as published, in a column
+  named for its source.
+
+My decision 3 in the entry above, keeping `status` even though engine 7 does not publish it, is
+**withdrawn**. It was the derivation the verbatim rule forbids. Recorded rather than rewritten.
+
+**Fix.** 0007 was uncommitted, so I revised it in place:
+- `status` and its CHECK are removed, and so is the model's identity;
+- `closed_bar_ts INTEGER CHECK (closed_bar_ts IS NULL OR closed_bar_ts >= 0)`, with `ge=0` on the
+  model.
+
+A test asserts that neither the model nor the table has a status, and that `status=` is refused as
+an extra input.
+
+Re-sweep: 18 of 19 arms killed, and T16 remains the checked negative from the entry above. The
+new arms were all killed:
+- T9: the `closed_bar_ts` CHECK dropped;
+- T13: a `status` column reintroduced;
+- T19: the model's bound dropped.

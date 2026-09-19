@@ -117,12 +117,20 @@ def _capture_scout(log_path: Path) -> None:
             with log_path.open("a", encoding="utf-8", newline="\n") as handle:
                 handle.write(json.dumps({
                     "now": context.now.isoformat(),
+                    "cycle_id": state.get("cycle_id"),
+                    "status": str(result.status),
                     "bar_ts": feature.get("bar_ts"),
+                    # Engine 3's decision bar, which spec 146 stores as `closed_bar_ts`.
+                    "closed_bar_ts": (state.get("market_sensor") or {}).get("closed_bar_ts"),
                     "universe": list(result.data.get("pairs", [])),
                     "candidate": result.data.get("pair"),
                     "ranked": list(result.data.get("ranked", [])),
                     "reason_code": result.data.get("reason_code"),
-                }) + "\n")
+                    # Verbatim, for spec 146's tally check. Engine 7's payload is JSON-safe
+                    # (money and moves are decimal strings); `str` only ever serves an
+                    # errored tick's payload, which the check never compares.
+                    "payload": dict(result.data),
+                }, default=str) + "\n")
         return result
 
     orchestrator.Orchestrator._run = run  # type: ignore[method-assign]
@@ -429,6 +437,87 @@ def gates(db: Path) -> dict[str, int]:
         connection.close()
 
 
+# Spec 146's `scout_tallies` columns, each against the key engine 7 publishes it under.
+# The JSON columns are parsed before comparing; everything else is compared as stored.
+# There is no `status`: the lead ruled the table carries no derived status, so none is
+# compared. `closed_bar_ts` is engine 3's, compared separately.
+TALLY_FIELDS: dict[str, str] = {
+    "reason_code": "reason_code",
+    "candidate": "pair",
+    "scanned": "scanned",
+    "entered": "entered",
+    "equity": "equity",
+    "pairs": "pairs",
+    "excluded": "excluded",
+    "rank_feature": "rank_feature",
+    "rank_descending": "rank_descending",
+    "rank_skipped": "rank_skipped",
+    "ranked": "ranked",
+    "rank_run_ids": "rank_run_ids",
+}
+TALLY_JSON_COLUMNS = frozenset({"pairs", "excluded", "rank_skipped", "ranked", "rank_run_ids"})
+
+
+def tally_check(db: Path, scout_log: Path) -> dict[str, Any]:
+    """Spec 146: one `scout_tallies` row for every tick engine 7 ran without erroring,
+    no-candidate ticks included, each equal to what engine 7 published on that tick.
+
+    The expectation is the payload captured inside the running process (`scout.jsonl`),
+    never the table read back against itself. A key engine 7 did not publish is expected
+    as NULL, never zero. An errored engine 7 writes no tally by the spec, so its ticks are
+    expected to have none. Ticks are matched on `cycle_id` within run a's one process;
+    more than one `run_id` in the table is reported, and would break the count.
+    """
+    connection = sqlite3.connect(db)
+    connection.row_factory = sqlite3.Row
+    try:
+        present = connection.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'scout_tallies'"
+        ).fetchone()[0]
+        if not present:
+            return {"table_present": False, "note": "scout_tallies absent: spec 146 has not landed"}
+        rows_read = [dict(row) for row in connection.execute("SELECT * FROM scout_tallies")]
+        columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(scout_tallies)")}
+    finally:
+        connection.close()
+    stored = {int(row["cycle_id"]): row for row in rows_read}
+    captured = [json.loads(line) for line in scout_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    expected = [entry for entry in captured if entry["status"] != "ERROR"]
+    mismatched: list[dict[str, Any]] = []
+    for entry in expected:
+        row = stored.get(int(entry["cycle_id"]))
+        if row is None:
+            mismatched.append({"cycle_id": entry["cycle_id"], "candidate": entry["candidate"], "missing": True})
+            continue
+        payload = dict(entry["payload"], closed_bar_ts=entry["closed_bar_ts"])
+        differing: list[str] = []
+        for column, key in {**TALLY_FIELDS, "closed_bar_ts": "closed_bar_ts"}.items():
+            if column not in columns:
+                continue
+            got = row.get(column)
+            if column in TALLY_JSON_COLUMNS and isinstance(got, str):
+                got = json.loads(got)
+            want = payload.get(key)
+            if column == "rank_descending" and got is not None:
+                got = bool(got)
+            if type(got) is not type(want) or got != want:
+                differing.append(column)
+        if differing:
+            mismatched.append({"cycle_id": entry["cycle_id"], "fields": differing})
+    return {
+        "table_present": True,
+        "ticks_engine_7_ran": len(expected),
+        "of_which_no_candidate": sum(1 for entry in expected if entry["candidate"] is None),
+        "engine_7_errored": len(captured) - len(expected),
+        "tally_rows": len(rows_read),
+        "run_ids": sorted({str(row["run_id"]) for row in rows_read}),
+        "columns_not_in_table": sorted(set(TALLY_FIELDS) - columns | {"closed_bar_ts"} - columns),
+        "counts_equal": len(rows_read) == len(expected),
+        "mismatched": mismatched[:20],
+        "mismatched_count": len(mismatched),
+    }
+
+
 def ranking_check(
     scout_log: Path, config: Any, pair_names: Path, *, fee_round_trip: Fraction
 ) -> dict[str, Any]:
@@ -609,6 +698,7 @@ def main(argv: list[str] | None = None) -> int:
     report["row_counts"] = counts
     report["launch_preconditions"] = preconditions(out / "a.sqlite")
     report["gates"] = gates(out / "a.sqlite")
+    report["scout_tallies"] = tally_check(out / "a.sqlite", out / "scout.jsonl")
     report["trades"] = records(out / "a.sqlite", "trades")
     if args.ranking == "expected_move":
         report["ranking_check"] = ranking_check(

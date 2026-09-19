@@ -72,6 +72,8 @@ EXPECTED_MONEY_COLUMNS: frozenset[tuple[str, str]] = frozenset(
         ("trades", "friction_pct"),
         ("trades", "net_edge_pct"),
         ("trades", "hurdle_pct"),
+        # Migration 0007, spec 146: the equity engine 7 sized the universe against.
+        ("scout_tallies", "equity"),
         ("equity_snapshots", "equity"),
         ("equity_snapshots", "peak_equity"),
         ("equity_snapshots", "cash"),

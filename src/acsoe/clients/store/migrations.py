@@ -30,8 +30,8 @@ BOOKKEEPING_TABLE = "schema_migrations"
 
 MIGRATION_FILENAME = re.compile(r"^(?P<version>\d{4})_(?P<name>[a-z0-9_]+)\.sql$")
 
-#: The ten relational tables of `context/architecture-context.md`. `approvals` comes from
-#: migration 0006 (spec 132). The set does not include :data:`BOOKKEEPING_TABLE`, so it is
+#: The eleven relational tables of `context/architecture-context.md`. `approvals` comes
+#: from migration 0006 (spec 132), and `scout_tallies` from 0007 (spec 146). The set does not include :data:`BOOKKEEPING_TABLE`, so it is
 #: exactly the set a caller wants to compare against.
 EXPECTED_TABLES: frozenset[str] = frozenset(
     {
@@ -44,6 +44,7 @@ EXPECTED_TABLES: frozenset[str] = frozenset(
         "positions",
         "rejections",
         "runs",
+        "scout_tallies",
         "trades",
     }
 )
@@ -74,6 +75,7 @@ EXPECTED_INDEXES: frozenset[str] = frozenset(
         "idx_rejections_run_cycle",
         "idx_rejections_ts",
         "idx_runs_started_at",
+        "idx_scout_tallies_ts",
         "idx_trades_closed_at",
         "idx_trades_pair",
         "ux_block_records_primary",

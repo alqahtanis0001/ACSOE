@@ -12,6 +12,17 @@ Rejected: columns on `orders`. My reasoning is in the build log. I told c-eval a
 `DOCUMENTED_TABLES` gains `approvals` (C), and `architecture-context.md` gets an `approvals` row in
 the storage table (lead).
 
+**Spec 146 (B's half): DONE 2026-09-19, and revised by the lead's ruling.** There is no
+derived `status`, and the bar is `closed_bar_ts` (engine 3's, in seconds). `tests/db tests/clients
+tests/verify` gave 1150 passed; the re-sweep killed 18/19, with 1 checked negative. `db_migrates_from_empty` needs C's
+`DOCUMENTED_TABLES` line for `scout_tallies`, and the lead adds the row in
+`architecture-context.md`.
+
+**CLAIMED 2026-09-19: spec 146, B's half.** This is migration 0007 with the `scout_tallies`
+table, the row model, `write_scout_tally` (write-once) and `scout_tallies(run_id)`. It came from
+the operator's Q8 ruling. The lead's row in `architecture-context.md` and C's `DOCUMENTED_TABLES`
+line land in the same boundary.
+
 **Status at a glance (2026-09-19, later):**
 - **Spec 132 + `approvals.details` (spec 145's column):** DONE. The sweep killed 13/13 and then
   5/5.

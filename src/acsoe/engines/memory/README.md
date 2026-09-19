@@ -128,6 +128,18 @@ refusal of that same pair carries the ref in `rejections.shap_ref`; an approval 
   other exception still raises.
 - **A rejection of a different pair gets no ref:** the file explains the pair engine 8 scored.
 
+## Engine 7's universe step, on every tick it ran (spec 146)
+
+One `scout_tallies` row (migration 0007) on every tick engine 7 ran and did not error,
+**including ticks with no candidate**, so the funnel's universe step comes from rows rather
+than from arithmetic on absences. The row is engine 7's payload **verbatim**: the published
+`pair` stored as `candidate`, the counts, `equity`, the ranking fields, and the lists and maps
+as canonical JSON text (sorted keys, compact), every expected move kept as the published
+string. `closed_bar_ts` is engine 3's published value as it is, in seconds, `NULL` when absent.
+A field engine 7 did not publish is `NULL`, never zero, which is what a blocked engine 7 leaves:
+only its reason code. No status is stored (the lead's ruling): `reason_code` and `candidate`
+carry the outcome. An engine 7 that raised writes no tally. A tally is never a rejection.
+
 ## What it writes into `state`
 
 `state["memory"]` only — contract rule 2. It carries per-table counts (zeros included,

@@ -35,6 +35,7 @@ __all__ = [
     "BLOCK_REASON_KEY",
     "BLOCK_STATUS_KEY",
     "CANDIDATE_PAIR_PATH",
+    "CLOSED_BAR_TS_FIELD",
     "CLOSED_TRADES_FIELD",
     "COST_KEY",
     "CYCLE_ID_KEY",
@@ -45,6 +46,7 @@ __all__ = [
     "EXIT_KEY",
     "GUARD_BLOCKERS_KEY",
     "HOLD_REASON_FIELD",
+    "MARKET_SENSOR_KEY",
     "MODEL_RUN_ID_FIELD",
     "MODEL_RUN_KEYS",
     "NET_PROCEEDS_FIELD",
@@ -63,6 +65,8 @@ __all__ = [
     "SCOUT_KEY",
     "SHAP_FIELD",
     "STATE_KEY",
+    "TALLY_JSON_FIELDS",
+    "TALLY_SCALAR_FIELDS",
     "TRADING_BLOCKED_BY_KEY",
     "UNREALISED_PNL_FIELD",
     "USERREF_FIELD",
@@ -243,6 +247,26 @@ APPROVAL_TRADE_FIELDS: Final[tuple[str, ...]] = (
 PREDICTION_KEY: Final = "prediction"
 SHAP_FIELD: Final = "shap"
 
+#: Engine 7 `scout` (B): the fields of its payload a `scout_tallies` row stores verbatim
+#: (spec 146), as ``(column, published key)``. The candidate is published under `pair`.
+TALLY_SCALAR_FIELDS: Final[tuple[tuple[str, str], ...]] = (
+    ("candidate", "pair"),
+    ("scanned", "scanned"),
+    ("entered", "entered"),
+    ("equity", "equity"),
+    ("reason_code", "reason_code"),
+    ("rank_feature", "rank_feature"),
+    ("rank_descending", "rank_descending"),
+)
+#: The ones stored as canonical JSON text.
+TALLY_JSON_FIELDS: Final[tuple[str, ...]] = (
+    "pairs", "excluded", "rank_skipped", "ranked", "rank_run_ids",
+)
+
+#: Engine 3 `market_sensor` (A): the opening second of the decision bar that just closed.
+CLOSED_BAR_TS_FIELD: Final = "closed_bar_ts"
+MARKET_SENSOR_KEY: Final = "market_sensor"
+
 #: The version of the snapshot's shape, written into every one.
 DETAILS_VERSION: Final = 1
 
@@ -294,6 +318,7 @@ WRITTEN_TABLES: Final[tuple[str, ...]] = (
     "approvals",
     "positions",
     "orders",
+    "scout_tallies",
     "trades",
     "rejections",
     "equity_snapshots",

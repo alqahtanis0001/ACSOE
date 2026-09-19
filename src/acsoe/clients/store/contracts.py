@@ -20,12 +20,21 @@ order by `ts`.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any, Final
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 MICROSECONDS_PER_SECOND: Final = 1_000_000
 
@@ -598,6 +607,144 @@ class LeaderboardRow(_Row):
     promoted: bool = False
     notes: str | None = None
     updated_at: Micros
+
+
+def _json_text(value: str | None, what: str) -> Any:
+    """Parse a JSON column's text, or refuse it. Returns the parsed value, or `None`."""
+    if value is None:
+        return None
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{what} is not JSON: {value!r}") from exc
+
+
+def _count_map(parsed: Any, what: str) -> dict[str, int]:
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{what} must be a JSON object of reason code to count")
+    for code, count in parsed.items():
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError(f"{what}[{code!r}] must be a non-negative integer, got {count!r}")
+    return parsed
+
+
+class ScoutTallyRow(_Row):
+    """Engine 7's universe step on one tick (migration 0007, spec 146).
+
+    Written by engine 19 from `state["scout"]`, verbatim, on every tick engine 7 ran and
+    did not error, **including ticks with no candidate**. Keyed by `(run_id, cycle_id)`
+    and written once. A tally is a tick-level fact and never goes into `rejections`.
+
+    **Absent is `None`, never zero.** Every payload field is optional because a `BLOCK`
+    payload carries only `reason_code`.
+
+    **The JSON fields are the text engine 19 serialised, stored and returned byte for
+    byte.** This model parses them only to refuse a wrong shape:
+    - `pairs` is a list of pair names;
+    - `excluded` and `rank_skipped` are objects of reason code to non-negative count;
+    - `ranked` is a list of `{"pair": ..., "expected_move_pct": "<exact decimal string>"}`,
+      and a JSON number there is refused, as a float is refused for money;
+    - `rank_run_ids` is an object of name to run id.
+
+    **One identity is enforced, engine 7's own:** `scanned == entered + sum(excluded)`
+    whenever all three are present (spec 146 step 3).
+
+    **There is no status field** (the lead's ruling, 2026-09-19). Engine 7 publishes
+    none, and a tally stores the payload verbatim, so `reason_code` and `candidate` carry
+    the outcome. `closed_bar_ts` is engine 3's published `closed_bar_ts`, in whole
+    seconds as published (the opening second of the closed bar), and `None` when absent.
+    """
+
+    id: int | None = None
+    run_id: str
+    cycle_id: int
+    ts: Micros
+    closed_bar_ts: int | None = Field(default=None, ge=0)
+    reason_code: str | None = None
+    candidate: str | None = None
+    scanned: int | None = Field(default=None, ge=0)
+    entered: int | None = Field(default=None, ge=0)
+    equity: Money | None = None
+    pairs: str | None = None
+    excluded: str | None = None
+    rank_feature: str | None = None
+    rank_descending: bool | None = None
+    rank_skipped: str | None = None
+    ranked: str | None = None
+    rank_run_ids: str | None = None
+    updated_at: Micros
+
+    @field_validator("reason_code", "candidate", "rank_feature")
+    @classmethod
+    def _a_name_or_null(cls, value: str | None) -> str | None:
+        return _text_or_null(value, "a scout tally's name field")
+
+    @field_validator("pairs")
+    @classmethod
+    def _pairs_shape(cls, value: str | None) -> str | None:
+        parsed = _json_text(value, "pairs")
+        if parsed is not None and (
+            not isinstance(parsed, list) or not all(isinstance(p, str) for p in parsed)
+        ):
+            raise ValueError("pairs must be a JSON list of pair names")
+        return value
+
+    @field_validator("excluded", "rank_skipped")
+    @classmethod
+    def _count_shape(cls, value: str | None, info: ValidationInfo) -> str | None:
+        parsed = _json_text(value, str(info.field_name))
+        if parsed is not None:
+            _count_map(parsed, str(info.field_name))
+        return value
+
+    @field_validator("ranked")
+    @classmethod
+    def _ranked_shape(cls, value: str | None) -> str | None:
+        parsed = _json_text(value, "ranked")
+        if parsed is None:
+            return value
+        if not isinstance(parsed, list):
+            raise ValueError("ranked must be a JSON list")
+        for entry in parsed:
+            if not isinstance(entry, dict) or set(entry) != {"pair", "expected_move_pct"}:
+                raise ValueError(
+                    f"each ranked entry is exactly {{pair, expected_move_pct}}, got {entry!r}"
+                )
+            move = entry["expected_move_pct"]
+            if not isinstance(move, str):
+                raise ValueError(
+                    "an expected move in ranked must be an exact decimal string, never a "
+                    f"JSON number: {move!r}"
+                )
+            try:
+                exact = Decimal(move)
+            except ArithmeticError as exc:
+                raise ValueError(f"expected move {move!r} is not a decimal") from exc
+            if not exact.is_finite():
+                raise ValueError(f"expected move {move!r} is not finite")
+        return value
+
+    @field_validator("rank_run_ids")
+    @classmethod
+    def _run_ids_shape(cls, value: str | None) -> str | None:
+        parsed = _json_text(value, "rank_run_ids")
+        if parsed is not None and (
+            not isinstance(parsed, dict)
+            or not all(isinstance(k, str) and isinstance(v, str) for k, v in parsed.items())
+        ):
+            raise ValueError("rank_run_ids must be a JSON object of name to run id")
+        return value
+
+    @model_validator(mode="after")
+    def _the_tally_adds_up(self) -> ScoutTallyRow:
+        if self.scanned is not None and self.entered is not None and self.excluded is not None:
+            excluded = _count_map(json.loads(self.excluded), "excluded")
+            if self.scanned != self.entered + sum(excluded.values()):
+                raise ValueError(
+                    f"scanned {self.scanned} != entered {self.entered} + excluded "
+                    f"{sum(excluded.values())}: the tally does not add up"
+                )
+        return self
 
 
 class ShapRecord(_Row):

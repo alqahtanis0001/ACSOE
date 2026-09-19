@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from fractions import Fraction
@@ -23,6 +24,7 @@ import pytest
 
 from acsoe.clients.kraken.replay import ReplayKrakenClient
 from acsoe.engines.order_book.contracts import walk_the_bid_side
+from acsoe.engines.scout.contracts import ScoutUniverse
 from acsoe.platform.clock import FixedClock
 from tests.clients.kraken.replay_fixtures import FEE_FIXTURE, WEEK_0, write_scenario
 
@@ -209,3 +211,95 @@ def test_a_grid_difference_above_the_cost_bar_is_a_stop_and_below_it_is_explaine
     assert (below["agree"], len(below["tie_broken_by_name_spelling"]), below["stops"]) == (0, 1, [])
     above = rehearsal.ranking_check(log, Config(), names, fee_round_trip=Fraction(1, 1000))
     assert [stop["engine"] for stop in above["stops"]] == ["BTC/USD"]
+
+
+MIGRATION_0007 = REPO / "db" / "migrations" / "0007_tick_tallies.sql"
+TALLY_JSON = ("pairs", "excluded", "rank_skipped", "ranked", "rank_run_ids")
+BAR_S = 1_729_382_400
+
+
+def scout_ticks() -> list[tuple[int, str, dict[str, object]]]:
+    """Four ticks as engine 7 publishes them: a candidate, no candidate, a block, an error."""
+    chosen = ScoutUniverse(
+        pairs=("BTC/USD", "ETH/USD"), scanned=3, excluded={"stale_quote": 1}, equity=Decimal("1000"),
+        candidate="ETH/USD", rank_feature="expected_move", ranked=(("ETH/USD", Decimal("0.031")),
+        ("BTC/USD", Decimal("0.004"))), rank_run_ids={"target": "run-1"},
+    ).to_state_data()
+    none_chosen = ScoutUniverse(
+        pairs=("BTC/USD",), scanned=1, equity=Decimal("1000"), rank_feature="expected_move",
+        reason_code="no_rankable_pair", rank_skipped={"no_prediction": 1},
+    ).to_state_data()
+    return [
+        (1, "OK", chosen),
+        (2, "PASS", none_chosen),
+        (3, "BLOCK", {"reason_code": "scout_inputs_unavailable"}),
+        (4, "ERROR", {"error": "boom"}),
+    ]
+
+
+def write_tally_case(root: Path, rows: list[tuple[int, str, dict[str, object]]]) -> tuple[Path, Path]:
+    """The captured log for every tick, and a `scout_tallies` table (migration 0007's own
+    SQL) holding `rows`, serialised the way spec 146 has engine 19 store them.
+
+    The insert follows whatever columns 0007 declares, so the test reads the schema as
+    committed rather than a copy of it. Engine 3's `closed_bar_ts` is the tick's bar."""
+    log = root / "scout.jsonl"
+    log.write_text("".join(
+        json.dumps({"cycle_id": cycle, "status": status, "candidate": payload.get("pair"),
+                    "closed_bar_ts": BAR_S + cycle * 900, "payload": payload}) + "\n"
+        for cycle, status, payload in scout_ticks()
+    ), encoding="utf-8")
+    db = root / "a.sqlite"
+    connection = sqlite3.connect(db)
+    connection.executescript(MIGRATION_0007.read_text(encoding="utf-8"))
+    columns = [str(row[1]) for row in connection.execute("PRAGMA table_info(scout_tallies)") if row[1] != "id"]
+    for cycle, status, payload in rows:
+        values: dict[str, object] = {
+            "run_id": "replay-a", "cycle_id": cycle, "ts": 0, "updated_at": 0, "status": status,
+            "closed_bar_ts": payload.get("stored_bar_s", BAR_S + cycle * 900), "candidate": payload.get("pair"),
+            **{key: payload.get(key) for key in ("reason_code", "scanned", "entered", "equity", "rank_feature",
+                                                 "rank_descending")},
+            **{key: json.dumps(payload[key]) if payload.get(key) is not None else None for key in TALLY_JSON},
+        }
+        connection.execute(
+            f"INSERT INTO scout_tallies ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+            [values.get(column) for column in columns],
+        )
+    connection.commit()
+    connection.close()
+    return db, log
+
+
+@pytest.mark.skipif(not MIGRATION_0007.exists(), reason="spec 146's migration has not landed")
+def test_every_tick_engine_7_ran_has_its_tally_and_each_planted_defect_is_caught(
+    rehearsal: ModuleType, tmp_path: Path
+) -> None:
+    faithful = [tick for tick in scout_ticks() if tick[1] != "ERROR"]
+    (tmp_path / "ok").mkdir()
+    report = rehearsal.tally_check(*write_tally_case(tmp_path / "ok", faithful))
+    assert (report["ticks_engine_7_ran"], report["of_which_no_candidate"], report["engine_7_errored"]) == (3, 2, 1)
+    assert (report["tally_rows"], report["counts_equal"], report["mismatched_count"]) == (3, True, 0)
+    assert report["columns_not_in_table"] == []
+
+    no_candidate_skipped = [tick for tick in faithful if tick[2].get("pair") is not None]
+    ranked_only_with_a_candidate = [
+        (cycle, status, payload if "pair" in payload else {k: v for k, v in payload.items() if k != "ranked"})
+        for cycle, status, payload in faithful
+    ]
+    null_filled_as_zero = [
+        (cycle, status, {"scanned": 0, "entered": 0, **payload}) for cycle, status, payload in faithful
+    ]
+    bar_one_bar_off = [
+        (cycle, status, {**payload, "stored_bar_s": BAR_S + (cycle - 1) * 900}) for cycle, status, payload in faithful
+    ]
+    for name, rows in (("skip", no_candidate_skipped), ("ranked", ranked_only_with_a_candidate),
+                       ("zero", null_filled_as_zero), ("bar", bar_one_bar_off)):
+        (tmp_path / name).mkdir()
+        planted = rehearsal.tally_check(*write_tally_case(tmp_path / name, rows))
+        assert planted["mismatched_count"] > 0 or not planted["counts_equal"], name
+
+
+def test_the_tally_check_reports_an_absent_table_rather_than_a_count(rehearsal: ModuleType, tmp_path: Path) -> None:
+    db = tmp_path / "a.sqlite"
+    sqlite3.connect(db).close()
+    assert rehearsal.tally_check(db, tmp_path / "scout.jsonl")["table_present"] is False

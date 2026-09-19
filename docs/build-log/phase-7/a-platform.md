@@ -1542,3 +1542,64 @@ then on. No database row is affected.
 tests: two runs given two directories each have exactly their own file handler and file,
 with nothing shared and the default not written; and the default is `<cwd>/logs`. Two arms,
 ignoring the flag and losing the default, were each killed (`1 failed, 1 passed`).
+
+### The rehearsal counts spec 146's `scout_tallies` rows (lead request)
+
+**Agent:** A-replay · **Date:** 2026-09-19
+
+**What happened.** The lead asked for the rehearsal report to hold spec 146's first check:
+every tick on which engine 7 ran has exactly one tally row, including the ticks with no
+candidate.
+
+**Change.** Run a's in-process capture (`scout.jsonl`) now also records `cycle_id`, engine 7's
+status and its whole published payload, verbatim. The report gains `scout_tallies`
+(`tally_check`):
+- The ticks engine 7 ran without erroring are counted against the table's rows, and must be
+  equal. An errored tick is expected to have no row, as spec 146 says.
+- Each row's thirteen payload columns are compared with the captured payload, with types
+  checked too, so a NULL is never equal to 0 and a missing `ranked` is never equal to `[]`.
+  A key engine 7 did not publish is expected as NULL.
+- The no-candidate ticks and the errored ticks are reported separately.
+- While migration 0007 has not landed, the report says the table is absent instead of
+  giving a count.
+
+The expectation comes from the running process and never from the table itself.
+
+**Tests.**
+- Four ticks built with engine 7's own `ScoutUniverse.to_state_data`, one of each kind: a
+  candidate, no candidate, a block and an error. They are stored in a table created by
+  migration 0007's own SQL.
+- The faithful table gives 3 rows, 3 ticks and 0 mismatches.
+- Spec 146's three planted defects are each caught: skipping no-candidate ticks, storing
+  `ranked` only with a candidate, and filling nulls as zero.
+- The test is skipped while the migration file is absent.
+
+Five arms on the check were each killed (`1 failed, 1 passed`):
+- errored ticks expected to have a tally;
+- a differing field not recorded;
+- a missing tick neither counted nor flagged;
+- the candidate read from the wrong key;
+- null and zero compared loosely.
+
+**Rejected:** matching ticks on `(run_id, cycle_id)` against run ids taken from the capture.
+Run a is one process with one run id, so `cycle_id` identifies the tick. The report lists
+the table's run ids, and a second one would break the count visibly.
+
+**Revised the same day, by the lead's 146 schema ruling.** `scout_tallies` has no derived
+`status` column, and its bar is engine 3's `closed_bar_ts` (seconds). The check no longer
+compares a status; engine 7's status is used only to tell which ticks errored. The capture
+now records `state["market_sensor"]["closed_bar_ts"]`, and the check compares it with the
+row's `closed_bar_ts`. Columns are read from the table itself: any expected column that is
+missing is listed under `columns_not_in_table`, and the test requires that list to be empty.
+The test's insert follows the columns migration 0007 actually declares. A fourth planted
+defect, a bar one bar off, joins the other three. **Until b-store's revised 0007 lands, the
+test fails on exactly one thing: `['closed_bar_ts']` is not in the table.** The check will be
+re-run against the revised SQL, with the mutation arms, before the DONE.
+
+**Re-run against b-store's revised 0007.** The table now has `closed_bar_ts` and no
+`status`. The tally tests pass: `2 passed`, with `columns_not_in_table == []`. Six arms were
+each killed (`1 failed, 1 passed`): the five above, plus `closed_bar_ts` not compared. The
+restore was verified by hash. **Rejected: reading the rows through
+`StoreClient.scout_tallies(run_id)`, as b-store offered.** The check reads the table with
+plain SQL, so the store's reader is not part of what it verifies, just as the expectation
+never comes from the table itself.

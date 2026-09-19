@@ -2231,6 +2231,11 @@ one replayed day).** Also: every new config model field this phase goes through 
   on flat pairs, and one tree split turns on it (build log).
 - Observed for the lead, not a defect of mine: a target exit fills at the next tick's book
   (+2.0% realised against the +3.0% label). Build log, "Observed in the rehearsal".
+- `--log-dir` for `acsoe research backtest` (DONE sent). Pending, to go with the next DONE:
+  the rehearsal report's `scout_tallies` check (spec 146). It counts one row per tick where
+  engine 7 ran, no-candidate ticks included, and compares each row with the captured
+  payload and engine 3's `closed_bar_ts`. It compares no status, per the lead's ruling.
+  Re-run against the revised 0007: green, with six mutation arms killed.
 - Config (A's lane): `replay:` section (optional), `mode: replay` accepted, `ConfigView`,
   `derive_config`. The daemon refuses a replay config (`cli/engine.py`). The YAML block was
   sent to the lead.

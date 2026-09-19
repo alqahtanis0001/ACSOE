@@ -53,6 +53,7 @@ from acsoe.clients.store.contracts import (
     PositionRow,
     PositionStatus,
     RejectionRow,
+    ScoutTallyRow,
     TradeRow,
     to_micros,
 )
@@ -63,6 +64,7 @@ from acsoe.engines.memory.contracts import (
     BLOCK_REASON_KEY,
     BLOCK_STATUS_KEY,
     CANDIDATE_PAIR_PATH,
+    CLOSED_BAR_TS_FIELD,
     CLOSED_TRADES_FIELD,
     COST_KEY,
     CYCLE_ID_KEY,
@@ -73,6 +75,7 @@ from acsoe.engines.memory.contracts import (
     EXIT_KEY,
     GUARD_BLOCKERS_KEY,
     HOLD_REASON_FIELD,
+    MARKET_SENSOR_KEY,
     MODEL_RUN_ID_FIELD,
     MODEL_RUN_KEYS,
     NET_PROCEEDS_FIELD,
@@ -88,8 +91,11 @@ from acsoe.engines.memory.contracts import (
     PREDICTION_KEY,
     REASON_CODE_FIELD,
     REASON_ENGINE_ERRORED,
+    SCOUT_KEY,
     SHAP_FIELD,
     STATE_KEY,
+    TALLY_JSON_FIELDS,
+    TALLY_SCALAR_FIELDS,
     TRADING_BLOCKED_BY_KEY,
     UNREALISED_PNL_FIELD,
     USERREF_FIELD,
@@ -177,6 +183,9 @@ class MemoryEngine(BaseEngine):
         )
         closed = self._write_trades(store, context, exiting, cycle_id=cycle_id, ts=ts)
         written["trades"] = len(closed)
+        written["scout_tallies"] = self._write_scout_tally(
+            store, context, state, cycle_id=cycle_id, ts=ts
+        )
         shap = self._write_shap(store, context, state, cycle_id=cycle_id, ts=ts)
         written["rejections"] = self._write_rejection(
             store, context, state, cycle_id=cycle_id, ts=ts, shap=shap
@@ -497,6 +506,52 @@ class MemoryEngine(BaseEngine):
             store.write_trade(trade)
             closed.append(ClosedTrade(row=trade, net_proceeds=proceeds))
         return closed
+
+    # ---------------------------------------------------------- scout_tallies
+
+    def _write_scout_tally(
+        self, store: Any, context: EngineContext, state: State, *, cycle_id: int, ts: int
+    ) -> int:
+        """Engine 7's universe step on this tick, stored verbatim. Spec 146.
+
+        **On every tick engine 7 ran, candidate or not**: the no-candidate ticks are the
+        ones the funnel could not count before. Nothing is recomputed; a field engine 7 did
+        not publish is `NULL`, never zero. An engine 7 that raised writes no tally, since its
+        block record already is the record of that tick.
+
+        No status is stored (the lead's ruling): engine 7 publishes none, and its
+        `reason_code` and candidate carry the outcome. The store holds `scanned == entered +
+        sum(excluded)`, so a payload breaking it is refused there, loudly.
+        """
+        scout = self._payload(state, SCOUT_KEY)
+        if scout is None or self._errored_opportunity_engine(state) == SCOUT_KEY:
+            return 0
+        fields: dict[str, Any] = {
+            column: scout.get(key) for column, key in TALLY_SCALAR_FIELDS
+        }
+        if fields["candidate"] == "":
+            fields["candidate"] = None
+        for column in TALLY_JSON_FIELDS:
+            value = scout.get(column)
+            fields[column] = (
+                None if value is None
+                else json.dumps(value, sort_keys=True, separators=(",", ":"))
+            )
+        sensor = self._payload(state, MARKET_SENSOR_KEY) or {}
+        bar = sensor.get(CLOSED_BAR_TS_FIELD)
+        store.write_scout_tally(
+            ScoutTallyRow(
+                run_id=context.run_id,
+                cycle_id=cycle_id,
+                ts=ts,
+                # Engine 3's published value, verbatim (the lead's ruling): the opening
+                # second of the bar that just closed. The column name is b-store's.
+                closed_bar_ts=None if bar is None else int(bar),
+                updated_at=ts,
+                **fields,
+            )
+        )
+        return 1
 
     # ------------------------------------------------------------------- shap
 
