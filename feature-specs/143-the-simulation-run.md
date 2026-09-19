@@ -18,8 +18,11 @@ The figures replace every SIMULATED VALUE PENDING in `docs/dataset/phase-7-findi
 
 ## Implementation
 
-1. **The shape, RULED 2026-09-19 (R4): six months**, folds 379 to 404, ending at fold 404's test
-   close, 2025-01-04 00:00 UTC. **Two runs: tier 3 and tier 5, both on engine 8's expected-move
+1. **The shape: THREE months**, folds 392 to 404, test weeks 2024-10-05 00:15Z to fold 404's test
+   close, 2025-01-04 00:00 UTC. R4 first ruled six months (folds 379 to 404). The operator cut
+   it to three on the evening of 2026-09-19, for the Sunday 13:00 report deadline (D23). **Only
+   the window is shorter**: every engine and gate runs as live. The driver is passed
+   `--begin 2024-10-05T00:15:00`. **Two runs: tier 3 and tier 5, both on engine 8's expected-move
    ranking** (`--ranking expected_move`). Each run has its own process and its own database.
    **No alphabetical run, now or later** (operator ruling 2026-09-19): alphabetical is the name
    of the limitation the ranking removed, not a rival ranking. Whether the model has skill is

@@ -119,8 +119,12 @@ BUY calls, as ruled on 2026-09-16. In the operator's words: *1.6% passing at a 5
 6.2% at 41% is a difference in this data at the step that decides the funnel's end, not a
 difference in principle* (§5a).
 
-**R.6 The window is six months (R4).** It is folds 379 to 404, test weeks from 2024-07-06 to fold
-404's test close at 2025-01-04 00:00 UTC. **Two runs: tier 3 and tier 5, both on engine 8's
+**R.6 The window is THREE months (R4 as amended by the operator, 2026-09-19 evening).** It is folds
+392 to 404, test weeks from 2024-10-05 00:15Z to fold 404's test close at 2025-01-04 00:00 UTC.
+R4 first ruled six months (folds 379 to 404). The operator cut it to three because the report
+deadline is Sunday 2026-09-20 13:00 and six months does not fit (D23 in the overnight decision
+log). **Only the window is shorter:** every engine and every gate runs, guard through manage, as
+live. The limitations the cut brings are stated in §7b. **Two runs: tier 3 and tier 5, both on engine 8's
 expected-move ranking.** There is no alphabetical run: it is the name of the limitation the
 ranking removed, and whether the model has skill is answered by the benchmark basket (§R.7) and
 the promotion bar (§R.4) (operator ruling 2026-09-19). Nothing else is configured. The tiers run in parallel on separate databases. The folds within a tier
@@ -458,7 +462,7 @@ yields too few trades to say anything about its return. Its point estimates are 
 rest on one to twelve trades on two pairs.
 
 **SIMULATED VALUE PENDING:** the expected-move ranking's chain trade count, pair count and net per
-trade at tiers 3 and 5 over the six months (§R.6).
+trade at tiers 3 and 5 over the three months (§R.6).
 
 ---
 
@@ -595,8 +599,8 @@ the model. The skeptic's survivor target rates at 0.50 point the same way (§5b)
 The per-year realised mean of cost-clearing calls, for years other than the final 365 days, is
 **NOT MEASURED**, and neither is any control that separates the two explanations.
 
-**Why it matters for the simulation.** The simulated window is the six months ending 2025-01-04,
-inside the strong period. A simulated result, favourable or not, describes that period. It must not
+**Why it matters for the simulation.** The simulated window is the three months ending 2025-01-04
+(folds 392 to 404), inside the strong period, and narrower still (§7b). A simulated result, favourable or not, describes that period. It must not
 be read as the full span's behaviour.
 
 ---
@@ -624,7 +628,8 @@ substitution costs.
 ## 7a. The declared substitutes the chain simulation runs on (written before launch, 2026-09-19)
 
 The simulation is **two runs: tier 3 and tier 5, engine 8's expected-move ranking, the median
-column of the bucket table** (operator ruling 2026-09-19). Every input below that the 2023–24
+column of the bucket table, over the three months ending 2025-01-04** (operator rulings
+2026-09-19). Every input below that the 2023–24
 archive does not hold is either **declared** or **recorded in 2026**, and each is named with its
 source and date. None is a measurement of the period it is applied to.
 
@@ -660,6 +665,97 @@ source and date. None is a measurement of the period it is applied to.
      the sign of the result;
    - a post-run script that re-prices the trades that did happen under another spread, which
      answers what they would have earned and nothing about which trades would have happened.
+
+## 7b. Stated before any simulated figure exists (written 2026-09-19, before launch)
+
+Everything in this section was written before either run began, so none of it was chosen after a
+result was seen.
+
+### The three-month window: chosen constraints, with their cost
+
+1. **Three months and 13 retrained models, not six and 26.** The claim that the system was tested
+   across weekly retraining rests on 13 retrains and one season.
+2. **The window sits inside a strong directional market** (§6a), and three months narrows that
+   warning further. The alpha regression has **91 daily returns**.
+3. **Expected trades: about 8–11 at tier 3 and 27–55 at tier 5.** Tier 3 is at or below spec 139's
+   10-trade threshold, below which the promotion gate reports no interval, so **tier 3's result is
+   descriptive.**
+4. **The three-month cell was never measured offline.** Those estimates are scaled from the six- and
+   twelve-month cells of §4 (22 and 46 trades at 0.60% fees), with a 3-in-4 entry fill rate taken
+   from the rehearsal.
+
+### What the promotion bar can find at these trade counts: expected to be unreachable
+
+The bar is fixed (§R.4, spec 139): the lower bound of an interval widened by Bonferroni over **N =
+1,679 trials** must exceed zero. The minimum mean net return per trade that could clear it is
+`q × SD / √n`. Here `q` is the committed code's Student-t quantile at confidence `1 − 0.05/N`, and SD
+is the per-trade standard deviation of the §4 expected-move cells (about 2.2–2.3%). HAC can only
+widen the standard error, so these are lower bounds:
+
+| Tier | Expected n | q | Minimum mean net return per trade |
+|---|---|---|---|
+| 3 | 10–11 (fewer gives no interval) | 7.71–7.19 | **4.9–5.5%** |
+| 5 | 27–55 | 5.05–4.56 | **1.35–2.14%** |
+
+- **Tier 3 cannot clear the bar.** The required mean exceeds the net return of a single target exit
+  (about +2.3% after tier-3 friction), so no possible mix of outcomes reaches it. The only exception
+  is a degenerate run in which every trade returns the same amount.
+- **Tier 5 cannot plausibly clear it.** Ignoring timeouts, it needs a target-hit rate of roughly 76–94%.
+  The skeptic's survivors hit targets at 0.39–0.58 (§5), and the expected-move cells net −0.26% to
+  −0.17% per trade (§4).
+
+**So a non-promotion is the expected outcome of this design, not a finding about skill.** It follows
+from the trade counts and the pre-registered trial count. The run's value is its record (the funnel,
+the approvals and refusals with every gate's numbers, the equity curve against both benchmarks), not
+a promotion verdict.
+
+### The trial count
+
+**N = 1,679, pre-registered** (`docs/dataset/phase-7-trial-ledger.json`). It is built by a script
+from the committed outputs, counting every configuration ever evaluated on the out-of-sample data.
+The ledger counts **four** Phase 7 runs (two rankings at two tiers, as first planned). **Two run**, so
+the ledger **overcounts by two, deliberately, in the harsher direction**. N is not changed after any
+figure exists.
+
+### The benchmarks
+
+- **BTC/USD buy-and-hold** over the run's own window.
+- **An equal-weighted basket of the pairs the run held, while it held them, cash otherwise** (R8).
+- **Two secondary baskets, computed after the run from stored data:** the held pairs bought and held
+  over the whole window, and the equal-weighted universe.
+
+**No claim is made that any of these is the standard benchmark in the crypto backtesting
+literature.** No source was verified for such a claim.
+
+### Measured before the run, and stated with their limits
+
+- **F4, the capped skeptic against the predictor's own confidence, in the simulation window.** Over
+  1,237,399 out-of-sample BUY calls (folds 379–404), the capped skeptic at 0.50 passes 8.38%
+  (about 103,700 calls) at a target rate of 0.3935. The same number of calls taken by the
+  predictor's own `p_target`, per fold, reaches 0.3953.
+  - The difference, 0.0018, is about 0.8–1.2 standard errors under an independent-binomial
+    approximation. The two sets overlap heavily and share 48-bar label windows, so the true band is
+    wider.
+  - **Stated as: no detectable difference.** Not "the skeptic adds nothing". No formal test was run.
+  - The uncapped skeptic did beat the same comparison over all 405 folds (+0.058, §5b).
+  - Source: `docs/build-log/phase-7/c-interface.md` (c-models).
+- **F6, a train/serve skew in the features of unmoving pairs.** Engine 5 over 200 published bars
+  yields exact zeros where the training dataset carries floating-point residues.
+  - **Measured** (c-models, all 2,216,920 out-of-sample rows of folds 379–404 re-scored with the
+    residues zeroed): 12 columns affected; 23,155 rows carry a residue; the expected move changes on
+    2,308 rows, by at most 0.453 pp. **No complete row crosses a cost bar of 1.25% or above.** The
+    measurement assumes live yields exactly 0.0 wherever the dataset has a residue.
+  - **Calculated, not measured:** the lowest cost bar the simulation can apply, 2.5 × friction in the
+    most liquid bucket, is **about 1.30% at tier 5** and **about 1.67% at tier 3**. This is arithmetic
+    from the declared table and the fee schedule.
+  - So F6 can change which pair is ranked first, and **cannot change a cost verdict.** The run matches
+    what the live daemon computes; it is the training data and the offline grids that carry the
+    residue.
+- **F5, the target exit.** A target exit sells at market on the next minute's tick, as built. In the
+  rehearsal, one target exit realised +2.0% where the label books +3.0%. **The run's realised returns
+  on targets are expected to sit below every offline grid in this document**, because the grids use
+  the label's +3.0%. The run measures the exit rule as built. Changing it now would be changing the
+  system to help it pass its own test.
 
 ## 8. On every interval in this document
 

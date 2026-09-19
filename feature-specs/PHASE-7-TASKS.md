@@ -98,7 +98,8 @@ lead does not close the phase and does not mark it green.
   is rejected on live feasibility. No alphabetical run (operator ruling 2026-09-19).
 - **R2, skeptic:** the capped skeptic (13 folds).
 - **R3, tiers:** 3 and 5.
-- **R4, window:** six months, folds 379 to 404, ending at fold 404's test close (2025-01-04). That
+- **R4, window:** THREE months, folds 392 to 404 (2024-10-05 00:15Z to 2025-01-04 00:00Z), cut
+  from six by the operator on the evening of 2026-09-19 for the Sunday 13:00 deadline (D23). That
   is **two runs: tiers 3 and 5 on expected move** (operator ruling 2026-09-19; the lead's earlier
   four-run reading is withdrawn). The tiers run in parallel on separate databases. Folds run in
   sequence within a run.
@@ -128,9 +129,9 @@ lead does not close the phase and does not mark it green.
 
 - **Build:** 12 to 17 hours of agent time across the specs below. This is the lead's estimate, not
   a measurement.
-- **Run:** 7 to 15 hours per run for six months, at 1.5 to 3 s per bar tick. The alphabetical
-  baseline skips the batched ranking (about 0.9 s per bar), so it should run faster. Spec 142
-  replaces the estimate with a measurement before spec 143 launches.
+- **Run, measured** (handover section 4): 5.00 s per bar tick at two in parallel. Three months is
+  8,736 bar ticks, so tier 3 is about 13.2–13.6 h and tier 5 about 15.7–19.3 h. The first estimate,
+  7–15 h for six months, was a sum of parts and wrong by about 3×.
 
 ## Tasks
 
