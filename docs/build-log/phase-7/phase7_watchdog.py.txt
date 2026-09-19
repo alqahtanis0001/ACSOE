@@ -1,0 +1,385 @@
+"""Phase 7 auto-resume watchdog (lead, operator ruling 2026-09-19: option A, modified).
+
+Runs once per invocation, every minute, from a Windows scheduled task, NOT from any session:
+    pythonw.exe phase7_watchdog.py --launch <worktree>\\phase7-runs\\launch.json --home <dir>
+
+For each run in launch.json:
+- **Alive** (its python PID is a running python.exe, checked through the Windows API, not a
+  query that can fail silently): nothing is done. A live run is never touched, restarted or
+  reconfigured.
+- **Dead, and its run record ends with a finished `end` event:** marked finished.
+- **Dead mid-run:** first confirmed dead a second way (no python.exe anywhere names the run's
+  database; if that query cannot be answered, nothing is done this minute). Then resumed with
+  its **exact original command plus `--resume`**, from the same worktree, with the same
+  environment (set inside the same cmd.exe line), through WMI `Win32_Process.Create`: the
+  handover's recovery, automated. Only the console redirect goes to a new file per resume, so
+  the original output is never truncated. **Unless a stop condition holds** (operator ruling),
+  in which case the run is stopped and NEEDS OPERATOR is raised:
+  - two consecutive resumes that die at the SAME tick (a loop);
+  - more than 3 resumes within any one hour;
+  - more than 10 resumes in the run.
+  The two caps are `--max-per-hour` and `--max-total`. The defaults are the first ruling; the
+  scheduled task passes the values ruled for the launch (after the A/B, 2026-09-19).
+
+Every resume is recorded (run, the tick it died after, wall-clock time, resume number) in the
+run's own log directory (`<log_dir>\\resumes.jsonl`), in this watchdog's state, and in the
+handover's resume log, which is then committed (that one path only) and pushed. It touches
+nothing else: never the recorder, the supervisor, funding.py, fees.py or the manager, and never
+a live process.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import ctypes
+import json
+import os
+import subprocess
+import sys
+import time
+from ctypes import wintypes
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+CREATE_NO_WINDOW = 0x08000000
+MAIN = Path(r"C:\Users\saad2\Documents\GitHub\ACSOE")
+HANDOVER = MAIN / "docs" / "build-log" / "phase-7" / "handover-2026-09-19.md"
+RESUME_LOG_HEADING = "## Resume log (appended by the watchdog; one line per resume, stop or finish)"
+MAX_PER_HOUR = 3
+MAX_TOTAL = 10
+
+
+class Unanswerable(Exception):
+    """A query whose failure must mean 'do nothing', never 'dead'."""
+
+
+# --------------------------------------------------------------------------- decisions (pure)
+def decide(*, alive: bool, last_event: dict[str, Any] | None) -> tuple[str, str]:
+    if alive:
+        return "none", "alive"
+    if last_event is not None and last_event.get("event") == "end":
+        if last_event.get("finished") is True:
+            return "finished", "the run record ends with a finished end event"
+        return "stop", f"the run ended unfinished: {json.dumps(last_event, sort_keys=True)}"
+    return "resume", "dead mid-run"
+
+
+def stop_condition(*, current_after_tick_s: int | None, current_is_resume: bool,
+                   deaths: list[dict[str, Any]], resumes: list[dict[str, Any]], now: float) -> str | None:
+    """The operator's three stop conditions, checked before each resume. None means resume.
+    `deaths` holds the PRIOR deaths; the current one is described by the two current_* args."""
+    if current_is_resume and deaths:
+        previous = deaths[-1]
+        if previous.get("resumed_process") and previous.get("after_tick_s") == current_after_tick_s:
+            return (f"loop: two consecutive resumes died at the same tick "
+                    f"(after tick_s {current_after_tick_s})")
+    recent = [r for r in resumes if now - float(r["at_epoch"]) < 3600]
+    if len(recent) >= MAX_PER_HOUR:
+        return f"more than {MAX_PER_HOUR} resumes within one hour ({len(recent)} already in the last hour)"
+    if len(resumes) >= MAX_TOTAL:
+        return f"more than {MAX_TOTAL} resumes in the run ({len(resumes)} already)"
+    return None
+
+
+def resume_command(original: str, resume_n: int, out_log: str) -> str:
+    """The exact original command with `--resume` added, and the console redirected to a new
+    file for this resume. Refuses anything not in the launcher's form rather than guess."""
+    marker = f' > "{out_log}" 2>&1'
+    if original.count(marker) != 1 or "--resume" in original:
+        raise ValueError("the launch command is not in the launcher's form; refusing to edit it")
+    new_log = out_log[: -len(".out.log")] + f".resume{resume_n}.out.log"
+    return original.replace(marker, f' --resume > "{new_log}" 2>&1')
+
+
+# --------------------------------------------------------------------------- processes
+_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_k32.OpenProcess.restype = wintypes.HANDLE
+_k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+_k32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+_k32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                            ctypes.POINTER(wintypes.DWORD)]
+_k32.CloseHandle.argtypes = [wintypes.HANDLE]
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+STILL_ACTIVE = 259
+ERROR_INVALID_PARAMETER = 87  # OpenProcess on a PID that does not exist
+
+
+def python_running(pid: int | None) -> bool:
+    """True if `pid` is a running python.exe. A PID that does not exist is False; any other
+    failure is Unanswerable, so it can never be mistaken for a death."""
+    if not pid:
+        return False
+    handle = _k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        if ctypes.get_last_error() == ERROR_INVALID_PARAMETER:
+            return False
+        raise Unanswerable(f"OpenProcess({pid}) failed with {ctypes.get_last_error()}")
+    try:
+        code = wintypes.DWORD()
+        if not _k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            raise Unanswerable(f"GetExitCodeProcess({pid}) failed")
+        if code.value != STILL_ACTIVE:
+            return False
+        size = wintypes.DWORD(1024)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if not _k32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            raise Unanswerable(f"QueryFullProcessImageNameW({pid}) failed")
+        return buf.value.lower().endswith("\\python.exe")
+    finally:
+        _k32.CloseHandle(handle)
+
+
+def powershell(script: str) -> str:
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    done = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                          capture_output=True, text=True, creationflags=CREATE_NO_WINDOW, timeout=120)
+    if done.returncode != 0:
+        raise Unanswerable(f"powershell exit {done.returncode}: {done.stderr.strip()[:300]}")
+    return done.stdout.strip()
+
+
+def processes_on(db: str) -> list[dict[str, Any]]:
+    """Every python.exe whose command line names this run's database (a backtest)."""
+    stem = db.replace("\\", "/").split("/")[-1]
+    # 'OK' first, so an empty answer (no process) is told apart from no answer at all.
+    out = powershell(
+        "$ErrorActionPreference = 'Stop'; "
+        "$r = @(Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+        f"Where-Object {{ $_.CommandLine -like '*{stem}*' -and $_.CommandLine -like '*research backtest*' }} | "
+        "ForEach-Object { '{0} {1}' -f $_.ProcessId, $_.ParentProcessId }); 'OK'; $r")
+    lines = out.splitlines()
+    if not lines or lines[0].strip() != "OK":
+        raise Unanswerable(f"process query gave no answer: {out[:200]!r}")
+    rows = []
+    for line in lines[1:]:
+        pid, parent = line.split()
+        rows.append({"pid": int(pid), "parent": int(parent)})
+    return rows
+
+
+def interpreter_of(rows: list[dict[str, Any]]) -> int | None:
+    """The venv's python.exe is a launcher; the interpreter is its python child."""
+    pids = {r["pid"] for r in rows}
+    inner = [r["pid"] for r in rows if r["parent"] in pids]
+    return inner[0] if inner else (rows[0]["pid"] if rows else None)
+
+
+def chain(pid: int) -> list[str]:
+    out = powershell(
+        f"$id = {int(pid)}; $n = 0; while ($id -and $n -lt 6) {{ "
+        "$p = Get-CimInstance Win32_Process -Filter \"ProcessId=$id\"; "
+        "if (-not $p) { \"$id:gone\"; break }; \"$($p.ProcessId):$($p.Name)\"; $id = $p.ParentProcessId; $n++ }")
+    return out.splitlines()
+
+
+def wmi_create(command: str, cwd: str) -> int:
+    quoted = command.replace("'", "''")
+    out = powershell(
+        "$ErrorActionPreference = 'Stop'; "
+        "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
+        f"@{{ CommandLine = '{quoted}'; CurrentDirectory = '{cwd}' }}; "
+        "\"$($r.ReturnValue) $($r.ProcessId)\"")
+    rv, pid = out.split()
+    if rv != "0":
+        raise RuntimeError(f"WMI Create returned {rv}")
+    return int(pid)
+
+
+# --------------------------------------------------------------------------- records
+def run_record(path: Path) -> tuple[dict[str, Any] | None, int | None]:
+    last_event, last_tick = None, None
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # a line torn by the crash
+            last_event = entry
+            if entry.get("event") == "tick":
+                last_tick = int(entry["tick_s"])
+    return last_event, last_tick
+
+
+def stamp(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+
+
+def append(path: Path, line: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(line + "\n")
+
+
+def handover_line(text: str, *, git: bool) -> None:
+    body = HANDOVER.read_text(encoding="utf-8")
+    if RESUME_LOG_HEADING not in body:
+        append(HANDOVER, "\n" + RESUME_LOG_HEADING + "\n")
+    append(HANDOVER, f"- {text}")
+    if git:
+        for args in (["commit", "-q", "-m", f"docs: watchdog: {text[:110]}", "--", str(HANDOVER)],
+                     ["push", "-q", "origin", "main"]):
+            subprocess.run(["git", "-C", str(MAIN), *args], capture_output=True, text=True,
+                           creationflags=CREATE_NO_WINDOW, timeout=180)
+
+
+def needs_operator(home: Path, alerts: list[Path], what: str) -> None:
+    block = "\n".join([
+        "=" * 74,
+        f"NEEDS OPERATOR  {stamp(time.time())}  (raised by the phase 7 watchdog)",
+        f"STOPPED: {what}",
+        "NEED: a ruling; the watchdog will not resume this run again.",
+        "RUNNING: the other run, if alive (see heartbeat.jsonl and the handover's resume log).",
+    ]) + "\n"
+    for path in [home / "NEEDS-OPERATOR.txt", *alerts]:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(block, encoding="utf-8")
+        except OSError:
+            pass
+
+
+# --------------------------------------------------------------------------- one pass
+def main() -> int:
+    global HANDOVER, MAX_TOTAL, MAX_PER_HOUR
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--launch", type=Path, required=True)
+    parser.add_argument("--home", type=Path, required=True)
+    parser.add_argument("--alert", type=Path, action="append", default=[])
+    parser.add_argument("--no-git", action="store_true", help="tests: write the handover, never commit")
+    parser.add_argument("--handover", type=Path, default=None, help="tests: another handover file")
+    parser.add_argument("--max-total", type=int, default=MAX_TOTAL, help="resumes per run before a stop")
+    parser.add_argument("--max-per-hour", type=int, default=MAX_PER_HOUR, help="resumes per hour before a stop")
+    args = parser.parse_args()
+    if args.handover is not None:
+        HANDOVER = args.handover
+    MAX_TOTAL, MAX_PER_HOUR = args.max_total, args.max_per_hour
+    home = args.home
+    home.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    beat: dict[str, Any] = {"at": stamp(now), "pid": os.getpid()}
+    try:
+        beat["chain"] = chain(os.getpid())
+    except Exception as exc:
+        beat["chain"] = f"unknown: {exc!r}"
+
+    lock = home / "watchdog.lock"
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+    except FileExistsError:
+        if now - lock.stat().st_mtime > 900:
+            lock.unlink(missing_ok=True)  # a pass that died holding it; the next pass proceeds
+        append(home / "heartbeat.jsonl", json.dumps({**beat, "skipped": "another pass holds the lock"}))
+        return 0
+    state_path = home / "state.json"
+
+    def save(state: dict[str, Any]) -> None:
+        tmp = state_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, indent=1), encoding="utf-8")
+        os.replace(tmp, state_path)
+
+    try:
+        if not args.launch.is_file():
+            append(home / "heartbeat.jsonl", json.dumps({**beat, "waiting": f"no {args.launch} yet"}))
+            return 0
+        runs = json.loads(args.launch.read_text(encoding="utf-8-sig"))
+        runs = runs if isinstance(runs, list) else [runs]
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.is_file() else {"runs": {}}
+        seen: dict[str, str] = {}
+        for run in runs:
+            name, db = run["name"], run["db"]
+            rs = state["runs"].setdefault(name, {
+                "py_pid": run.get("py_pid"), "is_resume": False, "status": "running",
+                "deaths": [], "resumes": []})
+            save(state)
+            if rs["status"] != "running":
+                seen[name] = rs["status"]
+                continue
+            try:
+                is_alive = python_running(rs.get("py_pid"))
+                if not is_alive:
+                    # Second, independent confirmation before anything is started on this db.
+                    others = processes_on(db)
+                    if others:
+                        rs["py_pid"] = interpreter_of(others)
+                        save(state)
+                        seen[name] = f"adopted running python {rs['py_pid']}"
+                        continue
+            except Unanswerable as exc:
+                seen[name] = f"unanswerable, nothing done: {exc}"
+                continue
+            last_event, last_tick = run_record(Path(run["runrecord"]))
+            action, reason = decide(alive=is_alive, last_event=last_event)
+            seen[name] = f"{action}: {reason}"
+            log_dir = Path(run["log_dir"])
+            if action == "none":
+                continue
+            if action == "finished":
+                rs["status"], rs["finished_at"] = "finished", stamp(now)
+                save(state)
+                handover_line(f"{stamp(now)} **{name} FINISHED**, resumes in the run: {len(rs['resumes'])}.",
+                              git=not args.no_git)
+                continue
+            if action == "stop":
+                rs["status"], rs["stop_reason"] = "stopped", reason
+                save(state)
+                append(log_dir / "resumes.jsonl", json.dumps({"event": "stop", "at": stamp(now), "reason": reason}))
+                handover_line(f"{stamp(now)} **{name} STOPPED**: {reason}", git=not args.no_git)
+                needs_operator(home, args.alert, f"{name}: {reason}")
+                continue
+            why = stop_condition(current_after_tick_s=last_tick, current_is_resume=rs["is_resume"],
+                                 deaths=rs["deaths"], resumes=rs["resumes"], now=now)
+            rs["deaths"].append({"at": stamp(now), "after_tick_s": last_tick,
+                                 "resumed_process": rs["is_resume"], "pid": rs.get("py_pid")})
+            if why is not None:
+                rs["status"], rs["stop_reason"] = "stopped", why
+                save(state)
+                append(log_dir / "resumes.jsonl", json.dumps(
+                    {"event": "stop", "at": stamp(now), "reason": why, "after_tick_s": last_tick}))
+                handover_line(f"{stamp(now)} **{name} STOPPED, not resumed**: {why}. Died after tick_s "
+                              f"{last_tick}; resumes so far {len(rs['resumes'])}.", git=not args.no_git)
+                needs_operator(home, args.alert, f"{name}: {why}")
+                continue
+            n = len(rs["resumes"]) + 1
+            command = resume_command(run["command"], n, run["out"])
+            worktree = str(Path(run["out"]).parent.parent)
+            after = datetime.fromtimestamp(last_tick, UTC).isoformat() if last_tick else None
+            record = {"event": "resume", "n": n, "at": stamp(now), "at_epoch": now, "run": name,
+                      "died_after_tick_s": last_tick, "died_after_tick": after,
+                      "dead_pid": rs.get("py_pid"), "command": command}
+            rs["resumes"].append(record)
+            rs["py_pid"], rs["is_resume"] = None, True
+            save(state)  # before the create: a failure after it must never start a second one
+            record["cmd_pid"] = wmi_create(command, worktree)
+            for _ in range(12):
+                time.sleep(5)
+                try:
+                    found = interpreter_of(processes_on(db))
+                except Unanswerable:
+                    found = None
+                if found:
+                    rs["py_pid"] = found
+                    break
+            record["py_pid"] = rs["py_pid"]
+            save(state)
+            append(log_dir / "resumes.jsonl", json.dumps(record))
+            handover_line(
+                f"{stamp(now)} **{name} RESUME #{n}**: died after tick {after} (tick_s {last_tick}); "
+                f"resumed as cmd {record['cmd_pid']} / python {rs['py_pid']}. A resume writes the same "
+                "rows as an uninterrupted run (the rehearsal's kill-and-resume identity check).",
+                git=not args.no_git)
+        append(home / "heartbeat.jsonl", json.dumps({**beat, "runs": seen}))
+        return 0
+    except Exception as exc:  # say why, then try again next minute
+        append(home / "heartbeat.jsonl", json.dumps({**beat, "error": repr(exc)}))
+        return 1
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

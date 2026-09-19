@@ -1,0 +1,48 @@
+"""Mutation proof for the watchdog. Every mutant is written to its OWN FILE on disk; the
+original is only ever read, and its hash is checked unchanged at the end."""
+import hashlib
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).parent
+ORIG = Path(r"C:\Users\saad2\Documents\GitHub\ACSOE\docs\build-log\phase-7\phase7_watchdog.py.txt")
+PY = r"C:\Users\saad2\Documents\GitHub\ACSOE\.venv\Scripts\python.exe"
+before = hashlib.sha256(ORIG.read_bytes()).hexdigest()
+text = ORIG.read_text(encoding="utf-8")
+
+ARMS = [
+    ("M1 loop check disabled", "    if current_is_resume and deaths:\n", "    if False:\n"),
+    ("M2 loop ignores whether the previous death was a resume",
+     'if previous.get("resumed_process") and previous.get("after_tick_s")', 'if previous.get("after_tick_s")'),
+    ("M3 per-hour cap off by one", "if len(recent) >= MAX_PER_HOUR:", "if len(recent) > MAX_PER_HOUR:"),
+    ("M4 hour window wrong", "now - float(r[\"at_epoch\"]) < 3600", "now - float(r[\"at_epoch\"]) < 60"),
+    ("M5 total cap off by one", "if len(resumes) >= MAX_TOTAL:", "if len(resumes) > MAX_TOTAL:"),
+    ("M6 a live run is acted on", "    if alive:\n        return \"none\", \"alive\"\n", "    if False:\n        return \"none\", \"alive\"\n"),
+    ("M7 unfinished end taken as finished", 'if last_event.get("finished") is True:', "if True:"),
+    ("M8 command form not checked", "if original.count(marker) != 1 or \"--resume\" in original:", "if False:"),
+    ("M9 exit code not checked", "        if code.value != STILL_ACTIVE:\n            return False\n", ""),
+    ("M10 any image counts as python", 'return buf.value.lower().endswith("\\\\python.exe")', "return True"),
+]
+base = subprocess.run([PY, "-m", "pytest", str(HERE / "test_watchdog.py"), "-q", "-p", "no:cacheprovider"],
+                      capture_output=True, text=True)
+print("BASELINE", (base.stdout.strip().splitlines() or ["?"])[-1])
+if base.returncode != 0:
+    raise SystemExit("baseline not green; sweep refused (a mutant 'killed' by a broken suite proves nothing)")
+killed = 0
+for name, old, new in ARMS:
+    if text.count(old) != 1:
+        print(f"ANCHOR x{text.count(old)}  {name}")
+        continue
+    mutant = HERE / f"wd_mutant_{name.split()[0]}.py.txt"
+    mutant.write_text(text.replace(old, new), encoding="utf-8")
+    done = subprocess.run([PY, "-m", "pytest", str(HERE / "test_watchdog.py"), "-q", "-p", "no:cacheprovider", "-x"],
+                          capture_output=True, text=True, env=dict(os.environ, WD_SRC=str(mutant)))
+    last = [l for l in done.stdout.splitlines() if "passed" in l or "failed" in l or "error" in l][-1:]
+    ok = done.returncode != 0
+    killed += ok
+    print(f"{'KILLED  ' if ok else 'SURVIVED'} {name} | {last}")
+    mutant.unlink()
+after = hashlib.sha256(ORIG.read_bytes()).hexdigest()
+print(f"\n{killed} of {len(ARMS)} killed; original unchanged: {before == after}")

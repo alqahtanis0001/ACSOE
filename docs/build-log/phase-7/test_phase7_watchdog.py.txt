@@ -1,0 +1,138 @@
+"""Unit tests of the watchdog's decisions: each operator stop condition from both sides."""
+import importlib.util
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+SRC = Path(os.environ.get("WD_SRC", r"C:\Users\saad2\Documents\GitHub\ACSOE\docs\build-log\phase-7\phase7_watchdog.py.txt"))
+spec = importlib.util.spec_from_loader("wd", loader=None)
+wd = importlib.util.module_from_spec(spec)
+exec(compile(SRC.read_text(encoding="utf-8"), str(SRC), "exec"), wd.__dict__)
+
+NOW = 1_000_000.0
+
+
+def r(ago_s):  # a resume made `ago_s` seconds before NOW
+    return {"at_epoch": NOW - ago_s}
+
+
+# ---- decide
+def test_alive_is_never_touched():
+    assert wd.decide(alive=True, last_event={"event": "end", "finished": True})[0] == "none"
+
+
+def test_dead_and_finished_is_finished():
+    assert wd.decide(alive=False, last_event={"event": "end", "finished": True})[0] == "finished"
+
+
+def test_dead_and_ended_unfinished_stops():
+    assert wd.decide(alive=False, last_event={"event": "end", "finished": False})[0] == "stop"
+
+
+def test_dead_mid_run_resumes():
+    assert wd.decide(alive=False, last_event={"event": "tick", "tick_s": 5})[0] == "resume"
+    assert wd.decide(alive=False, last_event=None)[0] == "resume"
+
+
+# ---- the loop condition: two consecutive RESUMES dying at the same tick
+def test_first_death_of_the_original_resumes():
+    assert wd.stop_condition(current_after_tick_s=100, current_is_resume=False, deaths=[], resumes=[], now=NOW) is None
+
+
+def test_a_resume_dying_at_the_originals_tick_is_not_yet_a_loop():
+    deaths = [{"after_tick_s": 100, "resumed_process": False}]
+    assert wd.stop_condition(current_after_tick_s=100, current_is_resume=True, deaths=deaths,
+                             resumes=[r(4000)], now=NOW) is None
+
+
+def test_two_consecutive_resumes_at_the_same_tick_stop():
+    deaths = [{"after_tick_s": 100, "resumed_process": False}, {"after_tick_s": 100, "resumed_process": True}]
+    why = wd.stop_condition(current_after_tick_s=100, current_is_resume=True, deaths=deaths,
+                            resumes=[r(5000), r(4000)], now=NOW)
+    assert why and why.startswith("loop")
+
+
+def test_two_consecutive_resumes_at_different_ticks_resume():
+    deaths = [{"after_tick_s": 100, "resumed_process": False}, {"after_tick_s": 200, "resumed_process": True}]
+    assert wd.stop_condition(current_after_tick_s=300, current_is_resume=True, deaths=deaths,
+                             resumes=[r(9000), r(5000)], now=NOW) is None
+
+
+def test_two_resumes_both_dying_before_any_tick_is_a_loop():
+    deaths = [{"after_tick_s": None, "resumed_process": True}]
+    assert wd.stop_condition(current_after_tick_s=None, current_is_resume=True, deaths=deaths,
+                             resumes=[r(9000)], now=NOW)
+
+
+# ---- more than 3 in any one hour
+def test_three_in_the_last_hour_stops_a_fourth():
+    why = wd.stop_condition(current_after_tick_s=1, current_is_resume=False, deaths=[],
+                            resumes=[r(100), r(1000), r(3500)], now=NOW)
+    assert why and "within one hour" in why
+
+
+def test_three_resumes_one_older_than_an_hour_resume():
+    assert wd.stop_condition(current_after_tick_s=1, current_is_resume=False, deaths=[],
+                             resumes=[r(100), r(1000), r(3700)], now=NOW) is None
+
+
+# ---- more than 10 in the run
+def test_ten_resumes_stop_an_eleventh():
+    why = wd.stop_condition(current_after_tick_s=1, current_is_resume=False, deaths=[],
+                            resumes=[r(4000 * (i + 1)) for i in range(10)], now=NOW)
+    assert why and "more than 10" in why
+
+
+def test_nine_resumes_allow_a_tenth():
+    assert wd.stop_condition(current_after_tick_s=1, current_is_resume=False, deaths=[],
+                             resumes=[r(4000 * (i + 1)) for i in range(9)], now=NOW) is None
+
+
+# ---- the command
+ORIGINAL = ('cmd.exe /c "set PYTHONPATH=C:\\W\\src&& set PYTHONDONTWRITEBYTECODE=1&& "C:\\py.exe" -m acsoe.cli.main '
+            '--config config/default.yaml research backtest --db data\\db\\x.sqlite --ranking expected_move '
+            '--fee-tier 3 --log-dir "C:\\W\\phase7-runs\\logs-x" --begin 2024-10-05T00:15:00 > "C:\\W\\phase7-runs\\x.out.log" 2>&1"')
+
+
+def test_resume_command_is_the_original_plus_resume_only():
+    new = wd.resume_command(ORIGINAL, 2, "C:\\W\\phase7-runs\\x.out.log")
+    assert new == ORIGINAL.replace('--begin 2024-10-05T00:15:00 > "C:\\W\\phase7-runs\\x.out.log"',
+                                   '--begin 2024-10-05T00:15:00 --resume > "C:\\W\\phase7-runs\\x.resume2.out.log"')
+
+
+def test_resume_command_refuses_an_unknown_form():
+    with pytest.raises(ValueError):
+        wd.resume_command(ORIGINAL.replace(" 2>&1", ""), 1, "C:\\W\\phase7-runs\\x.out.log")
+    with pytest.raises(ValueError):
+        wd.resume_command(ORIGINAL + " --resume", 1, "C:\\W\\phase7-runs\\x.out.log")
+
+
+# ---- liveness through the Windows API
+def test_python_running_sees_a_live_python_and_a_dead_one():
+    proc = subprocess.Popen([r"C:\Users\saad2\Documents\GitHub\ACSOE\.venv\Scripts\python.exe", "-c", "import time; time.sleep(30)"])
+    try:
+        import time
+        time.sleep(2)
+        rows = wd.processes_on("never-a-db-name.sqlite")
+        assert rows == []
+        # the venv launcher's child is the interpreter; the launcher itself is python.exe too
+        assert wd.python_running(proc.pid) is True
+    finally:
+        proc.kill()
+        proc.wait()
+    assert wd.python_running(proc.pid) is False
+
+
+def test_python_running_is_false_for_a_live_non_python_process():
+    ps = subprocess.Popen(["cmd.exe", "/c", "ping -n 5 127.0.0.1 >NUL"])
+    try:
+        assert wd.python_running(ps.pid) is False
+    finally:
+        ps.kill()
+
+
+def test_no_pid_is_dead():
+    assert wd.python_running(None) is False
