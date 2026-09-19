@@ -120,6 +120,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="backtest: stop after this many ticks (tests only)",
     )
+    research.add_argument(
+        "--log-dir",
+        type=Path,
+        default=None,
+        help="backtest: this run's own log directory (default <cwd>/logs); one per "
+        "concurrent run, so no two processes rotate one file",
+    )
 
     return parser
 

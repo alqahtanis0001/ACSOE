@@ -498,8 +498,13 @@ def run_backtest(args: argparse.Namespace) -> int:
 
     root = Path.cwd().resolve()
     paths = ensure_runtime_directories(root)
+    # One log directory per run when asked. Four concurrent runs sharing
+    # `<cwd>/logs/acsoe.jsonl` would each try to rename it at the UTC midnight rollover
+    # while the others hold it open, which fails on Windows and loses log lines from then
+    # on (lead ruling (b), 2026-09-19). The default stays `<cwd>/logs`.
+    log_dir: Path = args.log_dir if args.log_dir is not None else paths.logs
     configure_logging(
-        log_dir=paths.logs,
+        log_dir=log_dir,
         level=committed.logging.level,
         retention_days=committed.logging.retention_days,
         also_stderr=False,

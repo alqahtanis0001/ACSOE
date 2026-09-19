@@ -1526,3 +1526,19 @@ run, and `tree_unchanged` is true. On that basis:
 - **The cutter's docstring no longer names the declared-scenario directory.** The criterion's
   AST walk reads a docstring as a string constant. The fixture was re-cut, so the manifest's
   `script_sha256` still matches the script.
+
+
+### `--log-dir` for `acsoe research backtest` (lead ruling (b))
+
+**Agent:** A-replay · **Date:** 2026-09-19
+
+**What happened.** Four concurrent replay runs launched from one working directory would share
+`<cwd>/logs/acsoe.jsonl` through `TimedRotatingFileHandler`. At the UTC midnight rollover each
+process renames the file while the other three hold it open. On Windows that raises
+`PermissionError`, which `logging` swallows through `handleError`, so log lines are lost from
+then on. No database row is affected.
+
+**Fix.** `--log-dir` gives each run its own directory; the default stays `<cwd>/logs`. Two
+tests: two runs given two directories each have exactly their own file handler and file,
+with nothing shared and the default not written; and the default is `<cwd>/logs`. Two arms,
+ignoring the flag and losing the default, were each killed (`1 failed, 1 passed`).

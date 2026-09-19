@@ -403,3 +403,35 @@ def test_a_replay_runs_store_can_write_shap_under_the_derived_root(workdir: Path
     written = list((paths.derived / "shap").rglob("*.parquet"))
     assert len(written) == 1
     assert "replay-shap-test" in ref
+
+
+def _file_handler_paths() -> set[Path]:
+    import logging
+
+    return {
+        Path(handler.baseFilename).resolve()
+        for handler in logging.getLogger().handlers
+        if isinstance(handler, logging.FileHandler)
+    }
+
+
+def test_each_run_logs_only_to_its_own_log_dir(workdir: Path) -> None:
+    """Lead ruling (b): concurrent runs must not rotate one shared log file. Two runs given
+    two directories each write their own `acsoe.jsonl`, and neither's handler names the
+    other's file or the shared default."""
+    config = write_run(workdir)
+    seen: list[set[Path]] = []
+    for name in ("one", "two"):
+        log_dir = workdir / f"logs-{name}"
+        assert backtest(config, workdir / "data" / "db" / f"{name}.sqlite", "--log-dir", str(log_dir)) == 0
+        seen.append(_file_handler_paths())
+        assert seen[-1] == {(log_dir / "acsoe.jsonl").resolve()}
+        assert (log_dir / "acsoe.jsonl").is_file()
+    assert seen[0].isdisjoint(seen[1])
+    assert not (workdir / "logs" / "acsoe.jsonl").exists()
+
+
+def test_the_log_dir_defaults_to_logs_under_the_cwd(workdir: Path) -> None:
+    config = write_run(workdir)
+    assert backtest(config, workdir / "data" / "db" / "default.sqlite") == 0
+    assert _file_handler_paths() == {(workdir / "logs" / "acsoe.jsonl").resolve()}

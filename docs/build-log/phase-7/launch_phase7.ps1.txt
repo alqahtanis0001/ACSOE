@@ -1,0 +1,58 @@
+# Phase 7 spec 143 launcher (lead). Usage:
+#   powershell -NoProfile -File launch_phase7.ps1 -Commit <sha> [-DryRun]
+# Creates a detached worktree at the commit, junctions its data\ and models\ to the main
+# checkout, and starts the four runs through WMI (Win32_Process.Create), so no run lives in any
+# shell's job object and each survives this session ending. Writes launch.json with the PIDs.
+param(
+    [Parameter(Mandatory = $true)][string]$Commit,
+    [switch]$DryRun
+)
+$ErrorActionPreference = 'Stop'
+$Main = 'C:\Users\saad2\Documents\GitHub\ACSOE'
+$Py = Join-Path $Main '.venv\Scripts\python.exe'
+$Short = $Commit.Substring(0, 7)
+$Wt = "C:\Users\saad2\Documents\GitHub\ACSOE-run-$Short"
+
+if (-not (Test-Path $Wt)) {
+    git -C $Main worktree add --detach $Wt $Commit | Out-Null
+}
+foreach ($d in @('data', 'models')) {
+    $link = Join-Path $Wt $d
+    if (-not (Test-Path $link)) {
+        New-Item -ItemType Junction -Path $link -Target (Join-Path $Main $d) | Out-Null
+    }
+}
+$RunDir = Join-Path $Wt 'phase7-runs'
+New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
+
+# Code must come from the worktree, not the main checkout's editable install.
+$env:PYTHONPATH = Join-Path $Wt 'src'
+$env:PYTHONDONTWRITEBYTECODE = '1'
+Push-Location $Wt
+$where = & $Py -c "import acsoe; print(acsoe.__file__)"
+Pop-Location
+if (-not $where.StartsWith($Wt)) { throw "acsoe imports from $where, not the worktree $Wt" }
+
+$runs = @(
+    @{ name = 't3-expected_move'; ranking = 'expected_move'; tier = 3 },
+    @{ name = 't5-expected_move'; ranking = 'expected_move'; tier = 5 },
+    @{ name = 't3-alphabetical'; ranking = 'alphabetical'; tier = 3 },
+    @{ name = 't5-alphabetical'; ranking = 'alphabetical'; tier = 5 }
+)
+$launched = @()
+foreach ($r in $runs) {
+    $name = $r.name
+    if ($DryRun) { $db = "data\db\phase7-dryrun-$name.sqlite"; $extra = '--until 2024-07-06T00:15:00' }
+    else { $db = "data\db\phase7-$name.sqlite"; $extra = '' }
+    $tag = $(if ($DryRun) { "dryrun-$name" } else { $name })
+    $logDir = Join-Path $RunDir "logs-$tag"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $out = Join-Path $RunDir "$tag.out.log"
+    $pyArgs = "-m acsoe.cli.main --config config/default.yaml research backtest --db $db --ranking $($r.ranking) --fee-tier $($r.tier) --log-dir `"$logDir`" $extra"
+    $cmd = "cmd.exe /c `"set PYTHONPATH=$Wt\src&& set PYTHONDONTWRITEBYTECODE=1&& `"$Py`" $pyArgs > `"$out`" 2>&1`""
+    $res = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; CurrentDirectory = $Wt }
+    if ($res.ReturnValue -ne 0) { throw "WMI Create failed for $name with $($res.ReturnValue)" }
+    $launched += [pscustomobject]@{ name = $name; cmd_pid = $res.ProcessId; db = $db; out = $out; log_dir = $logDir; command = $cmd }
+}
+$launched | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $RunDir ($(if ($DryRun) { 'dryrun.json' } else { 'launch.json' })))
+$launched | Format-Table name, cmd_pid, db -AutoSize
