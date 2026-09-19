@@ -1,0 +1,5827 @@
+{
+ "provenance": {
+  "derived_by": "scripts/record_asset_pairs.py --names",
+  "derived_from": {
+   "asset_pairs_recorded_2026-09-19.json": "7a5edf9a90b10ed0658943257763a8a77872abeb31796c8257729fd30168cfcd",
+   "instrument_recorded_2026-09-19.json": "227cf11cb91ba9e1560e0ae55a9c66a261d4511f680ce2f11dd76330a2d886ef"
+  },
+  "asset_map": {
+   "XBT": "BTC",
+   "XDG": "DOGE"
+  },
+  "asset_map_basis": "derived from the two recorded files: an asset is renamed only where a REST pair's wsname is not a v2 symbol, a v2 symbol no wsname names shares its other side and every rule, and every such vote for that asset agrees",
+  "joined": 1450,
+  "rules_compared": [
+   "ordermin = qty_min",
+   "costmin = cost_min",
+   "tick_size = tick_size",
+   "pair_decimals = price_precision",
+   "lot_decimals = qty_precision",
+   "status = status"
+  ],
+  "rule_mismatches": 0,
+  "key": "altname, which is the spelling the time-and-sales archive's file names use"
+ },
+ "pairs": {
+  "0GEUR": {
+   "rest_key": "0GEUR",
+   "v2_symbol": "0G/EUR"
+  },
+  "0GUSD": {
+   "rest_key": "0GUSD",
+   "v2_symbol": "0G/USD"
+  },
+  "1INCHEUR": {
+   "rest_key": "1INCHEUR",
+   "v2_symbol": "1INCH/EUR"
+  },
+  "1INCHUSD": {
+   "rest_key": "1INCHUSD",
+   "v2_symbol": "1INCH/USD"
+  },
+  "2ZEUR": {
+   "rest_key": "2ZEUR",
+   "v2_symbol": "2Z/EUR"
+  },
+  "2ZUSD": {
+   "rest_key": "2ZUSD",
+   "v2_symbol": "2Z/USD"
+  },
+  "AAVEETH": {
+   "rest_key": "AAVEETH",
+   "v2_symbol": "AAVE/ETH"
+  },
+  "AAVEEUR": {
+   "rest_key": "AAVEEUR",
+   "v2_symbol": "AAVE/EUR"
+  },
+  "AAVEGBP": {
+   "rest_key": "AAVEGBP",
+   "v2_symbol": "AAVE/GBP"
+  },
+  "AAVEUSD": {
+   "rest_key": "AAVEUSD",
+   "v2_symbol": "AAVE/USD"
+  },
+  "AAVEXBT": {
+   "rest_key": "AAVEXBT",
+   "v2_symbol": "AAVE/BTC"
+  },
+  "ABEUR": {
+   "rest_key": "ABEUR",
+   "v2_symbol": "AB/EUR"
+  },
+  "ABUSD": {
+   "rest_key": "ABUSD",
+   "v2_symbol": "AB/USD"
+  },
+  "ACAEUR": {
+   "rest_key": "ACAEUR",
+   "v2_symbol": "ACA/EUR"
+  },
+  "ACAUSD": {
+   "rest_key": "ACAUSD",
+   "v2_symbol": "ACA/USD"
+  },
+  "ACHEUR": {
+   "rest_key": "ACHEUR",
+   "v2_symbol": "ACH/EUR"
+  },
+  "ACHUSD": {
+   "rest_key": "ACHUSD",
+   "v2_symbol": "ACH/USD"
+  },
+  "ACTEUR": {
+   "rest_key": "ACTEUR",
+   "v2_symbol": "ACT/EUR"
+  },
+  "ACTUSD": {
+   "rest_key": "ACTUSD",
+   "v2_symbol": "ACT/USD"
+  },
+  "ACUEUR": {
+   "rest_key": "ACUEUR",
+   "v2_symbol": "ACU/EUR"
+  },
+  "ACUUSD": {
+   "rest_key": "ACUUSD",
+   "v2_symbol": "ACU/USD"
+  },
+  "ACXEUR": {
+   "rest_key": "ACXEUR",
+   "v2_symbol": "ACX/EUR"
+  },
+  "ACXUSD": {
+   "rest_key": "ACXUSD",
+   "v2_symbol": "ACX/USD"
+  },
+  "ADAAUD": {
+   "rest_key": "ADAAUD",
+   "v2_symbol": "ADA/AUD"
+  },
+  "ADAETH": {
+   "rest_key": "ADAETH",
+   "v2_symbol": "ADA/ETH"
+  },
+  "ADAEUR": {
+   "rest_key": "ADAEUR",
+   "v2_symbol": "ADA/EUR"
+  },
+  "ADAGBP": {
+   "rest_key": "ADAGBP",
+   "v2_symbol": "ADA/GBP"
+  },
+  "ADAUSD": {
+   "rest_key": "ADAUSD",
+   "v2_symbol": "ADA/USD"
+  },
+  "ADAUSDC": {
+   "rest_key": "ADAUSDC",
+   "v2_symbol": "ADA/USDC"
+  },
+  "ADAUSDT": {
+   "rest_key": "ADAUSDT",
+   "v2_symbol": "ADA/USDT"
+  },
+  "ADAXBT": {
+   "rest_key": "ADAXBT",
+   "v2_symbol": "ADA/BTC"
+  },
+  "ADIEUR": {
+   "rest_key": "ADIEUR",
+   "v2_symbol": "ADI/EUR"
+  },
+  "ADIUSD": {
+   "rest_key": "ADIUSD",
+   "v2_symbol": "ADI/USD"
+  },
+  "ADXEUR": {
+   "rest_key": "ADXEUR",
+   "v2_symbol": "ADX/EUR"
+  },
+  "ADXUSD": {
+   "rest_key": "ADXUSD",
+   "v2_symbol": "ADX/USD"
+  },
+  "AEROEUR": {
+   "rest_key": "AEROEUR",
+   "v2_symbol": "AERO/EUR"
+  },
+  "AEROUSD": {
+   "rest_key": "AEROUSD",
+   "v2_symbol": "AERO/USD"
+  },
+  "AEUR": {
+   "rest_key": "AEUR",
+   "v2_symbol": "A/EUR"
+  },
+  "AEVOEUR": {
+   "rest_key": "AEVOEUR",
+   "v2_symbol": "AEVO/EUR"
+  },
+  "AEVOUSD": {
+   "rest_key": "AEVOUSD",
+   "v2_symbol": "AEVO/USD"
+  },
+  "AI3EUR": {
+   "rest_key": "AI3EUR",
+   "v2_symbol": "AI3/EUR"
+  },
+  "AI3USD": {
+   "rest_key": "AI3USD",
+   "v2_symbol": "AI3/USD"
+  },
+  "AIEUR": {
+   "rest_key": "AIEUR",
+   "v2_symbol": "AI/EUR"
+  },
+  "AINUSD": {
+   "rest_key": "AINUSD",
+   "v2_symbol": "AIN/USD"
+  },
+  "AIOEUR": {
+   "rest_key": "AIOEUR",
+   "v2_symbol": "AIO/EUR"
+  },
+  "AIOUSD": {
+   "rest_key": "AIOUSD",
+   "v2_symbol": "AIO/USD"
+  },
+  "AIOZEUR": {
+   "rest_key": "AIOZEUR",
+   "v2_symbol": "AIOZ/EUR"
+  },
+  "AIOZUSD": {
+   "rest_key": "AIOZUSD",
+   "v2_symbol": "AIOZ/USD"
+  },
+  "AIUSD": {
+   "rest_key": "AIUSD",
+   "v2_symbol": "AI/USD"
+  },
+  "AIXBTEUR": {
+   "rest_key": "AIXBTEUR",
+   "v2_symbol": "AIXBT/EUR"
+  },
+  "AIXBTUSD": {
+   "rest_key": "AIXBTUSD",
+   "v2_symbol": "AIXBT/USD"
+  },
+  "AKEEUR": {
+   "rest_key": "AKEEUR",
+   "v2_symbol": "AKE/EUR"
+  },
+  "AKEUSD": {
+   "rest_key": "AKEUSD",
+   "v2_symbol": "AKE/USD"
+  },
+  "AKTEUR": {
+   "rest_key": "AKTEUR",
+   "v2_symbol": "AKT/EUR"
+  },
+  "AKTUSD": {
+   "rest_key": "AKTUSD",
+   "v2_symbol": "AKT/USD"
+  },
+  "ALCHEUR": {
+   "rest_key": "ALCHEUR",
+   "v2_symbol": "ALCH/EUR"
+  },
+  "ALCHUSD": {
+   "rest_key": "ALCHUSD",
+   "v2_symbol": "ALCH/USD"
+  },
+  "ALCXEUR": {
+   "rest_key": "ALCXEUR",
+   "v2_symbol": "ALCX/EUR"
+  },
+  "ALCXUSD": {
+   "rest_key": "ALCXUSD",
+   "v2_symbol": "ALCX/USD"
+  },
+  "ALEOUSD": {
+   "rest_key": "ALEOUSD",
+   "v2_symbol": "ALEO/USD"
+  },
+  "ALEOUSDT": {
+   "rest_key": "ALEOUSDT",
+   "v2_symbol": "ALEO/USDT"
+  },
+  "ALGOETH": {
+   "rest_key": "ALGOETH",
+   "v2_symbol": "ALGO/ETH"
+  },
+  "ALGOEUR": {
+   "rest_key": "ALGOEUR",
+   "v2_symbol": "ALGO/EUR"
+  },
+  "ALGOGBP": {
+   "rest_key": "ALGOGBP",
+   "v2_symbol": "ALGO/GBP"
+  },
+  "ALGOUSD": {
+   "rest_key": "ALGOUSD",
+   "v2_symbol": "ALGO/USD"
+  },
+  "ALGOUSDC": {
+   "rest_key": "ALGOUSDC",
+   "v2_symbol": "ALGO/USDC"
+  },
+  "ALGOUSDT": {
+   "rest_key": "ALGOUSDT",
+   "v2_symbol": "ALGO/USDT"
+  },
+  "ALGOXBT": {
+   "rest_key": "ALGOXBT",
+   "v2_symbol": "ALGO/BTC"
+  },
+  "ALICEEUR": {
+   "rest_key": "ALICEEUR",
+   "v2_symbol": "ALICE/EUR"
+  },
+  "ALICEUSD": {
+   "rest_key": "ALICEUSD",
+   "v2_symbol": "ALICE/USD"
+  },
+  "ALIGNUSD": {
+   "rest_key": "ALIGNUSD",
+   "v2_symbol": "ALIGN/USD"
+  },
+  "ALKIMIEUR": {
+   "rest_key": "ALKIMIEUR",
+   "v2_symbol": "ALKIMI/EUR"
+  },
+  "ALKIMIUSD": {
+   "rest_key": "ALKIMIUSD",
+   "v2_symbol": "ALKIMI/USD"
+  },
+  "ALLOUSD": {
+   "rest_key": "ALLOUSD",
+   "v2_symbol": "ALLO/USD"
+  },
+  "ALPHAEUR": {
+   "rest_key": "ALPHAEUR",
+   "v2_symbol": "ALPHA/EUR"
+  },
+  "ALPHAUSD": {
+   "rest_key": "ALPHAUSD",
+   "v2_symbol": "ALPHA/USD"
+  },
+  "ALTEUR": {
+   "rest_key": "ALTEUR",
+   "v2_symbol": "ALT/EUR"
+  },
+  "ALTHEAEUR": {
+   "rest_key": "ALTHEAEUR",
+   "v2_symbol": "ALTHEA/EUR"
+  },
+  "ALTHEAUSD": {
+   "rest_key": "ALTHEAUSD",
+   "v2_symbol": "ALTHEA/USD"
+  },
+  "ALTUSD": {
+   "rest_key": "ALTUSD",
+   "v2_symbol": "ALT/USD"
+  },
+  "AMIUSD": {
+   "rest_key": "AMIUSD",
+   "v2_symbol": "AMI/USD"
+  },
+  "ANIMEEUR": {
+   "rest_key": "ANIMEEUR",
+   "v2_symbol": "ANIME/EUR"
+  },
+  "ANIMEUSD": {
+   "rest_key": "ANIMEUSD",
+   "v2_symbol": "ANIME/USD"
+  },
+  "ANKREUR": {
+   "rest_key": "ANKREUR",
+   "v2_symbol": "ANKR/EUR"
+  },
+  "ANKRUSD": {
+   "rest_key": "ANKRUSD",
+   "v2_symbol": "ANKR/USD"
+  },
+  "ANKRXBT": {
+   "rest_key": "ANKRXBT",
+   "v2_symbol": "ANKR/BTC"
+  },
+  "ANONEUR": {
+   "rest_key": "ANONEUR",
+   "v2_symbol": "ANON/EUR"
+  },
+  "ANONUSD": {
+   "rest_key": "ANONUSD",
+   "v2_symbol": "ANON/USD"
+  },
+  "APEEUR": {
+   "rest_key": "APEEUR",
+   "v2_symbol": "APE/EUR"
+  },
+  "APENFTEUR": {
+   "rest_key": "APENFTEUR",
+   "v2_symbol": "APENFT/EUR"
+  },
+  "APENFTUSD": {
+   "rest_key": "APENFTUSD",
+   "v2_symbol": "APENFT/USD"
+  },
+  "APEUSD": {
+   "rest_key": "APEUSD",
+   "v2_symbol": "APE/USD"
+  },
+  "APEUSDC": {
+   "rest_key": "APEUSDC",
+   "v2_symbol": "APE/USDC"
+  },
+  "APEUSDT": {
+   "rest_key": "APEUSDT",
+   "v2_symbol": "APE/USDT"
+  },
+  "API3EUR": {
+   "rest_key": "API3EUR",
+   "v2_symbol": "API3/EUR"
+  },
+  "API3USD": {
+   "rest_key": "API3USD",
+   "v2_symbol": "API3/USD"
+  },
+  "APREUR": {
+   "rest_key": "APREUR",
+   "v2_symbol": "APR/EUR"
+  },
+  "APRUSD": {
+   "rest_key": "APRUSD",
+   "v2_symbol": "APR/USD"
+  },
+  "APTEUR": {
+   "rest_key": "APTEUR",
+   "v2_symbol": "APT/EUR"
+  },
+  "APTUSD": {
+   "rest_key": "APTUSD",
+   "v2_symbol": "APT/USD"
+  },
+  "APUEUR": {
+   "rest_key": "APUEUR",
+   "v2_symbol": "APU/EUR"
+  },
+  "APUUSD": {
+   "rest_key": "APUUSD",
+   "v2_symbol": "APU/USD"
+  },
+  "APXUSDUSD": {
+   "rest_key": "APXUSDUSD",
+   "v2_symbol": "APXUSD/USD"
+  },
+  "APXUSDUSDC": {
+   "rest_key": "APXUSDUSDC",
+   "v2_symbol": "APXUSD/USDC"
+  },
+  "ARBEUR": {
+   "rest_key": "ARBEUR",
+   "v2_symbol": "ARB/EUR"
+  },
+  "ARBUSD": {
+   "rest_key": "ARBUSD",
+   "v2_symbol": "ARB/USD"
+  },
+  "ARCEUR": {
+   "rest_key": "ARCEUR",
+   "v2_symbol": "ARC/EUR"
+  },
+  "ARCUSD": {
+   "rest_key": "ARCUSD",
+   "v2_symbol": "ARC/USD"
+  },
+  "AREUR": {
+   "rest_key": "AREUR",
+   "v2_symbol": "AR/EUR"
+  },
+  "ARKMEUR": {
+   "rest_key": "ARKMEUR",
+   "v2_symbol": "ARKM/EUR"
+  },
+  "ARKMUSD": {
+   "rest_key": "ARKMUSD",
+   "v2_symbol": "ARKM/USD"
+  },
+  "ARPAEUR": {
+   "rest_key": "ARPAEUR",
+   "v2_symbol": "ARPA/EUR"
+  },
+  "ARPAUSD": {
+   "rest_key": "ARPAUSD",
+   "v2_symbol": "ARPA/USD"
+  },
+  "ARUSD": {
+   "rest_key": "ARUSD",
+   "v2_symbol": "AR/USD"
+  },
+  "ARXUSD": {
+   "rest_key": "ARXUSD",
+   "v2_symbol": "ARX/USD"
+  },
+  "ASSETUSD": {
+   "rest_key": "ASSETUSD",
+   "v2_symbol": "ASSET/USD"
+  },
+  "ASTEREUR": {
+   "rest_key": "ASTEREUR",
+   "v2_symbol": "ASTER/EUR"
+  },
+  "ASTERUSD": {
+   "rest_key": "ASTERUSD",
+   "v2_symbol": "ASTER/USD"
+  },
+  "ASTREUR": {
+   "rest_key": "ASTREUR",
+   "v2_symbol": "ASTR/EUR"
+  },
+  "ASTRUSD": {
+   "rest_key": "ASTRUSD",
+   "v2_symbol": "ASTR/USD"
+  },
+  "ATHEUR": {
+   "rest_key": "ATHEUR",
+   "v2_symbol": "ATH/EUR"
+  },
+  "ATHUSD": {
+   "rest_key": "ATHUSD",
+   "v2_symbol": "ATH/USD"
+  },
+  "ATLASUSD": {
+   "rest_key": "ATLASUSD",
+   "v2_symbol": "ATLAS/USD"
+  },
+  "ATOMETH": {
+   "rest_key": "ATOMETH",
+   "v2_symbol": "ATOM/ETH"
+  },
+  "ATOMEUR": {
+   "rest_key": "ATOMEUR",
+   "v2_symbol": "ATOM/EUR"
+  },
+  "ATOMGBP": {
+   "rest_key": "ATOMGBP",
+   "v2_symbol": "ATOM/GBP"
+  },
+  "ATOMUSD": {
+   "rest_key": "ATOMUSD",
+   "v2_symbol": "ATOM/USD"
+  },
+  "ATOMUSDC": {
+   "rest_key": "ATOMUSDC",
+   "v2_symbol": "ATOM/USDC"
+  },
+  "ATOMUSDT": {
+   "rest_key": "ATOMUSDT",
+   "v2_symbol": "ATOM/USDT"
+  },
+  "ATOMXBT": {
+   "rest_key": "ATOMXBT",
+   "v2_symbol": "ATOM/BTC"
+  },
+  "AUCTIONEUR": {
+   "rest_key": "AUCTIONEUR",
+   "v2_symbol": "AUCTION/EUR"
+  },
+  "AUCTIONUSD": {
+   "rest_key": "AUCTIONUSD",
+   "v2_symbol": "AUCTION/USD"
+  },
+  "AUDIOEUR": {
+   "rest_key": "AUDIOEUR",
+   "v2_symbol": "AUDIO/EUR"
+  },
+  "AUDIOUSD": {
+   "rest_key": "AUDIOUSD",
+   "v2_symbol": "AUDIO/USD"
+  },
+  "AUDJPY": {
+   "rest_key": "AUDJPY",
+   "v2_symbol": "AUD/JPY"
+  },
+  "AUDUSD": {
+   "rest_key": "AUDUSD",
+   "v2_symbol": "AUD/USD"
+  },
+  "AUDXAUD": {
+   "rest_key": "AUDXAUD",
+   "v2_symbol": "AUDX/AUD"
+  },
+  "AUDXUSD": {
+   "rest_key": "AUDXUSD",
+   "v2_symbol": "AUDX/USD"
+  },
+  "AUGURUSD": {
+   "rest_key": "AUGURUSD",
+   "v2_symbol": "AUGUR/USD"
+  },
+  "AUSD": {
+   "rest_key": "AUSD",
+   "v2_symbol": "A/USD"
+  },
+  "AUSDEUR": {
+   "rest_key": "AUSDEUR",
+   "v2_symbol": "AUSD/EUR"
+  },
+  "AUSDUSD": {
+   "rest_key": "AUSDUSD",
+   "v2_symbol": "AUSD/USD"
+  },
+  "AVAAIUSD": {
+   "rest_key": "AVAAIUSD",
+   "v2_symbol": "AVAAI/USD"
+  },
+  "AVAEUR": {
+   "rest_key": "AVAEUR",
+   "v2_symbol": "AVA/EUR"
+  },
+  "AVAUSD": {
+   "rest_key": "AVAUSD",
+   "v2_symbol": "AVA/USD"
+  },
+  "AVAXEUR": {
+   "rest_key": "AVAXEUR",
+   "v2_symbol": "AVAX/EUR"
+  },
+  "AVAXUSD": {
+   "rest_key": "AVAXUSD",
+   "v2_symbol": "AVAX/USD"
+  },
+  "AVAXUSDC": {
+   "rest_key": "AVAXUSDC",
+   "v2_symbol": "AVAX/USDC"
+  },
+  "AVAXUSDT": {
+   "rest_key": "AVAXUSDT",
+   "v2_symbol": "AVAX/USDT"
+  },
+  "AVLUSD": {
+   "rest_key": "AVLUSD",
+   "v2_symbol": "AVL/USD"
+  },
+  "AVNTEUR": {
+   "rest_key": "AVNTEUR",
+   "v2_symbol": "AVNT/EUR"
+  },
+  "AVNTUSD": {
+   "rest_key": "AVNTUSD",
+   "v2_symbol": "AVNT/USD"
+  },
+  "AXSEUR": {
+   "rest_key": "AXSEUR",
+   "v2_symbol": "AXS/EUR"
+  },
+  "AXSUSD": {
+   "rest_key": "AXSUSD",
+   "v2_symbol": "AXS/USD"
+  },
+  "AZTECEUR": {
+   "rest_key": "AZTECEUR",
+   "v2_symbol": "AZTEC/EUR"
+  },
+  "AZTECUSD": {
+   "rest_key": "AZTECUSD",
+   "v2_symbol": "AZTEC/USD"
+  },
+  "B2EUR": {
+   "rest_key": "B2EUR",
+   "v2_symbol": "B2/EUR"
+  },
+  "B2USD": {
+   "rest_key": "B2USD",
+   "v2_symbol": "B2/USD"
+  },
+  "B3EUR": {
+   "rest_key": "B3EUR",
+   "v2_symbol": "B3/EUR"
+  },
+  "B3USD": {
+   "rest_key": "B3USD",
+   "v2_symbol": "B3/USD"
+  },
+  "BABYEUR": {
+   "rest_key": "BABYEUR",
+   "v2_symbol": "BABY/EUR"
+  },
+  "BABYSHARKUSD": {
+   "rest_key": "BABYSHARKUSD",
+   "v2_symbol": "BABYSHARK/USD"
+  },
+  "BABYUSD": {
+   "rest_key": "BABYUSD",
+   "v2_symbol": "BABY/USD"
+  },
+  "BADGEREUR": {
+   "rest_key": "BADGEREUR",
+   "v2_symbol": "BADGER/EUR"
+  },
+  "BADGERUSD": {
+   "rest_key": "BADGERUSD",
+   "v2_symbol": "BADGER/USD"
+  },
+  "BALEUR": {
+   "rest_key": "BALEUR",
+   "v2_symbol": "BAL/EUR"
+  },
+  "BALUSD": {
+   "rest_key": "BALUSD",
+   "v2_symbol": "BAL/USD"
+  },
+  "BANANAS31EUR": {
+   "rest_key": "BANANAS31EUR",
+   "v2_symbol": "BANANAS31/EUR"
+  },
+  "BANANAS31USD": {
+   "rest_key": "BANANAS31USD",
+   "v2_symbol": "BANANAS31/USD"
+  },
+  "BANDEUR": {
+   "rest_key": "BANDEUR",
+   "v2_symbol": "BAND/EUR"
+  },
+  "BANDUSD": {
+   "rest_key": "BANDUSD",
+   "v2_symbol": "BAND/USD"
+  },
+  "BASEDEUR": {
+   "rest_key": "BASEDEUR",
+   "v2_symbol": "BASED/EUR"
+  },
+  "BASEDUSD": {
+   "rest_key": "BASEDUSD",
+   "v2_symbol": "BASED/USD"
+  },
+  "BATEUR": {
+   "rest_key": "BATEUR",
+   "v2_symbol": "BAT/EUR"
+  },
+  "BATUSD": {
+   "rest_key": "BATUSD",
+   "v2_symbol": "BAT/USD"
+  },
+  "BCHAUD": {
+   "rest_key": "BCHAUD",
+   "v2_symbol": "BCH/AUD"
+  },
+  "BCHETH": {
+   "rest_key": "BCHETH",
+   "v2_symbol": "BCH/ETH"
+  },
+  "BCHEUR": {
+   "rest_key": "BCHEUR",
+   "v2_symbol": "BCH/EUR"
+  },
+  "BCHGBP": {
+   "rest_key": "BCHGBP",
+   "v2_symbol": "BCH/GBP"
+  },
+  "BCHJPY": {
+   "rest_key": "BCHJPY",
+   "v2_symbol": "BCH/JPY"
+  },
+  "BCHUSD": {
+   "rest_key": "BCHUSD",
+   "v2_symbol": "BCH/USD"
+  },
+  "BCHUSDC": {
+   "rest_key": "BCHUSDC",
+   "v2_symbol": "BCH/USDC"
+  },
+  "BCHUSDT": {
+   "rest_key": "BCHUSDT",
+   "v2_symbol": "BCH/USDT"
+  },
+  "BCHXBT": {
+   "rest_key": "BCHXBT",
+   "v2_symbol": "BCH/BTC"
+  },
+  "BDXNEUR": {
+   "rest_key": "BDXNEUR",
+   "v2_symbol": "BDXN/EUR"
+  },
+  "BDXNUSD": {
+   "rest_key": "BDXNUSD",
+   "v2_symbol": "BDXN/USD"
+  },
+  "BEAMEUR": {
+   "rest_key": "BEAMEUR",
+   "v2_symbol": "BEAM/EUR"
+  },
+  "BEAMUSD": {
+   "rest_key": "BEAMUSD",
+   "v2_symbol": "BEAM/USD"
+  },
+  "BERAEUR": {
+   "rest_key": "BERAEUR",
+   "v2_symbol": "BERA/EUR"
+  },
+  "BERAUSD": {
+   "rest_key": "BERAUSD",
+   "v2_symbol": "BERA/USD"
+  },
+  "BERAUSDC": {
+   "rest_key": "BERAUSDC",
+   "v2_symbol": "BERA/USDC"
+  },
+  "BERAUSDT": {
+   "rest_key": "BERAUSDT",
+   "v2_symbol": "BERA/USDT"
+  },
+  "BERTEUR": {
+   "rest_key": "BERTEUR",
+   "v2_symbol": "BERT/EUR"
+  },
+  "BERTUSD": {
+   "rest_key": "BERTUSD",
+   "v2_symbol": "BERT/USD"
+  },
+  "BGBEUR": {
+   "rest_key": "BGBEUR",
+   "v2_symbol": "BGB/EUR"
+  },
+  "BGBUSD": {
+   "rest_key": "BGBUSD",
+   "v2_symbol": "BGB/USD"
+  },
+  "BICOEUR": {
+   "rest_key": "BICOEUR",
+   "v2_symbol": "BICO/EUR"
+  },
+  "BICOUSD": {
+   "rest_key": "BICOUSD",
+   "v2_symbol": "BICO/USD"
+  },
+  "BIGTIMEEUR": {
+   "rest_key": "BIGTIMEEUR",
+   "v2_symbol": "BIGTIME/EUR"
+  },
+  "BIGTIMEUSD": {
+   "rest_key": "BIGTIMEUSD",
+   "v2_symbol": "BIGTIME/USD"
+  },
+  "BILLEUR": {
+   "rest_key": "BILLEUR",
+   "v2_symbol": "BILL/EUR"
+  },
+  "BILLUSD": {
+   "rest_key": "BILLUSD",
+   "v2_symbol": "BILL/USD"
+  },
+  "BILLYEUR": {
+   "rest_key": "BILLYEUR",
+   "v2_symbol": "BILLY/EUR"
+  },
+  "BILLYUSD": {
+   "rest_key": "BILLYUSD",
+   "v2_symbol": "BILLY/USD"
+  },
+  "BIOEUR": {
+   "rest_key": "BIOEUR",
+   "v2_symbol": "BIO/EUR"
+  },
+  "BIOUSD": {
+   "rest_key": "BIOUSD",
+   "v2_symbol": "BIO/USD"
+  },
+  "BKSEUR": {
+   "rest_key": "BKSEUR",
+   "v2_symbol": "BKS/EUR"
+  },
+  "BKSUSD": {
+   "rest_key": "BKSUSD",
+   "v2_symbol": "BKS/USD"
+  },
+  "BLENDEUR": {
+   "rest_key": "BLENDEUR",
+   "v2_symbol": "BLEND/EUR"
+  },
+  "BLENDUSD": {
+   "rest_key": "BLENDUSD",
+   "v2_symbol": "BLEND/USD"
+  },
+  "BLESSUSD": {
+   "rest_key": "BLESSUSD",
+   "v2_symbol": "BLESS/USD"
+  },
+  "BLUAIEUR": {
+   "rest_key": "BLUAIEUR",
+   "v2_symbol": "BLUAI/EUR"
+  },
+  "BLUAIUSD": {
+   "rest_key": "BLUAIUSD",
+   "v2_symbol": "BLUAI/USD"
+  },
+  "BLUEEUR": {
+   "rest_key": "BLUEEUR",
+   "v2_symbol": "BLUE/EUR"
+  },
+  "BLUEUSD": {
+   "rest_key": "BLUEUSD",
+   "v2_symbol": "BLUE/USD"
+  },
+  "BLUREUR": {
+   "rest_key": "BLUREUR",
+   "v2_symbol": "BLUR/EUR"
+  },
+  "BLURUSD": {
+   "rest_key": "BLURUSD",
+   "v2_symbol": "BLUR/USD"
+  },
+  "BLZUSD": {
+   "rest_key": "BLZUSD",
+   "v2_symbol": "BLZ/USD"
+  },
+  "BMBUSD": {
+   "rest_key": "BMBUSD",
+   "v2_symbol": "BMB/USD"
+  },
+  "BMTEUR": {
+   "rest_key": "BMTEUR",
+   "v2_symbol": "BMT/EUR"
+  },
+  "BMTUSD": {
+   "rest_key": "BMTUSD",
+   "v2_symbol": "BMT/USD"
+  },
+  "BNBEUR": {
+   "rest_key": "BNBEUR",
+   "v2_symbol": "BNB/EUR"
+  },
+  "BNBUSD": {
+   "rest_key": "BNBUSD",
+   "v2_symbol": "BNB/USD"
+  },
+  "BNBUSDC": {
+   "rest_key": "BNBUSDC",
+   "v2_symbol": "BNB/USDC"
+  },
+  "BNBUSDT": {
+   "rest_key": "BNBUSDT",
+   "v2_symbol": "BNB/USDT"
+  },
+  "BNCEUR": {
+   "rest_key": "BNCEUR",
+   "v2_symbol": "BNC/EUR"
+  },
+  "BNCUSD": {
+   "rest_key": "BNCUSD",
+   "v2_symbol": "BNC/USD"
+  },
+  "BNKRUSD": {
+   "rest_key": "BNKRUSD",
+   "v2_symbol": "BNKR/USD"
+  },
+  "BNTEUR": {
+   "rest_key": "BNTEUR",
+   "v2_symbol": "BNT/EUR"
+  },
+  "BNTUSD": {
+   "rest_key": "BNTUSD",
+   "v2_symbol": "BNT/USD"
+  },
+  "BOBAEUR": {
+   "rest_key": "BOBAEUR",
+   "v2_symbol": "BOBA/EUR"
+  },
+  "BOBAUSD": {
+   "rest_key": "BOBAUSD",
+   "v2_symbol": "BOBA/USD"
+  },
+  "BOBEUR": {
+   "rest_key": "BOBEUR",
+   "v2_symbol": "BOB/EUR"
+  },
+  "BOBUSD": {
+   "rest_key": "BOBUSD",
+   "v2_symbol": "BOB/USD"
+  },
+  "BODENEUR": {
+   "rest_key": "BODENEUR",
+   "v2_symbol": "BODEN/EUR"
+  },
+  "BODENUSD": {
+   "rest_key": "BODENUSD",
+   "v2_symbol": "BODEN/USD"
+  },
+  "BONKEUR": {
+   "rest_key": "BONKEUR",
+   "v2_symbol": "BONK/EUR"
+  },
+  "BONKUSD": {
+   "rest_key": "BONKUSD",
+   "v2_symbol": "BONK/USD"
+  },
+  "BONZOUSD": {
+   "rest_key": "BONZOUSD",
+   "v2_symbol": "BONZO/USD"
+  },
+  "BOSEUR": {
+   "rest_key": "BOSEUR",
+   "v2_symbol": "BOS/EUR"
+  },
+  "BOSUSD": {
+   "rest_key": "BOSUSD",
+   "v2_symbol": "BOS/USD"
+  },
+  "BREVEUR": {
+   "rest_key": "BREVEUR",
+   "v2_symbol": "BREV/EUR"
+  },
+  "BREVUSD": {
+   "rest_key": "BREVUSD",
+   "v2_symbol": "BREV/USD"
+  },
+  "BRL1USD": {
+   "rest_key": "BRL1USD",
+   "v2_symbol": "BRL1/USD"
+  },
+  "BTREUR": {
+   "rest_key": "BTREUR",
+   "v2_symbol": "BTR/EUR"
+  },
+  "BTRUSD": {
+   "rest_key": "BTRUSD",
+   "v2_symbol": "BTR/USD"
+  },
+  "BTTEUR": {
+   "rest_key": "BTTEUR",
+   "v2_symbol": "BTT/EUR"
+  },
+  "BTTUSD": {
+   "rest_key": "BTTUSD",
+   "v2_symbol": "BTT/USD"
+  },
+  "C98USD": {
+   "rest_key": "C98USD",
+   "v2_symbol": "C98/USD"
+  },
+  "CAKEEUR": {
+   "rest_key": "CAKEEUR",
+   "v2_symbol": "CAKE/EUR"
+  },
+  "CAKEUSD": {
+   "rest_key": "CAKEUSD",
+   "v2_symbol": "CAKE/USD"
+  },
+  "CAMPEUR": {
+   "rest_key": "CAMPEUR",
+   "v2_symbol": "CAMP/EUR"
+  },
+  "CAMPUSD": {
+   "rest_key": "CAMPUSD",
+   "v2_symbol": "CAMP/USD"
+  },
+  "CAPUSD": {
+   "rest_key": "CAPUSD",
+   "v2_symbol": "CAP/USD"
+  },
+  "CARVEUR": {
+   "rest_key": "CARVEUR",
+   "v2_symbol": "CARV/EUR"
+  },
+  "CARVUSD": {
+   "rest_key": "CARVUSD",
+   "v2_symbol": "CARV/USD"
+  },
+  "CASHUSD": {
+   "rest_key": "CASHUSD",
+   "v2_symbol": "CASH/USD"
+  },
+  "CASHUSDC": {
+   "rest_key": "CASHUSDC",
+   "v2_symbol": "CASH/USDC"
+  },
+  "CATEUR": {
+   "rest_key": "CATEUR",
+   "v2_symbol": "CAT/EUR"
+  },
+  "CATUSD": {
+   "rest_key": "CATUSD",
+   "v2_symbol": "CAT/USD"
+  },
+  "CCDEUR": {
+   "rest_key": "CCDEUR",
+   "v2_symbol": "CCD/EUR"
+  },
+  "CCDUSD": {
+   "rest_key": "CCDUSD",
+   "v2_symbol": "CCD/USD"
+  },
+  "CCEUR": {
+   "rest_key": "CCEUR",
+   "v2_symbol": "CC/EUR"
+  },
+  "CCUSD": {
+   "rest_key": "CCUSD",
+   "v2_symbol": "CC/USD"
+  },
+  "CCUSDC": {
+   "rest_key": "CCUSDC",
+   "v2_symbol": "CC/USDC"
+  },
+  "CCUSDT": {
+   "rest_key": "CCUSDT",
+   "v2_symbol": "CC/USDT"
+  },
+  "CELOEUR": {
+   "rest_key": "CELOEUR",
+   "v2_symbol": "CELO/EUR"
+  },
+  "CELOUSD": {
+   "rest_key": "CELOUSD",
+   "v2_symbol": "CELO/USD"
+  },
+  "CELREUR": {
+   "rest_key": "CELREUR",
+   "v2_symbol": "CELR/EUR"
+  },
+  "CELRUSD": {
+   "rest_key": "CELRUSD",
+   "v2_symbol": "CELR/USD"
+  },
+  "CFGEUR": {
+   "rest_key": "CFGEUR",
+   "v2_symbol": "CFG/EUR"
+  },
+  "CFGUSD": {
+   "rest_key": "CFGUSD",
+   "v2_symbol": "CFG/USD"
+  },
+  "CFXEUR": {
+   "rest_key": "CFXEUR",
+   "v2_symbol": "CFX/EUR"
+  },
+  "CFXUSD": {
+   "rest_key": "CFXUSD",
+   "v2_symbol": "CFX/USD"
+  },
+  "CHECKUSD": {
+   "rest_key": "CHECKUSD",
+   "v2_symbol": "CHECK/USD"
+  },
+  "CHEEMSEUR": {
+   "rest_key": "CHEEMSEUR",
+   "v2_symbol": "CHEEMS/EUR"
+  },
+  "CHEEMSUSD": {
+   "rest_key": "CHEEMSUSD",
+   "v2_symbol": "CHEEMS/USD"
+  },
+  "CHEXEUR": {
+   "rest_key": "CHEXEUR",
+   "v2_symbol": "CHEX/EUR"
+  },
+  "CHEXUSD": {
+   "rest_key": "CHEXUSD",
+   "v2_symbol": "CHEX/USD"
+  },
+  "CHILLHOUSEEUR": {
+   "rest_key": "CHILLHOUSEEUR",
+   "v2_symbol": "CHILLHOUSE/EUR"
+  },
+  "CHILLHOUSEUSD": {
+   "rest_key": "CHILLHOUSEUSD",
+   "v2_symbol": "CHILLHOUSE/USD"
+  },
+  "CHIPEUR": {
+   "rest_key": "CHIPEUR",
+   "v2_symbol": "CHIP/EUR"
+  },
+  "CHIPUSD": {
+   "rest_key": "CHIPUSD",
+   "v2_symbol": "CHIP/USD"
+  },
+  "CHREUR": {
+   "rest_key": "CHREUR",
+   "v2_symbol": "CHR/EUR"
+  },
+  "CHRUSD": {
+   "rest_key": "CHRUSD",
+   "v2_symbol": "CHR/USD"
+  },
+  "CHZEUR": {
+   "rest_key": "CHZEUR",
+   "v2_symbol": "CHZ/EUR"
+  },
+  "CHZUSD": {
+   "rest_key": "CHZUSD",
+   "v2_symbol": "CHZ/USD"
+  },
+  "CLANKEREUR": {
+   "rest_key": "CLANKEREUR",
+   "v2_symbol": "CLANKER/EUR"
+  },
+  "CLANKERUSD": {
+   "rest_key": "CLANKERUSD",
+   "v2_symbol": "CLANKER/USD"
+  },
+  "CLOUDUSD": {
+   "rest_key": "CLOUDUSD",
+   "v2_symbol": "CLOUD/USD"
+  },
+  "CLVUSD": {
+   "rest_key": "CLVUSD",
+   "v2_symbol": "CLV/USD"
+  },
+  "CMETHETH": {
+   "rest_key": "CMETHETH",
+   "v2_symbol": "CMETH/ETH"
+  },
+  "CMETHUSD": {
+   "rest_key": "CMETHUSD",
+   "v2_symbol": "CMETH/USD"
+  },
+  "COMPEUR": {
+   "rest_key": "COMPEUR",
+   "v2_symbol": "COMP/EUR"
+  },
+  "COMPUSD": {
+   "rest_key": "COMPUSD",
+   "v2_symbol": "COMP/USD"
+  },
+  "COMPXBT": {
+   "rest_key": "COMPXBT",
+   "v2_symbol": "COMP/BTC"
+  },
+  "COOKIEEUR": {
+   "rest_key": "COOKIEEUR",
+   "v2_symbol": "COOKIE/EUR"
+  },
+  "COOKIEUSD": {
+   "rest_key": "COOKIEUSD",
+   "v2_symbol": "COOKIE/USD"
+  },
+  "COPMUSD": {
+   "rest_key": "COPMUSD",
+   "v2_symbol": "COPM/USD"
+  },
+  "COQEUR": {
+   "rest_key": "COQEUR",
+   "v2_symbol": "COQ/EUR"
+  },
+  "COQUSD": {
+   "rest_key": "COQUSD",
+   "v2_symbol": "COQ/USD"
+  },
+  "CORNUSD": {
+   "rest_key": "CORNUSD",
+   "v2_symbol": "CORN/USD"
+  },
+  "COTIEUR": {
+   "rest_key": "COTIEUR",
+   "v2_symbol": "COTI/EUR"
+  },
+  "COTIUSD": {
+   "rest_key": "COTIUSD",
+   "v2_symbol": "COTI/USD"
+  },
+  "COWEUR": {
+   "rest_key": "COWEUR",
+   "v2_symbol": "COW/EUR"
+  },
+  "COWUSD": {
+   "rest_key": "COWUSD",
+   "v2_symbol": "COW/USD"
+  },
+  "CPOOLEUR": {
+   "rest_key": "CPOOLEUR",
+   "v2_symbol": "CPOOL/EUR"
+  },
+  "CPOOLUSD": {
+   "rest_key": "CPOOLUSD",
+   "v2_symbol": "CPOOL/USD"
+  },
+  "CQTEUR": {
+   "rest_key": "CQTEUR",
+   "v2_symbol": "CQT/EUR"
+  },
+  "CQTUSD": {
+   "rest_key": "CQTUSD",
+   "v2_symbol": "CQT/USD"
+  },
+  "CROEUR": {
+   "rest_key": "CROEUR",
+   "v2_symbol": "CRO/EUR"
+  },
+  "CROUSD": {
+   "rest_key": "CROUSD",
+   "v2_symbol": "CRO/USD"
+  },
+  "CROUSDC": {
+   "rest_key": "CROUSDC",
+   "v2_symbol": "CRO/USDC"
+  },
+  "CROUSDT": {
+   "rest_key": "CROUSDT",
+   "v2_symbol": "CRO/USDT"
+  },
+  "CRVEUR": {
+   "rest_key": "CRVEUR",
+   "v2_symbol": "CRV/EUR"
+  },
+  "CRVUSD": {
+   "rest_key": "CRVUSD",
+   "v2_symbol": "CRV/USD"
+  },
+  "CSPRUSD": {
+   "rest_key": "CSPRUSD",
+   "v2_symbol": "CSPR/USD"
+  },
+  "CTCEUR": {
+   "rest_key": "CTCEUR",
+   "v2_symbol": "CTC/EUR"
+  },
+  "CTCUSD": {
+   "rest_key": "CTCUSD",
+   "v2_symbol": "CTC/USD"
+  },
+  "CTRUSD": {
+   "rest_key": "CTRUSD",
+   "v2_symbol": "CTR/USD"
+  },
+  "CTSIEUR": {
+   "rest_key": "CTSIEUR",
+   "v2_symbol": "CTSI/EUR"
+  },
+  "CTSIUSD": {
+   "rest_key": "CTSIUSD",
+   "v2_symbol": "CTSI/USD"
+  },
+  "CVCEUR": {
+   "rest_key": "CVCEUR",
+   "v2_symbol": "CVC/EUR"
+  },
+  "CVCUSD": {
+   "rest_key": "CVCUSD",
+   "v2_symbol": "CVC/USD"
+  },
+  "CVXEUR": {
+   "rest_key": "CVXEUR",
+   "v2_symbol": "CVX/EUR"
+  },
+  "CVXUSD": {
+   "rest_key": "CVXUSD",
+   "v2_symbol": "CVX/USD"
+  },
+  "CXTEUR": {
+   "rest_key": "CXTEUR",
+   "v2_symbol": "CXT/EUR"
+  },
+  "CXTUSD": {
+   "rest_key": "CXTUSD",
+   "v2_symbol": "CXT/USD"
+  },
+  "CYBEREUR": {
+   "rest_key": "CYBEREUR",
+   "v2_symbol": "CYBER/EUR"
+  },
+  "CYBERUSD": {
+   "rest_key": "CYBERUSD",
+   "v2_symbol": "CYBER/USD"
+  },
+  "DAGEUR": {
+   "rest_key": "DAGEUR",
+   "v2_symbol": "DAG/EUR"
+  },
+  "DAGUSD": {
+   "rest_key": "DAGUSD",
+   "v2_symbol": "DAG/USD"
+  },
+  "DAIEUR": {
+   "rest_key": "DAIEUR",
+   "v2_symbol": "DAI/EUR"
+  },
+  "DAIUSD": {
+   "rest_key": "DAIUSD",
+   "v2_symbol": "DAI/USD"
+  },
+  "DAIUSDT": {
+   "rest_key": "DAIUSDT",
+   "v2_symbol": "DAI/USDT"
+  },
+  "DASHEUR": {
+   "rest_key": "DASHEUR",
+   "v2_symbol": "DASH/EUR"
+  },
+  "DASHUSD": {
+   "rest_key": "DASHUSD",
+   "v2_symbol": "DASH/USD"
+  },
+  "DBREUR": {
+   "rest_key": "DBREUR",
+   "v2_symbol": "DBR/EUR"
+  },
+  "DBRUSD": {
+   "rest_key": "DBRUSD",
+   "v2_symbol": "DBR/USD"
+  },
+  "DCRUSD": {
+   "rest_key": "DCRUSD",
+   "v2_symbol": "DCR/USD"
+  },
+  "DEEPEUR": {
+   "rest_key": "DEEPEUR",
+   "v2_symbol": "DEEP/EUR"
+  },
+  "DEEPUSD": {
+   "rest_key": "DEEPUSD",
+   "v2_symbol": "DEEP/USD"
+  },
+  "DEGENEUR": {
+   "rest_key": "DEGENEUR",
+   "v2_symbol": "DEGEN/EUR"
+  },
+  "DEGENUSD": {
+   "rest_key": "DEGENUSD",
+   "v2_symbol": "DEGEN/USD"
+  },
+  "DENTEUR": {
+   "rest_key": "DENTEUR",
+   "v2_symbol": "DENT/EUR"
+  },
+  "DENTUSD": {
+   "rest_key": "DENTUSD",
+   "v2_symbol": "DENT/USD"
+  },
+  "DGAIUSD": {
+   "rest_key": "DGAIUSD",
+   "v2_symbol": "DGAI/USD"
+  },
+  "DMCEUR": {
+   "rest_key": "DMCEUR",
+   "v2_symbol": "DMC/EUR"
+  },
+  "DMCUSD": {
+   "rest_key": "DMCUSD",
+   "v2_symbol": "DMC/USD"
+  },
+  "DOGEUR": {
+   "rest_key": "DOGEUR",
+   "v2_symbol": "DOG/EUR"
+  },
+  "DOGSEUR": {
+   "rest_key": "DOGSEUR",
+   "v2_symbol": "DOGS/EUR"
+  },
+  "DOGSUSD": {
+   "rest_key": "DOGSUSD",
+   "v2_symbol": "DOGS/USD"
+  },
+  "DOGUSD": {
+   "rest_key": "DOGUSD",
+   "v2_symbol": "DOG/USD"
+  },
+  "DOLOEUR": {
+   "rest_key": "DOLOEUR",
+   "v2_symbol": "DOLO/EUR"
+  },
+  "DOLOUSD": {
+   "rest_key": "DOLOUSD",
+   "v2_symbol": "DOLO/USD"
+  },
+  "DOSUSD": {
+   "rest_key": "DOSUSD",
+   "v2_symbol": "DOS/USD"
+  },
+  "DOTETH": {
+   "rest_key": "DOTETH",
+   "v2_symbol": "DOT/ETH"
+  },
+  "DOTEUR": {
+   "rest_key": "DOTEUR",
+   "v2_symbol": "DOT/EUR"
+  },
+  "DOTGBP": {
+   "rest_key": "DOTGBP",
+   "v2_symbol": "DOT/GBP"
+  },
+  "DOTJPY": {
+   "rest_key": "DOTJPY",
+   "v2_symbol": "DOT/JPY"
+  },
+  "DOTUSD": {
+   "rest_key": "DOTUSD",
+   "v2_symbol": "DOT/USD"
+  },
+  "DOTUSDC": {
+   "rest_key": "DOTUSDC",
+   "v2_symbol": "DOT/USDC"
+  },
+  "DOTUSDT": {
+   "rest_key": "DOTUSDT",
+   "v2_symbol": "DOT/USDT"
+  },
+  "DOTXBT": {
+   "rest_key": "DOTXBT",
+   "v2_symbol": "DOT/BTC"
+  },
+  "DOVUUSD": {
+   "rest_key": "DOVUUSD",
+   "v2_symbol": "DOVU/USD"
+  },
+  "DRIFTEUR": {
+   "rest_key": "DRIFTEUR",
+   "v2_symbol": "DRIFT/EUR"
+  },
+  "DRIFTUSD": {
+   "rest_key": "DRIFTUSD",
+   "v2_symbol": "DRIFT/USD"
+  },
+  "DRVEUR": {
+   "rest_key": "DRVEUR",
+   "v2_symbol": "DRV/EUR"
+  },
+  "DRVUSD": {
+   "rest_key": "DRVUSD",
+   "v2_symbol": "DRV/USD"
+  },
+  "DUALEUR": {
+   "rest_key": "DUALEUR",
+   "v2_symbol": "DUAL/EUR"
+  },
+  "DUALUSD": {
+   "rest_key": "DUALUSD",
+   "v2_symbol": "DUAL/USD"
+  },
+  "DUCKEUR": {
+   "rest_key": "DUCKEUR",
+   "v2_symbol": "DUCK/EUR"
+  },
+  "DUCKUSD": {
+   "rest_key": "DUCKUSD",
+   "v2_symbol": "DUCK/USD"
+  },
+  "DYDXEUR": {
+   "rest_key": "DYDXEUR",
+   "v2_symbol": "DYDX/EUR"
+  },
+  "DYDXUSD": {
+   "rest_key": "DYDXUSD",
+   "v2_symbol": "DYDX/USD"
+  },
+  "DYMEUR": {
+   "rest_key": "DYMEUR",
+   "v2_symbol": "DYM/EUR"
+  },
+  "DYMUSD": {
+   "rest_key": "DYMUSD",
+   "v2_symbol": "DYM/USD"
+  },
+  "EATEUR": {
+   "rest_key": "EATEUR",
+   "v2_symbol": "EAT/EUR"
+  },
+  "EATUSD": {
+   "rest_key": "EATUSD",
+   "v2_symbol": "EAT/USD"
+  },
+  "EDGEEUR": {
+   "rest_key": "EDGEEUR",
+   "v2_symbol": "EDGE/EUR"
+  },
+  "EDGEUSD": {
+   "rest_key": "EDGEUSD",
+   "v2_symbol": "EDGE/USD"
+  },
+  "EDGEXEUR": {
+   "rest_key": "EDGEXEUR",
+   "v2_symbol": "EDGEX/EUR"
+  },
+  "EDGEXUSD": {
+   "rest_key": "EDGEXUSD",
+   "v2_symbol": "EDGEX/USD"
+  },
+  "EDUEUR": {
+   "rest_key": "EDUEUR",
+   "v2_symbol": "EDU/EUR"
+  },
+  "EDUUSD": {
+   "rest_key": "EDUUSD",
+   "v2_symbol": "EDU/USD"
+  },
+  "EGLDEUR": {
+   "rest_key": "EGLDEUR",
+   "v2_symbol": "EGLD/EUR"
+  },
+  "EGLDUSD": {
+   "rest_key": "EGLDUSD",
+   "v2_symbol": "EGLD/USD"
+  },
+  "EIGENEUR": {
+   "rest_key": "EIGENEUR",
+   "v2_symbol": "EIGEN/EUR"
+  },
+  "EIGENUSD": {
+   "rest_key": "EIGENUSD",
+   "v2_symbol": "EIGEN/USD"
+  },
+  "ELIZAOSEUR": {
+   "rest_key": "ELIZAOSEUR",
+   "v2_symbol": "ELIZAOS/EUR"
+  },
+  "ELIZAOSUSD": {
+   "rest_key": "ELIZAOSUSD",
+   "v2_symbol": "ELIZAOS/USD"
+  },
+  "ELXEUR": {
+   "rest_key": "ELXEUR",
+   "v2_symbol": "ELX/EUR"
+  },
+  "ELXUSD": {
+   "rest_key": "ELXUSD",
+   "v2_symbol": "ELX/USD"
+  },
+  "ENAEUR": {
+   "rest_key": "ENAEUR",
+   "v2_symbol": "ENA/EUR"
+  },
+  "ENAUSD": {
+   "rest_key": "ENAUSD",
+   "v2_symbol": "ENA/USD"
+  },
+  "ENJEUR": {
+   "rest_key": "ENJEUR",
+   "v2_symbol": "ENJ/EUR"
+  },
+  "ENJUSD": {
+   "rest_key": "ENJUSD",
+   "v2_symbol": "ENJ/USD"
+  },
+  "ENSEUR": {
+   "rest_key": "ENSEUR",
+   "v2_symbol": "ENS/EUR"
+  },
+  "ENSOEUR": {
+   "rest_key": "ENSOEUR",
+   "v2_symbol": "ENSO/EUR"
+  },
+  "ENSOUSD": {
+   "rest_key": "ENSOUSD",
+   "v2_symbol": "ENSO/USD"
+  },
+  "ENSUSD": {
+   "rest_key": "ENSUSD",
+   "v2_symbol": "ENS/USD"
+  },
+  "EPTEUR": {
+   "rest_key": "EPTEUR",
+   "v2_symbol": "EPT/EUR"
+  },
+  "EPTUSD": {
+   "rest_key": "EPTUSD",
+   "v2_symbol": "EPT/USD"
+  },
+  "ESEUR": {
+   "rest_key": "ESEUR",
+   "v2_symbol": "ES/EUR"
+  },
+  "ESPEUR": {
+   "rest_key": "ESPEUR",
+   "v2_symbol": "ESP/EUR"
+  },
+  "ESPORTSUSD": {
+   "rest_key": "ESPORTSUSD",
+   "v2_symbol": "ESPORTS/USD"
+  },
+  "ESPUSD": {
+   "rest_key": "ESPUSD",
+   "v2_symbol": "ESP/USD"
+  },
+  "ESUSD": {
+   "rest_key": "ESUSD",
+   "v2_symbol": "ES/USD"
+  },
+  "ESXUSD": {
+   "rest_key": "ESXUSD",
+   "v2_symbol": "ESX/USD"
+  },
+  "ETCETH": {
+   "rest_key": "XETCXETH",
+   "v2_symbol": "ETC/ETH"
+  },
+  "ETCEUR": {
+   "rest_key": "XETCZEUR",
+   "v2_symbol": "ETC/EUR"
+  },
+  "ETCUSD": {
+   "rest_key": "XETCZUSD",
+   "v2_symbol": "ETC/USD"
+  },
+  "ETCXBT": {
+   "rest_key": "XETCXXBT",
+   "v2_symbol": "ETC/BTC"
+  },
+  "ETHAUD": {
+   "rest_key": "ETHAUD",
+   "v2_symbol": "ETH/AUD"
+  },
+  "ETHCAD": {
+   "rest_key": "XETHZCAD",
+   "v2_symbol": "ETH/CAD"
+  },
+  "ETHCHF": {
+   "rest_key": "ETHCHF",
+   "v2_symbol": "ETH/CHF"
+  },
+  "ETHDAI": {
+   "rest_key": "ETHDAI",
+   "v2_symbol": "ETH/DAI"
+  },
+  "ETHEUR": {
+   "rest_key": "XETHZEUR",
+   "v2_symbol": "ETH/EUR"
+  },
+  "ETHEURC": {
+   "rest_key": "ETHEURC",
+   "v2_symbol": "ETH/EURC"
+  },
+  "ETHEUROP": {
+   "rest_key": "ETHEUROP",
+   "v2_symbol": "ETH/EUROP"
+  },
+  "ETHFIDD": {
+   "rest_key": "ETHFIDD",
+   "v2_symbol": "ETH/FIDD"
+  },
+  "ETHFIEUR": {
+   "rest_key": "ETHFIEUR",
+   "v2_symbol": "ETHFI/EUR"
+  },
+  "ETHFIUSD": {
+   "rest_key": "ETHFIUSD",
+   "v2_symbol": "ETHFI/USD"
+  },
+  "ETHGBP": {
+   "rest_key": "XETHZGBP",
+   "v2_symbol": "ETH/GBP"
+  },
+  "ETHJPY": {
+   "rest_key": "XETHZJPY",
+   "v2_symbol": "ETH/JPY"
+  },
+  "ETHPYUSD": {
+   "rest_key": "ETHPYUSD",
+   "v2_symbol": "ETH/PYUSD"
+  },
+  "ETHSOFID": {
+   "rest_key": "ETHSOFID",
+   "v2_symbol": "ETH/SOFID"
+  },
+  "ETHUSD": {
+   "rest_key": "XETHZUSD",
+   "v2_symbol": "ETH/USD"
+  },
+  "ETHUSD1": {
+   "rest_key": "ETHUSD1",
+   "v2_symbol": "ETH/USD1"
+  },
+  "ETHUSDC": {
+   "rest_key": "ETHUSDC",
+   "v2_symbol": "ETH/USDC"
+  },
+  "ETHUSDT": {
+   "rest_key": "ETHUSDT",
+   "v2_symbol": "ETH/USDT"
+  },
+  "ETHXBT": {
+   "rest_key": "XETHXXBT",
+   "v2_symbol": "ETH/BTC"
+  },
+  "EULEUR": {
+   "rest_key": "EULEUR",
+   "v2_symbol": "EUL/EUR"
+  },
+  "EULUSD": {
+   "rest_key": "EULUSD",
+   "v2_symbol": "EUL/USD"
+  },
+  "EURAUD": {
+   "rest_key": "EURAUD",
+   "v2_symbol": "EUR/AUD"
+  },
+  "EURCAD": {
+   "rest_key": "EURCAD",
+   "v2_symbol": "EUR/CAD"
+  },
+  "EURCEUR": {
+   "rest_key": "EURCEUR",
+   "v2_symbol": "EURC/EUR"
+  },
+  "EURCHF": {
+   "rest_key": "EURCHF",
+   "v2_symbol": "EUR/CHF"
+  },
+  "EURCUSD": {
+   "rest_key": "EURCUSD",
+   "v2_symbol": "EURC/USD"
+  },
+  "EURCUSDC": {
+   "rest_key": "EURCUSDC",
+   "v2_symbol": "EURC/USDC"
+  },
+  "EURGBP": {
+   "rest_key": "EURGBP",
+   "v2_symbol": "EUR/GBP"
+  },
+  "EURJPY": {
+   "rest_key": "EURJPY",
+   "v2_symbol": "EUR/JPY"
+  },
+  "EUROPEUR": {
+   "rest_key": "EUROPEUR",
+   "v2_symbol": "EUROP/EUR"
+  },
+  "EUROPUSD": {
+   "rest_key": "EUROPUSD",
+   "v2_symbol": "EUROP/USD"
+  },
+  "EUROPUSDC": {
+   "rest_key": "EUROPUSDC",
+   "v2_symbol": "EUROP/USDC"
+  },
+  "EURQEUR": {
+   "rest_key": "EURQEUR",
+   "v2_symbol": "EURQ/EUR"
+  },
+  "EURQUSD": {
+   "rest_key": "EURQUSD",
+   "v2_symbol": "EURQ/USD"
+  },
+  "EURREUR": {
+   "rest_key": "EURREUR",
+   "v2_symbol": "EURR/EUR"
+  },
+  "EURRUSD": {
+   "rest_key": "EURRUSD",
+   "v2_symbol": "EURR/USD"
+  },
+  "EURRUSDC": {
+   "rest_key": "EURRUSDC",
+   "v2_symbol": "EURR/USDC"
+  },
+  "EURRUSDT": {
+   "rest_key": "EURRUSDT",
+   "v2_symbol": "EURR/USDT"
+  },
+  "EURUSD": {
+   "rest_key": "ZEURZUSD",
+   "v2_symbol": "EUR/USD"
+  },
+  "EVAAUSD": {
+   "rest_key": "EVAAUSD",
+   "v2_symbol": "EVAA/USD"
+  },
+  "EVEUR": {
+   "rest_key": "EVEUR",
+   "v2_symbol": "EV/EUR"
+  },
+  "EVUSD": {
+   "rest_key": "EVUSD",
+   "v2_symbol": "EV/USD"
+  },
+  "EWTEUR": {
+   "rest_key": "EWTEUR",
+   "v2_symbol": "EWT/EUR"
+  },
+  "EWTUSD": {
+   "rest_key": "EWTUSD",
+   "v2_symbol": "EWT/USD"
+  },
+  "FARTCOINEUR": {
+   "rest_key": "FARTCOINEUR",
+   "v2_symbol": "FARTCOIN/EUR"
+  },
+  "FARTCOINUSD": {
+   "rest_key": "FARTCOINUSD",
+   "v2_symbol": "FARTCOIN/USD"
+  },
+  "FARTCOINUSDC": {
+   "rest_key": "FARTCOINUSDC",
+   "v2_symbol": "FARTCOIN/USDC"
+  },
+  "FARTCOINUSDT": {
+   "rest_key": "FARTCOINUSDT",
+   "v2_symbol": "FARTCOIN/USDT"
+  },
+  "FETEUR": {
+   "rest_key": "FETEUR",
+   "v2_symbol": "FET/EUR"
+  },
+  "FETUSD": {
+   "rest_key": "FETUSD",
+   "v2_symbol": "FET/USD"
+  },
+  "FFUSD": {
+   "rest_key": "FFUSD",
+   "v2_symbol": "FF/USD"
+  },
+  "FHEEUR": {
+   "rest_key": "FHEEUR",
+   "v2_symbol": "FHE/EUR"
+  },
+  "FHEUSD": {
+   "rest_key": "FHEUSD",
+   "v2_symbol": "FHE/USD"
+  },
+  "FIDAEUR": {
+   "rest_key": "FIDAEUR",
+   "v2_symbol": "FIDA/EUR"
+  },
+  "FIDAUSD": {
+   "rest_key": "FIDAUSD",
+   "v2_symbol": "FIDA/USD"
+  },
+  "FIDDUSD": {
+   "rest_key": "FIDDUSD",
+   "v2_symbol": "FIDD/USD"
+  },
+  "FIDDUSDC": {
+   "rest_key": "FIDDUSDC",
+   "v2_symbol": "FIDD/USDC"
+  },
+  "FIDDUSDT": {
+   "rest_key": "FIDDUSDT",
+   "v2_symbol": "FIDD/USDT"
+  },
+  "FIGHTEUR": {
+   "rest_key": "FIGHTEUR",
+   "v2_symbol": "FIGHT/EUR"
+  },
+  "FIGHTUSD": {
+   "rest_key": "FIGHTUSD",
+   "v2_symbol": "FIGHT/USD"
+  },
+  "FILETH": {
+   "rest_key": "FILETH",
+   "v2_symbol": "FIL/ETH"
+  },
+  "FILEUR": {
+   "rest_key": "FILEUR",
+   "v2_symbol": "FIL/EUR"
+  },
+  "FILGBP": {
+   "rest_key": "FILGBP",
+   "v2_symbol": "FIL/GBP"
+  },
+  "FILUSD": {
+   "rest_key": "FILUSD",
+   "v2_symbol": "FIL/USD"
+  },
+  "FILXBT": {
+   "rest_key": "FILXBT",
+   "v2_symbol": "FIL/BTC"
+  },
+  "FISEUR": {
+   "rest_key": "FISEUR",
+   "v2_symbol": "FIS/EUR"
+  },
+  "FISUSD": {
+   "rest_key": "FISUSD",
+   "v2_symbol": "FIS/USD"
+  },
+  "FLOCKEUR": {
+   "rest_key": "FLOCKEUR",
+   "v2_symbol": "FLOCK/EUR"
+  },
+  "FLOCKUSD": {
+   "rest_key": "FLOCKUSD",
+   "v2_symbol": "FLOCK/USD"
+  },
+  "FLOKIEUR": {
+   "rest_key": "FLOKIEUR",
+   "v2_symbol": "FLOKI/EUR"
+  },
+  "FLOKIUSD": {
+   "rest_key": "FLOKIUSD",
+   "v2_symbol": "FLOKI/USD"
+  },
+  "FLOWEUR": {
+   "rest_key": "FLOWEUR",
+   "v2_symbol": "FLOW/EUR"
+  },
+  "FLOWUSD": {
+   "rest_key": "FLOWUSD",
+   "v2_symbol": "FLOW/USD"
+  },
+  "FLREUR": {
+   "rest_key": "FLREUR",
+   "v2_symbol": "FLR/EUR"
+  },
+  "FLRUSD": {
+   "rest_key": "FLRUSD",
+   "v2_symbol": "FLR/USD"
+  },
+  "FLUXEUR": {
+   "rest_key": "FLUXEUR",
+   "v2_symbol": "FLUX/EUR"
+  },
+  "FLUXUSD": {
+   "rest_key": "FLUXUSD",
+   "v2_symbol": "FLUX/USD"
+  },
+  "FOLDUSD": {
+   "rest_key": "FOLDUSD",
+   "v2_symbol": "FOLD/USD"
+  },
+  "FOLKSUSD": {
+   "rest_key": "FOLKSUSD",
+   "v2_symbol": "FOLKS/USD"
+  },
+  "FORESTUSD": {
+   "rest_key": "FORESTUSD",
+   "v2_symbol": "FOREST/USD"
+  },
+  "FORTHEUR": {
+   "rest_key": "FORTHEUR",
+   "v2_symbol": "FORTH/EUR"
+  },
+  "FORTHUSD": {
+   "rest_key": "FORTHUSD",
+   "v2_symbol": "FORTH/USD"
+  },
+  "FRNTUSD": {
+   "rest_key": "FRNTUSD",
+   "v2_symbol": "FRNT/USD"
+  },
+  "FRNTUSDC": {
+   "rest_key": "FRNTUSDC",
+   "v2_symbol": "FRNT/USDC"
+  },
+  "FUNEUR": {
+   "rest_key": "FUNEUR",
+   "v2_symbol": "FUN/EUR"
+  },
+  "FUNUSD": {
+   "rest_key": "FUNUSD",
+   "v2_symbol": "FUN/USD"
+  },
+  "FWOGEUR": {
+   "rest_key": "FWOGEUR",
+   "v2_symbol": "FWOG/EUR"
+  },
+  "FWOGUSD": {
+   "rest_key": "FWOGUSD",
+   "v2_symbol": "FWOG/USD"
+  },
+  "FXSEUR": {
+   "rest_key": "FXSEUR",
+   "v2_symbol": "FXS/EUR"
+  },
+  "FXSUSD": {
+   "rest_key": "FXSUSD",
+   "v2_symbol": "FXS/USD"
+  },
+  "GAIAEUR": {
+   "rest_key": "GAIAEUR",
+   "v2_symbol": "GAIA/EUR"
+  },
+  "GAIAUSD": {
+   "rest_key": "GAIAUSD",
+   "v2_symbol": "GAIA/USD"
+  },
+  "GAIBEUR": {
+   "rest_key": "GAIBEUR",
+   "v2_symbol": "GAIB/EUR"
+  },
+  "GAIBUSD": {
+   "rest_key": "GAIBUSD",
+   "v2_symbol": "GAIB/USD"
+  },
+  "GALAEUR": {
+   "rest_key": "GALAEUR",
+   "v2_symbol": "GALA/EUR"
+  },
+  "GALAUSD": {
+   "rest_key": "GALAUSD",
+   "v2_symbol": "GALA/USD"
+  },
+  "GAME2EUR": {
+   "rest_key": "GAME2EUR",
+   "v2_symbol": "GAME2/EUR"
+  },
+  "GAME2USD": {
+   "rest_key": "GAME2USD",
+   "v2_symbol": "GAME2/USD"
+  },
+  "GASEUR": {
+   "rest_key": "GASEUR",
+   "v2_symbol": "GAS/EUR"
+  },
+  "GASUSD": {
+   "rest_key": "GASUSD",
+   "v2_symbol": "GAS/USD"
+  },
+  "GBPUSD": {
+   "rest_key": "ZGBPZUSD",
+   "v2_symbol": "GBP/USD"
+  },
+  "GENIUSEUR": {
+   "rest_key": "GENIUSEUR",
+   "v2_symbol": "GENIUS/EUR"
+  },
+  "GENIUSUSD": {
+   "rest_key": "GENIUSUSD",
+   "v2_symbol": "GENIUS/USD"
+  },
+  "GFIEUR": {
+   "rest_key": "GFIEUR",
+   "v2_symbol": "GFI/EUR"
+  },
+  "GFIUSD": {
+   "rest_key": "GFIUSD",
+   "v2_symbol": "GFI/USD"
+  },
+  "GHIBLIEUR": {
+   "rest_key": "GHIBLIEUR",
+   "v2_symbol": "GHIBLI/EUR"
+  },
+  "GHIBLIUSD": {
+   "rest_key": "GHIBLIUSD",
+   "v2_symbol": "GHIBLI/USD"
+  },
+  "GHSTEUR": {
+   "rest_key": "GHSTEUR",
+   "v2_symbol": "GHST/EUR"
+  },
+  "GHSTUSD": {
+   "rest_key": "GHSTUSD",
+   "v2_symbol": "GHST/USD"
+  },
+  "GIBUSD": {
+   "rest_key": "GIBUSD",
+   "v2_symbol": "GIB/USD"
+  },
+  "GIGAEUR": {
+   "rest_key": "GIGAEUR",
+   "v2_symbol": "GIGA/EUR"
+  },
+  "GIGAUSD": {
+   "rest_key": "GIGAUSD",
+   "v2_symbol": "GIGA/USD"
+  },
+  "GLMREUR": {
+   "rest_key": "GLMREUR",
+   "v2_symbol": "GLMR/EUR"
+  },
+  "GLMRUSD": {
+   "rest_key": "GLMRUSD",
+   "v2_symbol": "GLMR/USD"
+  },
+  "GMTEUR": {
+   "rest_key": "GMTEUR",
+   "v2_symbol": "GMT/EUR"
+  },
+  "GMTUSD": {
+   "rest_key": "GMTUSD",
+   "v2_symbol": "GMT/USD"
+  },
+  "GMXEUR": {
+   "rest_key": "GMXEUR",
+   "v2_symbol": "GMX/EUR"
+  },
+  "GMXUSD": {
+   "rest_key": "GMXUSD",
+   "v2_symbol": "GMX/USD"
+  },
+  "GNOEUR": {
+   "rest_key": "GNOEUR",
+   "v2_symbol": "GNO/EUR"
+  },
+  "GNOTUSD": {
+   "rest_key": "GNOTUSD",
+   "v2_symbol": "GNOT/USD"
+  },
+  "GNOUSD": {
+   "rest_key": "GNOUSD",
+   "v2_symbol": "GNO/USD"
+  },
+  "GOATEUR": {
+   "rest_key": "GOATEUR",
+   "v2_symbol": "GOAT/EUR"
+  },
+  "GOATUSD": {
+   "rest_key": "GOATUSD",
+   "v2_symbol": "GOAT/USD"
+  },
+  "GOMININGEUR": {
+   "rest_key": "GOMININGEUR",
+   "v2_symbol": "GOMINING/EUR"
+  },
+  "GOMININGUSD": {
+   "rest_key": "GOMININGUSD",
+   "v2_symbol": "GOMINING/USD"
+  },
+  "GRASSEUR": {
+   "rest_key": "GRASSEUR",
+   "v2_symbol": "GRASS/EUR"
+  },
+  "GRASSUSD": {
+   "rest_key": "GRASSUSD",
+   "v2_symbol": "GRASS/USD"
+  },
+  "GRIFFAINEUR": {
+   "rest_key": "GRIFFAINEUR",
+   "v2_symbol": "GRIFFAIN/EUR"
+  },
+  "GRIFFAINUSD": {
+   "rest_key": "GRIFFAINUSD",
+   "v2_symbol": "GRIFFAIN/USD"
+  },
+  "GRTEUR": {
+   "rest_key": "GRTEUR",
+   "v2_symbol": "GRT/EUR"
+  },
+  "GRTGBP": {
+   "rest_key": "GRTGBP",
+   "v2_symbol": "GRT/GBP"
+  },
+  "GRTUSD": {
+   "rest_key": "GRTUSD",
+   "v2_symbol": "GRT/USD"
+  },
+  "GRTXBT": {
+   "rest_key": "GRTXBT",
+   "v2_symbol": "GRT/BTC"
+  },
+  "GSTEUR": {
+   "rest_key": "GSTEUR",
+   "v2_symbol": "GST/EUR"
+  },
+  "GSTUSD": {
+   "rest_key": "GSTUSD",
+   "v2_symbol": "GST/USD"
+  },
+  "GTCEUR": {
+   "rest_key": "GTCEUR",
+   "v2_symbol": "GTC/EUR"
+  },
+  "GTCUSD": {
+   "rest_key": "GTCUSD",
+   "v2_symbol": "GTC/USD"
+  },
+  "GUNEUR": {
+   "rest_key": "GUNEUR",
+   "v2_symbol": "GUN/EUR"
+  },
+  "GUNUSD": {
+   "rest_key": "GUNUSD",
+   "v2_symbol": "GUN/USD"
+  },
+  "GUSD": {
+   "rest_key": "GUSD",
+   "v2_symbol": "G/USD"
+  },
+  "GWEIUSD": {
+   "rest_key": "GWEIUSD",
+   "v2_symbol": "GWEI/USD"
+  },
+  "HBAREUR": {
+   "rest_key": "HBAREUR",
+   "v2_symbol": "HBAR/EUR"
+  },
+  "HBARUSD": {
+   "rest_key": "HBARUSD",
+   "v2_symbol": "HBAR/USD"
+  },
+  "HDXEUR": {
+   "rest_key": "HDXEUR",
+   "v2_symbol": "HDX/EUR"
+  },
+  "HDXUSD": {
+   "rest_key": "HDXUSD",
+   "v2_symbol": "HDX/USD"
+  },
+  "HFTEUR": {
+   "rest_key": "HFTEUR",
+   "v2_symbol": "HFT/EUR"
+  },
+  "HFTUSD": {
+   "rest_key": "HFTUSD",
+   "v2_symbol": "HFT/USD"
+  },
+  "HIPPOEUR": {
+   "rest_key": "HIPPOEUR",
+   "v2_symbol": "HIPPO/EUR"
+  },
+  "HIPPOUSD": {
+   "rest_key": "HIPPOUSD",
+   "v2_symbol": "HIPPO/USD"
+  },
+  "HMSTREUR": {
+   "rest_key": "HMSTREUR",
+   "v2_symbol": "HMSTR/EUR"
+  },
+  "HMSTRUSD": {
+   "rest_key": "HMSTRUSD",
+   "v2_symbol": "HMSTR/USD"
+  },
+  "HNTEUR": {
+   "rest_key": "HNTEUR",
+   "v2_symbol": "HNT/EUR"
+  },
+  "HNTUSD": {
+   "rest_key": "HNTUSD",
+   "v2_symbol": "HNT/USD"
+  },
+  "HOLOUSD": {
+   "rest_key": "HOLOUSD",
+   "v2_symbol": "HOLO/USD"
+  },
+  "HONEYEUR": {
+   "rest_key": "HONEYEUR",
+   "v2_symbol": "HONEY/EUR"
+  },
+  "HONEYUSD": {
+   "rest_key": "HONEYUSD",
+   "v2_symbol": "HONEY/USD"
+  },
+  "HOUSEEUR": {
+   "rest_key": "HOUSEEUR",
+   "v2_symbol": "HOUSE/EUR"
+  },
+  "HOUSEUSD": {
+   "rest_key": "HOUSEUSD",
+   "v2_symbol": "HOUSE/USD"
+  },
+  "HPOS10IEUR": {
+   "rest_key": "HPOS10IEUR",
+   "v2_symbol": "HPOS10I/EUR"
+  },
+  "HPOS10IUSD": {
+   "rest_key": "HPOS10IUSD",
+   "v2_symbol": "HPOS10I/USD"
+  },
+  "HSKEUR": {
+   "rest_key": "HSKEUR",
+   "v2_symbol": "HSK/EUR"
+  },
+  "HSKUSD": {
+   "rest_key": "HSKUSD",
+   "v2_symbol": "HSK/USD"
+  },
+  "HYPEEUR": {
+   "rest_key": "HYPEEUR",
+   "v2_symbol": "HYPE/EUR"
+  },
+  "HYPEUSD": {
+   "rest_key": "HYPEUSD",
+   "v2_symbol": "HYPE/USD"
+  },
+  "IAGEUR": {
+   "rest_key": "IAGEUR",
+   "v2_symbol": "IAG/EUR"
+  },
+  "IAGUSD": {
+   "rest_key": "IAGUSD",
+   "v2_symbol": "IAG/USD"
+  },
+  "ICNTEUR": {
+   "rest_key": "ICNTEUR",
+   "v2_symbol": "ICNT/EUR"
+  },
+  "ICNTUSD": {
+   "rest_key": "ICNTUSD",
+   "v2_symbol": "ICNT/USD"
+  },
+  "ICPEUR": {
+   "rest_key": "ICPEUR",
+   "v2_symbol": "ICP/EUR"
+  },
+  "ICPUSD": {
+   "rest_key": "ICPUSD",
+   "v2_symbol": "ICP/USD"
+  },
+  "IDEXEUR": {
+   "rest_key": "IDEXEUR",
+   "v2_symbol": "IDEX/EUR"
+  },
+  "IDEXUSD": {
+   "rest_key": "IDEXUSD",
+   "v2_symbol": "IDEX/USD"
+  },
+  "IDOSEUR": {
+   "rest_key": "IDOSEUR",
+   "v2_symbol": "IDOS/EUR"
+  },
+  "IDOSUSD": {
+   "rest_key": "IDOSUSD",
+   "v2_symbol": "IDOS/USD"
+  },
+  "IMXEUR": {
+   "rest_key": "IMXEUR",
+   "v2_symbol": "IMX/EUR"
+  },
+  "IMXUSD": {
+   "rest_key": "IMXUSD",
+   "v2_symbol": "IMX/USD"
+  },
+  "INEUR": {
+   "rest_key": "INEUR",
+   "v2_symbol": "IN/EUR"
+  },
+  "INITEUR": {
+   "rest_key": "INITEUR",
+   "v2_symbol": "INIT/EUR"
+  },
+  "INITUSD": {
+   "rest_key": "INITUSD",
+   "v2_symbol": "INIT/USD"
+  },
+  "INJEUR": {
+   "rest_key": "INJEUR",
+   "v2_symbol": "INJ/EUR"
+  },
+  "INJUSD": {
+   "rest_key": "INJUSD",
+   "v2_symbol": "INJ/USD"
+  },
+  "INUSD": {
+   "rest_key": "INUSD",
+   "v2_symbol": "IN/USD"
+  },
+  "INXEUR": {
+   "rest_key": "INXEUR",
+   "v2_symbol": "INX/EUR"
+  },
+  "INXUSD": {
+   "rest_key": "INXUSD",
+   "v2_symbol": "INX/USD"
+  },
+  "IPEUR": {
+   "rest_key": "IPEUR",
+   "v2_symbol": "IP/EUR"
+  },
+  "IPUSD": {
+   "rest_key": "IPUSD",
+   "v2_symbol": "IP/USD"
+  },
+  "IREUR": {
+   "rest_key": "IREUR",
+   "v2_symbol": "IR/EUR"
+  },
+  "IRUSD": {
+   "rest_key": "IRUSD",
+   "v2_symbol": "IR/USD"
+  },
+  "JAILSTOOLUSD": {
+   "rest_key": "JAILSTOOLUSD",
+   "v2_symbol": "JAILSTOOL/USD"
+  },
+  "JASMYEUR": {
+   "rest_key": "JASMYEUR",
+   "v2_symbol": "JASMY/EUR"
+  },
+  "JASMYUSD": {
+   "rest_key": "JASMYUSD",
+   "v2_symbol": "JASMY/USD"
+  },
+  "JITOSOLEUR": {
+   "rest_key": "JITOSOLEUR",
+   "v2_symbol": "JITOSOL/EUR"
+  },
+  "JITOSOLSOL": {
+   "rest_key": "JITOSOLSOL",
+   "v2_symbol": "JITOSOL/SOL"
+  },
+  "JITOSOLUSD": {
+   "rest_key": "JITOSOLUSD",
+   "v2_symbol": "JITOSOL/USD"
+  },
+  "JOEEUR": {
+   "rest_key": "JOEEUR",
+   "v2_symbol": "JOE/EUR"
+  },
+  "JOEUSD": {
+   "rest_key": "JOEUSD",
+   "v2_symbol": "JOE/USD"
+  },
+  "JSTEUR": {
+   "rest_key": "JSTEUR",
+   "v2_symbol": "JST/EUR"
+  },
+  "JSTUSD": {
+   "rest_key": "JSTUSD",
+   "v2_symbol": "JST/USD"
+  },
+  "JTOEUR": {
+   "rest_key": "JTOEUR",
+   "v2_symbol": "JTO/EUR"
+  },
+  "JTOUSD": {
+   "rest_key": "JTOUSD",
+   "v2_symbol": "JTO/USD"
+  },
+  "JUNOEUR": {
+   "rest_key": "JUNOEUR",
+   "v2_symbol": "JUNO/EUR"
+  },
+  "JUNOUSD": {
+   "rest_key": "JUNOUSD",
+   "v2_symbol": "JUNO/USD"
+  },
+  "JUPEUR": {
+   "rest_key": "JUPEUR",
+   "v2_symbol": "JUP/EUR"
+  },
+  "JUPUSD": {
+   "rest_key": "JUPUSD",
+   "v2_symbol": "JUP/USD"
+  },
+  "KAITOEUR": {
+   "rest_key": "KAITOEUR",
+   "v2_symbol": "KAITO/EUR"
+  },
+  "KAITOUSD": {
+   "rest_key": "KAITOUSD",
+   "v2_symbol": "KAITO/USD"
+  },
+  "KASEUR": {
+   "rest_key": "KASEUR",
+   "v2_symbol": "KAS/EUR"
+  },
+  "KASUSD": {
+   "rest_key": "KASUSD",
+   "v2_symbol": "KAS/USD"
+  },
+  "KASUSDT": {
+   "rest_key": "KASUSDT",
+   "v2_symbol": "KAS/USDT"
+  },
+  "KATEUR": {
+   "rest_key": "KATEUR",
+   "v2_symbol": "KAT/EUR"
+  },
+  "KATUSD": {
+   "rest_key": "KATUSD",
+   "v2_symbol": "KAT/USD"
+  },
+  "KAVAEUR": {
+   "rest_key": "KAVAEUR",
+   "v2_symbol": "KAVA/EUR"
+  },
+  "KAVAUSD": {
+   "rest_key": "KAVAUSD",
+   "v2_symbol": "KAVA/USD"
+  },
+  "KEEPUSD": {
+   "rest_key": "KEEPUSD",
+   "v2_symbol": "KEEP/USD"
+  },
+  "KERNELEUR": {
+   "rest_key": "KERNELEUR",
+   "v2_symbol": "KERNEL/EUR"
+  },
+  "KERNELUSD": {
+   "rest_key": "KERNELUSD",
+   "v2_symbol": "KERNEL/USD"
+  },
+  "KEYEUR": {
+   "rest_key": "KEYEUR",
+   "v2_symbol": "KEY/EUR"
+  },
+  "KEYUSD": {
+   "rest_key": "KEYUSD",
+   "v2_symbol": "KEY/USD"
+  },
+  "KGENUSD": {
+   "rest_key": "KGENUSD",
+   "v2_symbol": "KGEN/USD"
+  },
+  "KIIUSD": {
+   "rest_key": "KIIUSD",
+   "v2_symbol": "KII/USD"
+  },
+  "KINEUR": {
+   "rest_key": "KINEUR",
+   "v2_symbol": "KIN/EUR"
+  },
+  "KINUSD": {
+   "rest_key": "KINUSD",
+   "v2_symbol": "KIN/USD"
+  },
+  "KMNOEUR": {
+   "rest_key": "KMNOEUR",
+   "v2_symbol": "KMNO/EUR"
+  },
+  "KMNOUSD": {
+   "rest_key": "KMNOUSD",
+   "v2_symbol": "KMNO/USD"
+  },
+  "KNCEUR": {
+   "rest_key": "KNCEUR",
+   "v2_symbol": "KNC/EUR"
+  },
+  "KNCUSD": {
+   "rest_key": "KNCUSD",
+   "v2_symbol": "KNC/USD"
+  },
+  "KNTQEUR": {
+   "rest_key": "KNTQEUR",
+   "v2_symbol": "KNTQ/EUR"
+  },
+  "KNTQUSD": {
+   "rest_key": "KNTQUSD",
+   "v2_symbol": "KNTQ/USD"
+  },
+  "KOBANEUR": {
+   "rest_key": "KOBANEUR",
+   "v2_symbol": "KOBAN/EUR"
+  },
+  "KOBANUSD": {
+   "rest_key": "KOBANUSD",
+   "v2_symbol": "KOBAN/USD"
+  },
+  "KP3REUR": {
+   "rest_key": "KP3REUR",
+   "v2_symbol": "KP3R/EUR"
+  },
+  "KP3RUSD": {
+   "rest_key": "KP3RUSD",
+   "v2_symbol": "KP3R/USD"
+  },
+  "KSMEUR": {
+   "rest_key": "KSMEUR",
+   "v2_symbol": "KSM/EUR"
+  },
+  "KSMGBP": {
+   "rest_key": "KSMGBP",
+   "v2_symbol": "KSM/GBP"
+  },
+  "KSMUSD": {
+   "rest_key": "KSMUSD",
+   "v2_symbol": "KSM/USD"
+  },
+  "KTAEUR": {
+   "rest_key": "KTAEUR",
+   "v2_symbol": "KTA/EUR"
+  },
+  "KTAUSD": {
+   "rest_key": "KTAUSD",
+   "v2_symbol": "KTA/USD"
+  },
+  "KULAEUR": {
+   "rest_key": "KULAEUR",
+   "v2_symbol": "KULA/EUR"
+  },
+  "KULAUSD": {
+   "rest_key": "KULAUSD",
+   "v2_symbol": "KULA/USD"
+  },
+  "L3USD": {
+   "rest_key": "L3USD",
+   "v2_symbol": "L3/USD"
+  },
+  "LAPTOPUSD": {
+   "rest_key": "LAPTOPUSD",
+   "v2_symbol": "LAPTOP/USD"
+  },
+  "LAVAEUR": {
+   "rest_key": "LAVAEUR",
+   "v2_symbol": "LAVA/EUR"
+  },
+  "LAVAUSD": {
+   "rest_key": "LAVAUSD",
+   "v2_symbol": "LAVA/USD"
+  },
+  "LAYEREUR": {
+   "rest_key": "LAYEREUR",
+   "v2_symbol": "LAYER/EUR"
+  },
+  "LAYERUSD": {
+   "rest_key": "LAYERUSD",
+   "v2_symbol": "LAYER/USD"
+  },
+  "LCAPEUR": {
+   "rest_key": "LCAPEUR",
+   "v2_symbol": "LCAP/EUR"
+  },
+  "LCAPUSD": {
+   "rest_key": "LCAPUSD",
+   "v2_symbol": "LCAP/USD"
+  },
+  "LCXEUR": {
+   "rest_key": "LCXEUR",
+   "v2_symbol": "LCX/EUR"
+  },
+  "LCXUSD": {
+   "rest_key": "LCXUSD",
+   "v2_symbol": "LCX/USD"
+  },
+  "LDOEUR": {
+   "rest_key": "LDOEUR",
+   "v2_symbol": "LDO/EUR"
+  },
+  "LDOUSD": {
+   "rest_key": "LDOUSD",
+   "v2_symbol": "LDO/USD"
+  },
+  "LIGHTERUSD": {
+   "rest_key": "LIGHTERUSD",
+   "v2_symbol": "LIGHTER/USD"
+  },
+  "LINEAEUR": {
+   "rest_key": "LINEAEUR",
+   "v2_symbol": "LINEA/EUR"
+  },
+  "LINEAUSD": {
+   "rest_key": "LINEAUSD",
+   "v2_symbol": "LINEA/USD"
+  },
+  "LINKAUD": {
+   "rest_key": "LINKAUD",
+   "v2_symbol": "LINK/AUD"
+  },
+  "LINKETH": {
+   "rest_key": "LINKETH",
+   "v2_symbol": "LINK/ETH"
+  },
+  "LINKEUR": {
+   "rest_key": "LINKEUR",
+   "v2_symbol": "LINK/EUR"
+  },
+  "LINKGBP": {
+   "rest_key": "LINKGBP",
+   "v2_symbol": "LINK/GBP"
+  },
+  "LINKJPY": {
+   "rest_key": "LINKJPY",
+   "v2_symbol": "LINK/JPY"
+  },
+  "LINKUSD": {
+   "rest_key": "LINKUSD",
+   "v2_symbol": "LINK/USD"
+  },
+  "LINKUSDC": {
+   "rest_key": "LINKUSDC",
+   "v2_symbol": "LINK/USDC"
+  },
+  "LINKUSDT": {
+   "rest_key": "LINKUSDT",
+   "v2_symbol": "LINK/USDT"
+  },
+  "LINKXBT": {
+   "rest_key": "LINKXBT",
+   "v2_symbol": "LINK/BTC"
+  },
+  "LIONEUR": {
+   "rest_key": "LIONEUR",
+   "v2_symbol": "LION/EUR"
+  },
+  "LIONUSD": {
+   "rest_key": "LIONUSD",
+   "v2_symbol": "LION/USD"
+  },
+  "LITEUR": {
+   "rest_key": "LITEUR",
+   "v2_symbol": "LIT/EUR"
+  },
+  "LITUSD": {
+   "rest_key": "LITUSD",
+   "v2_symbol": "LIT/USD"
+  },
+  "LMWREUR": {
+   "rest_key": "LMWREUR",
+   "v2_symbol": "LMWR/EUR"
+  },
+  "LMWRUSD": {
+   "rest_key": "LMWRUSD",
+   "v2_symbol": "LMWR/USD"
+  },
+  "LOCKINEUR": {
+   "rest_key": "LOCKINEUR",
+   "v2_symbol": "LOCKIN/EUR"
+  },
+  "LOCKINUSD": {
+   "rest_key": "LOCKINUSD",
+   "v2_symbol": "LOCKIN/USD"
+  },
+  "LOFIEUR": {
+   "rest_key": "LOFIEUR",
+   "v2_symbol": "LOFI/EUR"
+  },
+  "LOFIUSD": {
+   "rest_key": "LOFIUSD",
+   "v2_symbol": "LOFI/USD"
+  },
+  "LPTEUR": {
+   "rest_key": "LPTEUR",
+   "v2_symbol": "LPT/EUR"
+  },
+  "LPTUSD": {
+   "rest_key": "LPTUSD",
+   "v2_symbol": "LPT/USD"
+  },
+  "LQTYEUR": {
+   "rest_key": "LQTYEUR",
+   "v2_symbol": "LQTY/EUR"
+  },
+  "LQTYUSD": {
+   "rest_key": "LQTYUSD",
+   "v2_symbol": "LQTY/USD"
+  },
+  "LRCEUR": {
+   "rest_key": "LRCEUR",
+   "v2_symbol": "LRC/EUR"
+  },
+  "LRCUSD": {
+   "rest_key": "LRCUSD",
+   "v2_symbol": "LRC/USD"
+  },
+  "LSETHETH": {
+   "rest_key": "LSETHETH",
+   "v2_symbol": "LSETH/ETH"
+  },
+  "LSETHUSD": {
+   "rest_key": "LSETHUSD",
+   "v2_symbol": "LSETH/USD"
+  },
+  "LSKEUR": {
+   "rest_key": "LSKEUR",
+   "v2_symbol": "LSK/EUR"
+  },
+  "LSKUSD": {
+   "rest_key": "LSKUSD",
+   "v2_symbol": "LSK/USD"
+  },
+  "LSSOLEUR": {
+   "rest_key": "LSSOLEUR",
+   "v2_symbol": "LSSOL/EUR"
+  },
+  "LSSOLSOL": {
+   "rest_key": "LSSOLSOL",
+   "v2_symbol": "LSSOL/SOL"
+  },
+  "LSSOLUSD": {
+   "rest_key": "LSSOLUSD",
+   "v2_symbol": "LSSOL/USD"
+  },
+  "LTCAUD": {
+   "rest_key": "LTCAUD",
+   "v2_symbol": "LTC/AUD"
+  },
+  "LTCETH": {
+   "rest_key": "LTCETH",
+   "v2_symbol": "LTC/ETH"
+  },
+  "LTCEUR": {
+   "rest_key": "XLTCZEUR",
+   "v2_symbol": "LTC/EUR"
+  },
+  "LTCGBP": {
+   "rest_key": "LTCGBP",
+   "v2_symbol": "LTC/GBP"
+  },
+  "LTCJPY": {
+   "rest_key": "XLTCZJPY",
+   "v2_symbol": "LTC/JPY"
+  },
+  "LTCUSD": {
+   "rest_key": "XLTCZUSD",
+   "v2_symbol": "LTC/USD"
+  },
+  "LTCUSDC": {
+   "rest_key": "LTCUSDC",
+   "v2_symbol": "LTC/USDC"
+  },
+  "LTCUSDT": {
+   "rest_key": "LTCUSDT",
+   "v2_symbol": "LTC/USDT"
+  },
+  "LTCXBT": {
+   "rest_key": "XLTCXXBT",
+   "v2_symbol": "LTC/BTC"
+  },
+  "LUNAEUR": {
+   "rest_key": "LUNAEUR",
+   "v2_symbol": "LUNA/EUR"
+  },
+  "LUNAUSD": {
+   "rest_key": "LUNAUSD",
+   "v2_symbol": "LUNA/USD"
+  },
+  "MANAEUR": {
+   "rest_key": "MANAEUR",
+   "v2_symbol": "MANA/EUR"
+  },
+  "MANAUSD": {
+   "rest_key": "MANAUSD",
+   "v2_symbol": "MANA/USD"
+  },
+  "MANAUSDC": {
+   "rest_key": "MANAUSDC",
+   "v2_symbol": "MANA/USDC"
+  },
+  "MANAUSDT": {
+   "rest_key": "MANAUSDT",
+   "v2_symbol": "MANA/USDT"
+  },
+  "MANAXBT": {
+   "rest_key": "MANAXBT",
+   "v2_symbol": "MANA/BTC"
+  },
+  "MANTRAEUR": {
+   "rest_key": "MANTRAEUR",
+   "v2_symbol": "MANTRA/EUR"
+  },
+  "MANTRAUSD": {
+   "rest_key": "MANTRAUSD",
+   "v2_symbol": "MANTRA/USD"
+  },
+  "MASKEUR": {
+   "rest_key": "MASKEUR",
+   "v2_symbol": "MASK/EUR"
+  },
+  "MASKUSD": {
+   "rest_key": "MASKUSD",
+   "v2_symbol": "MASK/USD"
+  },
+  "MATEUR": {
+   "rest_key": "MATEUR",
+   "v2_symbol": "MAT/EUR"
+  },
+  "MATUSD": {
+   "rest_key": "MATUSD",
+   "v2_symbol": "MAT/USD"
+  },
+  "MEEUR": {
+   "rest_key": "MEEUR",
+   "v2_symbol": "ME/EUR"
+  },
+  "MEGAEUR": {
+   "rest_key": "MEGAEUR",
+   "v2_symbol": "MEGA/EUR"
+  },
+  "MEGAUSD": {
+   "rest_key": "MEGAUSD",
+   "v2_symbol": "MEGA/USD"
+  },
+  "MELANIAEUR": {
+   "rest_key": "MELANIAEUR",
+   "v2_symbol": "MELANIA/EUR"
+  },
+  "MELANIAUSD": {
+   "rest_key": "MELANIAUSD",
+   "v2_symbol": "MELANIA/USD"
+  },
+  "MELANIAUSDC": {
+   "rest_key": "MELANIAUSDC",
+   "v2_symbol": "MELANIA/USDC"
+  },
+  "MELANIAUSDT": {
+   "rest_key": "MELANIAUSDT",
+   "v2_symbol": "MELANIA/USDT"
+  },
+  "MEMEEUR": {
+   "rest_key": "MEMEEUR",
+   "v2_symbol": "MEME/EUR"
+  },
+  "MEMEUSD": {
+   "rest_key": "MEMEUSD",
+   "v2_symbol": "MEME/USD"
+  },
+  "MERLEUR": {
+   "rest_key": "MERLEUR",
+   "v2_symbol": "MERL/EUR"
+  },
+  "MERLUSD": {
+   "rest_key": "MERLUSD",
+   "v2_symbol": "MERL/USD"
+  },
+  "METEUR": {
+   "rest_key": "METEUR",
+   "v2_symbol": "MET/EUR"
+  },
+  "METHETH": {
+   "rest_key": "METHETH",
+   "v2_symbol": "METH/ETH"
+  },
+  "METHUSD": {
+   "rest_key": "METHUSD",
+   "v2_symbol": "METH/USD"
+  },
+  "METISEUR": {
+   "rest_key": "METISEUR",
+   "v2_symbol": "METIS/EUR"
+  },
+  "METISUSD": {
+   "rest_key": "METISUSD",
+   "v2_symbol": "METIS/USD"
+  },
+  "METUSD": {
+   "rest_key": "METUSD",
+   "v2_symbol": "MET/USD"
+  },
+  "MEUR": {
+   "rest_key": "MEUR",
+   "v2_symbol": "M/EUR"
+  },
+  "MEUSD": {
+   "rest_key": "MEUSD",
+   "v2_symbol": "ME/USD"
+  },
+  "MEWEUR": {
+   "rest_key": "MEWEUR",
+   "v2_symbol": "MEW/EUR"
+  },
+  "MEWUSD": {
+   "rest_key": "MEWUSD",
+   "v2_symbol": "MEW/USD"
+  },
+  "MEZOUSD": {
+   "rest_key": "MEZOUSD",
+   "v2_symbol": "MEZO/USD"
+  },
+  "MFEUR": {
+   "rest_key": "MFEUR",
+   "v2_symbol": "MF/EUR"
+  },
+  "MFUSD": {
+   "rest_key": "MFUSD",
+   "v2_symbol": "MF/USD"
+  },
+  "MIMEUR": {
+   "rest_key": "MIMEUR",
+   "v2_symbol": "MIM/EUR"
+  },
+  "MIMUSD": {
+   "rest_key": "MIMUSD",
+   "v2_symbol": "MIM/USD"
+  },
+  "MINAEUR": {
+   "rest_key": "MINAEUR",
+   "v2_symbol": "MINA/EUR"
+  },
+  "MINAGBP": {
+   "rest_key": "MINAGBP",
+   "v2_symbol": "MINA/GBP"
+  },
+  "MINAUSD": {
+   "rest_key": "MINAUSD",
+   "v2_symbol": "MINA/USD"
+  },
+  "MINAXBT": {
+   "rest_key": "MINAXBT",
+   "v2_symbol": "MINA/BTC"
+  },
+  "MIRAEUR": {
+   "rest_key": "MIRAEUR",
+   "v2_symbol": "MIRA/EUR"
+  },
+  "MIRAUSD": {
+   "rest_key": "MIRAUSD",
+   "v2_symbol": "MIRA/USD"
+  },
+  "MIREUR": {
+   "rest_key": "MIREUR",
+   "v2_symbol": "MIR/EUR"
+  },
+  "MIRUSD": {
+   "rest_key": "MIRUSD",
+   "v2_symbol": "MIR/USD"
+  },
+  "MLNEUR": {
+   "rest_key": "XMLNZEUR",
+   "v2_symbol": "MLN/EUR"
+  },
+  "MLNUSD": {
+   "rest_key": "XMLNZUSD",
+   "v2_symbol": "MLN/USD"
+  },
+  "MLNXBT": {
+   "rest_key": "XMLNXXBT",
+   "v2_symbol": "MLN/BTC"
+  },
+  "MNGOEUR": {
+   "rest_key": "MNGOEUR",
+   "v2_symbol": "MNGO/EUR"
+  },
+  "MNGOUSD": {
+   "rest_key": "MNGOUSD",
+   "v2_symbol": "MNGO/USD"
+  },
+  "MNTEUR": {
+   "rest_key": "MNTEUR",
+   "v2_symbol": "MNT/EUR"
+  },
+  "MNTUSD": {
+   "rest_key": "MNTUSD",
+   "v2_symbol": "MNT/USD"
+  },
+  "MOCAEUR": {
+   "rest_key": "MOCAEUR",
+   "v2_symbol": "MOCA/EUR"
+  },
+  "MOCAUSD": {
+   "rest_key": "MOCAUSD",
+   "v2_symbol": "MOCA/USD"
+  },
+  "MOGEUR": {
+   "rest_key": "MOGEUR",
+   "v2_symbol": "MOG/EUR"
+  },
+  "MOGUSD": {
+   "rest_key": "MOGUSD",
+   "v2_symbol": "MOG/USD"
+  },
+  "MONEUR": {
+   "rest_key": "MONEUR",
+   "v2_symbol": "MON/EUR"
+  },
+  "MONUSD": {
+   "rest_key": "MONUSD",
+   "v2_symbol": "MON/USD"
+  },
+  "MOODENGEUR": {
+   "rest_key": "MOODENGEUR",
+   "v2_symbol": "MOODENG/EUR"
+  },
+  "MOODENGUSD": {
+   "rest_key": "MOODENGUSD",
+   "v2_symbol": "MOODENG/USD"
+  },
+  "MORPHOEUR": {
+   "rest_key": "MORPHOEUR",
+   "v2_symbol": "MORPHO/EUR"
+  },
+  "MORPHOUSD": {
+   "rest_key": "MORPHOUSD",
+   "v2_symbol": "MORPHO/USD"
+  },
+  "MOVREUR": {
+   "rest_key": "MOVREUR",
+   "v2_symbol": "MOVR/EUR"
+  },
+  "MOVRUSD": {
+   "rest_key": "MOVRUSD",
+   "v2_symbol": "MOVR/USD"
+  },
+  "MSOLEUR": {
+   "rest_key": "MSOLEUR",
+   "v2_symbol": "MSOL/EUR"
+  },
+  "MSOLUSD": {
+   "rest_key": "MSOLUSD",
+   "v2_symbol": "MSOL/USD"
+  },
+  "MUBARAKUSD": {
+   "rest_key": "MUBARAKUSD",
+   "v2_symbol": "MUBARAK/USD"
+  },
+  "MULTIEUR": {
+   "rest_key": "MULTIEUR",
+   "v2_symbol": "MULTI/EUR"
+  },
+  "MULTIUSD": {
+   "rest_key": "MULTIUSD",
+   "v2_symbol": "MULTI/USD"
+  },
+  "MUSD": {
+   "rest_key": "MUSD",
+   "v2_symbol": "M/USD"
+  },
+  "MXNBUSD": {
+   "rest_key": "MXNBUSD",
+   "v2_symbol": "MXNB/USD"
+  },
+  "MYXEUR": {
+   "rest_key": "MYXEUR",
+   "v2_symbol": "MYX/EUR"
+  },
+  "MYXUSD": {
+   "rest_key": "MYXUSD",
+   "v2_symbol": "MYX/USD"
+  },
+  "NANOEUR": {
+   "rest_key": "NANOEUR",
+   "v2_symbol": "NANO/EUR"
+  },
+  "NANOUSD": {
+   "rest_key": "NANOUSD",
+   "v2_symbol": "NANO/USD"
+  },
+  "NEAREUR": {
+   "rest_key": "NEAREUR",
+   "v2_symbol": "NEAR/EUR"
+  },
+  "NEARUSD": {
+   "rest_key": "NEARUSD",
+   "v2_symbol": "NEAR/USD"
+  },
+  "NEIROEUR": {
+   "rest_key": "NEIROEUR",
+   "v2_symbol": "NEIRO/EUR"
+  },
+  "NEIROUSD": {
+   "rest_key": "NEIROUSD",
+   "v2_symbol": "NEIRO/USD"
+  },
+  "NEOEUR": {
+   "rest_key": "NEOEUR",
+   "v2_symbol": "NEO/EUR"
+  },
+  "NEOUSD": {
+   "rest_key": "NEOUSD",
+   "v2_symbol": "NEO/USD"
+  },
+  "NESUSD": {
+   "rest_key": "NESUSD",
+   "v2_symbol": "NES/USD"
+  },
+  "NEXEUR": {
+   "rest_key": "NEXEUR",
+   "v2_symbol": "NEX/EUR"
+  },
+  "NEXUSD": {
+   "rest_key": "NEXUSD",
+   "v2_symbol": "NEX/USD"
+  },
+  "NIGHTEUR": {
+   "rest_key": "NIGHTEUR",
+   "v2_symbol": "NIGHT/EUR"
+  },
+  "NIGHTUSD": {
+   "rest_key": "NIGHTUSD",
+   "v2_symbol": "NIGHT/USD"
+  },
+  "NILEUR": {
+   "rest_key": "NILEUR",
+   "v2_symbol": "NIL/EUR"
+  },
+  "NILUSD": {
+   "rest_key": "NILUSD",
+   "v2_symbol": "NIL/USD"
+  },
+  "NMREUR": {
+   "rest_key": "NMREUR",
+   "v2_symbol": "NMR/EUR"
+  },
+  "NMRUSD": {
+   "rest_key": "NMRUSD",
+   "v2_symbol": "NMR/USD"
+  },
+  "NOBODYEUR": {
+   "rest_key": "NOBODYEUR",
+   "v2_symbol": "NOBODY/EUR"
+  },
+  "NOBODYUSD": {
+   "rest_key": "NOBODYUSD",
+   "v2_symbol": "NOBODY/USD"
+  },
+  "NOCKUSD": {
+   "rest_key": "NOCKUSD",
+   "v2_symbol": "NOCK/USD"
+  },
+  "NODEEUR": {
+   "rest_key": "NODEEUR",
+   "v2_symbol": "NODE/EUR"
+  },
+  "NODEUSD": {
+   "rest_key": "NODEUSD",
+   "v2_symbol": "NODE/USD"
+  },
+  "NOSEUR": {
+   "rest_key": "NOSEUR",
+   "v2_symbol": "NOS/EUR"
+  },
+  "NOSUSD": {
+   "rest_key": "NOSUSD",
+   "v2_symbol": "NOS/USD"
+  },
+  "NOTEUR": {
+   "rest_key": "NOTEUR",
+   "v2_symbol": "NOT/EUR"
+  },
+  "NOTUSD": {
+   "rest_key": "NOTUSD",
+   "v2_symbol": "NOT/USD"
+  },
+  "NPCEUR": {
+   "rest_key": "NPCEUR",
+   "v2_symbol": "NPC/EUR"
+  },
+  "NPCUSD": {
+   "rest_key": "NPCUSD",
+   "v2_symbol": "NPC/USD"
+  },
+  "NTRNEUR": {
+   "rest_key": "NTRNEUR",
+   "v2_symbol": "NTRN/EUR"
+  },
+  "NTRNUSD": {
+   "rest_key": "NTRNUSD",
+   "v2_symbol": "NTRN/USD"
+  },
+  "OBOLEUR": {
+   "rest_key": "OBOLEUR",
+   "v2_symbol": "OBOL/EUR"
+  },
+  "OBOLUSD": {
+   "rest_key": "OBOLUSD",
+   "v2_symbol": "OBOL/USD"
+  },
+  "OBOLUSDT": {
+   "rest_key": "OBOLUSDT",
+   "v2_symbol": "OBOL/USDT"
+  },
+  "OCEANEUR": {
+   "rest_key": "OCEANEUR",
+   "v2_symbol": "OCEAN/EUR"
+  },
+  "OCEANUSD": {
+   "rest_key": "OCEANUSD",
+   "v2_symbol": "OCEAN/USD"
+  },
+  "ODOSUSD": {
+   "rest_key": "ODOSUSD",
+   "v2_symbol": "ODOS/USD"
+  },
+  "OGNEUR": {
+   "rest_key": "OGNEUR",
+   "v2_symbol": "OGN/EUR"
+  },
+  "OGNUSD": {
+   "rest_key": "OGNUSD",
+   "v2_symbol": "OGN/USD"
+  },
+  "OKBUSD": {
+   "rest_key": "OKBUSD",
+   "v2_symbol": "OKB/USD"
+  },
+  "OMGEUR": {
+   "rest_key": "OMGEUR",
+   "v2_symbol": "OMG/EUR"
+  },
+  "OMGUSD": {
+   "rest_key": "OMGUSD",
+   "v2_symbol": "OMG/USD"
+  },
+  "OMIEUR": {
+   "rest_key": "OMIEUR",
+   "v2_symbol": "OMI/EUR"
+  },
+  "OMIUSD": {
+   "rest_key": "OMIUSD",
+   "v2_symbol": "OMI/USD"
+  },
+  "OMNIUSD": {
+   "rest_key": "OMNIUSD",
+   "v2_symbol": "OMNI/USD"
+  },
+  "ONDOEUR": {
+   "rest_key": "ONDOEUR",
+   "v2_symbol": "ONDO/EUR"
+  },
+  "ONDOUSD": {
+   "rest_key": "ONDOUSD",
+   "v2_symbol": "ONDO/USD"
+  },
+  "ONEUSD": {
+   "rest_key": "ONEUSD",
+   "v2_symbol": "ONE/USD"
+  },
+  "OOBEUR": {
+   "rest_key": "OOBEUR",
+   "v2_symbol": "OOB/EUR"
+  },
+  "OOBUSD": {
+   "rest_key": "OOBUSD",
+   "v2_symbol": "OOB/USD"
+  },
+  "OPENEUR": {
+   "rest_key": "OPENEUR",
+   "v2_symbol": "OPEN/EUR"
+  },
+  "OPENUSD": {
+   "rest_key": "OPENUSD",
+   "v2_symbol": "OPEN/USD"
+  },
+  "OPEUR": {
+   "rest_key": "OPEUR",
+   "v2_symbol": "OP/EUR"
+  },
+  "OPNUSD": {
+   "rest_key": "OPNUSD",
+   "v2_symbol": "OPN/USD"
+  },
+  "OPUSD": {
+   "rest_key": "OPUSD",
+   "v2_symbol": "OP/USD"
+  },
+  "ORCAEUR": {
+   "rest_key": "ORCAEUR",
+   "v2_symbol": "ORCA/EUR"
+  },
+  "ORCAUSD": {
+   "rest_key": "ORCAUSD",
+   "v2_symbol": "ORCA/USD"
+  },
+  "ORDERUSD": {
+   "rest_key": "ORDERUSD",
+   "v2_symbol": "ORDER/USD"
+  },
+  "OSMOEUR": {
+   "rest_key": "OSMOEUR",
+   "v2_symbol": "OSMO/EUR"
+  },
+  "OSMOUSD": {
+   "rest_key": "OSMOUSD",
+   "v2_symbol": "OSMO/USD"
+  },
+  "OXTEUR": {
+   "rest_key": "OXTEUR",
+   "v2_symbol": "OXT/EUR"
+  },
+  "OXTUSD": {
+   "rest_key": "OXTUSD",
+   "v2_symbol": "OXT/USD"
+  },
+  "PACKUSD": {
+   "rest_key": "PACKUSD",
+   "v2_symbol": "PACK/USD"
+  },
+  "PACTUSD": {
+   "rest_key": "PACTUSD",
+   "v2_symbol": "PACT/USD"
+  },
+  "PARTIEUR": {
+   "rest_key": "PARTIEUR",
+   "v2_symbol": "PARTI/EUR"
+  },
+  "PARTIUSD": {
+   "rest_key": "PARTIUSD",
+   "v2_symbol": "PARTI/USD"
+  },
+  "PAXGETH": {
+   "rest_key": "PAXGETH",
+   "v2_symbol": "PAXG/ETH"
+  },
+  "PAXGEUR": {
+   "rest_key": "PAXGEUR",
+   "v2_symbol": "PAXG/EUR"
+  },
+  "PAXGUSD": {
+   "rest_key": "PAXGUSD",
+   "v2_symbol": "PAXG/USD"
+  },
+  "PAXGXBT": {
+   "rest_key": "PAXGXBT",
+   "v2_symbol": "PAXG/BTC"
+  },
+  "PEAQEUR": {
+   "rest_key": "PEAQEUR",
+   "v2_symbol": "PEAQ/EUR"
+  },
+  "PEAQUSD": {
+   "rest_key": "PEAQUSD",
+   "v2_symbol": "PEAQ/USD"
+  },
+  "PEAQUSDC": {
+   "rest_key": "PEAQUSDC",
+   "v2_symbol": "PEAQ/USDC"
+  },
+  "PENDLEEUR": {
+   "rest_key": "PENDLEEUR",
+   "v2_symbol": "PENDLE/EUR"
+  },
+  "PENDLEUSD": {
+   "rest_key": "PENDLEUSD",
+   "v2_symbol": "PENDLE/USD"
+  },
+  "PENGUEUR": {
+   "rest_key": "PENGUEUR",
+   "v2_symbol": "PENGU/EUR"
+  },
+  "PENGUUSD": {
+   "rest_key": "PENGUUSD",
+   "v2_symbol": "PENGU/USD"
+  },
+  "PENGUUSDC": {
+   "rest_key": "PENGUUSDC",
+   "v2_symbol": "PENGU/USDC"
+  },
+  "PENGUUSDT": {
+   "rest_key": "PENGUUSDT",
+   "v2_symbol": "PENGU/USDT"
+  },
+  "PEPEAUD": {
+   "rest_key": "PEPEAUD",
+   "v2_symbol": "PEPE/AUD"
+  },
+  "PEPECAD": {
+   "rest_key": "PEPECAD",
+   "v2_symbol": "PEPE/CAD"
+  },
+  "PEPECOINUSD": {
+   "rest_key": "PEPECOINUSD",
+   "v2_symbol": "PEPECOIN/USD"
+  },
+  "PEPEEUR": {
+   "rest_key": "PEPEEUR",
+   "v2_symbol": "PEPE/EUR"
+  },
+  "PEPEGBP": {
+   "rest_key": "PEPEGBP",
+   "v2_symbol": "PEPE/GBP"
+  },
+  "PEPEUR": {
+   "rest_key": "PEPEUR",
+   "v2_symbol": "PEP/EUR"
+  },
+  "PEPEUSD": {
+   "rest_key": "PEPEUSD",
+   "v2_symbol": "PEPE/USD"
+  },
+  "PEPUSD": {
+   "rest_key": "PEPUSD",
+   "v2_symbol": "PEP/USD"
+  },
+  "PERPEUR": {
+   "rest_key": "PERPEUR",
+   "v2_symbol": "PERP/EUR"
+  },
+  "PERPUSD": {
+   "rest_key": "PERPUSD",
+   "v2_symbol": "PERP/USD"
+  },
+  "PHAEUR": {
+   "rest_key": "PHAEUR",
+   "v2_symbol": "PHA/EUR"
+  },
+  "PHAUSD": {
+   "rest_key": "PHAUSD",
+   "v2_symbol": "PHA/USD"
+  },
+  "PIEUR": {
+   "rest_key": "PIEUR",
+   "v2_symbol": "PI/EUR"
+  },
+  "PIEVERSEUSD": {
+   "rest_key": "PIEVERSEUSD",
+   "v2_symbol": "PIEVERSE/USD"
+  },
+  "PIPEEUR": {
+   "rest_key": "PIPEEUR",
+   "v2_symbol": "PIPE/EUR"
+  },
+  "PIPEUSD": {
+   "rest_key": "PIPEUSD",
+   "v2_symbol": "PIPE/USD"
+  },
+  "PIUSD": {
+   "rest_key": "PIUSD",
+   "v2_symbol": "PI/USD"
+  },
+  "PLAYEUR": {
+   "rest_key": "PLAYEUR",
+   "v2_symbol": "PLAY/EUR"
+  },
+  "PLAYUSD": {
+   "rest_key": "PLAYUSD",
+   "v2_symbol": "PLAY/USD"
+  },
+  "PLUMEEUR": {
+   "rest_key": "PLUMEEUR",
+   "v2_symbol": "PLUME/EUR"
+  },
+  "PLUMEUSD": {
+   "rest_key": "PLUMEUSD",
+   "v2_symbol": "PLUME/USD"
+  },
+  "PNUTEUR": {
+   "rest_key": "PNUTEUR",
+   "v2_symbol": "PNUT/EUR"
+  },
+  "PNUTUSD": {
+   "rest_key": "PNUTUSD",
+   "v2_symbol": "PNUT/USD"
+  },
+  "POLEUR": {
+   "rest_key": "POLEUR",
+   "v2_symbol": "POL/EUR"
+  },
+  "POLISEUR": {
+   "rest_key": "POLISEUR",
+   "v2_symbol": "POLIS/EUR"
+  },
+  "POLISUSD": {
+   "rest_key": "POLISUSD",
+   "v2_symbol": "POLIS/USD"
+  },
+  "POLSEUR": {
+   "rest_key": "POLSEUR",
+   "v2_symbol": "POLS/EUR"
+  },
+  "POLSUSD": {
+   "rest_key": "POLSUSD",
+   "v2_symbol": "POLS/USD"
+  },
+  "POLUSD": {
+   "rest_key": "POLUSD",
+   "v2_symbol": "POL/USD"
+  },
+  "PONDEUR": {
+   "rest_key": "PONDEUR",
+   "v2_symbol": "POND/EUR"
+  },
+  "PONDUSD": {
+   "rest_key": "PONDUSD",
+   "v2_symbol": "POND/USD"
+  },
+  "PONKEEUR": {
+   "rest_key": "PONKEEUR",
+   "v2_symbol": "PONKE/EUR"
+  },
+  "PONKEUSD": {
+   "rest_key": "PONKEUSD",
+   "v2_symbol": "PONKE/USD"
+  },
+  "POPCATEUR": {
+   "rest_key": "POPCATEUR",
+   "v2_symbol": "POPCAT/EUR"
+  },
+  "POPCATGBP": {
+   "rest_key": "POPCATGBP",
+   "v2_symbol": "POPCAT/GBP"
+  },
+  "POPCATUSD": {
+   "rest_key": "POPCATUSD",
+   "v2_symbol": "POPCAT/USD"
+  },
+  "PORTALEUR": {
+   "rest_key": "PORTALEUR",
+   "v2_symbol": "PORTAL/EUR"
+  },
+  "PORTALUSD": {
+   "rest_key": "PORTALUSD",
+   "v2_symbol": "PORTAL/USD"
+  },
+  "POWREUR": {
+   "rest_key": "POWREUR",
+   "v2_symbol": "POWR/EUR"
+  },
+  "POWRUSD": {
+   "rest_key": "POWRUSD",
+   "v2_symbol": "POWR/USD"
+  },
+  "PRCLEUR": {
+   "rest_key": "PRCLEUR",
+   "v2_symbol": "PRCL/EUR"
+  },
+  "PRCLUSD": {
+   "rest_key": "PRCLUSD",
+   "v2_symbol": "PRCL/USD"
+  },
+  "PRIMEEUR": {
+   "rest_key": "PRIMEEUR",
+   "v2_symbol": "PRIME/EUR"
+  },
+  "PRIMEUSD": {
+   "rest_key": "PRIMEUSD",
+   "v2_symbol": "PRIME/USD"
+  },
+  "PROEUR": {
+   "rest_key": "PROEUR",
+   "v2_symbol": "PRO/EUR"
+  },
+  "PROMPTEUR": {
+   "rest_key": "PROMPTEUR",
+   "v2_symbol": "PROMPT/EUR"
+  },
+  "PROMPTUSD": {
+   "rest_key": "PROMPTUSD",
+   "v2_symbol": "PROMPT/USD"
+  },
+  "PROSEUR": {
+   "rest_key": "PROSEUR",
+   "v2_symbol": "PROS/EUR"
+  },
+  "PROSUSD": {
+   "rest_key": "PROSUSD",
+   "v2_symbol": "PROS/USD"
+  },
+  "PROUSD": {
+   "rest_key": "PROUSD",
+   "v2_symbol": "PRO/USD"
+  },
+  "PROVEEUR": {
+   "rest_key": "PROVEEUR",
+   "v2_symbol": "PROVE/EUR"
+  },
+  "PROVEUSD": {
+   "rest_key": "PROVEUSD",
+   "v2_symbol": "PROVE/USD"
+  },
+  "PTBEUR": {
+   "rest_key": "PTBEUR",
+   "v2_symbol": "PTB/EUR"
+  },
+  "PTBUSD": {
+   "rest_key": "PTBUSD",
+   "v2_symbol": "PTB/USD"
+  },
+  "PUFFEREUR": {
+   "rest_key": "PUFFEREUR",
+   "v2_symbol": "PUFFER/EUR"
+  },
+  "PUFFERUSD": {
+   "rest_key": "PUFFERUSD",
+   "v2_symbol": "PUFFER/USD"
+  },
+  "PUMPEUR": {
+   "rest_key": "PUMPEUR",
+   "v2_symbol": "PUMP/EUR"
+  },
+  "PUMPSOL": {
+   "rest_key": "PUMPSOL",
+   "v2_symbol": "PUMP/SOL"
+  },
+  "PUMPUSD": {
+   "rest_key": "PUMPUSD",
+   "v2_symbol": "PUMP/USD"
+  },
+  "PUPSEUR": {
+   "rest_key": "PUPSEUR",
+   "v2_symbol": "PUPS/EUR"
+  },
+  "PUPSUSD": {
+   "rest_key": "PUPSUSD",
+   "v2_symbol": "PUPS/USD"
+  },
+  "PWTUSD": {
+   "rest_key": "PWTUSD",
+   "v2_symbol": "PWT/USD"
+  },
+  "PYTHEUR": {
+   "rest_key": "PYTHEUR",
+   "v2_symbol": "PYTH/EUR"
+  },
+  "PYTHUSD": {
+   "rest_key": "PYTHUSD",
+   "v2_symbol": "PYTH/USD"
+  },
+  "PYUSDUSD": {
+   "rest_key": "PYUSDUSD",
+   "v2_symbol": "PYUSD/USD"
+  },
+  "QCADUSD": {
+   "rest_key": "QCADUSD",
+   "v2_symbol": "QCAD/USD"
+  },
+  "QEUR": {
+   "rest_key": "QEUR",
+   "v2_symbol": "Q/EUR"
+  },
+  "QIUSD": {
+   "rest_key": "QIUSD",
+   "v2_symbol": "QI/USD"
+  },
+  "QNTEUR": {
+   "rest_key": "QNTEUR",
+   "v2_symbol": "QNT/EUR"
+  },
+  "QNTUSD": {
+   "rest_key": "QNTUSD",
+   "v2_symbol": "QNT/USD"
+  },
+  "QTUMEUR": {
+   "rest_key": "QTUMEUR",
+   "v2_symbol": "QTUM/EUR"
+  },
+  "QTUMUSD": {
+   "rest_key": "QTUMUSD",
+   "v2_symbol": "QTUM/USD"
+  },
+  "QUAIEUR": {
+   "rest_key": "QUAIEUR",
+   "v2_symbol": "QUAI/EUR"
+  },
+  "QUAIUSD": {
+   "rest_key": "QUAIUSD",
+   "v2_symbol": "QUAI/USD"
+  },
+  "QUIDUSD": {
+   "rest_key": "QUIDUSD",
+   "v2_symbol": "QUID/USD"
+  },
+  "QUSD": {
+   "rest_key": "QUSD",
+   "v2_symbol": "Q/USD"
+  },
+  "RADEUR": {
+   "rest_key": "RADEUR",
+   "v2_symbol": "RAD/EUR"
+  },
+  "RADUSD": {
+   "rest_key": "RADUSD",
+   "v2_symbol": "RAD/USD"
+  },
+  "RAILSEUR": {
+   "rest_key": "RAILSEUR",
+   "v2_symbol": "RAILS/EUR"
+  },
+  "RAILSUSD": {
+   "rest_key": "RAILSUSD",
+   "v2_symbol": "RAILS/USD"
+  },
+  "RAREEUR": {
+   "rest_key": "RAREEUR",
+   "v2_symbol": "RARE/EUR"
+  },
+  "RAREUSD": {
+   "rest_key": "RAREUSD",
+   "v2_symbol": "RARE/USD"
+  },
+  "RARIEUR": {
+   "rest_key": "RARIEUR",
+   "v2_symbol": "RARI/EUR"
+  },
+  "RARIUSD": {
+   "rest_key": "RARIUSD",
+   "v2_symbol": "RARI/USD"
+  },
+  "RAYEUR": {
+   "rest_key": "RAYEUR",
+   "v2_symbol": "RAY/EUR"
+  },
+  "RAYUSD": {
+   "rest_key": "RAYUSD",
+   "v2_symbol": "RAY/USD"
+  },
+  "RBCUSD": {
+   "rest_key": "RBCUSD",
+   "v2_symbol": "RBC/USD"
+  },
+  "REDEUR": {
+   "rest_key": "REDEUR",
+   "v2_symbol": "RED/EUR"
+  },
+  "REDUSD": {
+   "rest_key": "REDUSD",
+   "v2_symbol": "RED/USD"
+  },
+  "REKTEUR": {
+   "rest_key": "REKTEUR",
+   "v2_symbol": "REKT/EUR"
+  },
+  "REKTUSD": {
+   "rest_key": "REKTUSD",
+   "v2_symbol": "REKT/USD"
+  },
+  "RENDEREUR": {
+   "rest_key": "RENDEREUR",
+   "v2_symbol": "RENDER/EUR"
+  },
+  "RENDERUSD": {
+   "rest_key": "RENDERUSD",
+   "v2_symbol": "RENDER/USD"
+  },
+  "RENEUR": {
+   "rest_key": "RENEUR",
+   "v2_symbol": "REN/EUR"
+  },
+  "RENUSD": {
+   "rest_key": "RENUSD",
+   "v2_symbol": "REN/USD"
+  },
+  "REPPOEUR": {
+   "rest_key": "REPPOEUR",
+   "v2_symbol": "REPPO/EUR"
+  },
+  "REPPOUSD": {
+   "rest_key": "REPPOUSD",
+   "v2_symbol": "REPPO/USD"
+  },
+  "REQEUR": {
+   "rest_key": "REQEUR",
+   "v2_symbol": "REQ/EUR"
+  },
+  "REQUSD": {
+   "rest_key": "REQUSD",
+   "v2_symbol": "REQ/USD"
+  },
+  "REUSD": {
+   "rest_key": "REUSD",
+   "v2_symbol": "RE/USD"
+  },
+  "REZEUR": {
+   "rest_key": "REZEUR",
+   "v2_symbol": "REZ/EUR"
+  },
+  "REZUSD": {
+   "rest_key": "REZUSD",
+   "v2_symbol": "REZ/USD"
+  },
+  "RIVEREUR": {
+   "rest_key": "RIVEREUR",
+   "v2_symbol": "RIVER/EUR"
+  },
+  "RIVERUSD": {
+   "rest_key": "RIVERUSD",
+   "v2_symbol": "RIVER/USD"
+  },
+  "RIZEEUR": {
+   "rest_key": "RIZEEUR",
+   "v2_symbol": "RIZE/EUR"
+  },
+  "RIZEUSD": {
+   "rest_key": "RIZEUSD",
+   "v2_symbol": "RIZE/USD"
+  },
+  "RLCEUR": {
+   "rest_key": "RLCEUR",
+   "v2_symbol": "RLC/EUR"
+  },
+  "RLCUSD": {
+   "rest_key": "RLCUSD",
+   "v2_symbol": "RLC/USD"
+  },
+  "RLSEUR": {
+   "rest_key": "RLSEUR",
+   "v2_symbol": "RLS/EUR"
+  },
+  "RLSUSD": {
+   "rest_key": "RLSUSD",
+   "v2_symbol": "RLS/USD"
+  },
+  "RLUSDEUR": {
+   "rest_key": "RLUSDEUR",
+   "v2_symbol": "RLUSD/EUR"
+  },
+  "RLUSDUSD": {
+   "rest_key": "RLUSDUSD",
+   "v2_symbol": "RLUSD/USD"
+  },
+  "RLUSDUSDC": {
+   "rest_key": "RLUSDUSDC",
+   "v2_symbol": "RLUSD/USDC"
+  },
+  "RLUSDUSDT": {
+   "rest_key": "RLUSDUSDT",
+   "v2_symbol": "RLUSD/USDT"
+  },
+  "RNBWUSD": {
+   "rest_key": "RNBWUSD",
+   "v2_symbol": "RNBW/USD"
+  },
+  "ROBOUSD": {
+   "rest_key": "ROBOUSD",
+   "v2_symbol": "ROBO/USD"
+  },
+  "ROLLEUR": {
+   "rest_key": "ROLLEUR",
+   "v2_symbol": "ROLL/EUR"
+  },
+  "ROLLUSD": {
+   "rest_key": "ROLLUSD",
+   "v2_symbol": "ROLL/USD"
+  },
+  "RPLEUR": {
+   "rest_key": "RPLEUR",
+   "v2_symbol": "RPL/EUR"
+  },
+  "RPLUSD": {
+   "rest_key": "RPLUSD",
+   "v2_symbol": "RPL/USD"
+  },
+  "RSCEUR": {
+   "rest_key": "RSCEUR",
+   "v2_symbol": "RSC/EUR"
+  },
+  "RSCUSD": {
+   "rest_key": "RSCUSD",
+   "v2_symbol": "RSC/USD"
+  },
+  "RSREUR": {
+   "rest_key": "RSREUR",
+   "v2_symbol": "RSR/EUR"
+  },
+  "RSRUSD": {
+   "rest_key": "RSRUSD",
+   "v2_symbol": "RSR/USD"
+  },
+  "RUJIEUR": {
+   "rest_key": "RUJIEUR",
+   "v2_symbol": "RUJI/EUR"
+  },
+  "RUJIUSD": {
+   "rest_key": "RUJIUSD",
+   "v2_symbol": "RUJI/USD"
+  },
+  "RUNEEUR": {
+   "rest_key": "RUNEEUR",
+   "v2_symbol": "RUNE/EUR"
+  },
+  "RUNEUSD": {
+   "rest_key": "RUNEUSD",
+   "v2_symbol": "RUNE/USD"
+  },
+  "RVVUSD": {
+   "rest_key": "RVVUSD",
+   "v2_symbol": "RVV/USD"
+  },
+  "SAFEEUR": {
+   "rest_key": "SAFEEUR",
+   "v2_symbol": "SAFE/EUR"
+  },
+  "SAFEUSD": {
+   "rest_key": "SAFEUSD",
+   "v2_symbol": "SAFE/USD"
+  },
+  "SAGAEUR": {
+   "rest_key": "SAGAEUR",
+   "v2_symbol": "SAGA/EUR"
+  },
+  "SAGAUSD": {
+   "rest_key": "SAGAUSD",
+   "v2_symbol": "SAGA/USD"
+  },
+  "SAHARAEUR": {
+   "rest_key": "SAHARAEUR",
+   "v2_symbol": "SAHARA/EUR"
+  },
+  "SAHARAUSD": {
+   "rest_key": "SAHARAUSD",
+   "v2_symbol": "SAHARA/USD"
+  },
+  "SAMOEUR": {
+   "rest_key": "SAMOEUR",
+   "v2_symbol": "SAMO/EUR"
+  },
+  "SAMOUSD": {
+   "rest_key": "SAMOUSD",
+   "v2_symbol": "SAMO/USD"
+  },
+  "SANDEUR": {
+   "rest_key": "SANDEUR",
+   "v2_symbol": "SAND/EUR"
+  },
+  "SANDGBP": {
+   "rest_key": "SANDGBP",
+   "v2_symbol": "SAND/GBP"
+  },
+  "SANDUSD": {
+   "rest_key": "SANDUSD",
+   "v2_symbol": "SAND/USD"
+  },
+  "SANDXBT": {
+   "rest_key": "SANDXBT",
+   "v2_symbol": "SAND/BTC"
+  },
+  "SAPIENEUR": {
+   "rest_key": "SAPIENEUR",
+   "v2_symbol": "SAPIEN/EUR"
+  },
+  "SAPIENUSD": {
+   "rest_key": "SAPIENUSD",
+   "v2_symbol": "SAPIEN/USD"
+  },
+  "SAUCEEUR": {
+   "rest_key": "SAUCEEUR",
+   "v2_symbol": "SAUCE/EUR"
+  },
+  "SAUCEUSD": {
+   "rest_key": "SAUCEUSD",
+   "v2_symbol": "SAUCE/USD"
+  },
+  "SBREUR": {
+   "rest_key": "SBREUR",
+   "v2_symbol": "SBR/EUR"
+  },
+  "SBRUSD": {
+   "rest_key": "SBRUSD",
+   "v2_symbol": "SBR/USD"
+  },
+  "SCAUSD": {
+   "rest_key": "SCAUSD",
+   "v2_symbol": "SCA/USD"
+  },
+  "SCEUR": {
+   "rest_key": "SCEUR",
+   "v2_symbol": "SC/EUR"
+  },
+  "SCOREUR": {
+   "rest_key": "SCOREUR",
+   "v2_symbol": "SCOR/EUR"
+  },
+  "SCORUSD": {
+   "rest_key": "SCORUSD",
+   "v2_symbol": "SCOR/USD"
+  },
+  "SCRTEUR": {
+   "rest_key": "SCRTEUR",
+   "v2_symbol": "SCRT/EUR"
+  },
+  "SCRTUSD": {
+   "rest_key": "SCRTUSD",
+   "v2_symbol": "SCRT/USD"
+  },
+  "SCUSD": {
+   "rest_key": "SCUSD",
+   "v2_symbol": "SC/USD"
+  },
+  "SCXBT": {
+   "rest_key": "SCXBT",
+   "v2_symbol": "SC/BTC"
+  },
+  "SEIEUR": {
+   "rest_key": "SEIEUR",
+   "v2_symbol": "SEI/EUR"
+  },
+  "SEIUSD": {
+   "rest_key": "SEIUSD",
+   "v2_symbol": "SEI/USD"
+  },
+  "SENTEUR": {
+   "rest_key": "SENTEUR",
+   "v2_symbol": "SENT/EUR"
+  },
+  "SENTUSD": {
+   "rest_key": "SENTUSD",
+   "v2_symbol": "SENT/USD"
+  },
+  "SEUR": {
+   "rest_key": "SEUR",
+   "v2_symbol": "S/EUR"
+  },
+  "SGBEUR": {
+   "rest_key": "SGBEUR",
+   "v2_symbol": "SGB/EUR"
+  },
+  "SGBUSD": {
+   "rest_key": "SGBUSD",
+   "v2_symbol": "SGB/USD"
+  },
+  "SHAPEUSD": {
+   "rest_key": "SHAPEUSD",
+   "v2_symbol": "SHAPE/USD"
+  },
+  "SHIBEUR": {
+   "rest_key": "SHIBEUR",
+   "v2_symbol": "SHIB/EUR"
+  },
+  "SHIBUSD": {
+   "rest_key": "SHIBUSD",
+   "v2_symbol": "SHIB/USD"
+  },
+  "SHIBUSDC": {
+   "rest_key": "SHIBUSDC",
+   "v2_symbol": "SHIB/USDC"
+  },
+  "SHIBUSDT": {
+   "rest_key": "SHIBUSDT",
+   "v2_symbol": "SHIB/USDT"
+  },
+  "SHXEUR": {
+   "rest_key": "SHXEUR",
+   "v2_symbol": "SHX/EUR"
+  },
+  "SHXUSD": {
+   "rest_key": "SHXUSD",
+   "v2_symbol": "SHX/USD"
+  },
+  "SIDEKICKEUR": {
+   "rest_key": "SIDEKICKEUR",
+   "v2_symbol": "SIDEKICK/EUR"
+  },
+  "SIDEKICKUSD": {
+   "rest_key": "SIDEKICKUSD",
+   "v2_symbol": "SIDEKICK/USD"
+  },
+  "SIDEKICKUSDT": {
+   "rest_key": "SIDEKICKUSDT",
+   "v2_symbol": "SIDEKICK/USDT"
+  },
+  "SIGMAEUR": {
+   "rest_key": "SIGMAEUR",
+   "v2_symbol": "SIGMA/EUR"
+  },
+  "SIGMAUSD": {
+   "rest_key": "SIGMAUSD",
+   "v2_symbol": "SIGMA/USD"
+  },
+  "SIGNEUR": {
+   "rest_key": "SIGNEUR",
+   "v2_symbol": "SIGN/EUR"
+  },
+  "SIGNUSD": {
+   "rest_key": "SIGNUSD",
+   "v2_symbol": "SIGN/USD"
+  },
+  "SKREUR": {
+   "rest_key": "SKREUR",
+   "v2_symbol": "SKR/EUR"
+  },
+  "SKRUSD": {
+   "rest_key": "SKRUSD",
+   "v2_symbol": "SKR/USD"
+  },
+  "SKYEUR": {
+   "rest_key": "SKYEUR",
+   "v2_symbol": "SKY/EUR"
+  },
+  "SKYUSD": {
+   "rest_key": "SKYUSD",
+   "v2_symbol": "SKY/USD"
+  },
+  "SLAYEUR": {
+   "rest_key": "SLAYEUR",
+   "v2_symbol": "SLAY/EUR"
+  },
+  "SLAYUSD": {
+   "rest_key": "SLAYUSD",
+   "v2_symbol": "SLAY/USD"
+  },
+  "SLXEUR": {
+   "rest_key": "SLXEUR",
+   "v2_symbol": "SLX/EUR"
+  },
+  "SLXUSD": {
+   "rest_key": "SLXUSD",
+   "v2_symbol": "SLX/USD"
+  },
+  "SN44USD": {
+   "rest_key": "SN44USD",
+   "v2_symbol": "SN44/USD"
+  },
+  "SN51USD": {
+   "rest_key": "SN51USD",
+   "v2_symbol": "SN51/USD"
+  },
+  "SN62USD": {
+   "rest_key": "SN62USD",
+   "v2_symbol": "SN62/USD"
+  },
+  "SN64USD": {
+   "rest_key": "SN64USD",
+   "v2_symbol": "SN64/USD"
+  },
+  "SN75USD": {
+   "rest_key": "SN75USD",
+   "v2_symbol": "SN75/USD"
+  },
+  "SN8USD": {
+   "rest_key": "SN8USD",
+   "v2_symbol": "SN8/USD"
+  },
+  "SNEKEUR": {
+   "rest_key": "SNEKEUR",
+   "v2_symbol": "SNEK/EUR"
+  },
+  "SNEKUSD": {
+   "rest_key": "SNEKUSD",
+   "v2_symbol": "SNEK/USD"
+  },
+  "SNXEUR": {
+   "rest_key": "SNXEUR",
+   "v2_symbol": "SNX/EUR"
+  },
+  "SNXUSD": {
+   "rest_key": "SNXUSD",
+   "v2_symbol": "SNX/USD"
+  },
+  "SNXXBT": {
+   "rest_key": "SNXXBT",
+   "v2_symbol": "SNX/BTC"
+  },
+  "SODAUSD": {
+   "rest_key": "SODAUSD",
+   "v2_symbol": "SODA/USD"
+  },
+  "SOFIDUSD": {
+   "rest_key": "SOFIDUSD",
+   "v2_symbol": "SOFID/USD"
+  },
+  "SOFIDUSDC": {
+   "rest_key": "SOFIDUSDC",
+   "v2_symbol": "SOFID/USDC"
+  },
+  "SOFIDUSDT": {
+   "rest_key": "SOFIDUSDT",
+   "v2_symbol": "SOFID/USDT"
+  },
+  "SOLAUD": {
+   "rest_key": "SOLAUD",
+   "v2_symbol": "SOL/AUD"
+  },
+  "SOLCAD": {
+   "rest_key": "SOLCAD",
+   "v2_symbol": "SOL/CAD"
+  },
+  "SOLETH": {
+   "rest_key": "SOLETH",
+   "v2_symbol": "SOL/ETH"
+  },
+  "SOLEUR": {
+   "rest_key": "SOLEUR",
+   "v2_symbol": "SOL/EUR"
+  },
+  "SOLEURC": {
+   "rest_key": "SOLEURC",
+   "v2_symbol": "SOL/EURC"
+  },
+  "SOLGBP": {
+   "rest_key": "SOLGBP",
+   "v2_symbol": "SOL/GBP"
+  },
+  "SOLSOFID": {
+   "rest_key": "SOLSOFID",
+   "v2_symbol": "SOL/SOFID"
+  },
+  "SOLUSD": {
+   "rest_key": "SOLUSD",
+   "v2_symbol": "SOL/USD"
+  },
+  "SOLUSD1": {
+   "rest_key": "SOLUSD1",
+   "v2_symbol": "SOL/USD1"
+  },
+  "SOLUSDC": {
+   "rest_key": "SOLUSDC",
+   "v2_symbol": "SOL/USDC"
+  },
+  "SOLUSDT": {
+   "rest_key": "SOLUSDT",
+   "v2_symbol": "SOL/USDT"
+  },
+  "SOLVEUR": {
+   "rest_key": "SOLVEUR",
+   "v2_symbol": "SOLV/EUR"
+  },
+  "SOLVUSD": {
+   "rest_key": "SOLVUSD",
+   "v2_symbol": "SOLV/USD"
+  },
+  "SOLXBT": {
+   "rest_key": "SOLXBT",
+   "v2_symbol": "SOL/BTC"
+  },
+  "SOMIEUR": {
+   "rest_key": "SOMIEUR",
+   "v2_symbol": "SOMI/EUR"
+  },
+  "SOMIUSD": {
+   "rest_key": "SOMIUSD",
+   "v2_symbol": "SOMI/USD"
+  },
+  "SONICUSD": {
+   "rest_key": "SONICUSD",
+   "v2_symbol": "SONIC/USD"
+  },
+  "SOONEUR": {
+   "rest_key": "SOONEUR",
+   "v2_symbol": "SOON/EUR"
+  },
+  "SOONUSD": {
+   "rest_key": "SOONUSD",
+   "v2_symbol": "SOON/USD"
+  },
+  "SOSOEUR": {
+   "rest_key": "SOSOEUR",
+   "v2_symbol": "SOSO/EUR"
+  },
+  "SOSOUSD": {
+   "rest_key": "SOSOUSD",
+   "v2_symbol": "SOSO/USD"
+  },
+  "SPACEEUR": {
+   "rest_key": "SPACEEUR",
+   "v2_symbol": "SPACE/EUR"
+  },
+  "SPACEUSD": {
+   "rest_key": "SPACEUSD",
+   "v2_symbol": "SPACE/USD"
+  },
+  "SPELLEUR": {
+   "rest_key": "SPELLEUR",
+   "v2_symbol": "SPELL/EUR"
+  },
+  "SPELLUSD": {
+   "rest_key": "SPELLUSD",
+   "v2_symbol": "SPELL/USD"
+  },
+  "SPKEUR": {
+   "rest_key": "SPKEUR",
+   "v2_symbol": "SPK/EUR"
+  },
+  "SPKUSD": {
+   "rest_key": "SPKUSD",
+   "v2_symbol": "SPK/USD"
+  },
+  "SPXEUR": {
+   "rest_key": "SPXEUR",
+   "v2_symbol": "SPX/EUR"
+  },
+  "SPXUSD": {
+   "rest_key": "SPXUSD",
+   "v2_symbol": "SPX/USD"
+  },
+  "SRMEUR": {
+   "rest_key": "SRMEUR",
+   "v2_symbol": "SRM/EUR"
+  },
+  "SRMUSD": {
+   "rest_key": "SRMUSD",
+   "v2_symbol": "SRM/USD"
+  },
+  "SSVEUR": {
+   "rest_key": "SSVEUR",
+   "v2_symbol": "SSV/EUR"
+  },
+  "SSVUSD": {
+   "rest_key": "SSVUSD",
+   "v2_symbol": "SSV/USD"
+  },
+  "STABLEUSD": {
+   "rest_key": "STABLEUSD",
+   "v2_symbol": "STABLE/USD"
+  },
+  "STBLEUR": {
+   "rest_key": "STBLEUR",
+   "v2_symbol": "STBL/EUR"
+  },
+  "STBLUSD": {
+   "rest_key": "STBLUSD",
+   "v2_symbol": "STBL/USD"
+  },
+  "STEUR": {
+   "rest_key": "STEUR",
+   "v2_symbol": "ST/EUR"
+  },
+  "STGEUR": {
+   "rest_key": "STGEUR",
+   "v2_symbol": "STG/EUR"
+  },
+  "STGUSD": {
+   "rest_key": "STGUSD",
+   "v2_symbol": "STG/USD"
+  },
+  "STORJEUR": {
+   "rest_key": "STORJEUR",
+   "v2_symbol": "STORJ/EUR"
+  },
+  "STORJUSD": {
+   "rest_key": "STORJUSD",
+   "v2_symbol": "STORJ/USD"
+  },
+  "STRKEUR": {
+   "rest_key": "STRKEUR",
+   "v2_symbol": "STRK/EUR"
+  },
+  "STRKUSD": {
+   "rest_key": "STRKUSD",
+   "v2_symbol": "STRK/USD"
+  },
+  "STUSD": {
+   "rest_key": "STUSD",
+   "v2_symbol": "ST/USD"
+  },
+  "STXEUR": {
+   "rest_key": "STXEUR",
+   "v2_symbol": "STX/EUR"
+  },
+  "STXUSD": {
+   "rest_key": "STXUSD",
+   "v2_symbol": "STX/USD"
+  },
+  "SUIEUR": {
+   "rest_key": "SUIEUR",
+   "v2_symbol": "SUI/EUR"
+  },
+  "SUIGBP": {
+   "rest_key": "SUIGBP",
+   "v2_symbol": "SUI/GBP"
+  },
+  "SUIUSD": {
+   "rest_key": "SUIUSD",
+   "v2_symbol": "SUI/USD"
+  },
+  "SUKUEUR": {
+   "rest_key": "SUKUEUR",
+   "v2_symbol": "SUKU/EUR"
+  },
+  "SUKUUSD": {
+   "rest_key": "SUKUUSD",
+   "v2_symbol": "SUKU/USD"
+  },
+  "SUNDOGEUR": {
+   "rest_key": "SUNDOGEUR",
+   "v2_symbol": "SUNDOG/EUR"
+  },
+  "SUNDOGUSD": {
+   "rest_key": "SUNDOGUSD",
+   "v2_symbol": "SUNDOG/USD"
+  },
+  "SUNEUR": {
+   "rest_key": "SUNEUR",
+   "v2_symbol": "SUN/EUR"
+  },
+  "SUNUSD": {
+   "rest_key": "SUNUSD",
+   "v2_symbol": "SUN/USD"
+  },
+  "SUPEREUR": {
+   "rest_key": "SUPEREUR",
+   "v2_symbol": "SUPER/EUR"
+  },
+  "SUPERUSD": {
+   "rest_key": "SUPERUSD",
+   "v2_symbol": "SUPER/USD"
+  },
+  "SUPEUR": {
+   "rest_key": "SUPEUR",
+   "v2_symbol": "SUP/EUR"
+  },
+  "SUPUSD": {
+   "rest_key": "SUPUSD",
+   "v2_symbol": "SUP/USD"
+  },
+  "SUSD": {
+   "rest_key": "SUSD",
+   "v2_symbol": "S/USD"
+  },
+  "SUSDC": {
+   "rest_key": "SUSDC",
+   "v2_symbol": "S/USDC"
+  },
+  "SUSDT": {
+   "rest_key": "SUSDT",
+   "v2_symbol": "S/USDT"
+  },
+  "SUSHIEUR": {
+   "rest_key": "SUSHIEUR",
+   "v2_symbol": "SUSHI/EUR"
+  },
+  "SUSHIUSD": {
+   "rest_key": "SUSHIUSD",
+   "v2_symbol": "SUSHI/USD"
+  },
+  "SWARMSEUR": {
+   "rest_key": "SWARMSEUR",
+   "v2_symbol": "SWARMS/EUR"
+  },
+  "SWARMSUSD": {
+   "rest_key": "SWARMSUSD",
+   "v2_symbol": "SWARMS/USD"
+  },
+  "SWEATEUR": {
+   "rest_key": "SWEATEUR",
+   "v2_symbol": "SWEAT/EUR"
+  },
+  "SWEATUSD": {
+   "rest_key": "SWEATUSD",
+   "v2_symbol": "SWEAT/USD"
+  },
+  "SWELLEUR": {
+   "rest_key": "SWELLEUR",
+   "v2_symbol": "SWELL/EUR"
+  },
+  "SWELLUSD": {
+   "rest_key": "SWELLUSD",
+   "v2_symbol": "SWELL/USD"
+  },
+  "SXTEUR": {
+   "rest_key": "SXTEUR",
+   "v2_symbol": "SXT/EUR"
+  },
+  "SXTUSD": {
+   "rest_key": "SXTUSD",
+   "v2_symbol": "SXT/USD"
+  },
+  "SYNDEUR": {
+   "rest_key": "SYNDEUR",
+   "v2_symbol": "SYND/EUR"
+  },
+  "SYNDUSD": {
+   "rest_key": "SYNDUSD",
+   "v2_symbol": "SYND/USD"
+  },
+  "SYNEUR": {
+   "rest_key": "SYNEUR",
+   "v2_symbol": "SYN/EUR"
+  },
+  "SYNUSD": {
+   "rest_key": "SYNUSD",
+   "v2_symbol": "SYN/USD"
+  },
+  "SYRUPEUR": {
+   "rest_key": "SYRUPEUR",
+   "v2_symbol": "SYRUP/EUR"
+  },
+  "SYRUPUSD": {
+   "rest_key": "SYRUPUSD",
+   "v2_symbol": "SYRUP/USD"
+  },
+  "TACUSD": {
+   "rest_key": "TACUSD",
+   "v2_symbol": "TAC/USD"
+  },
+  "TAKEEUR": {
+   "rest_key": "TAKEEUR",
+   "v2_symbol": "TAKE/EUR"
+  },
+  "TAKEUSD": {
+   "rest_key": "TAKEUSD",
+   "v2_symbol": "TAKE/USD"
+  },
+  "TAOEUR": {
+   "rest_key": "TAOEUR",
+   "v2_symbol": "TAO/EUR"
+  },
+  "TAOUSD": {
+   "rest_key": "TAOUSD",
+   "v2_symbol": "TAO/USD"
+  },
+  "TBTCEUR": {
+   "rest_key": "TBTCEUR",
+   "v2_symbol": "TBTC/EUR"
+  },
+  "TBTCUSD": {
+   "rest_key": "TBTCUSD",
+   "v2_symbol": "TBTC/USD"
+  },
+  "TBTCXBT": {
+   "rest_key": "TBTCXBT",
+   "v2_symbol": "TBTC/BTC"
+  },
+  "TCSUSD": {
+   "rest_key": "TCSUSD",
+   "v2_symbol": "TCS/USD"
+  },
+  "TEAEUR": {
+   "rest_key": "TEAEUR",
+   "v2_symbol": "TEA/EUR"
+  },
+  "TELEUR": {
+   "rest_key": "TELEUR",
+   "v2_symbol": "TEL/EUR"
+  },
+  "TELUSD": {
+   "rest_key": "TELUSD",
+   "v2_symbol": "TEL/USD"
+  },
+  "TEUR": {
+   "rest_key": "TEUR",
+   "v2_symbol": "T/EUR"
+  },
+  "TGBPUSD": {
+   "rest_key": "TGBPUSD",
+   "v2_symbol": "TGBP/USD"
+  },
+  "THQEUR": {
+   "rest_key": "THQEUR",
+   "v2_symbol": "THQ/EUR"
+  },
+  "THQUSD": {
+   "rest_key": "THQUSD",
+   "v2_symbol": "THQ/USD"
+  },
+  "TIAEUR": {
+   "rest_key": "TIAEUR",
+   "v2_symbol": "TIA/EUR"
+  },
+  "TIAUSD": {
+   "rest_key": "TIAUSD",
+   "v2_symbol": "TIA/USD"
+  },
+  "TLMEUR": {
+   "rest_key": "TLMEUR",
+   "v2_symbol": "TLM/EUR"
+  },
+  "TLMUSD": {
+   "rest_key": "TLMUSD",
+   "v2_symbol": "TLM/USD"
+  },
+  "TMXUSD": {
+   "rest_key": "TMXUSD",
+   "v2_symbol": "TMX/USD"
+  },
+  "TNSREUR": {
+   "rest_key": "TNSREUR",
+   "v2_symbol": "TNSR/EUR"
+  },
+  "TNSRUSD": {
+   "rest_key": "TNSRUSD",
+   "v2_symbol": "TNSR/USD"
+  },
+  "TOKENEUR": {
+   "rest_key": "TOKENEUR",
+   "v2_symbol": "TOKEN/EUR"
+  },
+  "TOKENUSD": {
+   "rest_key": "TOKENUSD",
+   "v2_symbol": "TOKEN/USD"
+  },
+  "TONEUR": {
+   "rest_key": "TONEUR",
+   "v2_symbol": "TON/EUR"
+  },
+  "TONUSD": {
+   "rest_key": "TONUSD",
+   "v2_symbol": "TON/USD"
+  },
+  "TONUSDC": {
+   "rest_key": "TONUSDC",
+   "v2_symbol": "TON/USDC"
+  },
+  "TONUSDT": {
+   "rest_key": "TONUSDT",
+   "v2_symbol": "TON/USDT"
+  },
+  "TOSHIEUR": {
+   "rest_key": "TOSHIEUR",
+   "v2_symbol": "TOSHI/EUR"
+  },
+  "TOSHIUSD": {
+   "rest_key": "TOSHIUSD",
+   "v2_symbol": "TOSHI/USD"
+  },
+  "TRACEUR": {
+   "rest_key": "TRACEUR",
+   "v2_symbol": "TRAC/EUR"
+  },
+  "TRACUSD": {
+   "rest_key": "TRACUSD",
+   "v2_symbol": "TRAC/USD"
+  },
+  "TREADUSD": {
+   "rest_key": "TREADUSD",
+   "v2_symbol": "TREAD/USD"
+  },
+  "TREEEUR": {
+   "rest_key": "TREEEUR",
+   "v2_symbol": "TREE/EUR"
+  },
+  "TREEUSD": {
+   "rest_key": "TREEUSD",
+   "v2_symbol": "TREE/USD"
+  },
+  "TREMPUSD": {
+   "rest_key": "TREMPUSD",
+   "v2_symbol": "TREMP/USD"
+  },
+  "TRIAEUR": {
+   "rest_key": "TRIAEUR",
+   "v2_symbol": "TRIA/EUR"
+  },
+  "TRIAUSD": {
+   "rest_key": "TRIAUSD",
+   "v2_symbol": "TRIA/USD"
+  },
+  "TRUEUR": {
+   "rest_key": "TRUEUR",
+   "v2_symbol": "TRU/EUR"
+  },
+  "TRUMPEUR": {
+   "rest_key": "TRUMPEUR",
+   "v2_symbol": "TRUMP/EUR"
+  },
+  "TRUMPUSD": {
+   "rest_key": "TRUMPUSD",
+   "v2_symbol": "TRUMP/USD"
+  },
+  "TRUMPUSDC": {
+   "rest_key": "TRUMPUSDC",
+   "v2_symbol": "TRUMP/USDC"
+  },
+  "TRUMPUSDT": {
+   "rest_key": "TRUMPUSDT",
+   "v2_symbol": "TRUMP/USDT"
+  },
+  "TRUSTEUR": {
+   "rest_key": "TRUSTEUR",
+   "v2_symbol": "TRUST/EUR"
+  },
+  "TRUSTUSD": {
+   "rest_key": "TRUSTUSD",
+   "v2_symbol": "TRUST/USD"
+  },
+  "TRUUSD": {
+   "rest_key": "TRUUSD",
+   "v2_symbol": "TRU/USD"
+  },
+  "TRXETH": {
+   "rest_key": "TRXETH",
+   "v2_symbol": "TRX/ETH"
+  },
+  "TRXEUR": {
+   "rest_key": "TRXEUR",
+   "v2_symbol": "TRX/EUR"
+  },
+  "TRXUSD": {
+   "rest_key": "TRXUSD",
+   "v2_symbol": "TRX/USD"
+  },
+  "TRXUSDD": {
+   "rest_key": "TRXUSDD",
+   "v2_symbol": "TRX/USDD"
+  },
+  "TRXXBT": {
+   "rest_key": "TRXXBT",
+   "v2_symbol": "TRX/BTC"
+  },
+  "TURBOEUR": {
+   "rest_key": "TURBOEUR",
+   "v2_symbol": "TURBO/EUR"
+  },
+  "TURBOUSD": {
+   "rest_key": "TURBOUSD",
+   "v2_symbol": "TURBO/USD"
+  },
+  "TUSD": {
+   "rest_key": "TUSD",
+   "v2_symbol": "T/USD"
+  },
+  "TXEUR": {
+   "rest_key": "TXEUR",
+   "v2_symbol": "TX/EUR"
+  },
+  "TXUSD": {
+   "rest_key": "TXUSD",
+   "v2_symbol": "TX/USD"
+  },
+  "U2UUSD": {
+   "rest_key": "U2UUSD",
+   "v2_symbol": "U2U/USD"
+  },
+  "UAIEUR": {
+   "rest_key": "UAIEUR",
+   "v2_symbol": "UAI/EUR"
+  },
+  "UAIUSD": {
+   "rest_key": "UAIUSD",
+   "v2_symbol": "UAI/USD"
+  },
+  "UEUR": {
+   "rest_key": "UEUR",
+   "v2_symbol": "U/EUR"
+  },
+  "UFDEUR": {
+   "rest_key": "UFDEUR",
+   "v2_symbol": "UFD/EUR"
+  },
+  "UFDUSD": {
+   "rest_key": "UFDUSD",
+   "v2_symbol": "UFD/USD"
+  },
+  "UMAEUR": {
+   "rest_key": "UMAEUR",
+   "v2_symbol": "UMA/EUR"
+  },
+  "UMAUSD": {
+   "rest_key": "UMAUSD",
+   "v2_symbol": "UMA/USD"
+  },
+  "UMXMUSD": {
+   "rest_key": "UMXMUSD",
+   "v2_symbol": "UMXM/USD"
+  },
+  "UNFIEUR": {
+   "rest_key": "UNFIEUR",
+   "v2_symbol": "UNFI/EUR"
+  },
+  "UNFIUSD": {
+   "rest_key": "UNFIUSD",
+   "v2_symbol": "UNFI/USD"
+  },
+  "UNIETH": {
+   "rest_key": "UNIETH",
+   "v2_symbol": "UNI/ETH"
+  },
+  "UNIEUR": {
+   "rest_key": "UNIEUR",
+   "v2_symbol": "UNI/EUR"
+  },
+  "UNITASUSD": {
+   "rest_key": "UNITASUSD",
+   "v2_symbol": "UNITAS/USD"
+  },
+  "UNITASUSDT": {
+   "rest_key": "UNITASUSDT",
+   "v2_symbol": "UNITAS/USDT"
+  },
+  "UNIUSD": {
+   "rest_key": "UNIUSD",
+   "v2_symbol": "UNI/USD"
+  },
+  "UNIXBT": {
+   "rest_key": "UNIXBT",
+   "v2_symbol": "UNI/BTC"
+  },
+  "UPEUR": {
+   "rest_key": "UPEUR",
+   "v2_symbol": "UP/EUR"
+  },
+  "UPUSD": {
+   "rest_key": "UPUSD",
+   "v2_symbol": "UP/USD"
+  },
+  "USATUSD": {
+   "rest_key": "USATUSD",
+   "v2_symbol": "USAT/USD"
+  },
+  "USATUSDT": {
+   "rest_key": "USATUSDT",
+   "v2_symbol": "USAT/USDT"
+  },
+  "USD1USD": {
+   "rest_key": "USD1USD",
+   "v2_symbol": "USD1/USD"
+  },
+  "USD1USDC": {
+   "rest_key": "USD1USDC",
+   "v2_symbol": "USD1/USDC"
+  },
+  "USDCAD": {
+   "rest_key": "ZUSDZCAD",
+   "v2_symbol": "USD/CAD"
+  },
+  "USDCAUD": {
+   "rest_key": "USDCAUD",
+   "v2_symbol": "USDC/AUD"
+  },
+  "USDCCAD": {
+   "rest_key": "USDCCAD",
+   "v2_symbol": "USDC/CAD"
+  },
+  "USDCCHF": {
+   "rest_key": "USDCCHF",
+   "v2_symbol": "USDC/CHF"
+  },
+  "USDCEUR": {
+   "rest_key": "USDCEUR",
+   "v2_symbol": "USDC/EUR"
+  },
+  "USDCGBP": {
+   "rest_key": "USDCGBP",
+   "v2_symbol": "USDC/GBP"
+  },
+  "USDCHF": {
+   "rest_key": "USDCHF",
+   "v2_symbol": "USD/CHF"
+  },
+  "USDCUSD": {
+   "rest_key": "USDCUSD",
+   "v2_symbol": "USDC/USD"
+  },
+  "USDCUSDT": {
+   "rest_key": "USDCUSDT",
+   "v2_symbol": "USDC/USDT"
+  },
+  "USDDEUR": {
+   "rest_key": "USDDEUR",
+   "v2_symbol": "USDD/EUR"
+  },
+  "USDDUSD": {
+   "rest_key": "USDDUSD",
+   "v2_symbol": "USDD/USD"
+  },
+  "USDEEUR": {
+   "rest_key": "USDEEUR",
+   "v2_symbol": "USDE/EUR"
+  },
+  "USDEUSD": {
+   "rest_key": "USDEUSD",
+   "v2_symbol": "USDE/USD"
+  },
+  "USDEUSDC": {
+   "rest_key": "USDEUSDC",
+   "v2_symbol": "USDE/USDC"
+  },
+  "USDEUSDT": {
+   "rest_key": "USDEUSDT",
+   "v2_symbol": "USDE/USDT"
+  },
+  "USDGOUSD": {
+   "rest_key": "USDGOUSD",
+   "v2_symbol": "USDGO/USD"
+  },
+  "USDGUSD": {
+   "rest_key": "USDGUSD",
+   "v2_symbol": "USDG/USD"
+  },
+  "USDGUSDC": {
+   "rest_key": "USDGUSDC",
+   "v2_symbol": "USDG/USDC"
+  },
+  "USDGUSDT": {
+   "rest_key": "USDGUSDT",
+   "v2_symbol": "USDG/USDT"
+  },
+  "USDJPY": {
+   "rest_key": "ZUSDZJPY",
+   "v2_symbol": "USD/JPY"
+  },
+  "USDPTUSD": {
+   "rest_key": "USDPTUSD",
+   "v2_symbol": "USDPT/USD"
+  },
+  "USDPTUSDC": {
+   "rest_key": "USDPTUSDC",
+   "v2_symbol": "USDPT/USDC"
+  },
+  "USDPTUSDT": {
+   "rest_key": "USDPTUSDT",
+   "v2_symbol": "USDPT/USDT"
+  },
+  "USDQUSD": {
+   "rest_key": "USDQUSD",
+   "v2_symbol": "USDQ/USD"
+  },
+  "USDQUSDC": {
+   "rest_key": "USDQUSDC",
+   "v2_symbol": "USDQ/USDC"
+  },
+  "USDQUSDT": {
+   "rest_key": "USDQUSDT",
+   "v2_symbol": "USDQ/USDT"
+  },
+  "USDREUR": {
+   "rest_key": "USDREUR",
+   "v2_symbol": "USDR/EUR"
+  },
+  "USDRUSD": {
+   "rest_key": "USDRUSD",
+   "v2_symbol": "USDR/USD"
+  },
+  "USDRUSDC": {
+   "rest_key": "USDRUSDC",
+   "v2_symbol": "USDR/USDC"
+  },
+  "USDRUSDT": {
+   "rest_key": "USDRUSDT",
+   "v2_symbol": "USDR/USDT"
+  },
+  "USDSEUR": {
+   "rest_key": "USDSEUR",
+   "v2_symbol": "USDS/EUR"
+  },
+  "USDSMUSD": {
+   "rest_key": "USDSMUSD",
+   "v2_symbol": "USDSM/USD"
+  },
+  "USDSUSD": {
+   "rest_key": "USDSUSD",
+   "v2_symbol": "USDS/USD"
+  },
+  "USDTAUD": {
+   "rest_key": "USDTAUD",
+   "v2_symbol": "USDT/AUD"
+  },
+  "USDTCAD": {
+   "rest_key": "USDTCAD",
+   "v2_symbol": "USDT/CAD"
+  },
+  "USDTCHF": {
+   "rest_key": "USDTCHF",
+   "v2_symbol": "USDT/CHF"
+  },
+  "USDTEUR": {
+   "rest_key": "USDTEUR",
+   "v2_symbol": "USDT/EUR"
+  },
+  "USDTGBP": {
+   "rest_key": "USDTGBP",
+   "v2_symbol": "USDT/GBP"
+  },
+  "USDTJPY": {
+   "rest_key": "USDTJPY",
+   "v2_symbol": "USDT/JPY"
+  },
+  "USDTUSD": {
+   "rest_key": "USDTZUSD",
+   "v2_symbol": "USDT/USD"
+  },
+  "USDUCEUR": {
+   "rest_key": "USDUCEUR",
+   "v2_symbol": "USDUC/EUR"
+  },
+  "USDUCUSD": {
+   "rest_key": "USDUCUSD",
+   "v2_symbol": "USDUC/USD"
+  },
+  "USELESSEUR": {
+   "rest_key": "USELESSEUR",
+   "v2_symbol": "USELESS/EUR"
+  },
+  "USELESSUSD": {
+   "rest_key": "USELESSUSD",
+   "v2_symbol": "USELESS/USD"
+  },
+  "USEUR": {
+   "rest_key": "USEUR",
+   "v2_symbol": "US/EUR"
+  },
+  "USTABLESUSD": {
+   "rest_key": "USTABLESUSD",
+   "v2_symbol": "USTABLES/USD"
+  },
+  "USUALEUR": {
+   "rest_key": "USUALEUR",
+   "v2_symbol": "USUAL/EUR"
+  },
+  "USUALUSD": {
+   "rest_key": "USUALUSD",
+   "v2_symbol": "USUAL/USD"
+  },
+  "USUSD": {
+   "rest_key": "USUSD",
+   "v2_symbol": "US/USD"
+  },
+  "UUSD": {
+   "rest_key": "UUSD",
+   "v2_symbol": "U/USD"
+  },
+  "UXLINKUSD": {
+   "rest_key": "UXLINKUSD",
+   "v2_symbol": "UXLINK/USD"
+  },
+  "VANRYEUR": {
+   "rest_key": "VANRYEUR",
+   "v2_symbol": "VANRY/EUR"
+  },
+  "VANRYUSD": {
+   "rest_key": "VANRYUSD",
+   "v2_symbol": "VANRY/USD"
+  },
+  "VELODROMEEUR": {
+   "rest_key": "VELODROMEEUR",
+   "v2_symbol": "VELODROME/EUR"
+  },
+  "VELODROMEUSD": {
+   "rest_key": "VELODROMEUSD",
+   "v2_symbol": "VELODROME/USD"
+  },
+  "VELOEUR": {
+   "rest_key": "VELOEUR",
+   "v2_symbol": "VELO/EUR"
+  },
+  "VELOUSD": {
+   "rest_key": "VELOUSD",
+   "v2_symbol": "VELO/USD"
+  },
+  "VELVETEUR": {
+   "rest_key": "VELVETEUR",
+   "v2_symbol": "VELVET/EUR"
+  },
+  "VELVETUSD": {
+   "rest_key": "VELVETUSD",
+   "v2_symbol": "VELVET/USD"
+  },
+  "VETEUR": {
+   "rest_key": "VETEUR",
+   "v2_symbol": "VET/EUR"
+  },
+  "VETUSD": {
+   "rest_key": "VETUSD",
+   "v2_symbol": "VET/USD"
+  },
+  "VETUSDC": {
+   "rest_key": "VETUSDC",
+   "v2_symbol": "VET/USDC"
+  },
+  "VETUSDT": {
+   "rest_key": "VETUSDT",
+   "v2_symbol": "VET/USDT"
+  },
+  "VFYEUR": {
+   "rest_key": "VFYEUR",
+   "v2_symbol": "VFY/EUR"
+  },
+  "VFYUSD": {
+   "rest_key": "VFYUSD",
+   "v2_symbol": "VFY/USD"
+  },
+  "VINEEUR": {
+   "rest_key": "VINEEUR",
+   "v2_symbol": "VINE/EUR"
+  },
+  "VINEUSD": {
+   "rest_key": "VINEUSD",
+   "v2_symbol": "VINE/USD"
+  },
+  "VIRTUALEUR": {
+   "rest_key": "VIRTUALEUR",
+   "v2_symbol": "VIRTUAL/EUR"
+  },
+  "VIRTUALUSD": {
+   "rest_key": "VIRTUALUSD",
+   "v2_symbol": "VIRTUAL/USD"
+  },
+  "VIRTUALUSDC": {
+   "rest_key": "VIRTUALUSDC",
+   "v2_symbol": "VIRTUAL/USDC"
+  },
+  "VIRTUALUSDT": {
+   "rest_key": "VIRTUALUSDT",
+   "v2_symbol": "VIRTUAL/USDT"
+  },
+  "VOOIUSD": {
+   "rest_key": "VOOIUSD",
+   "v2_symbol": "VOOI/USD"
+  },
+  "VSNEUR": {
+   "rest_key": "VSNEUR",
+   "v2_symbol": "VSN/EUR"
+  },
+  "VSNUSD": {
+   "rest_key": "VSNUSD",
+   "v2_symbol": "VSN/USD"
+  },
+  "VTHOEUR": {
+   "rest_key": "VTHOEUR",
+   "v2_symbol": "VTHO/EUR"
+  },
+  "VTHOUSD": {
+   "rest_key": "VTHOUSD",
+   "v2_symbol": "VTHO/USD"
+  },
+  "VULTEUR": {
+   "rest_key": "VULTEUR",
+   "v2_symbol": "VULT/EUR"
+  },
+  "VULTUSD": {
+   "rest_key": "VULTUSD",
+   "v2_symbol": "VULT/USD"
+  },
+  "VVVEUR": {
+   "rest_key": "VVVEUR",
+   "v2_symbol": "VVV/EUR"
+  },
+  "VVVUSD": {
+   "rest_key": "VVVUSD",
+   "v2_symbol": "VVV/USD"
+  },
+  "WALEUR": {
+   "rest_key": "WALEUR",
+   "v2_symbol": "WAL/EUR"
+  },
+  "WALUSD": {
+   "rest_key": "WALUSD",
+   "v2_symbol": "WAL/USD"
+  },
+  "WARDEUR": {
+   "rest_key": "WARDEUR",
+   "v2_symbol": "WARD/EUR"
+  },
+  "WARDUSD": {
+   "rest_key": "WARDUSD",
+   "v2_symbol": "WARD/USD"
+  },
+  "WARUSD": {
+   "rest_key": "WARUSD",
+   "v2_symbol": "WAR/USD"
+  },
+  "WAXLEUR": {
+   "rest_key": "WAXLEUR",
+   "v2_symbol": "WAXL/EUR"
+  },
+  "WAXLUSD": {
+   "rest_key": "WAXLUSD",
+   "v2_symbol": "WAXL/USD"
+  },
+  "WBTCEUR": {
+   "rest_key": "WBTCEUR",
+   "v2_symbol": "WBTC/EUR"
+  },
+  "WBTCUSD": {
+   "rest_key": "WBTCUSD",
+   "v2_symbol": "WBTC/USD"
+  },
+  "WBTCXBT": {
+   "rest_key": "WBTCXBT",
+   "v2_symbol": "WBTC/BTC"
+  },
+  "WBTEUR": {
+   "rest_key": "WBTEUR",
+   "v2_symbol": "WBT/EUR"
+  },
+  "WBTUSD": {
+   "rest_key": "WBTUSD",
+   "v2_symbol": "WBT/USD"
+  },
+  "WCTEUR": {
+   "rest_key": "WCTEUR",
+   "v2_symbol": "WCT/EUR"
+  },
+  "WCTUSD": {
+   "rest_key": "WCTUSD",
+   "v2_symbol": "WCT/USD"
+  },
+  "WELLEUR": {
+   "rest_key": "WELLEUR",
+   "v2_symbol": "WELL/EUR"
+  },
+  "WELLUSD": {
+   "rest_key": "WELLUSD",
+   "v2_symbol": "WELL/USD"
+  },
+  "WEMIXUSD": {
+   "rest_key": "WEMIXUSD",
+   "v2_symbol": "WEMIX/USD"
+  },
+  "WENUSD": {
+   "rest_key": "WENUSD",
+   "v2_symbol": "WEN/USD"
+  },
+  "WEUR": {
+   "rest_key": "WEUR",
+   "v2_symbol": "W/EUR"
+  },
+  "WFBEUR": {
+   "rest_key": "WFBEUR",
+   "v2_symbol": "WFB/EUR"
+  },
+  "WFBUSD": {
+   "rest_key": "WFBUSD",
+   "v2_symbol": "WFB/USD"
+  },
+  "WIFEUR": {
+   "rest_key": "WIFEUR",
+   "v2_symbol": "WIF/EUR"
+  },
+  "WIFGBP": {
+   "rest_key": "WIFGBP",
+   "v2_symbol": "WIF/GBP"
+  },
+  "WIFUSD": {
+   "rest_key": "WIFUSD",
+   "v2_symbol": "WIF/USD"
+  },
+  "WINEUR": {
+   "rest_key": "WINEUR",
+   "v2_symbol": "WIN/EUR"
+  },
+  "WINGSUSD": {
+   "rest_key": "WINGSUSD",
+   "v2_symbol": "WINGS/USD"
+  },
+  "WINUSD": {
+   "rest_key": "WINUSD",
+   "v2_symbol": "WIN/USD"
+  },
+  "WLDEUR": {
+   "rest_key": "WLDEUR",
+   "v2_symbol": "WLD/EUR"
+  },
+  "WLDUSD": {
+   "rest_key": "WLDUSD",
+   "v2_symbol": "WLD/USD"
+  },
+  "WLFIEUR": {
+   "rest_key": "WLFIEUR",
+   "v2_symbol": "WLFI/EUR"
+  },
+  "WLFIUSD": {
+   "rest_key": "WLFIUSD",
+   "v2_symbol": "WLFI/USD"
+  },
+  "WMTXEUR": {
+   "rest_key": "WMTXEUR",
+   "v2_symbol": "WMTX/EUR"
+  },
+  "WMTXUSD": {
+   "rest_key": "WMTXUSD",
+   "v2_symbol": "WMTX/USD"
+  },
+  "WOOEUR": {
+   "rest_key": "WOOEUR",
+   "v2_symbol": "WOO/EUR"
+  },
+  "WOOUSD": {
+   "rest_key": "WOOUSD",
+   "v2_symbol": "WOO/USD"
+  },
+  "WUSD": {
+   "rest_key": "WUSD",
+   "v2_symbol": "W/USD"
+  },
+  "XANEUR": {
+   "rest_key": "XANEUR",
+   "v2_symbol": "XAN/EUR"
+  },
+  "XANUSD": {
+   "rest_key": "XANUSD",
+   "v2_symbol": "XAN/USD"
+  },
+  "XAUTUSD": {
+   "rest_key": "XAUTUSD",
+   "v2_symbol": "XAUT/USD"
+  },
+  "XAUTUSDT": {
+   "rest_key": "XAUTUSDT",
+   "v2_symbol": "XAUT/USDT"
+  },
+  "XBTAUD": {
+   "rest_key": "XBTAUD",
+   "v2_symbol": "BTC/AUD"
+  },
+  "XBTAUSD": {
+   "rest_key": "XBTAUSD",
+   "v2_symbol": "BTC/AUSD"
+  },
+  "XBTCAD": {
+   "rest_key": "XXBTZCAD",
+   "v2_symbol": "BTC/CAD"
+  },
+  "XBTCHF": {
+   "rest_key": "XBTCHF",
+   "v2_symbol": "BTC/CHF"
+  },
+  "XBTDAI": {
+   "rest_key": "XBTDAI",
+   "v2_symbol": "BTC/DAI"
+  },
+  "XBTEUR": {
+   "rest_key": "XXBTZEUR",
+   "v2_symbol": "BTC/EUR"
+  },
+  "XBTEURC": {
+   "rest_key": "XBTEURC",
+   "v2_symbol": "BTC/EURC"
+  },
+  "XBTEUROP": {
+   "rest_key": "XXBTEUROP",
+   "v2_symbol": "BTC/EUROP"
+  },
+  "XBTFIDD": {
+   "rest_key": "XBTFIDD",
+   "v2_symbol": "BTC/FIDD"
+  },
+  "XBTGBP": {
+   "rest_key": "XXBTZGBP",
+   "v2_symbol": "BTC/GBP"
+  },
+  "XBTJPY": {
+   "rest_key": "XXBTZJPY",
+   "v2_symbol": "BTC/JPY"
+  },
+  "XBTPYUSD": {
+   "rest_key": "XBTPYUSD",
+   "v2_symbol": "BTC/PYUSD"
+  },
+  "XBTSOFID": {
+   "rest_key": "XBTSOFID",
+   "v2_symbol": "BTC/SOFID"
+  },
+  "XBTUSD": {
+   "rest_key": "XXBTZUSD",
+   "v2_symbol": "BTC/USD"
+  },
+  "XBTUSD1": {
+   "rest_key": "XBTUSD1",
+   "v2_symbol": "BTC/USD1"
+  },
+  "XBTUSDC": {
+   "rest_key": "XBTUSDC",
+   "v2_symbol": "BTC/USDC"
+  },
+  "XBTUSDQ": {
+   "rest_key": "XXBTUSDQ",
+   "v2_symbol": "BTC/USDQ"
+  },
+  "XBTUSDR": {
+   "rest_key": "XXBTUSDR",
+   "v2_symbol": "BTC/USDR"
+  },
+  "XBTUSDT": {
+   "rest_key": "XBTUSDT",
+   "v2_symbol": "BTC/USDT"
+  },
+  "XCNEUR": {
+   "rest_key": "XCNEUR",
+   "v2_symbol": "XCN/EUR"
+  },
+  "XCNUSD": {
+   "rest_key": "XCNUSD",
+   "v2_symbol": "XCN/USD"
+  },
+  "XDCCAD": {
+   "rest_key": "XDCCAD",
+   "v2_symbol": "XDC/CAD"
+  },
+  "XDCEUR": {
+   "rest_key": "XDCEUR",
+   "v2_symbol": "XDC/EUR"
+  },
+  "XDCUSD": {
+   "rest_key": "XDCUSD",
+   "v2_symbol": "XDC/USD"
+  },
+  "XDCUSDC": {
+   "rest_key": "XDCUSDC",
+   "v2_symbol": "XDC/USDC"
+  },
+  "XDGAUD": {
+   "rest_key": "XDGAUD",
+   "v2_symbol": "DOGE/AUD"
+  },
+  "XDGCAD": {
+   "rest_key": "XDGCAD",
+   "v2_symbol": "DOGE/CAD"
+  },
+  "XDGEUR": {
+   "rest_key": "XDGEUR",
+   "v2_symbol": "DOGE/EUR"
+  },
+  "XDGGBP": {
+   "rest_key": "XDGGBP",
+   "v2_symbol": "DOGE/GBP"
+  },
+  "XDGUSD": {
+   "rest_key": "XDGUSD",
+   "v2_symbol": "DOGE/USD"
+  },
+  "XDGUSDC": {
+   "rest_key": "XDGUSDC",
+   "v2_symbol": "DOGE/USDC"
+  },
+  "XDGUSDT": {
+   "rest_key": "XDGUSDT",
+   "v2_symbol": "DOGE/USDT"
+  },
+  "XDGXBT": {
+   "rest_key": "XXDGXXBT",
+   "v2_symbol": "DOGE/BTC"
+  },
+  "XIONEUR": {
+   "rest_key": "XIONEUR",
+   "v2_symbol": "XION/EUR"
+  },
+  "XIONUSD": {
+   "rest_key": "XIONUSD",
+   "v2_symbol": "XION/USD"
+  },
+  "XL1EUR": {
+   "rest_key": "XL1EUR",
+   "v2_symbol": "XL1/EUR"
+  },
+  "XL1USD": {
+   "rest_key": "XL1USD",
+   "v2_symbol": "XL1/USD"
+  },
+  "XLMEUR": {
+   "rest_key": "XXLMZEUR",
+   "v2_symbol": "XLM/EUR"
+  },
+  "XLMGBP": {
+   "rest_key": "XXLMZGBP",
+   "v2_symbol": "XLM/GBP"
+  },
+  "XLMUSD": {
+   "rest_key": "XXLMZUSD",
+   "v2_symbol": "XLM/USD"
+  },
+  "XLMXBT": {
+   "rest_key": "XXLMXXBT",
+   "v2_symbol": "XLM/BTC"
+  },
+  "XMNEUR": {
+   "rest_key": "XMNEUR",
+   "v2_symbol": "XMN/EUR"
+  },
+  "XMNUSD": {
+   "rest_key": "XMNUSD",
+   "v2_symbol": "XMN/USD"
+  },
+  "XMREUR": {
+   "rest_key": "XXMRZEUR",
+   "v2_symbol": "XMR/EUR"
+  },
+  "XMRUSD": {
+   "rest_key": "XXMRZUSD",
+   "v2_symbol": "XMR/USD"
+  },
+  "XMRUSDC": {
+   "rest_key": "XMRUSDC",
+   "v2_symbol": "XMR/USDC"
+  },
+  "XMRUSDT": {
+   "rest_key": "XMRUSDT",
+   "v2_symbol": "XMR/USDT"
+  },
+  "XMRXBT": {
+   "rest_key": "XXMRXXBT",
+   "v2_symbol": "XMR/BTC"
+  },
+  "XNYEUR": {
+   "rest_key": "XNYEUR",
+   "v2_symbol": "XNY/EUR"
+  },
+  "XNYUSD": {
+   "rest_key": "XNYUSD",
+   "v2_symbol": "XNY/USD"
+  },
+  "XPLEUR": {
+   "rest_key": "XPLEUR",
+   "v2_symbol": "XPL/EUR"
+  },
+  "XPLUSD": {
+   "rest_key": "XPLUSD",
+   "v2_symbol": "XPL/USD"
+  },
+  "XRPAUD": {
+   "rest_key": "XRPAUD",
+   "v2_symbol": "XRP/AUD"
+  },
+  "XRPCAD": {
+   "rest_key": "XXRPZCAD",
+   "v2_symbol": "XRP/CAD"
+  },
+  "XRPETH": {
+   "rest_key": "XRPETH",
+   "v2_symbol": "XRP/ETH"
+  },
+  "XRPEUR": {
+   "rest_key": "XXRPZEUR",
+   "v2_symbol": "XRP/EUR"
+  },
+  "XRPGBP": {
+   "rest_key": "XRPGBP",
+   "v2_symbol": "XRP/GBP"
+  },
+  "XRPRLUSD": {
+   "rest_key": "XRPRLUSD",
+   "v2_symbol": "XRP/RLUSD"
+  },
+  "XRPUSD": {
+   "rest_key": "XXRPZUSD",
+   "v2_symbol": "XRP/USD"
+  },
+  "XRPUSDC": {
+   "rest_key": "XRPUSDC",
+   "v2_symbol": "XRP/USDC"
+  },
+  "XRPUSDT": {
+   "rest_key": "XRPUSDT",
+   "v2_symbol": "XRP/USDT"
+  },
+  "XRPXBT": {
+   "rest_key": "XXRPXXBT",
+   "v2_symbol": "XRP/BTC"
+  },
+  "XTEREUR": {
+   "rest_key": "XTEREUR",
+   "v2_symbol": "XTER/EUR"
+  },
+  "XTERUSD": {
+   "rest_key": "XTERUSD",
+   "v2_symbol": "XTER/USD"
+  },
+  "XTZEUR": {
+   "rest_key": "XTZEUR",
+   "v2_symbol": "XTZ/EUR"
+  },
+  "XTZUSD": {
+   "rest_key": "XTZUSD",
+   "v2_symbol": "XTZ/USD"
+  },
+  "XTZUSDC": {
+   "rest_key": "XTZUSDC",
+   "v2_symbol": "XTZ/USDC"
+  },
+  "XTZUSDT": {
+   "rest_key": "XTZUSDT",
+   "v2_symbol": "XTZ/USDT"
+  },
+  "XU3O8EUR": {
+   "rest_key": "XU3O8EUR",
+   "v2_symbol": "XU3O8/EUR"
+  },
+  "XU3O8USD": {
+   "rest_key": "XU3O8USD",
+   "v2_symbol": "XU3O8/USD"
+  },
+  "XYOEUR": {
+   "rest_key": "XYOEUR",
+   "v2_symbol": "XYO/EUR"
+  },
+  "XYOUSD": {
+   "rest_key": "XYOUSD",
+   "v2_symbol": "XYO/USD"
+  },
+  "YALAEUR": {
+   "rest_key": "YALAEUR",
+   "v2_symbol": "YALA/EUR"
+  },
+  "YALAUSD": {
+   "rest_key": "YALAUSD",
+   "v2_symbol": "YALA/USD"
+  },
+  "YBEUR": {
+   "rest_key": "YBEUR",
+   "v2_symbol": "YB/EUR"
+  },
+  "YBUSD": {
+   "rest_key": "YBUSD",
+   "v2_symbol": "YB/USD"
+  },
+  "YFIEUR": {
+   "rest_key": "YFIEUR",
+   "v2_symbol": "YFI/EUR"
+  },
+  "YFIUSD": {
+   "rest_key": "YFIUSD",
+   "v2_symbol": "YFI/USD"
+  },
+  "YGGEUR": {
+   "rest_key": "YGGEUR",
+   "v2_symbol": "YGG/EUR"
+  },
+  "YGGUSD": {
+   "rest_key": "YGGUSD",
+   "v2_symbol": "YGG/USD"
+  },
+  "YOMUSD": {
+   "rest_key": "YOMUSD",
+   "v2_symbol": "YOM/USD"
+  },
+  "ZAMAEUR": {
+   "rest_key": "ZAMAEUR",
+   "v2_symbol": "ZAMA/EUR"
+  },
+  "ZAMAUSD": {
+   "rest_key": "ZAMAUSD",
+   "v2_symbol": "ZAMA/USD"
+  },
+  "ZBCNEUR": {
+   "rest_key": "ZBCNEUR",
+   "v2_symbol": "ZBCN/EUR"
+  },
+  "ZBCNUSD": {
+   "rest_key": "ZBCNUSD",
+   "v2_symbol": "ZBCN/USD"
+  },
+  "ZBTEUR": {
+   "rest_key": "ZBTEUR",
+   "v2_symbol": "ZBT/EUR"
+  },
+  "ZBTUSD": {
+   "rest_key": "ZBTUSD",
+   "v2_symbol": "ZBT/USD"
+  },
+  "ZECEUR": {
+   "rest_key": "XZECZEUR",
+   "v2_symbol": "ZEC/EUR"
+  },
+  "ZECUSD": {
+   "rest_key": "XZECZUSD",
+   "v2_symbol": "ZEC/USD"
+  },
+  "ZEREBROEUR": {
+   "rest_key": "ZEREBROEUR",
+   "v2_symbol": "ZEREBRO/EUR"
+  },
+  "ZEREBROUSD": {
+   "rest_key": "ZEREBROUSD",
+   "v2_symbol": "ZEREBRO/USD"
+  },
+  "ZETAEUR": {
+   "rest_key": "ZETAEUR",
+   "v2_symbol": "ZETA/EUR"
+  },
+  "ZETAUSD": {
+   "rest_key": "ZETAUSD",
+   "v2_symbol": "ZETA/USD"
+  },
+  "ZEUSEUR": {
+   "rest_key": "ZEUSEUR",
+   "v2_symbol": "ZEUS/EUR"
+  },
+  "ZEUSUSD": {
+   "rest_key": "ZEUSUSD",
+   "v2_symbol": "ZEUS/USD"
+  },
+  "ZEXEUR": {
+   "rest_key": "ZEXEUR",
+   "v2_symbol": "ZEX/EUR"
+  },
+  "ZEXUSD": {
+   "rest_key": "ZEXUSD",
+   "v2_symbol": "ZEX/USD"
+  },
+  "ZIGEUR": {
+   "rest_key": "ZIGEUR",
+   "v2_symbol": "ZIG/EUR"
+  },
+  "ZIGUSD": {
+   "rest_key": "ZIGUSD",
+   "v2_symbol": "ZIG/USD"
+  },
+  "ZKEUR": {
+   "rest_key": "ZKEUR",
+   "v2_symbol": "ZK/EUR"
+  },
+  "ZKPEUR": {
+   "rest_key": "ZKPEUR",
+   "v2_symbol": "ZKP/EUR"
+  },
+  "ZKPUSD": {
+   "rest_key": "ZKPUSD",
+   "v2_symbol": "ZKP/USD"
+  },
+  "ZKUSD": {
+   "rest_key": "ZKUSD",
+   "v2_symbol": "ZK/USD"
+  },
+  "ZORAEUR": {
+   "rest_key": "ZORAEUR",
+   "v2_symbol": "ZORA/EUR"
+  },
+  "ZORAUSD": {
+   "rest_key": "ZORAUSD",
+   "v2_symbol": "ZORA/USD"
+  },
+  "ZRCEUR": {
+   "rest_key": "ZRCEUR",
+   "v2_symbol": "ZRC/EUR"
+  },
+  "ZRCUSD": {
+   "rest_key": "ZRCUSD",
+   "v2_symbol": "ZRC/USD"
+  },
+  "ZROEUR": {
+   "rest_key": "ZROEUR",
+   "v2_symbol": "ZRO/EUR"
+  },
+  "ZROUSD": {
+   "rest_key": "ZROUSD",
+   "v2_symbol": "ZRO/USD"
+  },
+  "ZRXEUR": {
+   "rest_key": "ZRXEUR",
+   "v2_symbol": "ZRX/EUR"
+  },
+  "ZRXUSD": {
+   "rest_key": "ZRXUSD",
+   "v2_symbol": "ZRX/USD"
+  },
+  "ZRXXBT": {
+   "rest_key": "ZRXXBT",
+   "v2_symbol": "ZRX/BTC"
+  }
+ }
+}

@@ -89,3 +89,16 @@ recorder:
   # the hour. Default: 3600. Open interest is not published as a series by the
   # venue, so this is the only resolution that history will ever have.
   funding_interval_s: 3600
+
+  # --- scripts/recording/supervise.py: the supervised pollers -----------------
+  # Scripts the supervisor runs and restarts beside record.py, re-read every
+  # --reload-s (30 s) so a newly listed poller starts without restarting the
+  # supervisor or the recorder. Each entry is a bare filename looked for beside
+  # supervise.py, then one directory up, with optional `args: [..]`; the
+  # supervisor passes --config and --source-id, never --out. Absent means the
+  # recorder alone (what a node package runs). Added 2026-09-19 after the funding
+  # poller died on 2026-09-15 with nothing to bring it back (P3, operator ruling).
+  pollers:
+    - script: funding.py
+    # The hourly Kraken fee-tier and AssetPairs poller (P2, operator ruling 2026-09-19).
+    - script: fees.py

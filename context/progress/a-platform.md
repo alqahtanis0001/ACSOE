@@ -2179,9 +2179,18 @@ and is not to be built. Teammates do not commit and I restart nothing until the 
   the recorder's backoff and lock-wait. `tests/scripts/test_supervise.py` has 27 tests, and the
   mutation sweep killed 10 of 10. The config key has been requested from the lead. The
   switchover restart waits for the lead's word.
-- [ ] **P2.** `scripts/recording/fees.py`: hourly signed TradeVolume plus public AssetPairs,
-  verbatim, into `data/raw/fees/`. It uses a copied `.env` reader and signer, per the lead's
-  how-decision.
+- [x] **P1, built 2026-09-19, awaiting the lead's gate and commit.** `record.py` keeps
+  `instrument` subscribed on the tier-1 socket, sent first on every connect and never
+  unsubscribed by the disk guard. `tests/platform/test_record_instrument.py` has 4 tests, the
+  mutation sweep killed 7 of 7, and it was proved live in the scratchpad (a 1,450-pair snapshot
+  on the combined socket). The one switchover comes after P1 is committed, on the lead's word.
+- [x] **P2, built 2026-09-19, awaiting the lead's gate and commit.**
+  `scripts/recording/fees.py`: hourly signed TradeVolume plus public AssetPairs, verbatim, into
+  `data/raw/fees/`. It uses a copied `.env` reader and signer, per the lead's how-decision.
+  `tests/scripts/test_fees.py` has 21 tests, and the mutation sweep killed 12 of 12. One live
+  `--once` into the scratchpad confirmed the form-encoded `fee_schedule` is honoured; the output
+  was deleted. It still needs `- script: fees.py` under `recorder.pollers` (the lead's file),
+  which takes effect without a restart once the P3 switchover is done.
 
 ## a-replay — Phase 7 specs 129, 131, 142 (2026-09-19)
 
@@ -2190,26 +2199,156 @@ spec 129 (the replay client), then 131 (engine 23 drives the registered chain), 
 one replayed day).** Also: every new config model field this phase goes through a-replay
 (`src/acsoe/platform/config.py`).
 
-- [ ] 129 — in progress
-- [ ] 131 — not started
-- [ ] 142 — not started
+- [x] 129 — built: `clients/kraken/replay.py`, `clients/kraken/replay_scenario.py`, tests in
+  `tests/clients/kraken/test_replay.py` and `replay_fixtures.py`. It reads a-data's committed
+  shapes: the `instrument` capture, the name join, the bucket table and the partition manifest.
+  Mutation sweep below.
+- [x] 131 — built: `research/backtest.py` (`ChainReplay`), `cli/research.py`
+  (`acsoe research backtest`, `fold_config`), `cli/main.py` (arguments), tests in
+  `tests/research/test_chain_replay.py` and `tests/cli/test_research_backtest.py`.
+- [ ] 142 — next.
+- Config (A's lane): `replay:` section (optional), `mode: replay` accepted, `ConfigView`,
+  `derive_config`. The daemon refuses a replay config (`cli/engine.py`). The YAML block was
+  sent to the lead.
 
 ### Seams agreed or proposed (by message)
 
-- a-data (127, 128, 130): the partition, rules and table shapes, proposed 2026-09-19. I am
-  building against mocks of exactly those shapes.
-- c-models (135): run dirs named `train-20260913T205245-067b2b9d-f<k>-p7`, proposed; the fold
-  block in the manifest.
-- The lead (134): `clients.scenario_digest` and `clients.scenario_description`, both `str`,
-  on the clients container, proposed.
+- a-data (127, 128, 130): the shapes as committed. Read by the real loaders, and a test with no
+  double reads the committed fixtures and a partition written by a-data's own script.
+- c-models (135): run dirs `train-20260913T205245-067b2b9d-f<k>-p7`, matching c-models' plan;
+  the driver reads each fold's `test_start_ts`/`test_end_ts` from its `manifest.json`.
+- The lead (134): `scenario_digest` and `scenario_description` (both `str`) on the replay
+  run's clients container. The lead's `previous_now` keyword (D9) is used on a resume.
+- The lead's D8 ruled S-fee-class: Spot Crypto for every pair, which is what the client serves.
 
 ### Stops and open items (messaged to the lead)
 
-- **S-fee-class.** `FeeTierSnapshot` is account-level, so the Stablecoin, Pegged & FX fee table
-  cannot be served per pair without a contract or engine change. Recommended: the Spot Crypto
-  tier for every pair, with the count of candidates and trades on the ~11 affected pairs
-  reported. Case against: those pairs would be priced at the wrong schedule. Alternative:
-  exclude them from the rules, which is a universe change.
-- **Core need for spec 131 step 6.** An optional `previous_now` keyword on the orchestrator
-  constructor, so that a resumed replay's first tick has its trade range. Without it, killing
-  and resuming cannot reproduce the uninterrupted rows exactly.
+- **S-fee-class: RULED by the lead (D8).** Spot Crypto for every pair. `FeeTierSnapshot` is
+  account-level, so this is what the client serves.
+- **STOP, cost (2026-09-19): about 45 h per six-month run, measured.** Engine 3 takes 4.7 s per
+  bar tick and engine 5 1.8 s. Options sent to the lead: (a) speed up engine 3's candle build,
+  which was prototyped, found to buy almost nothing and withdrawn; (b) run as is, now
+  recommended; (c) a 101-bar window, not recommended. Waiting on the ruling. 142's fixture and
+  harness went ahead meanwhile.
+- **The core need for spec 131 step 6: DONE by the lead (D9).** `Orchestrator(previous_now=...)`,
+  which the driver passes on a resume.
+
+## a-data — Phase 7 specs 128, 127, 130 (2026-09-19)
+
+**CLAIMED 2026-09-19, before any repository file was written**, in this order: 128 (longest run),
+127, 130. Written after the Phase 6 preflight gate finished (`exit 0`).
+
+| Spec | What | Files I will touch | State |
+|---|---|---|---|
+| 128 | Weekly time-and-sales partitions for replay | `scripts/partition_trades.py`, `tests/scripts/test_partition_trades.py`, `data/derived/trades_weekly/` | **DONE 2026-09-19** |
+| 127 | A genuine `AssetPairs` (and the v2 `instrument` snapshot), survivorship count | `scripts/record_asset_pairs.py`, `tests/scripts/test_record_asset_pairs.py`, `tests/fixtures/kraken/asset_pairs_recorded_2026-09-19.json`, `tests/fixtures/kraken/instrument_recorded_2026-09-19.json` | **DONE 2026-09-19** |
+| 130 | The bucket table script and fixture, the fee pair-class companion | `scripts/build_bucket_table.py`, `tests/scripts/test_build_bucket_table.py`, `tests/fixtures/replay/spread_book_table_2026-09-19.json`, `tests/fixtures/replay/kraken_fee_schedule_2026-09-19.pair_classes.json` | **DONE 2026-09-19** (stops S-fee-rows, S-pegged) |
+
+Seam shapes proposed to a-replay by message, 2026-09-19. The partition layout, the rules
+fixtures and the table fields are all in that message.
+
+### a-data: spec 128 DONE 2026-09-19
+
+- `scripts/partition_trades.py`, `tests/scripts/test_partition_trades.py`: 16 tests.
+  `pytest tests/scripts/test_partition_trades.py tests/scripts/test_build_ohlcvt.py`:
+  `59 passed`. `mypy --strict src/ scripts/`: `Success: no issues found in 160 source files`.
+  `ruff` clean on my files. Four ruff findings elsewhere are in a-replay's in-progress test
+  files, not mine.
+- `data/derived/trades_weekly/`: 234 pairs × 41 weeks, 2024-03-23 to 2025-01-04,
+  112,552,742 rows. Every pair's count reconciles three ways: the stream, the Parquet
+  metadata, and the `_15.csv` bar trade counts. Manifest sha256 `cb7897c2…d175`.
+- Peak working set on XBTUSD.csv: 780 MiB.
+- Mutation sweep: 17 applied, 15 killed, 2 equivalent (checked negatives). The tautological
+  check M17 exposed was removed.
+- The warm-up is 15 weeks, measured (build log). It is a how-decision, told to a-replay.
+
+### a-data: spec 127 DONE 2026-09-19
+
+- `scripts/record_asset_pairs.py`, `tests/scripts/test_record_asset_pairs.py`: 21 tests, `21 passed`.
+- `tests/fixtures/kraken/asset_pairs_recorded_2026-09-19.json`: REST, verbatim, 1,450 pairs,
+  all parsed by `map_asset_pairs`.
+- `tests/fixtures/kraken/instrument_recorded_2026-09-19.json`: v2 snapshot, verbatim. This is
+  the CONTESTABLE second fetch; its decision entry is in the build log.
+- `tests/fixtures/kraken/pair_names_recorded_2026-09-19.json`: the derived archive/REST/v2 name
+  map, {XBT: BTC, XDG: DOGE}, 1,450 joined with 0 rule disagreements.
+- Survivorship: **39 of 231** window pairs are absent; **42 of 234** over 1.5 years. The names
+  are in the build log.
+- Tick caveat: all 15 finer-grid pairs record their 2026 grid.
+- Mutation sweep: 18 applied, 17 killed, 1 equivalent.
+
+**Open items for the lead (stops, not acted on).**
+- **S-renames.** Some of the 39 absent pairs are likely rebrands (MATIC to POL, FTM, RNDR,
+  MKR), not delistings. Options:
+  - (a) leave them excluded as `pair_rules_missing`, which is what the replay does now, and
+    report the count as an upper bound on true delistings;
+  - (b) map each rename to its successor's 2026 rules, from a committed and sourced rename list.
+  Recommend (a) for this run: it is what the spec measures, and it errs toward a smaller
+  universe. Case against: it drops liquid pairs such as MATICUSD from the window, and the
+  simulation then understates the universe.
+- **S-cancel-only.** 13 window pairs are `cancel_only` in the recording. `PairRule` carries no
+  status, so engine 7 admits them. Options:
+  - (a) leave it, and label it as a 2026 status that says nothing about 2024 anyway;
+  - (b) drop non-online pairs from the replay's rules.
+  Recommend (a) for the replay: a 2026 status is not a fact about 2024. The live defect (engine
+  7 ignoring status) is a FINDING for the operator. Case against (a): live, these pairs would
+  be admitted and their orders refused by Kraken.
+- **FINDING, not fixed** (it would change live behaviour): `map_asset_pairs` keys rules by
+  REST name, while the engines key by v2 symbol, so live rules would make engine 7 exclude
+  every pair. This was already raised by the recorder audit.
+
+### a-data: spec 130 DONE 2026-09-19 (three pairs and one mapping STOPPED)
+
+- `scripts/build_bucket_table.py`, `tests/scripts/test_build_bucket_table.py`: `9 passed`.
+- `tests/fixtures/replay/spread_book_table_2026-09-19.json`: DECLARED.
+  - Reproduces §3's counts, medians and slippage figures, and 7 of the 8 spread IQR bounds.
+  - $100k–1M q75 is 19.6 against the published 19.4. The cause is in the build log; the recon's
+    row set cannot be recovered.
+- `tests/fixtures/replay/kraken_fee_schedule_2026-09-19.pair_classes.json`: the page's rule,
+  quoted verbatim and checked against the committed page.
+- Mutation sweep: 19 arms, all killed after one test fix.
+
+**Open items for the lead (stops).**
+- **S-fee-rows.** Which row of the stablecoin/pegged/FX table corresponds to spot tiers 3 and 5
+  (that table is keyed on 30-day volume alone). Options:
+  - (a) by volume at each spot tier's volume threshold: tier 3 ($10K+) takes the "$0 +" row,
+    0.20%/0.20%; tier 5 ($50K+) takes the "$50,000 +" row, 0.16%/0.16%;
+  - (b) the "$0 +" row for both, on the page's note that stablecoin and FX volume does not
+    count towards the 30-day volume, and because tiers are also reachable by assets on
+    platform with no volume;
+  - (c) Spot Crypto for every pair (§7's fallback).
+  Recommend (a): it keeps one volume assumption across both tables. Case against: an account
+  at tier 5 by assets on platform with little volume would pay the "$0 +" row. And a-replay's
+  S-fee-class notes that `FeeTierSnapshot` cannot serve a per-pair fee without a contract
+  change anyway.
+- **S-pegged.** TBTCUSD, WBTCUSD and PAXGUSD: the page's rule does not say whether a pegged
+  token quoted against USD, rather than against its peg, is in the class. They are marked
+  RULING REQUIRED with `table: null`. Recommend Spot Crypto for all three (the page's examples
+  are all token/peg pairs). Case against: "pegged tokens" is written without qualification.
+- **FINDING: XBTPYUSD and ETHPYUSD are PYUSD-quoted (BTC/PYUSD, ETH/PYUSD), not USD.**
+  `build_ohlcvt.py`'s `endswith("USD")` rule admitted them into the models' USD universe. For
+  fees the page is explicit (Spot Crypto). For the universe and reporting currency it is the
+  lead's call.
+
+### Spec 130 and 127: the lead's rulings applied (a correction to the entries above)
+
+**Agent:** A-data · **Date:** 2026-09-19
+
+**The fee-class companion is a reporting list (lead decision D8).** The replay serves the Spot
+Crypto tier to every pair, because `FeeTierSnapshot` is account-level. The companion was
+regenerated before any commit. Its `_provenance.use` now says it is for reporting only, and no
+client reads it to price anything. TBTCUSD, WBTCUSD and PAXGUSD are `table: null`, with status
+"AMBIGUOUS: Spot Crypto served (D8)", and are no longer stops. So S-pegged and S-fee-rows above
+are **moot**, not open.
+
+**Spec 127 stops, ruled by the lead from spec 129 step 4.**
+- S-renames: the pairs stay excluded. **39 is an upper bound on delistings.** The probable
+  rebrands among them are MATICUSD (POL), FTMUSD, RNDRUSD (in the 1.5-year count) and MKRUSD.
+  The lead carries this to findings §7.
+- S-cancel-only: left as is for the replay. "Engine 7 ignores pair status, live too" is logged
+  by the lead as live finding F3.
+
+**PYUSD quote confirmed from the recordings.** In the v2 snapshot, BTC/PYUSD has base BTC and
+quote PYUSD, and ETH/PYUSD has base ETH and quote PYUSD. In REST, XBTPYUSD's `wsname` is
+XBT/PYUSD with quote PYUSD, and ETHPYUSD's is ETH/PYUSD. So the name map gives both pairs quote
+**PYUSD, not USD**. Engine 7 excludes them for want of a PYUSD balance (invariant 7), as it
+would live.

@@ -1,0 +1,1206 @@
+{
+ "_provenance": {
+  "companion_of": "kraken_fee_schedule_2026-09-19.json",
+  "companion_of_sha256": "ee77a8c49b922fe5f6ad9e372b95317a3d819aecfcd91cb6d8c987b687822a92",
+  "pair_names_sha256": "2f43ebdbedcd2f316ee4d5d5d9b6d9d06ab041ffbee4000751d34d7c667484c8",
+  "authored_by": "A-data, spec 130, 2026-09-19, by hand from the page's rule below",
+  "page_rule_verbatim": "This fee schedule applies to FX pairs (EUR/USD), stablecoins in the base currency (USDT/USD, DAI/USDT, etc.) and pegged tokens (TBTC/BTC, WBTC/BTC, etc.). If the stablecoin is the quote currency only (BTC/DAI), the fee schedule in the \"Spot Crypto\" tab applies.",
+  "page_rule_source": "kraken_fee_schedule_2026-09-19.html.gz, the 'Stablecoin, Pegged Token & FX Pairs' tab",
+  "declared": "DECLARED. Which of the page's tables applies to each archive USD pair, decided from the page's own rule. The schedule is Kraken's in force on 2026-09-19, applied to a 2023-24 window. Never read by the live or paper path.",
+  "scope": "every archive USD pair (data/historical/*USD_15.csv), 234",
+  "use": "REPORTING ONLY (lead decision D8, 2026-09-19). The replay serves the Spot Crypto tier to every pair, findings section 7's documented substitute, because the fee contract (FeeTierSnapshot) is account-level. This list says which pairs would fall under the other table, so a run can report how many candidates and trades landed on them. No client reads it to price anything.",
+  "not_mapped_here": [
+   "Which row of the stablecoin_pegged_fx table a spot tier corresponds to. Moot: the replay never serves that table."
+  ]
+ },
+ "counts": {
+  "stablecoin_pegged_fx": 7,
+  "spot_crypto": 222,
+  "ambiguous": [
+   "PAXGUSD",
+   "TBTCUSD",
+   "WBTCUSD"
+  ],
+  "absent_from_rules": [
+   "TUSDUSD",
+   "USTUSD"
+  ]
+ },
+ "pairs": {
+  "1INCHUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "1INCH/USD"
+  },
+  "AAVEUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "AAVE/USD"
+  },
+  "ACAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ACA/USD"
+  },
+  "ACHUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ACH/USD"
+  },
+  "ADAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ADA/USD"
+  },
+  "ADXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ADX/USD"
+  },
+  "AGLDUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "AIRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "AKTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "AKT/USD"
+  },
+  "ALCXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ALCX/USD"
+  },
+  "ALGOUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ALGO/USD"
+  },
+  "ALICEUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ALICE/USD"
+  },
+  "ALPHAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ALPHA/USD"
+  },
+  "ANKRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ANKR/USD"
+  },
+  "ANTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "APEUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "APE/USD"
+  },
+  "API3USD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "API3/USD"
+  },
+  "APTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "APT/USD"
+  },
+  "ARBUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ARB/USD"
+  },
+  "ARPAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ARPA/USD"
+  },
+  "ASTRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ASTR/USD"
+  },
+  "ATLASUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ATLAS/USD"
+  },
+  "ATOMUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ATOM/USD"
+  },
+  "AUDIOUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "AUDIO/USD"
+  },
+  "AUDUSD": {
+   "table": "stablecoin_pegged_fx",
+   "why": "FX pair: fiat against fiat, as the page's EUR/USD example",
+   "v2_symbol": "AUD/USD"
+  },
+  "AVAXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "AVAX/USD"
+  },
+  "AXSUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "AXS/USD"
+  },
+  "BADGERUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BADGER/USD"
+  },
+  "BALUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BAL/USD"
+  },
+  "BANDUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BAND/USD"
+  },
+  "BATUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BAT/USD"
+  },
+  "BCHUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BCH/USD"
+  },
+  "BICOUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BICO/USD"
+  },
+  "BITUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "BLURUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BLUR/USD"
+  },
+  "BLZUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BLZ/USD"
+  },
+  "BNCUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BNC/USD"
+  },
+  "BNTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BNT/USD"
+  },
+  "BOBAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BOBA/USD"
+  },
+  "BONDUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "BONKUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BONK/USD"
+  },
+  "BSXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "BTTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BTT/USD"
+  },
+  "C98USD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "C98/USD"
+  },
+  "CELRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "CELR/USD"
+  },
+  "CFGUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "CFG/USD"
+  },
+  "CHRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "CHR/USD"
+  },
+  "CHZUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "CHZ/USD"
+  },
+  "COMPUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "COMP/USD"
+  },
+  "COTIUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "COTI/USD"
+  },
+  "CQTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "CQT/USD"
+  },
+  "CRVUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "CRV/USD"
+  },
+  "CSMUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "CTSIUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "CTSI/USD"
+  },
+  "CVCUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "CVC/USD"
+  },
+  "CVXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "CVX/USD"
+  },
+  "DAIUSD": {
+   "table": "stablecoin_pegged_fx",
+   "why": "stablecoin in the base currency: DAI is named a stablecoin by the page's DAI/USDT example",
+   "v2_symbol": "DAI/USD"
+  },
+  "DASHUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "DASH/USD"
+  },
+  "DENTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "DENT/USD"
+  },
+  "DOTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "DOT/USD"
+  },
+  "DYDXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "DYDX/USD"
+  },
+  "EGLDUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "EGLD/USD"
+  },
+  "ENJUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ENJ/USD"
+  },
+  "ENSUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ENS/USD"
+  },
+  "EOSUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "ETCUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ETC/USD"
+  },
+  "ETHPYUSD": {
+   "table": "spot_crypto",
+   "why": "ETH/PYUSD per the recorded name map: the stablecoin is the quote only, so the page says Spot Crypto",
+   "v2_symbol": "ETH/PYUSD"
+  },
+  "ETHUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ETH/USD"
+  },
+  "ETHWUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "EULUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "EUL/USD"
+  },
+  "EURUSD": {
+   "table": "stablecoin_pegged_fx",
+   "why": "FX pair: the page's own example, EUR/USD",
+   "v2_symbol": "EUR/USD"
+  },
+  "EWTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "EWT/USD"
+  },
+  "FARMUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "FETUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "FET/USD"
+  },
+  "FIDAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "FIDA/USD"
+  },
+  "FILUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "FIL/USD"
+  },
+  "FISUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "FIS/USD"
+  },
+  "FLOWUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "FLOW/USD"
+  },
+  "FLRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "FLR/USD"
+  },
+  "FORTHUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "FORTH/USD"
+  },
+  "FTMUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "FXSUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "FXS/USD"
+  },
+  "GALAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "GALA/USD"
+  },
+  "GALUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "GARIUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "GBPUSD": {
+   "table": "stablecoin_pegged_fx",
+   "why": "FX pair: fiat against fiat, as the page's EUR/USD example",
+   "v2_symbol": "GBP/USD"
+  },
+  "GHSTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "GHST/USD"
+  },
+  "GLMRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "GLMR/USD"
+  },
+  "GMTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "GMT/USD"
+  },
+  "GMXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "GMX/USD"
+  },
+  "GNOUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "GNO/USD"
+  },
+  "GRTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "GRT/USD"
+  },
+  "GSTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "GST/USD"
+  },
+  "GTCUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "GTC/USD"
+  },
+  "HDXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "HDX/USD"
+  },
+  "HFTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "HFT/USD"
+  },
+  "ICPUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ICP/USD"
+  },
+  "ICXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "IDEXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "IDEX/USD"
+  },
+  "IMXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "IMX/USD"
+  },
+  "INJUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "INJ/USD"
+  },
+  "INTRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "JASMYUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "JASMY/USD"
+  },
+  "JTOUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "JTO/USD"
+  },
+  "JUNOUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "JUNO/USD"
+  },
+  "KARUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "KAVAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "KAVA/USD"
+  },
+  "KEEPUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "KEEP/USD"
+  },
+  "KEYUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "KEY/USD"
+  },
+  "KILTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "KINTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "KINUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "KIN/USD"
+  },
+  "KNCUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "KNC/USD"
+  },
+  "KP3RUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "KP3R/USD"
+  },
+  "KSMUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "KSM/USD"
+  },
+  "LCXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "LCX/USD"
+  },
+  "LDOUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "LDO/USD"
+  },
+  "LINKUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "LINK/USD"
+  },
+  "LMWRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "LMWR/USD"
+  },
+  "LPTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "LPT/USD"
+  },
+  "LRCUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "LRC/USD"
+  },
+  "LSKUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "LSK/USD"
+  },
+  "LTCUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "LTC/USD"
+  },
+  "LUNA2USD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "LUNAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "LUNA/USD"
+  },
+  "MANAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "MANA/USD"
+  },
+  "MASKUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "MASK/USD"
+  },
+  "MATICUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "MCUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "MINAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "MINA/USD"
+  },
+  "MIRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "MIR/USD"
+  },
+  "MKRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "MLNUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "MLN/USD"
+  },
+  "MNGOUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "MNGO/USD"
+  },
+  "MOONUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "MOVRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "MOVR/USD"
+  },
+  "MSOLUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "MSOL/USD"
+  },
+  "MULTIUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "MULTI/USD"
+  },
+  "MVUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "MXCUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "NANOUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "NANO/USD"
+  },
+  "NEARUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "NEAR/USD"
+  },
+  "NMRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "NMR/USD"
+  },
+  "NODLUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "NYMUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "OCEANUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "OCEAN/USD"
+  },
+  "OGNUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "OGN/USD"
+  },
+  "OMGUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "OMG/USD"
+  },
+  "OPUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "OP/USD"
+  },
+  "ORCAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ORCA/USD"
+  },
+  "OXTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "OXT/USD"
+  },
+  "OXYUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "PAXGUSD": {
+   "table": null,
+   "status": "AMBIGUOUS: Spot Crypto served (D8)",
+   "why": "a gold-backed token; whether a commodity-pegged token is a 'pegged token' in the page's sense is not stated",
+   "v2_symbol": "PAXG/USD"
+  },
+  "PEPEUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "PEPE/USD"
+  },
+  "PERPUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "PERP/USD"
+  },
+  "PHAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "PHA/USD"
+  },
+  "POLISUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "POLIS/USD"
+  },
+  "POLSUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "POLS/USD"
+  },
+  "POLUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "POL/USD"
+  },
+  "PONDUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "POND/USD"
+  },
+  "POWRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "POWR/USD"
+  },
+  "PSTAKEUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "PYTHUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "PYTH/USD"
+  },
+  "PYUSDUSD": {
+   "table": "stablecoin_pegged_fx",
+   "why": "stablecoin in the base currency: PYUSD is a USD stablecoin",
+   "v2_symbol": "PYUSD/USD"
+  },
+  "QNTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "QNT/USD"
+  },
+  "QTUMUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "QTUM/USD"
+  },
+  "RADUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "RAD/USD"
+  },
+  "RAREUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "RARE/USD"
+  },
+  "RARIUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "RARI/USD"
+  },
+  "RAYUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "RAY/USD"
+  },
+  "RBCUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "RBC/USD"
+  },
+  "RENUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "REN/USD"
+  },
+  "REPUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "REPV2USD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "REQUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "REQ/USD"
+  },
+  "RLCUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "RLC/USD"
+  },
+  "RNDRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "ROOKUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "RPLUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "RPL/USD"
+  },
+  "RUNEUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "RUNE/USD"
+  },
+  "SAMOUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SAMO/USD"
+  },
+  "SANDUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SAND/USD"
+  },
+  "SBRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SBR/USD"
+  },
+  "SCRTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SCRT/USD"
+  },
+  "SCUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SC/USD"
+  },
+  "SDNUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "SEIUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SEI/USD"
+  },
+  "SGBUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SGB/USD"
+  },
+  "SHIBUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SHIB/USD"
+  },
+  "SNXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SNX/USD"
+  },
+  "SOLUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SOL/USD"
+  },
+  "SPELLUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SPELL/USD"
+  },
+  "SRMUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SRM/USD"
+  },
+  "STEPUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "STGUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "STG/USD"
+  },
+  "STORJUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "STORJ/USD"
+  },
+  "STXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "STX/USD"
+  },
+  "SUIUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SUI/USD"
+  },
+  "SUPERUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SUPER/USD"
+  },
+  "SUSHIUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SUSHI/USD"
+  },
+  "SYNUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "SYN/USD"
+  },
+  "TBTCUSD": {
+   "table": null,
+   "status": "AMBIGUOUS: Spot Crypto served (D8)",
+   "why": "pegged token, but the page's examples pair it with its peg (TBTC/BTC). Whether TBTC/USD is in the class is not stated",
+   "v2_symbol": "TBTC/USD"
+  },
+  "TEERUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "TIAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "TIA/USD"
+  },
+  "TLMUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "TLM/USD"
+  },
+  "TOKEUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "TRUUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "TRU/USD"
+  },
+  "TRXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "TRX/USD"
+  },
+  "TUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "T/USD"
+  },
+  "TUSDUSD": {
+   "table": null,
+   "status": "ABSENT FROM RULES",
+   "why": "stablecoin in the base currency, but absent from the recorded AssetPairs, so never tradable in replay",
+   "v2_symbol": null
+  },
+  "TVKUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "UMAUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "UMA/USD"
+  },
+  "UNFIUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "UNFI/USD"
+  },
+  "UNIUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "UNI/USD"
+  },
+  "USDCUSD": {
+   "table": "stablecoin_pegged_fx",
+   "why": "stablecoin in the base currency: USDC is a USD stablecoin",
+   "v2_symbol": "USDC/USD"
+  },
+  "USDTUSD": {
+   "table": "stablecoin_pegged_fx",
+   "why": "stablecoin in the base currency: the page's own example, USDT/USD",
+   "v2_symbol": "USDT/USD"
+  },
+  "USTUSD": {
+   "table": null,
+   "status": "ABSENT FROM RULES",
+   "why": "absent from the recorded AssetPairs, so never tradable in replay (and whether a de-pegged stablecoin is in the class would need a ruling)",
+   "v2_symbol": null
+  },
+  "WAVESUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "WAXLUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "WAXL/USD"
+  },
+  "WBTCUSD": {
+   "table": null,
+   "status": "AMBIGUOUS: Spot Crypto served (D8)",
+   "why": "pegged token, but the page's examples pair it with its peg (WBTC/BTC). Whether WBTC/USD is in the class is not stated",
+   "v2_symbol": "WBTC/USD"
+  },
+  "WOOUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "WOO/USD"
+  },
+  "XBTPYUSD": {
+   "table": "spot_crypto",
+   "why": "BTC/PYUSD per the recorded name map: the stablecoin is the quote only, so the page says Spot Crypto",
+   "v2_symbol": "BTC/PYUSD"
+  },
+  "XBTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "BTC/USD"
+  },
+  "XCNUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "XCN/USD"
+  },
+  "XDGUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "DOGE/USD"
+  },
+  "XLMUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "XLM/USD"
+  },
+  "XMRUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "XMR/USD"
+  },
+  "XRPUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "XRP/USD"
+  },
+  "XRTUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": null
+  },
+  "XTZUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "XTZ/USD"
+  },
+  "YFIUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "YFI/USD"
+  },
+  "YGGUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "YGG/USD"
+  },
+  "ZECUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ZEC/USD"
+  },
+  "ZRXUSD": {
+   "table": "spot_crypto",
+   "why": "a cryptocurrency pair outside the page's three named classes",
+   "v2_symbol": "ZRX/USD"
+  }
+ }
+}

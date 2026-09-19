@@ -102,6 +102,19 @@ not in it.
 Both derived lists are written into both archives as a ``session`` marker before
 any market data, so a replay always knows what was subscribed and what was not.
 
+## The pair rules are recorded too
+
+The tier 1 socket also keeps the ``instrument`` channel, sent **first** on every
+connect and never unsubscribed — not by the disk guard, not by a checksum
+resubscribe. Kraken answers each connect with a snapshot of every pair's rules
+(``qty_min``, ``cost_min``, ``tick_size``, both precisions, ``status``) and then
+sends an ``update`` whenever a pair is listed or changes status, so the rules in
+force at any moment of the archive are the last ``instrument`` frame before it.
+Without them a replay has no ``ordermin`` to size against, and engine 7 excludes
+every pair. They land in ``data/raw/`` verbatim with ``channel: "instrument"`` and
+``pair: null``, since one frame covers the whole exchange; at about 0.6 MB a
+snapshot, once per connection.
+
 ## The disk guard
 
 A recorder that dies of ``Errno 28`` loses everything from that moment on. One
@@ -371,6 +384,12 @@ CHECKSUM_LEVELS: Final = 10
 #: not use, so it is not subscribed and the bandwidth is not spent.
 TIER1_CHANNELS: Final = ("book", "ticker", "trade")
 TIER2_CHANNELS: Final = ("book", "trade")
+
+#: Kraken's pair-rules channel. Subscribed on the tier 1 socket **alongside**
+#: :data:`TIER1_CHANNELS` rather than as one of them: it takes no symbol, and the
+#: channel list feeds both the symbol-chunked subscribe and the disk guard's
+#: per-symbol unsubscribe, neither of which it may pass through.
+INSTRUMENT_CHANNEL: Final = "instrument"
 
 DEFAULT_DEPTH: Final = 10
 DEFAULT_QUOTE: Final = "USD"
@@ -1167,6 +1186,17 @@ def subscriptions(
     return subs
 
 
+def instrument_subscription() -> dict[str, Any]:
+    """Subscribe to every pair's rules. No symbol: the channel covers the exchange.
+
+    Kraken answers with a snapshot of every pair and asset — ``ordermin`` as
+    ``qty_min``, ``costmin`` as ``cost_min``, ``tick_size``, both precisions, and
+    ``status`` — and then an ``update`` whenever one of them changes. The same
+    message ``discover_pairs`` sends, and that is the evidence it is accepted.
+    """
+    return {"method": "subscribe", "params": {"channel": INSTRUMENT_CHANNEL}}
+
+
 def quote_volume_24h(entry: dict[str, Any]) -> float | None:
     """24-hour volume in the quote currency, from a ticker snapshot entry.
 
@@ -1911,8 +1941,13 @@ class Stream:
         ping_timeout: float = 20.0,
         on_disconnect: Callable[[], None] | None = None,
         on_reconnect: Callable[[], None] | None = None,
+        instrument: bool = False,
     ) -> None:
         self._label = label
+        #: Whether this stream also keeps the ``instrument`` channel. Sent first on
+        #: every connect, so after a reconnect the archive holds the pair rules
+        #: before any market data priced against them; never unsubscribed.
+        self._instrument = instrument
         self._writer = writer
         self._sink = sink
         self._url = url
@@ -1958,13 +1993,18 @@ class Stream:
     def stop(self) -> None:
         self._stopping.set()
 
+    def all_subscriptions(self) -> list[dict[str, Any]]:
+        """Everything sent on connect, in order: ``instrument`` first when kept."""
+        head = [instrument_subscription()] if self._instrument else []
+        return head + list(self._subs)
+
     def write_marker(self, event: str, extra: dict[str, Any] | None = None) -> None:
         """A ``session`` marker for this tier, carrying what it subscribed to."""
         payload: dict[str, Any] = {
             "event": event,
             "tier": self._label,
             "url": self._url,
-            "subscriptions": [sub["params"] for sub in self._subs],
+            "subscriptions": [sub["params"] for sub in self.all_subscriptions()],
             **self._session_extra,
             **(extra or {}),
         }
@@ -2106,7 +2146,7 @@ class Stream:
                 # that minute is order-book data nothing can recover.
                 self._attempt = 0
                 self._backoff = BACKOFF_INITIAL_S
-                for sub in self._subs:
+                for sub in self.all_subscriptions():
                     await ws.send(orjson.dumps(sub).decode())
                 while not self._stopping.is_set():
                     receive = asyncio.ensure_future(ws.recv())
@@ -2712,6 +2752,11 @@ async def _record(
             session_extra=session_extra,
             ping_interval=args.ping_interval,
             ping_timeout=args.ping_timeout,
+            # The pair rules a replay needs: without them engine 7 excludes every
+            # pair as `pair_rules_missing`. On tier 1's socket because tier 1 is the
+            # verbatim archive; once per connection, because the channel covers
+            # every pair whatever either tier subscribed.
+            instrument=True,
         )
         tier2_stream = Stream(
             label="tier2",

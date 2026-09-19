@@ -1,0 +1,442 @@
+{
+ "_provenance": {
+  "statement": "DECLARED, NOT MEASURED. Every value in this table is a median over USD pairs the recorder summarised over the recording span below, in September 2026. The replay applies it to every pair in a 2023-24 window, recorded or not, by the pair's own trailing 24-hour dollar volume. It is a declared scenario value applied to a different period, never a measurement of that period. The interquartile ranges are the declared uncertainty of each value. Operator ruling 2026-09-19; docs/dataset/phase-7-findings.md section 3.",
+  "built_by": "scripts/build_bucket_table.py",
+  "script_sha256": "50f2144264d7448a027b157a937bc8f17c77872adf6f0ca334bb40d06a43608c",
+  "recording_span": {
+   "first_minute": "2026-09-11T16:13:00Z",
+   "last_minute": "2026-09-19T00:45:00Z",
+   "days": 7.3556,
+   "until": "2026-09-19T00:45:00Z"
+  },
+  "sources": [
+   {
+    "file": "summary_2026-09-11.jsonl",
+    "bytes_read": 7808858,
+    "sha256": "e91d3dee648b63f88f029351ed11041854a316d38244c9d7f64ac0f50119acbe"
+   },
+   {
+    "file": "summary__msi__2026-09-11.jsonl",
+    "bytes_read": 12458446,
+    "sha256": "c55f52923e7e855e5e06e9528050e9681ad427239221d65dc0430af1d1680f4c"
+   },
+   {
+    "file": "summary__msi__2026-09-12.jsonl",
+    "bytes_read": 102109633,
+    "sha256": "ab8da1b8a9ed4931803edae4055ec4a259d22530a5b5ac6c81f9d0fc7eb246a0"
+   },
+   {
+    "file": "summary__msi__2026-09-13.jsonl",
+    "bytes_read": 102364356,
+    "sha256": "95f8c689289b531849fc3687d2f1c93aea4e22d4a6479192c4949551f8ffdd1b"
+   },
+   {
+    "file": "summary__msi__2026-09-14.jsonl",
+    "bytes_read": 102777803,
+    "sha256": "4e9881e2fb4198f468f819d06c546201c3c4eb95bcec12f881a323427f39dc79"
+   },
+   {
+    "file": "summary__msi__2026-09-15.jsonl",
+    "bytes_read": 82182450,
+    "sha256": "801ebddcc7e1bfeee196adbdc5dbcf19e4ea7e1baa2c99b0839a10e47df64cda"
+   },
+   {
+    "file": "summary__msi__2026-09-16.jsonl",
+    "bytes_read": 105559909,
+    "sha256": "24cd393992f67c92be7882f0fe37de1e46bffa8a829e25bf3f23eb7f09837ade"
+   },
+   {
+    "file": "summary__msi__2026-09-17.jsonl",
+    "bytes_read": 82410995,
+    "sha256": "d49280e41965044d420bb70a53a614829441012cf0499d98ec927645db9a6ca7"
+   },
+   {
+    "file": "summary__msi__2026-09-18.jsonl",
+    "bytes_read": 106210986,
+    "sha256": "a67d50e01131d740fc5fe7eeb1b25ed59d1a0e71eab8a974d17693fc60de5ef7"
+   },
+   {
+    "file": "summary__msi__2026-09-19.jsonl",
+    "bytes_read": 19358232,
+    "sha256": "25a04cd6fc8742252edd21e612fb9dfabc9d321981062e04bed368c585478ea0"
+   }
+  ],
+  "recorded_usd_pairs": 185,
+  "definitions": {
+   "spread_bps": "per pair, the median over clean, schema-2 minutes with samples of the minute's p50 spread; per bucket, the median of those per-pair medians",
+   "depth_bid_bps_to_10k_from_mid": "per pair, the median over the same minutes where the book reached $10,000 of depth_bid_bps: the distance from the mid, in bps, at which resting bids first add up to $10,000; per bucket, the median of those",
+   "usd_day": "the pair's summed quote_volume over every summary row in the span, divided by the span in days",
+   "quantiles": "polars median, and polars quantile at its default interpolation"
+  },
+  "used_by": "the replay client only (spec 129). Never read by the live or paper path."
+ },
+ "buckets": [
+  {
+   "bucket": "<$10k",
+   "usd_day_from": 0.0,
+   "usd_day_below": 10000.0,
+   "pairs": 16,
+   "pair_list": [
+    "ARC/USD",
+    "BABY/USD",
+    "BOB/USD",
+    "CTR/USD",
+    "CVC/USD",
+    "DYDX/USD",
+    "FIDD/USD",
+    "KAVA/USD",
+    "LMWR/USD",
+    "PRO/USD",
+    "RED/USD",
+    "SENT/USD",
+    "SUSHI/USD",
+    "T/USD",
+    "ZIG/USD",
+    "ZORA/USD"
+   ],
+   "spread_bps": {
+    "median": 30.395200000000003,
+    "q25": 12.1729,
+    "q75": 35.9997
+   },
+   "depth_bid_bps_to_10k_from_mid": {
+    "median": 86.2069,
+    "q25": 39.3895,
+    "q75": 141.881,
+    "pairs_with_depth": 11,
+    "pairs_never_reaching_10k": [
+     "BOB/USD",
+     "CVC/USD",
+     "LMWR/USD",
+     "PRO/USD",
+     "ZIG/USD"
+    ]
+   },
+   "slippage_5k_bps_check_only": 17.726175
+  },
+  {
+   "bucket": "$10k-100k",
+   "usd_day_from": 10000.0,
+   "usd_day_below": 100000.0,
+   "pairs": 49,
+   "pair_list": [
+    "ADI/USD",
+    "AI/USD",
+    "ALIGN/USD",
+    "ANON/USD",
+    "APE/USD",
+    "AR/USD",
+    "ASTR/USD",
+    "AUSD/USD",
+    "BABYSHARK/USD",
+    "BLUR/USD",
+    "BRL1/USD",
+    "CPOOL/USD",
+    "CVX/USD",
+    "DAI/USD",
+    "EGLD/USD",
+    "ETC/USD",
+    "FOLD/USD",
+    "FORTH/USD",
+    "GAIB/USD",
+    "GNOT/USD",
+    "GRASS/USD",
+    "GWEI/USD",
+    "KNTQ/USD",
+    "KTA/USD",
+    "LIT/USD",
+    "MEGA/USD",
+    "MNT/USD",
+    "MOODENG/USD",
+    "PEAQ/USD",
+    "PI/USD",
+    "PIEVERSE/USD",
+    "POPCAT/USD",
+    "PROMPT/USD",
+    "PTB/USD",
+    "PYUSD/USD",
+    "REZ/USD",
+    "RUNE/USD",
+    "SHX/USD",
+    "STBL/USD",
+    "STRK/USD",
+    "SYND/USD",
+    "TEL/USD",
+    "TRAC/USD",
+    "TRIA/USD",
+    "VSN/USD",
+    "WBTC/USD",
+    "ZAMA/USD",
+    "ZBCN/USD",
+    "ZK/USD"
+   ],
+   "spread_bps": {
+    "median": 25.7732,
+    "q25": 11.1576,
+    "q75": 39.2157
+   },
+   "depth_bid_bps_to_10k_from_mid": {
+    "median": 100.539,
+    "q25": 45.307050000000004,
+    "q75": 176.391,
+    "pairs_with_depth": 43,
+    "pairs_never_reaching_10k": [
+     "BABYSHARK/USD",
+     "FORTH/USD",
+     "PI/USD",
+     "SHX/USD",
+     "SYND/USD",
+     "TEL/USD"
+    ]
+   },
+   "slippage_5k_bps_check_only": 20.807000000000002
+  },
+  {
+   "bucket": "$100k-1M",
+   "usd_day_from": 100000.0,
+   "usd_day_below": 1000000.0,
+   "pairs": 84,
+   "pair_list": [
+    "AERO/USD",
+    "AIN/USD",
+    "AKT/USD",
+    "ALGO/USD",
+    "APT/USD",
+    "ASTER/USD",
+    "ATOM/USD",
+    "BAT/USD",
+    "BONK/USD",
+    "BTR/USD",
+    "CAKE/USD",
+    "CAP/USD",
+    "CHIP/USD",
+    "COTI/USD",
+    "DCR/USD",
+    "DGAI/USD",
+    "DOG/USD",
+    "DOT/USD",
+    "EIGEN/USD",
+    "ESPORTS/USD",
+    "ETHFI/USD",
+    "EURC/USD",
+    "FARTCOIN/USD",
+    "FET/USD",
+    "FLR/USD",
+    "GRT/USD",
+    "HBAR/USD",
+    "HNT/USD",
+    "ICP/USD",
+    "JASMY/USD",
+    "JTO/USD",
+    "JUP/USD",
+    "KAS/USD",
+    "KAT/USD",
+    "KSM/USD",
+    "LDO/USD",
+    "LSK/USD",
+    "LUNA/USD",
+    "MANA/USD",
+    "MET/USD",
+    "MINA/USD",
+    "MON/USD",
+    "MORPHO/USD",
+    "NIGHT/USD",
+    "NPC/USD",
+    "OP/USD",
+    "PENDLE/USD",
+    "PENGU/USD",
+    "PLAY/USD",
+    "POL/USD",
+    "PYTH/USD",
+    "QNT/USD",
+    "RENDER/USD",
+    "RIVER/USD",
+    "SAGA/USD",
+    "SEI/USD",
+    "SHIB/USD",
+    "SKR/USD",
+    "SKY/USD",
+    "SN51/USD",
+    "SPX/USD",
+    "STORJ/USD",
+    "STX/USD",
+    "SYN/USD",
+    "SYRUP/USD",
+    "TIA/USD",
+    "TON/USD",
+    "TREAD/USD",
+    "TRUMP/USD",
+    "TRUST/USD",
+    "UAI/USD",
+    "VET/USD",
+    "VIRTUAL/USD",
+    "VTHO/USD",
+    "W/USD",
+    "WIF/USD",
+    "WLD/USD",
+    "WLFI/USD",
+    "XAUT/USD",
+    "XCN/USD",
+    "XDC/USD",
+    "XPL/USD",
+    "XTZ/USD",
+    "ZRO/USD"
+   ],
+   "spread_bps": {
+    "median": 12.31675,
+    "q25": 7.23851,
+    "q75": 19.5503
+   },
+   "depth_bid_bps_to_10k_from_mid": {
+    "median": 35.1523,
+    "q25": 21.6415,
+    "q75": 62.61555,
+    "pairs_with_depth": 83,
+    "pairs_never_reaching_10k": [
+     "SN51/USD"
+    ]
+   },
+   "slippage_5k_bps_check_only": 7.4502187499999994
+  },
+  {
+   "bucket": "$1M-10M",
+   "usd_day_from": 1000000.0,
+   "usd_day_below": 10000000.0,
+   "pairs": 36,
+   "pair_list": [
+    "AAVE/USD",
+    "ADA/USD",
+    "AKE/USD",
+    "ARB/USD",
+    "AUD/USD",
+    "AVAX/USD",
+    "BCH/USD",
+    "BNB/USD",
+    "CC/USD",
+    "CRV/USD",
+    "DASH/USD",
+    "DOGE/USD",
+    "DRV/USD",
+    "ENA/USD",
+    "FIL/USD",
+    "GBP/USD",
+    "INJ/USD",
+    "LAPTOP/USD",
+    "LIGHTER/USD",
+    "LINK/USD",
+    "LTC/USD",
+    "NEAR/USD",
+    "ONDO/USD",
+    "PAXG/USD",
+    "PEPE/USD",
+    "PUMP/USD",
+    "RAY/USD",
+    "SUI/USD",
+    "TAO/USD",
+    "TRX/USD",
+    "UNI/USD",
+    "USDG/USD",
+    "USELESS/USD",
+    "VVV/USD",
+    "XLM/USD",
+    "XMR/USD"
+   ],
+   "spread_bps": {
+    "median": 5.522740000000001,
+    "q25": 2.70234,
+    "q75": 9.41811
+   },
+   "depth_bid_bps_to_10k_from_mid": {
+    "median": 8.94658,
+    "q25": 5.26593,
+    "q75": 15.8635,
+    "pairs_with_depth": 36,
+    "pairs_never_reaching_10k": []
+   },
+   "slippage_5k_bps_check_only": 1.67042125
+  },
+  {
+   "bucket": ">$10M",
+   "usd_day_from": 10000000.0,
+   "usd_day_below": null,
+   "pairs": 0,
+   "pair_list": [],
+   "mapped_to": "$1M-10M",
+   "why": "No recorded pair exceeds $10M a day in the summaries, because BTC, ETH and SOL are recorded as full books rather than as summaries. This bucket takes the $1M-10M row's values. Filling it from the full books instead is a ruling, not a choice made by this script."
+  }
+ ],
+ "reproduction": {
+  "against": "docs/dataset/phase-7-findings.md section 3: pairs, spread, IQR, slippage at $5k",
+  "buckets": {
+   "<$10k": {
+    "published": [
+     16,
+     30.4,
+     12.2,
+     36.0,
+     17.7
+    ],
+    "computed": [
+     16,
+     30.4,
+     12.2,
+     36.0,
+     17.7
+    ],
+    "equal": true
+   },
+   "$10k-100k": {
+    "published": [
+     49,
+     25.8,
+     11.2,
+     39.2,
+     20.8
+    ],
+    "computed": [
+     49,
+     25.8,
+     11.2,
+     39.2,
+     20.8
+    ],
+    "equal": true
+   },
+   "$100k-1M": {
+    "published": [
+     84,
+     12.3,
+     7.2,
+     19.4,
+     7.5
+    ],
+    "computed": [
+     84,
+     12.3,
+     7.2,
+     19.6,
+     7.5
+    ],
+    "equal": false
+   },
+   "$1M-10M": {
+    "published": [
+     36,
+     5.5,
+     2.7,
+     9.4,
+     1.7
+    ],
+    "computed": [
+     36,
+     5.5,
+     2.7,
+     9.4,
+     1.7
+    ],
+    "equal": true
+   }
+  },
+  "all_equal": false
+ }
+}
