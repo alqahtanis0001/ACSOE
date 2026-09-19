@@ -416,3 +416,31 @@ adds no native code; the SHAP writer adds polars and parquet writes on bar ticks
 
 **In every case:** the gating rehearsal must PASS the check script on the commit that launches,
 and the launch goes ahead without waiting for the operator.
+
+**Result (21:41): NEITHER ARM CRASHED.** Eight full days, 21:08 to 21:40, all in parallel. At
+`3efe958`, 4 runs, 1,700 ticks, 2.10 process-hours, 0 crashes. At `19c5a11`, 4 runs, 1,700
+ticks, 2.11 process-hours, 0 crashes. All eight ended `finished=True`. The `19c5a11` arm
+demonstrably ran the writer: exactly four new SHAP run directories, one per run, and none from
+`3efe958`.
+- **Running totals on `19c5a11` tonight:** 2 crashes in 3,531 ticks and about 3.2
+  process-hours. That is about 1 per 1,770 ticks, or about 0.6 per process-hour.
+- **On earlier code:** 0 crashes in 5,988 ticks.
+
+The difference is no longer strong evidence against the writer. **The operator's rule for this
+case:** launch `19c5a11` with SHAP, with the watchdog at 40 resumes per run and 8 per hour, and
+report the crash counts in the morning.
+
+### A hole in the SHAP check, found before it could pass on stale files
+
+**What happened.** SHAP files are keyed by `run_id`, and a rehearsal's run ids come only from its
+database names (`a`, `b`, `split`) and the day. So every rehearsal gets the same ids:
+`data/derived/shap/replay-a-20241020T000000Z/` already held 75 files from the 19:43 rehearsal.
+A new rehearsal's SHAP writes would be refused as duplicates, and engine 19 would record the
+refusals and carry on. The check's "files > 0" and "every ref resolves" would then be satisfied
+by the **old** files.
+
+**Fix.** Each parallel gating rehearsal runs in its own worktree at the launch commit. Its `data/`
+is junctioned to the main checkout piece by piece, except `data/derived/shap`, which starts
+empty. The check also now requires every SHAP file under the run's ids to be newer than the
+rehearsal's own start (its `config.yaml`), with no older ones. The real runs' ids are unique
+(`replay-phase7-t3-expected_move-…`), so the runs themselves were never exposed.
