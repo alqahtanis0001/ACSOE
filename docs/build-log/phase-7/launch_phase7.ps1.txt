@@ -40,8 +40,10 @@ $runs = @(
 $launched = @()
 foreach ($r in $runs) {
     $name = $r.name
-    if ($DryRun) { $db = "data\db\phase7-dryrun-$name.sqlite"; $extra = '--until 2024-07-06T00:15:00' }
-    else { $db = "data\db\phase7-$name.sqlite"; $extra = '' }
+    # The window is THREE months, folds 392-404 (operator ruling 2026-09-19, D23): the runs begin at
+    # fold 392's first bar close and end at fold 404's test close (the driver's default end).
+    if ($DryRun) { $db = "data\db\phase7-dryrun-$name.sqlite"; $extra = '--begin 2024-10-05T00:15:00 --until 2024-10-05T00:15:00' }
+    else { $db = "data\db\phase7-$name.sqlite"; $extra = '--begin 2024-10-05T00:15:00' }
     $tag = $(if ($DryRun) { "dryrun-$name" } else { $name })
     $logDir = Join-Path $RunDir "logs-$tag"
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
