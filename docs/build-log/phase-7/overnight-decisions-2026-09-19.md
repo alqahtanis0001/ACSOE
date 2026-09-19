@@ -602,3 +602,38 @@ the dataset has a residue. The rehearsal's grid comparison, with its stop criter
 Every mention above of four runs, of two rankings, or of an "alphabetical baseline" is
 superseded. The ruling: two runs, tiers 3 and 5, on engine 8's expected-move ranking (operator ruling 2026-09-19, after the overnight build). No alphabetical run, now or later: alphabetical is the name of the limitation the ranking removed, not a rival ranking. A baseline run would answer whether ranking beats not ranking, which nobody will challenge. It would not answer whether the model has skill; the benchmark basket (R8) and the promotion gate (R10b) answer that. It is also required by no Phase 7 criterion. The account and the stale reading's origin are in `lead.md`,
 "Phase 7 is two runs".
+
+### D23 — The window is three months, not six, for both tiers (operator ruling, 2026-09-19 evening). LOCKED
+
+**Ruled.** Folds 392–404, test weeks 2024-10-05 00:15Z to 2025-01-04 00:00Z, both tiers. **The reason:
+the operator's report deadline is Sunday 13:00, and six months does not fit.** The expected
+wall-clock at two in parallel is tier 3 ≈13.2–13.6 h and tier 5 ≈15.7–19.3 h.
+
+**Nothing else is cut.** Every engine and every gate runs, from guard through manage, exactly as live.
+No thinned tape, no sampled bars.
+
+**Rejected.** Six months at both tiers (tier 5 31–41 h, past the deadline). Also rejected: tier 3 at six
+months with tier 5 at three (the operator chose one window for both).
+
+**Costs, stated as chosen constraints:** 13 retrains instead of 26, and one season. A strong
+directional market. 91 daily returns. About 8–11 trades at tier 3, at or below spec 139's 10-trade
+threshold, so tier 3 is descriptive. The three-month cell was never measured offline.
+
+### D24 — CORRECTION: tier 5's six-month estimate was 31–41 h, not 45–60 h
+
+The 45–60 h figure was the lead's guess at multi-hour holds, not a measurement. At the rehearsal
+day's measured 82 exposed minutes per approval (328 minute ticks for 4 approvals), the six-month tier 5
+comes to 24.3 h of bar ticks plus 7.2–14.4 h of minute ticks, so **31–41 h**. It is 45–66 h only if the
+true average hold is about 4 h. The measured timing inputs are in the handover, section 4.
+
+### D25 — Spread sensitivity dropped from Phase 7 (operator ruling, 2026-09-19)
+
+**Ruled.** No q25/q75 spread runs. **Why:** measured, more runs in parallel slow every run (6.00 s per
+bar tick at four, 6.87 s at six, against 5.00 s at two), pushing tier 3 past the operator's limit
+(about 33 h at four, 37.6 h at six, when the window was six months). Tier 5 was already the long pole.
+Spread sensitivity is stated from the offline §3 comparison and a post-run repricing script, **with
+its limit declared**: a different spread changes which trades happen, and that is unrecoverable
+without a re-run (findings §7a item 4).
+
+**Rejected.** Four runs (tier 3 at median, q25 and q75, plus tier 5), and six runs. N stays 1,679,
+with no sensitivity runs added.
