@@ -24,21 +24,29 @@ Check first, then resume from here:
 - **Gates** run in clean worktrees, `../ACSOE-gate` and `../ACSOE-gate2`, through `gate.py` (the
   lead's scratchpad; its logic is in D11). Logs: `logs/verify/gate-<label>.log`.
 
-**Pushed state:** `bd96346` on origin/main. Committed, in order:
-- the rulings documents (126, the context half of 144, spec 145's text);
-- b1: the `core/` `previous_now` seed (D9), the `context.mode` fix (F2), and P3;
-- b2: A's 127, 128 and 130, P1, P2;
-- b3: C's 137, the modelling half of 144, and 139's statistics and trial ledger (N = 1,679).
+**Pushed state:** `df89e8a` on origin/main, plus docs. Committed boundaries: b1 (core D9/F2, P3),
+b2 (A's 127, 128, 130, P1, P2), b3 (C's 137, 144-modelling, 139 statistics and ledger), b4 (136
+and 135's modules; the 26 `-p7` run directories are built in the gitignored `models/`).
 
-**Queued (uncommitted in the working tree), and what each waits on:**
-- Config + 129 + 131 (a-replay): waits on `training.skeptic_cap_folds` and the move of the
-  rehearsal fixture to `tests/fixtures/phase7/` (D17). The lead's `replay:` YAML is written in
-  `config/default.yaml`, uncommitted, and gates with it.
-- 132 + 133 + 134 + the `verify.py` batch + engine 20 + `format.py` + the console leaderboard + the
-  scout half of 144: waits on B's `approvals.details` column and B's 144.
-- 138 (c-criteria): waits on its core-import fix.
-- 136 → 135 (c-models): in progress.
-- Then 145, 140's writer (which waits on B's `write_shap`), 142 (the rehearsal), and the launch.
+**The path to launch, in order (07:15 local):**
+1. b5 re-gate: B's 144 scout, engine 20's promotion gate, the leaderboard screen, and the Phase 5
+   test anchor fix (its first run was red on the anchor; see lead.md).
+2. b6: 132 (+ `details`, + the SHAP store surface), 133, 134, 138, and the `DOCUMENTED_TABLES`
+   hunk (gated as a partial `verify.py` via `gate.py`'s `rel::alt` form). **Waiting on a-replay's
+   fix to `tests/engines/test_trade_chain_rehearsal.py`.**
+3. a-replay's boundary: config (`replay:` and `skeptic_cap_folds`), 129, 131, the 142 scripts, the
+   fixture moved to `tests/fixtures/phase7/`, and the `derived_dir` wiring.
+4. c-eval's 145 (after b6), its gate, then 140's SHAP writer and its gate.
+5. c-criteria's engine 5 speed-up, if it lands with exact equality. It is optional for the launch.
+6. **The gating rehearsal on the quiet committed tree**, which must SHOW the six launch
+   preconditions (overnight log).
+7. **Launch:** four detached processes (two rankings × tiers 3 and 5), each with its own database,
+   verified alive. Expected about 27–41 h per run.
+
+**The preliminary rehearsal is DONE and clean** (overnight log): 4 approvals, identical reruns,
+every recomputation equal, 4.9 s per bar tick, 2.1 GB per process. Finding F5: a target exit
+realises about +2.0% where the label books +3.0% (the market sell on the next tick). Recorded, not
+a stop.
 
 **Teammates (background agents in the lead's session; a fresh session has none, so re-spawn from
 the team brief):**

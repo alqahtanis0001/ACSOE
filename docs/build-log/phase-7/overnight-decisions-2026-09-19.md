@@ -434,3 +434,72 @@ the offline grid on 52 of 52 sampled real bars, with expected-move difference 0.
 is re-run now that `models/train-20260913T205245-067b2b9d-f{k}-p7/` exist beside the source folds
 (found by c-models). It is a record of a completed study and is not re-run by anything in Phase 7,
 so it is left as committed. A re-run would need to filter out the `-p7` suffix.
+
+### D21 — Two rehearsals: a preliminary one now for defect discovery, and the gating one on the final committed code
+
+**Chose.** As soon as the Phase 7 run directories and engine 7's ranking existed, a-replay ran a
+**preliminary** rehearsal of 2024-10-20 at tier 3 with expected-move ranking. It finds chain
+defects that only an end-to-end run shows (Phase 6 found two that way). **The launch waits on the
+gating rehearsal.** That one runs the operator's one calendar day, 96 bars, on the committed code
+with 132/133, 145 and 140's writer in. The run must rehearse exactly what it will run, and those
+three change engine 19, the single writer.
+
+**Rejected.** Waiting to rehearse until everything is in. That serialises defect discovery behind
+the last engine 19 change, and a defect found then costs its fix plus a second rehearsal before the
+launch anyway.
+
+### Launch preconditions the gating rehearsal must SHOW, not assume (Phase 7's quiet-failure warning)
+
+Each is a way the run could produce a plausible dataset with a hole in it and nothing going red:
+
+1. **SHAP rows are written.** Engine 19 treats a store refusal of `write_shap` as recorded-and-
+   continue, by design. If `derived_dir` never reaches the `StoreClient` in the replay driver's CLI
+   wiring, every write is refused and the run records no SHAP at all. The rehearsal must show a
+   non-zero count of SHAP files and `rejections.shap_ref` set.
+2. **`approvals.details` and `rejections.details` are filled** (spec 145) on the rehearsal's
+   approvals and refusals, and they equal the recomputation from `state`.
+3. **`approvals` rows exist for every placed entry**, and each `trades` row carries the seven
+   approval fields (spec 133).
+4. **`runs.scenario_digest` is non-null** on each rehearsal run (spec 134), and it is the digest
+   that run's client computed.
+5. **The ranking matches the grid** on the rehearsal day's bars (spec 144's check), with every
+   difference explained.
+6. **Every friction, hurdle and entry fill recomputes exactly** (spec 142).
+
+The launch does not happen until all six are observed. If one cannot be observed, the lead stops.
+
+### Preliminary rehearsal (spec 142), 2024-10-20, fold 394, expected-move ranking, tiers 3 and 5 — clean
+
+a-replay ran it on the working tree, not yet the committed one:
+- **97 bar ticks and 328 minute ticks**; 4 approvals and 7 orders.
+- **The trades:** STORJ filled then stopped out; STORJ cancelled unfilled at 300 s; STORJ filled
+  then exited on target; DOGE filled then exited on target.
+- **Ending equity:** tier 3 5,058.50 and tier 5 5,073.71, both from 5,000.00.
+- **Two clean runs identical at both tiers.**
+- **Every friction, hurdle and fill recomputed exactly**, in rationals from the fixtures alone.
+- **Kill and resume** matched in content. It is not proven clean, because two lanes edited the tree
+  during the run. The gating rehearsal on the quiet committed tree re-runs it.
+- **Measured cost:** 4.9 s per bar tick and 4.1 s per minute tick, 2.1 GB peak per process.
+  **Projected per run: tier 3 about 27 h, tier 5 about 27–41 h, the alphabetical baselines
+  lower.** This replaces the 45 h stop; D16's options are moot.
+
+### F5 — FINDING for the morning report, NOT a stop: a target exit realises less than the label. CONTESTABLE
+
+In the rehearsal, STORJ touched its target at 06:41:12, printing 0.57264 against a target of
+0.57082. Engine 22 exits every barrier as a market sell on the next minute tick (the Phase 6 rule),
+and the declared book is centred on the last price at that tick, by which time the price was
+0.56552. So the fill was 0.56532: **+2.0% realised where the triple-barrier label books +3.0%.**
+The DOGE target exit happened to land above its target. **The same happens live.** So the run's
+realised returns on target exits will sit systematically below every offline grid in the findings,
+since every grid uses the label's +3.0%.
+
+**Why not a stop.** This is the system as built behaving as Phase 6 designed it. The simulation
+exists to measure exactly this gap between the label and what the system can realise. Changing it
+(a resting maker limit at the target, as invariant 8 permits, "exits on target may be maker")
+changes trading behaviour, which is the operator's to rule on, and changing it now would stop the
+run from measuring the system that exists.
+
+**CONTESTABLE.** The operator said to stop on anything the lead would have escalated. The lead
+would have *reported* this, not held the run for it. The case against: a run of 27–41 h that
+measures an exit rule the operator may change tomorrow. The mitigation: the run is resumable and
+stoppable, and the offline grids stand beside it for comparison.

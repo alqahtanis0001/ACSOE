@@ -180,3 +180,25 @@ already does. The spec wording invited the import; the boundary test is right.
 the first red on this boundary.** A second consecutive red after the fix is a stop, per the
 operator's rule. The 26 assembled run directories are unaffected: they were produced by this code,
 and the fix changes where the store is built, not what is written. The re-gate will say so.
+
+### Gate b5 (engine 7's ranking, engine 20's promotion gate, the leaderboard screen) RED on one test: a mutation anchor that now occurs twice
+
+**Agent:** Lead · **Date:** 2026-09-19
+
+**What happened.** `logs/verify/gate-b5-b144-c139e20-140lb.log`: pytest `1 failed, 3576 passed`.
+The failure is
+`tests/verify/test_phase5_criteria.py::test_a_write_routed_around_the_store_client_is_a_fail`.
+Its patcher refuses, because the anchor
+`    from acsoe.clients.store.contracts import LeaderboardRow` now appears twice in engine 20. There
+is one in the Phase 5 writer (line 531) and one in spec 139's new promotion writer (line 750).
+
+**Why.** The patcher's exactly-once rule working as intended (code-standards.md: "a test that
+anchors on a literal string must assert the literal occurs exactly once"). Without it, the
+mutation would have gone into whichever import came first, and the Phase 5 criterion's proof could
+have stopped being able to fail without anyone noticing. **The criterion is fine; its proof's
+anchor went stale.**
+
+**Fix.** Sent to c-eval, whose change made the anchor ambiguous: give the test an anchor unique in
+the new file, keeping the mutation's meaning (a raw `sqlite3` route beside the store's
+`LeaderboardRow`). Either widen the anchor with neighbouring lines, or mutate both writers in two
+tests. **First red on this boundary.**
