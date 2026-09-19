@@ -24,29 +24,27 @@ Check first, then resume from here:
 - **Gates** run in clean worktrees, `../ACSOE-gate` and `../ACSOE-gate2`, through `gate.py` (the
   lead's scratchpad; its logic is in D11). Logs: `logs/verify/gate-<label>.log`.
 
-**Pushed state:** `df89e8a` on origin/main, plus docs. Committed boundaries: b1 (core D9/F2, P3),
-b2 (A's 127, 128, 130, P1, P2), b3 (C's 137, 144-modelling, 139 statistics and ledger), b4 (136
-and 135's modules; the 26 `-p7` run directories are built in the gitignored `models/`).
+**Pushed state:** `04bc511` on origin/main (11:05 local). **Everything is committed except spec 145
+and 140's SHAP writer**, both c-eval's in engine 19, in that order, each gated alone (operator
+ruling). The boundaries so far: b1, b2, b3, b4 (red once), b5 (red once), b8 (engine 5 13× faster),
+and b67 (132, 133, 134, 138, 141, 129, 131, 142, config; b6 red once). The Phase 7 criteria on the
+committed tree: 4 PASS, 2 PENDING (the run's digest, and the SHAP writer).
 
-**The path to launch, in order (07:15 local):**
-1. b5 re-gate: B's 144 scout, engine 20's promotion gate, the leaderboard screen, and the Phase 5
-   test anchor fix (its first run was red on the anchor; see lead.md).
-2. b6: 132 (+ `details`, + the SHAP store surface), 133, 134, 138, and the `DOCUMENTED_TABLES`
-   hunk (gated as a partial `verify.py` via `gate.py`'s `rel::alt` form). **Waiting on a-replay's
-   fix to `tests/engines/test_trade_chain_rehearsal.py`.**
-3. a-replay's boundary: config (`replay:` and `skeptic_cap_folds`), 129, 131, the 142 scripts, the
-   fixture moved to `tests/fixtures/phase7/`, and the `derived_dir` wiring.
-4. c-eval's 145 (after b6), its gate, then 140's SHAP writer and its gate.
-5. c-criteria's engine 5 speed-up, if it lands with exact equality. It is optional for the launch.
-6. **The gating rehearsal on the quiet committed tree**, which must SHOW the six launch
-   preconditions (overnight log).
-7. **Launch:** four detached processes (two rankings × tiers 3 and 5), each with its own database,
-   verified alive. Expected about 27–41 h per run.
+**The path to launch:**
+1. c-eval's 145 → its gate → commit.
+2. c-eval's 140 writer → its gate → commit.
+3. **The gating rehearsal** (a-replay):
+   `python scripts/rehearse_replay_day.py --day 2024-10-20 --fixture tests/fixtures/phase7/rehearsal_2024-10-20 --out <dir> --tier 3 --fold 394`
+   on the committed tree, about 1.6 h. It must SHOW the six launch preconditions (overnight log),
+   `tree_unchanged`, and `ranking_stop` false.
+4. **Launch:** four detached runs, `acsoe research backtest --db data/db/<name>.sqlite --ranking
+   {expected_move|alphabetical} --fee-tier {3|5}`, from a detached worktree at the launch commit,
+   through WMI (the Phase 5 pattern), each verified alive. Expected about 22–28 h per run after the
+   engine 5 speed-up.
 
-**The preliminary rehearsal is DONE and clean** (overnight log): 4 approvals, identical reruns,
-every recomputation equal, 4.9 s per bar tick, 2.1 GB per process. Finding F5: a target exit
-realises about +2.0% where the label books +3.0% (the market sell on the next tick). Recorded, not
-a stop.
+**The preliminary rehearsal is clean** (two passes; overnight log). Findings F4 (the capped skeptic
+adds no selection beyond p_target), F5 (a target exit realises +2.0% against the label's +3.0%) and
+F6 (the flat-pair feature residue, ranking-only) are recorded; none is a stop.
 
 **Teammates (background agents in the lead's session; a fresh session has none, so re-spawn from
 the team brief):**
