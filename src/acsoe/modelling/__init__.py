@@ -28,6 +28,8 @@ What lives here is exactly the arithmetic that has to **agree** between live and
                                      scored by engine 8
 :mod:`~acsoe.modelling.expected_move` the expected move a BUY call is decided on, and
                                      which engine 10 prices against friction
+:mod:`~acsoe.modelling.ranking`      engine 7's order by expected move, skipping every
+                                     pair engines 13 and 8 would refuse (spec 144)
 ============================  ==========================================================
 
 Nothing here is imported for its side effects and nothing loads a model at import time.
@@ -42,5 +44,6 @@ __all__ = [
     "expected_move",
     "features",
     "macro",
+    "ranking",
     "weights",
 ]

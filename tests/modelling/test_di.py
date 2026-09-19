@@ -27,6 +27,8 @@ The fit leaves out every reference row within the exclusion span, across pairs.
 
 from __future__ import annotations
 
+import dataclasses
+import itertools
 from pathlib import Path
 
 import pytest
@@ -399,3 +401,104 @@ def test_loading_a_di_with_a_span_that_is_not_positive_is_refused(tmp_path: Path
     _rewrite(path, drop=(), exclusion_s=np.int64(0))
     with pytest.raises(di.DissimilarityError, match="not positive"):
         di.load(path)
+
+
+# --------------------------------------------------------------------------- #
+# Spec 137 — many vectors in one call, each scored exactly as `score` scores it
+# --------------------------------------------------------------------------- #
+
+#: The equivalence tolerance, and why it is not zero. `score` hands the distance code one row
+#: and `score_many` hands it many, so the matrix product is a one-row product in one and a
+#: many-row one in the other, and BLAS may associate a dot product differently between the
+#: two. Measured on this build it moves a DI in the last few units in the last place; 1e-12
+#: sits three orders of magnitude above that on values of order 1, and far below any change to
+#: what is computed. **The refusals are compared with no tolerance at all.**
+BATCH_TOLERANCE = 1e-12
+
+#: More rows than one of `_mean_nearest`'s chunks, so the batch crosses chunk boundaries and a
+#: boundary that dropped, duplicated or reordered a row has somewhere to happen.
+BATCH_ROWS = 2 * di._CHUNK + 37
+
+
+def test_a_batch_crosses_a_chunk_boundary() -> None:
+    """Without this the boundary tests below could be green against a single chunk."""
+    assert di._CHUNK < BATCH_ROWS < 3 * di._CHUNK
+
+
+def test_score_many_returns_what_score_returns_for_every_row() -> None:
+    """Spec 137's equivalence, row by row, on a batch with refusals on both sides of the line.
+
+    The per-row side is the real `score` in a loop, which is what engine 8 calls, so the
+    comparison is with the behaviour in use rather than with a restatement of it.
+    """
+    fitted = a_fit(400)
+    queries = np.asarray(cloud(BATCH_ROWS, spread=1.4, seed=29), dtype=np.float64)
+
+    batched = di.score_many(fitted, queries)
+    per_row = [di.score(fitted, row) for row in queries]
+
+    assert len(batched) == len(per_row) == BATCH_ROWS
+    refused = sum(entry.refused for entry in per_row)
+    assert 0 < refused < BATCH_ROWS, (
+        f"{refused} of {BATCH_ROWS} rows refused, so the batch cannot show a refusal moving "
+        "in either direction"
+    )
+    deviation = max(abs(a.di - b.di) for a, b in zip(batched, per_row, strict=True))
+    assert deviation <= BATCH_TOLERANCE, deviation
+    assert [a.refused for a in batched] == [b.refused for b in per_row]
+    assert {entry.threshold for entry in batched} == {fitted.threshold}
+
+
+def test_score_many_scores_each_row_as_its_own_rather_than_its_neighbours() -> None:
+    """Position, not count. Rows placed at strictly increasing distances from the cloud must
+    come back with strictly increasing DI, across every chunk boundary: a boundary that shifted
+    the results by one row would still return the right number of plausible values."""
+    fitted = a_fit(400)
+    queries = np.zeros((BATCH_ROWS, 4), dtype=np.float64)
+    queries[:, 0] = np.linspace(5.0, 60.0, BATCH_ROWS)
+
+    values = [entry.di for entry in di.score_many(fitted, queries)]
+    assert len(values) == BATCH_ROWS
+    assert all(later > earlier for earlier, later in itertools.pairwise(values))
+
+
+def test_a_row_exactly_on_the_threshold_is_accepted_in_a_batch() -> None:
+    """Strictly greater refuses, in the batch as in `score`."""
+    fitted = a_fit(300)
+    row = np.asarray(fitted.reference[0], dtype=np.float64) + 0.3
+    value = di.score_many(fitted, row[None, :])[0].di
+    on_the_line = dataclasses.replace(fitted, threshold=value)
+    assert di.score_many(on_the_line, row[None, :])[0].refused is False
+    below = dataclasses.replace(fitted, threshold=float(np.nextafter(value, -np.inf)))
+    assert di.score_many(below, row[None, :])[0].refused is True
+
+
+def test_an_empty_batch_scores_nothing() -> None:
+    fitted = a_fit(300)
+    assert di.score_many(fitted, np.zeros((0, fitted.width))) == []
+    assert di.score_many(fitted, []) == []
+
+
+def test_a_batch_of_the_wrong_width_is_refused() -> None:
+    fitted = a_fit(300)
+    with pytest.raises(di.DissimilarityError, match="features against the reference"):
+        di.score_many(fitted, np.zeros((3, fitted.width + 1)))
+
+
+def test_a_single_vector_is_refused_rather_than_read_as_a_batch() -> None:
+    """A 1-D input is one vector, which is `score`'s job; reading it as a batch of scalars
+    would score `width` one-feature rows against a four-feature reference."""
+    fitted = a_fit(300)
+    with pytest.raises(di.DissimilarityError, match="2-D"):
+        di.score_many(fitted, np.zeros(fitted.width))
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_a_non_finite_row_is_refused_and_named(bad: float) -> None:
+    """Refused as `score` refuses it, and the message says **which** row, because a caller
+    scoring a universe needs to know which pair's vector had the hole."""
+    fitted = a_fit(300)
+    rows = np.zeros((5, fitted.width))
+    rows[3, 1] = bad
+    with pytest.raises(di.DissimilarityError, match=r"row 3 carries NaN or infinity"):
+        di.score_many(fitted, rows)

@@ -67,6 +67,7 @@ __all__ = [
     "load",
     "save",
     "score",
+    "score_many",
 ]
 
 #: Rows per chunk when the pairwise distances are computed. The reference set is capped
@@ -303,6 +304,64 @@ def score(fitted: DiFit, vector: Sequence[float] | npt.NDArray[np.float64]) -> D
         )[0]
     )
     return DiScore(di=value, threshold=fitted.threshold, refused=value > fitted.threshold)
+
+
+def score_many(
+    fitted: DiFit, rows: Sequence[Sequence[float]] | npt.NDArray[np.float64]
+) -> list[DiScore]:
+    """The DI of many scaled feature vectors, in row order: :func:`score` for each. Spec 137.
+
+    Engine 7 ranks its universe by expected move and skips every pair the DI would refuse
+    (rulings R1 and R11 of 2026-09-19), so it scores every universe pair on every bar. Looped
+    through :func:`score` that cost 14.5 s a bar for 127 pairs against fold 404's reference;
+    one call here, 0.9 s. The saving is the matrix product: :func:`_mean_nearest` computes a
+    whole chunk of query rows against the reference at once, and one row at a time it
+    squares and sums the entire reference again for every row.
+
+    **The same statistic through the same function, and that is the point rather than a
+    tidiness.** Engine 8 keeps :func:`score` for its one candidate, and the two must agree
+    about which pairs are refused, so both call :func:`_mean_nearest`. The one numerical
+    difference is that a many-row matrix product may associate a dot product differently
+    from a one-row one, which moves a DI in its last few units in the last place.
+    ``tests/modelling/test_di.py`` holds every value to :func:`score` at 1e-12 and every
+    refusal exactly. A row within that distance of its threshold could land on the other
+    side of the strict ``>``; that is inherent to any reassociation, and neither rounding has
+    the better claim.
+
+    Refuses what :func:`score` refuses, and a non-finite row by its position, because a caller
+    scoring a universe needs to know which pair's vector had the hole. **It never skips one**:
+    a batch that quietly dropped an unscorable row would return fewer scores than rows with
+    nothing saying which were missing, and a caller aligning them against its pairs would
+    misattribute every score after the gap.
+    """
+    matrix = np.asarray(rows, dtype=np.float64)
+    if matrix.size == 0 and matrix.ndim <= 2:
+        # A universe with no complete vector is not an error, and `np.asarray([])` is 1-D.
+        return []
+    if matrix.ndim != 2:
+        raise DissimilarityError(
+            f"expected a 2-D matrix of feature vectors, one per row, got shape {matrix.shape}. "
+            "One vector is `score`'s job."
+        )
+    if matrix.shape[1] != fitted.width:
+        raise DissimilarityError(
+            f"the vectors have {matrix.shape[1]} features against the reference set's "
+            f"{fitted.width}. The DI is scored on the same columns in the same order the "
+            "predictor was trained on."
+        )
+    finite = np.isfinite(matrix).all(axis=1)
+    if not finite.all():
+        first = int(np.flatnonzero(~finite)[0])
+        raise DissimilarityError(
+            f"row {first} carries NaN or infinity ({int((~finite).sum())} rows do). The caller "
+            "leaves an incomplete vector out rather than scoring it: a NaN compared against "
+            "the threshold is False, and a refusal that silently never fires is worse than none."
+        )
+    values = _mean_nearest(matrix, fitted.reference, neighbours=fitted.neighbours, exclude_self=False)
+    return [
+        DiScore(di=float(value), threshold=fitted.threshold, refused=float(value) > fitted.threshold)
+        for value in values
+    ]
 
 
 def save(fitted: DiFit, path: Path) -> None:

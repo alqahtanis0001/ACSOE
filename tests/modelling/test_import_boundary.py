@@ -92,6 +92,8 @@ def test_modelling_exists_where_this_test_thinks_it_does() -> None:
         "expected_move.py",
         "features.py",
         "macro.py",
+        "promotion.py",
+        "ranking.py",
         "weights.py",
     ]
 

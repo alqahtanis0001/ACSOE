@@ -2812,3 +2812,169 @@ drives this same fixture on a thin pair and a deep one. Build log has the entry.
 `logs/verify/phase6-20260918-spec118-c-verify-tests.log`; `ruff check src/ tests/ scripts/`
 clean; `mypy --strict src/ scripts/` clean on 153 source files. No full gate from me.
 Phase 6 now registers **14** criteria.
+
+
+## c-models — Phase 7, CLAIM 2026-09-19 (Agent C, Interface and models, Opus 5 1M)
+
+Written before any code. Shared file with c-eval; this section is mine and only I append to it.
+No commits, no `core/`, `bootstrap.py`, `config/`, `context/*` (except this file), and no
+other lane's paths. Order, per the lead: 137 and the 144 function first, then 136's trainer
+change and replication, then 136's training of folds 379-404, then 135's assembly.
+
+| Spec | Files I will touch |
+|---|---|
+| **137** — batched DI score | `src/acsoe/modelling/di.py`, `tests/modelling/test_di.py` |
+| **144** (modelling half) — the shared ranking function (R1, R11) | `src/acsoe/modelling/ranking.py` (new), `src/acsoe/modelling/__init__.py`, `tests/modelling/test_ranking.py` (new), `tests/modelling/test_import_boundary.py` (file list), `src/acsoe/research/ranking_check.py` (new, the q_emrank comparison), `tests/research/test_ranking_check.py` (new) |
+| **136** — the 13-fold skeptic cap, trained for folds 379-404 into staging | `src/acsoe/research/training.py`, `src/acsoe/research/skeptic_cap.py` (new), `tests/research/test_skeptic_training.py`, `tests/research/test_skeptic_cap.py` (new); runtime output `data/derived/skeptic_cap_<run>/` |
+| **135** — DI and anomaly artefacts assembled from the study | `src/acsoe/research/artefact_assembly.py` (new), `tests/research/test_artefact_assembly.py` (new); runtime output `models/train-20260913T205245-067b2b9d-f{379..404}-p7/` via `StoreClient.new_model_run_dir` |
+
+**Seams, agreed by message:** b-store (the ranking function's signature, sent 2026-09-19);
+a-replay (run-directory naming `<source fold run id>-p7`, and the `training.skeptic_cap_folds`
+model field in `platform/config.py`, optional int, absent = uncapped).
+
+## c-eval — Phase 7, CLAIM 2026-09-19 (Agent C, Interface and models; Opus 5 1M)
+
+Written before any code, after the Phase 6 preflight gate ended (`exit 0`). My section only;
+c-models shares this file and writes its own. No commits, no `core/`, `bootstrap.py`,
+`config/`, `context/*` beyond this file, no other lane's paths. Mutations from byte copies in my
+scratchpad, `PYTHONDONTWRITEBYTECODE=1`, restore verified by sha256, pytest summary in every
+verdict.
+
+| Order | Spec | Files I will touch |
+|---|---|---|
+| 1 | **139** — deflated metric, trial ledger, promotion gate (critical path) | `src/acsoe/modelling/promotion.py` (new), `src/acsoe/research/trial_ledger.py` (new), `src/acsoe/engines/tournament/{engine.py,contracts.py,README.md}`, `src/acsoe/console/format.py` (`REASON_PROSE`), `docs/dataset/phase-7-trial-ledger.{json,md}` (generated), `tests/modelling/test_promotion.py`, `tests/modelling/test_import_boundary.py` (the file list), `tests/research/test_trial_ledger.py`, `tests/engines/test_tournament_promotion.py` |
+| 2 | **133** — engine 19 records approval economics | `src/acsoe/engines/memory/*`, `tests/engines/test_memory_rows.py` (seam with b-store's 0006) |
+| 3 | **141** — Phase 7 criteria, PENDING first | `scripts/verify.py`, `tests/verify/` |
+| 4 | **138** — alpha attribution | `src/acsoe/research/attribution.py` (new), tests |
+| 5 | **140** — SHAP writer and research screens | `engines/memory/`, `console/`, tests |
+
+### Seams opened (by message, 2026-09-19)
+
+- **b-store, spec 132/133:** where the approval economics persist between the placing tick and
+  the close. Proposed an insert-only `approvals` table keyed by `(run_id, entry_userref)`, since
+  `orders` is upserted with every column and later ticks would null the fields. Awaiting B.
+- **b-store, spec 139:** `StoreClient.closed_trades(*, run_id)` — every closed trade of one run,
+  unwindowed. Awaiting B.
+
+### c-eval — spec 133 DONE, not committed (2026-09-19)
+
+Engine 19 writes one `approvals` row per placed entry and copies it onto the trade. Files:
+`src/acsoe/engines/memory/{engine.py,contracts.py,README.md}`,
+`tests/engines/test_memory_approvals.py`. 70 passed across the three memory test files; sweep
+11/11 killed. **Known red in A's lane**: 4 tests of `tests/engines/test_trade_chain_rehearsal.py`,
+whose `check_recorded` expects the stored trade to equal engine 22's payload; a-replay has the
+line and a suggested fix. Reported to the lead.
+
+### c-eval — spec 139 IN PROGRESS
+
+Built and green: `modelling/promotion.py` (bar, DSR, worked example), `research/trial_ledger.py`
+and the generated `docs/dataset/phase-7-trial-ledger.{json,md}` (1,679 trials), 50 tests,
+30-arm sweep. Engine 20's gate is written; **blocked on `StoreClient.closed_trades(run_id=)`
+from b-store**, asked twice by message. `tests/engines/test_tournament_promotion.py` fails until
+it lands.
+
+**Flagged, not stopped (cannot move a verdict):** the DSR's periods (chose the trades) and its
+V (chose 1/(T-1)). Options and the case against are in the build log.
+
+## c-criteria — Phase 7, CLAIM 2026-09-19 (Agent C, Interface and models; Opus 5 1M)
+
+Written before any code, after the Phase 6 preflight gate ended (`exit 0`). My section only;
+c-models and c-eval share this file. Specs 141, 138 and 140's screens moved to me from c-eval
+(lead decision D13). No commits, no `core/`, `bootstrap.py`, `config/`, `context/*` beyond this
+file, no other lane's paths. `scripts/verify.py` is shared with c-eval tonight: small anchored
+edits only, never a rewrite.
+
+| Order | Spec | Files I will touch |
+|---|---|---|
+| 1 | **141** — Phase 7 criteria, PENDING first | `scripts/verify.py` (anchored edits), `tests/verify/test_phase7_criteria.py` (new), `tests/verify/test_phase2_criteria.py` (prerequisite 9 re-point, if its tests pin the old file) |
+| 2 | **138** — alpha attribution | `src/acsoe/research/attribution.py` (new), `tests/research/test_attribution.py` (new) |
+| 3 | **140** screens (steps 2, 3) — after the run | `src/acsoe/console/`, `tests/console/` |
+
+### c-models — spec 137 DONE, 2026-09-19
+
+`modelling/di.py` `score_many(fitted, rows) -> list[DiScore]`. It runs the same `_mean_nearest`
+that `score` does, over a batch. It refuses what `score` refuses, and names a non-finite row by its
+position. An empty batch returns `[]`. Equal to `score` row by row: 1.2e-15 on the fixture, and
+**2.3e-14 on fold 404's real 200,000-row reference** (1,100 test rows, refusals identical, 4.9 s
+batched against 110.9 s looped). The test tolerance is 1e-12. `fit` and `score` are unchanged, so
+`di_leave_one_out_excludes_48_bars` has nothing to move. **Mutations: 10 applied, 10 killed.**
+Spec 102's other parts (the element-budget block, the leave-one-out rewrite, the trainer's batched
+call, the peak-memory test) **stay parked**, a how-decision recorded in the build log.
+
+### c-models — spec 144, modelling half, BUILT 2026-09-19; the signature is sent to b-store, reply pending
+
+- `modelling/ranking.py`: `load_ranking_artefacts(prediction_dir, anomaly_dir)` and
+  `rank_by_expected_move(rows, macro, artefacts, *, target_pct, stop_pct) -> Ranking` (`ranked`
+  expected move descending, ties by name; `excluded` as (pair, reason) in chain order).
+  **Every number is held to the real engines 13 and 8** on the same artefact: the expected move as
+  engine 8's published string, the probabilities and anomaly score exact, and the DI within 1e-12.
+  Each excluded pair is refused by the real gate with the same reason code. **Mutations: 18 applied,
+  18 killed** (one false survivor, an equivalent mutant of my own making, redone).
+- `research/ranking_check.py`: `grid_order(bar)` restates q_emrank's choice from the study files;
+  `compare(...)` judges agreement within engine 7's universe. Equal to q_emrank's own code on
+  **60 of 60** sampled real bars. **Mutations: 8 applied, 8 killed.** For a-replay's rehearsal
+  (spec 142).
+- **Residual, stated:** a pair within about 2e-14 of its DI threshold could be ranked by engine 7
+  and refused by engine 8 (batched against per-row BLAS). The cost is one bar with the candidate
+  refused, never a refused pair trading.
+
+Tests: `tests/modelling/test_di.py` 31 passed; `tests/modelling/test_ranking.py` 13 passed;
+`tests/research/test_ranking_check.py` 5 passed; `tests/research/test_di.py` and
+`tests/engines/test_prediction.py` green; `tests/modelling/test_import_boundary.py` green with
+`ranking.py` added. ruff clean on every file I touched. `mypy --strict src/ scripts/`: clean
+on my files; the three errors it reports are all in `engines/scout/engine.py`, which is b-store's
+file and still in flight.
+
+### c-eval — spec 139 DONE, not committed (2026-09-19)
+
+Unblocked by reading `recent_closed_trades(limit=cap+1)` and refusing a truncated window; the
+request for a new store read was withdrawn. The bar, ledger (N = 1,679) and engine 20's gate are
+built; 705 targeted tests passed; sweeps 30 + 12 arms, all killed after three tests were added
+and one unreachable guard removed. Reported to the lead.
+
+### c-eval — spec 141 IN PROGRESS
+
+Four criteria registered for phase 7. Tonight: `promotion_gate_rejects_haircut_edge` PASS,
+`fee_scenario_is_replay_only` PASS, `backtest_emits_alpha_report` PENDING (no run digest until
+the six-month run ends; expected), `research_screens_render` PENDING (spec 140). **Remaining:**
+step 5 (the candle criterion reads `tick_size` from the recorded `AssetPairs`), the alpha-report
+body (needs spec 138's report and spec 143's digest shape), the screens body (spec 140).
+
+### Open question to the lead
+
+`src/acsoe/research/attribution.py` and `tests/research/test_attribution.py` appeared at 05:39,
+written by someone else, while spec 138 is on c-eval's list. Not touched until the lead says who
+owns it.
+
+### c-criteria — spec 138 DONE, not committed (2026-09-19)
+
+Taken before 141 because c-eval had not yet answered about what it started on 141 (its criteria
+are already in `scripts/verify.py`, uncommitted), and 138 touches no shared file.
+
+`src/acsoe/research/attribution.py` (new) and `tests/research/test_attribution.py` (new, 31
+tests). Read-only over a run database (`mode=ro`); both benchmarks marked from the partitions the
+run's own `scenario_description` names, sha256-checked; window from the run's first and last
+equity rows; every day regressed, flat days included; HAC with the lag stated. The two planted
+defects the spec names (flat days dropped, a constant window) are both killed. Sweep 24/24.
+`python -m acsoe.research.attribution --db <run.sqlite> [--json out.json]` prints the report.
+
+**Seam for spec 143 (lead) and 141's `backtest_emits_alpha_report`:** `AttributionReport.to_dict()`
+carries the daily series (`equity_levels`, `btc_levels`, `basket_levels`, `grid_us`), and
+`regress_digest(digest)` recomputes both regressions from them. The criterion's consistency check
+is built on that.
+
+**Flagged, not stopped (cannot move a verdict):** the effective-sample-size definition
+(`n (se_ols/se_hac)^2`, capped at `n`). Build log has the options.
+
+### c-eval — state at hand-back, 2026-09-19 (nothing committed; the lead commits)
+
+| Spec | State |
+|---|---|
+| 139 | **DONE.** Bar + DSR (`modelling/promotion.py`), ledger builder and ledger (N = 1,679), engine 20's gate. |
+| 133 | **DONE.** Engine 19 writes `approvals` and copies them onto `trades`. A's rehearsal `check_recorded` needs the approval fields in its expectation (4 red in A's file; a-replay told). |
+| 141 | **Mostly done.** 4 criteria registered; promotion and fee-scenario PASS; alpha report PENDING (no run digest, expected tonight); screens PENDING (SHAP writer). Step 5 done: the candle criterion reads the recorded `AssetPairs`. `approvals` added to `DOCUMENTED_TABLES` for B's 0006. **Left:** the alpha-report body, after spec 138's report and spec 143's digest. |
+| 140 | **Half done.** Leaderboard verdict columns built. **Blocked:** the SHAP writer and view need `StoreClient.write_shap`/`read_shap` from b-store (proposed, unanswered); lead asked whether it must land before the run. |
+| 138 | **Not started — ownership question to the lead.** `research/attribution.py` and its tests appeared at 05:39, written by someone else. |
+
+**Flagged, not stopped:** the DSR's periods (trades) and V (1/(T-1)); a fold row's effective
+sample size shown as "not recorded". Each has its rejected option in the build log.
