@@ -621,6 +621,46 @@ substitution costs.
 
 ---
 
+## 7a. The declared substitutes the chain simulation runs on (written before launch, 2026-09-19)
+
+The simulation is **two runs: tier 3 and tier 5, engine 8's expected-move ranking, the median
+column of the bucket table** (operator ruling 2026-09-19). Every input below that the 2023–24
+archive does not hold is either **declared** or **recorded in 2026**, and each is named with its
+source and date. None is a measurement of the period it is applied to.
+
+| Input | What the run uses | Source and date |
+|---|---|---|
+| **Spread** | Per pair, the **median** spread of its liquidity bucket, keyed on the pair's trailing 24-hour dollar volume computed from the replayed trades: 30.4 bps (< $10k), 25.8 ($10k–100k), 12.3 ($100k–1M), 5.5 ($1M–10M); the > $10M bucket uses the $1M–10M row. Served as half the spread either side of the last traded price. A pair with no trade in 24 h has **no quote**, never a zero spread. | `tests/fixtures/replay/spread_book_table_2026-09-19.json`, built by `scripts/build_bucket_table.py` from the recorder's minute summaries of 185 recorded USD pairs, 2026-09-11 16:13Z to 2026-09-19 00:45Z (7.36 days). Per pair, the median of each clean minute's median spread; per bucket, the median of the per-pair medians. The interquartile ranges are published there as declared uncertainty. |
+| **Book depth** | Per bucket, the median bid depth to $10,000 from mid: 86.2 / 100.5 / 35.2 / 8.9 bps. Laid as 10 evenly spaced levels from the half-spread to that depth, and walked by engine 9 with its own arithmetic. That serves $5k slippage of 15.8 / 19.5 / 6.5 / 1.4 bps. | Same fixture and recording span. The table's continuous-book check figures (17.7 / 20.8 / 7.5 / 1.7) differ because the served book is ten discrete levels. |
+| **Pair rules** | Kraken's `AssetPairs` as recorded (REST, verbatim), keyed by the engines' names through the websocket `instrument` snapshot captured with it. The 2026 tick sizes apply, finer than 2024's on 15 pairs. | `tests/fixtures/kraken/asset_pairs_recorded_2026-09-19.json`, `instrument_recorded_2026-09-19.json` and `pair_names_recorded_2026-09-19.json`, captured 2026-09-19 (spec 127). |
+| **Fee tier** | Kraken's **Spot Crypto** schedule, served to every pair (D8): tier 3 at 0.22% maker / 0.38% taker, tier 5 at 0.15% / 0.30%. The FX, stablecoin and pegged-token pairs are overcharged by this, the conservative direction. | `tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json`, fetched 2026-09-19T02:59:51Z from kraken.com/features/fee-schedule, with the raw page and the 9 July 2026 restructuring article committed beside it. |
+
+**Declared limitations, stated before any figure exists:**
+
+1. **Every substitute is 2026 applied to 2024.** The spread and depth come from 7.4 days of
+   September 2026; the pair rules and the fee schedule are as of 2026-09-19. Liquidity, pair rules
+   and Kraken's fees in July 2024 to January 2025 are not on disk, and the run does not know them.
+2. **Survivorship: 39 of the 231 archive USD pairs trading in the window are absent from the 2026
+   rules and are excluded from the universe** (42 of 234 over the 1.5-year window; spec 127). Some
+   are probable rebrands (MATIC/POL, FTM, MKR, and RNDR in the 1.5-year count), so 39 is an upper
+   bound on delistings. The universe is therefore biased towards pairs that still trade in 2026,
+   the survivors. Pairs that failed between 2024 and 2026 cannot be traded in the simulation even
+   if they were candidates in 2024. That can flatter or harm the result, and the direction is not
+   known.
+3. **The fee schedule is 2026's too.** Kraken restructured its tiers on 9 July 2026, and nothing on
+   disk dates any earlier schedule. Fees are the input the result is most sensitive to (§4: under
+   the ruled ranking, 46 trades at 0.60% fees against 254 at 0.40% over 12 months).
+4. **Spread sensitivity was NOT run through the chain** (operator ruling 2026-09-19: the extra
+   runs would push the tier-3 run past 32 hours). **A different spread changes WHICH trades
+   happen, not only what they earn.** Spread is part of friction, friction decides the cost gate,
+   and the gates after it, the entry fills and the account's path follow from that. So the effect
+   of a different spread on the trade set is **unrecoverable without a re-run.** What is available
+   instead:
+   - the offline flat-against-bucket comparison of §3, which found that a constant spread inverted
+     the sign of the result;
+   - a post-run script that re-prices the trades that did happen under another spread, which
+     answers what they would have earned and nothing about which trades would have happened.
+
 ## 8. On every interval in this document
 
 Each interval is the mean ± 1.96 standard errors, treating the trades as independent. **They are
