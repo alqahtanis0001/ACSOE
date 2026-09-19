@@ -2978,3 +2978,46 @@ is built on that.
 
 **Flagged, not stopped:** the DSR's periods (trades) and V (1/(T-1)); a fold row's effective
 sample size shown as "not recorded". Each has its rejected option in the build log.
+
+### c-models — specs 136 and 135: modules BUILT, 2026-09-19; the window's run waits on one config field
+
+- **136**: `research/training.py` (`_capped`, and `_fit_skeptic(..., cap_folds=None)`),
+  `research/skeptic_cap.py` (new: `replicate`, `stage_fold`, `read_staged`,
+  `recompute_identity`, CLI), `tests/research/test_skeptic_cap.py` (15 passed). **Replication on
+  the real run through `src/`: folds 20 and 40, identity equal, probability difference 0.0.**
+  Mutations: 14 applied, 13 killed, 1 checked negative (S5, equivalent behind the module's
+  bounded dataset read; the reason is documented).
+- **135**: `research/artefact_assembly.py` (new: `assemble_fold`, `verify_assembled`, CLI),
+  `tests/research/test_artefact_assembly.py` (21 passed, through the real engines 8, 13 and 15
+  loaders and B's real `StoreClient`). Mutations: 17 applied, 16 killed, 1 checked negative (A11,
+  redundant with the scaler-identity check); its non-equivalent form A11b is killed.
+- **Dry run on real fold 404** into the scratchpad: staged (cap 13, 782,124 rows, identity equal
+  to the recomputation), assembled, loaded by engines 8, 13 and 15, thresholds equal to the study's.
+  Peak 7.3 GB in one process.
+
+**BLOCKED on one thing:** the `training.skeptic_cap_folds` model field (a-replay,
+`platform/config.py`) and the lead's YAML value 13. When the field lands:
+(1) `train_walkforward` reads the key and passes it to `_fit_skeptic`, the parameter becomes
+required, and the key joins `_config_digest`'s list, since it changes what the skeptic trains on;
+(2) `python -m acsoe.research.skeptic_cap stage 379-404`;
+(3) `python -m acsoe.research.artefact_assembly 379-404`.
+Steps 2 and 3 run two folds at a time: about 15 GB peak and about 20 minutes. The run
+directories are `models/train-20260913T205245-067b2b9d-f{k}-p7`.
+
+### c-models — specs 136 and 135 DONE for the window, 2026-09-19
+
+- **Staged** 26 capped skeptics (cap 13, via `--cap 13`; see the build log's contestable
+  decision) in `data/derived/skeptic_cap_train-20260913T205245-067b2b9d/`.
+- **Assembled** 26 run directories `models/train-20260913T205245-067b2b9d-f{379..404}-p7/`.
+- **Verified, 26 of 26:** engines 8, 13 and 15 load each one; both thresholds equal the study's
+  recomputed quantiles; each skeptic identity equals an independent recomputation from the
+  out-of-sample file; the source files are unchanged; the uncapped skeptic was not copied.
+- **Ranking against the grid on real bars:** 52 of 52 sampled bars choose the same pair, the ranked
+  set equals the grid's on every bar, and the expected move equals the trainer's exactly.
+- **Step 4 re-measurement (a finding, not a stop):** at 0.50 the capped skeptic passes 8.38% of
+  the window's BUY calls at a 0.3935 target rate (no-skill band 0.277–0.282). At matched counts
+  it is **no better than the predictor's own `p_target`** (0.3953). The same holds at 0.60 and
+  0.70. The all-405-fold re-measurement is still outstanding.
+- **Still open for the lead:** the `training.skeptic_cap_folds` field and YAML value. When they
+  land, `train_walkforward` must be wired to the key and it must join `_config_digest`. Nothing in
+  Phase 7 retrains, so this is not on the critical path.

@@ -161,3 +161,22 @@ The grep was for the claims the new rules contradict, over `AGENTS.md`, `README.
 
 **Held until the gate over `engine-contracts.md` finishes:** engine 7's prose there (spec 144 step
 3). A gate in the worktree holds a copy of that file.
+
+### Gate b4 (specs 136 and 135's modules) RED on one test, predicted before it finished
+
+**Agent:** Lead · **Date:** 2026-09-19
+
+**What happened.** `logs/verify/gate-b4-c-136-135-modules.log`: `toolchain_green` FAIL, pytest
+`1 failed, 3522 passed, 3 skipped`. The one failure is
+`tests/research/test_backtest.py::test_backtest_is_the_one_research_module_allowed_to_import_core`.
+
+**Why.** `research/artefact_assembly.py` (spec 135) builds a `StoreClient` inside a function, so
+research reaches `acsoe.clients`. Only `backtest.py` may. c-criteria's spec 138 hit the same test
+earlier and fixed it by owning its own read. Spec 135 itself says "through
+`StoreClient.new_model_run_dir`", and that is satisfied by injection, as `research/training.py`
+already does. The spec wording invited the import; the boundary test is right.
+
+**Fix.** Sent back to c-models: inject the store, and construct it in a `scripts/` entry. **This is
+the first red on this boundary.** A second consecutive red after the fix is a stop, per the
+operator's rule. The 26 assembled run directories are unaffected: they were produced by this code,
+and the fix changes where the store is built, not what is written. The re-gate will say so.

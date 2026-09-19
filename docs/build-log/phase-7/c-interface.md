@@ -538,3 +538,334 @@ digest's figure onto the fold rows is a one-line change in engine 20 if the oper
 **Not built yet: the SHAP writer and the SHAP view.** Engine 19 must write Parquet through the
 store, and `StoreClient` has no Parquet surface. A `write_shap` / `read_shap` pair was proposed to
 b-store by message; no answer yet. The view waits on the same read.
+
+### Spec 136: the capped skeptic's module, and the replication through `src/`
+
+**Agent:** C-models · **Task:** spec 136 · **Date:** 2026-09-19
+
+**The replication, on the real run, with the code in `src/`.** `python -m
+acsoe.research.skeptic_cap replicate 20,40` retrains folds 20 and 40 uncapped through
+`training._fit_skeptic`, the function that trained them, and compares with each saved
+`skeptic.txt`:
+
+- fold 20: 64,276 rows, identity equal, 2,881 BUY calls, largest probability difference **0.0**;
+- fold 40: 132,434 rows, identity equal, 3,258 BUY calls, largest probability difference **0.0**.
+
+This matches the reconnaissance's `q_capped.py validate`.
+
+**Decision: the cap is a keyword on `_fit_skeptic`, not a config read inside it, until the key's
+model field lands.** *Options:* (a) `_fit_skeptic` reads `training.skeptic_cap_folds` itself; (b)
+it takes `cap_folds: int | None = None`, and `train_walkforward` reads the key and passes it once
+the field exists. *Chose (b).* `Config.get` raises on a key the config model does not declare, so
+(a) would turn every training test red until A-replay's field lands. *Rejected (a)*, the tidier
+end state. *Cost:* until the walk-forward is wired, a full retrain would still train uncapped.
+Nothing in Phase 7 retrains, and the staging module passes the cap explicitly.
+
+**What the mutation sweep found: the staging module's own read was doing the capping.** The first
+sweep (`tests/research/test_skeptic_cap.py`, 14 arms) had **five survivors**. Three of them
+removed or widened the trainer's cap filter: S2 one fold too many, S4 the trainer bypassing it, S5
+the module passing no cap. **Why:** to bound a late fold's memory, the module reads the dataset
+only from the capped window's first bar. An earlier fold's call therefore finds no feature row and
+drops out of the trainer's inner join, whatever the cap says. **The module's output could not see
+whether the trainer's filter worked.** **Fix:** a test that hands `_fit_skeptic` every earlier
+fold and the whole dataset with nothing narrowed in front, and requires the capped identity
+(`test_the_trainer_applies_the_cap_itself_over_the_whole_dataset`). It kills S2 and S4. S5 is
+equivalent behind the module's read and is recorded as a **checked negative**, with the reason
+written into the function's docstring. The other two survivors, S12 (the out-of-sample row-count
+guard) and S14 (the identity comparison in `replicate`), each gained a test that breaks that
+comparison alone, and both are now killed.
+
+The replication's control also had to be fixed. A different seed does not change LightGBM's
+trees here: there is no bagging and no feature sampling. One fewer tree changes nothing either,
+because on the learnable series the last rounds add nothing. A quarter of the trees does change
+the model, and the control uses that.
+
+**Sweep, final.** 14 applied: 9 killed on the first pass, and S2, S4, S12 and S14 killed once
+their tests existed, so 13 killed in all. S5 is the one checked negative, explained above. `tests/research/test_skeptic_cap.py` 15 passed.
+
+**Dry run on real fold 404, into the scratchpad, cap 13:** 782,124 training rows from folds
+391-403; the staged identity **equals** the one `recompute_identity` derives from the ruling;
+veto rate 0.993 at 0.50, survivor target rate 0.846 against 0.010 for all of fold 404's BUY calls;
+45 s to stage.
+
+### Spec 135: the assembly module, and a dry run on real fold 404
+
+**Agent:** C-models · **Task:** spec 135 · **Date:** 2026-09-19
+
+`research/artefact_assembly.py`. Fold 404 was assembled into a scratch artefact root from the
+dry-run staged skeptic. The module's own checks all passed: the split counts, the training and
+scaler identity, the rebuilt reference identity against the study's, the three
+`di_fitted_on_predictor_training_set` questions, and 16 sampled leave-one-out rows against
+`modelling.di`. The real engines 8, 13 and 15 then load it through their own `_read`: 200,000
+reference rows, DI threshold 2.066936, anomaly threshold 0.658429, 121 skeptic inputs.
+`verify_assembled` recomputes both thresholds from the study files and finds them equal. It took
+26 s to assemble, with **a 7.3 GB peak for staging and assembly in one process**. So the window's
+26 folds run two at a time, well under the 20 GB line.
+
+**Mutation sweep, `tests/research/test_artefact_assembly.py`.** 17 arms first: 13 killed and 4
+survived.
+
+- A10, split counts unchecked: killed by a new test that adds one purged row, so only the purge
+  count changes.
+- A13, the verification's exclusion inclusive: killed by a new test that places a duplicate of
+  each row exactly one span away.
+- A17, the staged skeptic's source run unchecked: killed by a new test with a staged record from
+  another run.
+- A11, the training-identity check removed: **a checked negative**. The next line compares the same
+  recomputed identity with `scaler_identity`, which the trainer records equal on every fold. The
+  non-equivalent form, both checks removed (A11b), is killed by a new test that renames the oldest
+  training row, so no count and no reference row changes.
+
+Final: `tests/research/test_artefact_assembly.py` 21 passed.
+
+### Decision: stage the window's capped skeptics with `--cap 13` rather than wait for the config field
+
+**Agent:** C-models · **Task:** spec 136 · **Date:** 2026-09-19
+
+**Options.** (a) Wait for `training.skeptic_cap_folds` to land: a-replay's model field, then the
+lead's YAML. (b) Stage now with the ruled value passed on the command line.
+
+**Chose (b).** The number is the operator's ruling of 2026-09-16, 13 folds, and the flag carries
+exactly that number. `_with_cap` **refuses** the flag when the config declares a different value,
+and never overrides it. So once the key lands, a disagreement is an error rather than a silent
+second source. Every staged record carries `cap_folds: 13`. The assembly copies it into the
+manifest as `extras.skeptic.cap_folds`, and the assembly is what engine 15 loads.
+
+*Rejected (a).* The field had been asked for twice with no reply, and the lead's order puts 136's
+training and 135's assembly on the critical path to the rehearsal. **Contestable:** until the
+field lands, the key's home is not the source of the number. Tests: 4 new tests, and 3 mutations
+applied, 3 killed.
+
+### Spec 138 crossed the research import boundary through the store's row models; now it reads its own rows
+
+**Agent:** C-criteria · **Task:** spec 138 · **Date:** 2026-09-19
+
+**What happened.** The lead's gate went red on
+`tests/research/test_backtest.py::test_backtest_is_the_one_research_module_allowed_to_import_core`:
+`research/attribution.py` imported `acsoe.clients.store.contracts`, and only `backtest.py` may reach
+`acsoe.core`, `acsoe.clients` or the engines from `research/`.
+
+**Why.** My decision 2 above chose "every row parsed through the store's own row models" as the way
+to avoid fabricating the contract. That is the right instinct for a criterion and the wrong one for
+a `research/` module, and I never ran the directory's boundary test, only my own file's tests. It is
+the same failure as a double that stops tracking the thing it doubles, but from the importer's side:
+my file's tests were green and the rule lives in another file.
+
+**Fix.** Four small frozen row types in the module (`RunRow`, `EquityRow`, `PositionRow`,
+`TradeRow`), each carrying only the columns the report reads. They are read by explicit column
+list from the `mode=ro` connection, and every money column goes through `_money`, which refuses
+anything but the schema's decimal text. *Rejected:* widening the test's allow-list (the lead ruled
+it out, and code-standards names the trap); and a new `StoreClient` read (B's lane, and it would
+still sit under `acsoe.clients`). This amends decision 2 above and does not rewrite it. Tests: two
+added (a non-text money value refused; the module reaches neither core nor clients). The seam test
+with no double now reads trades through the database as well
+(`test_trades_are_read_from_the_database_with_their_economics`). Sweep on the new read path: 3
+applied, 3 killed. R3, the expected move never read, first **survived**, because every
+per-trade test passed rows in directly and bypassed the database. The new seam test kills it.
+
+**Still red, and not mine:** the same boundary test names `research/artefact_assembly.py:
+acsoe.clients.store.client` (c-models, spec 135). Reported to the lead.
+
+### Decision (lead ruling): `fee_scenario_is_replay_only` keeps its directory marker and gains the fixtures' and loaders' own names
+
+**Agent:** C-criteria · **Task:** spec 141 · **Date:** 2026-09-19
+
+**What happened.** The criterion went FAIL on the working tree. a-replay's new
+`scripts/cut_replay_fixture.py` (spec 142) names `tests/fixtures/replay` because it writes the
+rehearsal day's trade slice there. It never reads the fee or the book. The directory string was the
+criterion's only marker for the bucket table, so it could not tell a writer of trades from a reader
+of the declared scenario.
+
+**Options put to the lead.** (A) Replace the directory marker with the fixtures' and loaders'
+names. (B) Move the slice out of `tests/fixtures/replay/`. (C) Exempt the script by path.
+
+**Ruled: B, plus A's names added alongside the directory marker, not in place of it.** A marker set
+may widen and never narrow. *Rejected:* A alone, which narrows a gate's check; C, because an
+exemption list in an invariant check is how the check decays. Added: `spread_book_table`,
+`load_spread_table` (as a string and as a name), and the `from acsoe.clients.kraken import
+replay_scenario` form of the module import. That form was not caught before, which was a real hole
+the old tests never probed. Each new marker has a planted-reader test. The directory marker keeps
+its own test. The criterion stays FAIL on the shared tree until a-replay moves the slice. That is
+correct: the gate should not go green by a change to the check.
+
+### Decision (lead ruling): the one-day pipeline run is the criterion's `--live` half
+
+Spec 141 asks `backtest_emits_alpha_report` to "run a committed one-day fixture through the whole
+pipeline". The chain needs each fold's model artefacts, which live under the gitignored `models/`,
+and `ai-workflow-rules.md` says a criterion must pass on a fresh clone and may never read
+`models/`. The spec's two constraints meet, and the ruling resolves it: the one-day run belongs to
+`--live`, and the fresh-clone half is the digest-consistency check plus the fabricated six-day run
+through the real store and report. *Rejected:* committing model artefacts under `tests/fixtures/`
+(tens of MB per fold, and a second copy of what `models/` holds) and a one-day regression (one
+daily return cannot carry one).
+
+### Engine 5 costs 1.8 s a bar tick because it calls the feature arithmetic once per pair
+
+**Agent:** C-criteria · **Task:** engine 5 speed-up (lead decision D16, behaviour-preserving) ·
+**Date:** 2026-09-19
+
+**What happened.** a-replay measured engine 5 `feature` at 1,765 ms per bar tick at 190 pairs. Over
+a ~17,500-bar run that is about 8.6 hours of engine 5 alone.
+
+**Why.** The arithmetic is not the cost. The engine builds a polars frame, runs
+`modelling.features.compute` (about forty window expressions over some 200 rows) and converts
+the last row to a dict, once for each of 190 pairs. Each call is roughly 8 ms of fixed polars
+query overhead over a tiny frame. On a synthetic 190-pair, 200-bar tick the per-pair loop took
+1,443 ms. The same expressions over all pairs in one frame, each window made per-pair with
+`.over("pair")`, took 89 ms, and matched the per-pair result bit for bit on every feature. Across 8
+seeds and 2,146,200 values (all rows, not only the last), no value differed and every NaN sat in the
+same place.
+
+**Why exact equality is plausible rather than lucky.** Polars evaluates a window expression
+`.over(key)` by running the same rolling kernel on each group's slice. The slice for a pair is the
+same sequence of rows the per-pair frame held, in the same order, so the incremental sums see the
+same operands in the same order. That order is the thing that decides the last bits: `rolling_std_by`
+over a constant series differs at 1e-13 (see `_add_regime_rank`). The property test and the rehearsal
+day are what make the claim more than plausible.
+
+### Specs 136 and 135 run for the window: 26 capped skeptics staged, 26 run directories assembled and verified
+
+**Agent:** C-models · **Task:** specs 136, 135 · **Date:** 2026-09-19
+
+**Staged:** `python -m acsoe.research.skeptic_cap stage 379-391 --cap 13` and `392-404` ran in
+parallel into `data/derived/skeptic_cap_train-20260913T205245-067b2b9d/`, 26 folds, and each fold
+reaches back 13 folds (fold 379 to 366). **Assembled:** `python -m
+acsoe.research.artefact_assembly 379-391` and `392-404` ran in parallel into
+`models/train-20260913T205245-067b2b9d-f{379..404}-p7/`. Every fold passed the module's checks
+before its directory was created.
+
+**Verified independently, all 26 folds** (`scratchpad/c-models/verify_window.py`, read-only):
+
+- the real engines 8, 13 and 15 load each directory through their own `_read`;
+- both thresholds equal the quantiles recomputed from the study files at today's percentiles;
+- the capped skeptic's training identity, **recomputed from the out-of-sample file by the
+  ruling**, equals the manifest's;
+- `cap_folds` is 13 and `earliest_fold` is k − 13;
+- the source files are byte-identical to the provenance hashes;
+- the uncapped `skeptic.txt` was not copied.
+
+**26 of 26.** DI thresholds range 1.74 to 2.72, and anomaly thresholds 0.642 to 0.666. Capped
+training rows range from 401,180 (fold 386) to 827,327 (fold 403).
+
+**The ranking over the assembled artefacts, against the grid, on real bars**
+(`scratchpad/c-models/rank_vs_grid.py`, read-only). The universe was two sampled bars per fold,
+every pair the out-of-sample file holds on the bar, with each pair's feature row from the dataset
+the trainer scored. `rank_by_expected_move` with the fold's `-p7` artefacts was compared with
+`grid_order`:
+
+- **52 of 52** bars choose the same pair;
+- the ranked set equals the grid's passing set on every bar;
+- the largest difference between the ranking's expected move and the trainer's recorded one over
+  every ranked pair is **0.0**.
+
+So before any replay, on the archive's own rows, the function and the §4 grid agree.
+
+**A finding for the lead: Finding 1's re-measurement over the window (spec 136 step 4).** The
+capped skeptics were scored on the window's 1,237,399 out-of-sample BUY calls (base target rate
+0.2614), the way the 2026-09-14 veto sweep scored them (`scratchpad/c-models/remeasure.py`):
+
+| Threshold | Survivors | Share | Survivor target rate | No-skill band (20 shuffles within fold) | Top N by `p_target`, same N per fold |
+|---|---|---|---|---|---|
+| 0.50 | 103,752 | 8.38% | 0.3935 | 0.2770–0.2815 | 0.3953 |
+| 0.60 | 254,187 | 20.54% | 0.3697 | 0.2893–0.2925 | 0.3731 |
+| 0.70 | 556,658 | 44.99% | 0.3401 | 0.2880–0.2892 | 0.3471 |
+
+The capped skeptic sits well above its no-skill band at every threshold. **But at matched counts
+it does no better than the predictor's own `p_target` ranking: it is 0.002 to 0.007 below it at
+each threshold.** Measured over all 405 folds, the uncapped skeptic beat the same comparison by
++0.058 at 0.50 (`phase-7-findings.md` §5b). So in the six-month window, what the capped skeptic
+adds is selection the predictor already had. This is a measurement, not a stop: R2 ruled the
+capped skeptic, and nothing here changes what the system does. The all-405-fold re-measurement
+remains outstanding, as spec 136 says.
+
+**Also found:** the Phase 5 study script's `fold_indices()`
+(`docs/dataset/di-anomaly-fit-2026-09-14.py`) globs `models/<run>-f*`. That pattern now also
+matches the `-f{k}-p7` directories, and `int("379-p7")` would raise if the script were rerun. The
+script is a committed historical record, is not rerun by anything, and is not mine to edit.
+Recorded so that whoever next reruns it knows why it fails.
+
+### Spec 135: the assembly's command line imported `clients/`, which `research/` may not
+
+**Agent:** C-models · **Task:** spec 135 · **Date:** 2026-09-19
+
+**What happened.** The lead's gate went red on
+`tests/research/test_backtest.py::test_backtest_is_the_one_research_module_allowed_to_import_core`.
+`artefact_assembly.main` built a `StoreClient` to get `new_model_run_dir`. Only `backtest.py`
+may import `core`, `engines`, `clients`, `cli` or `console` from inside `research/`.
+
+**Why.** I followed spec 135's wording ("through `StoreClient.new_model_run_dir`") into the
+module's own command line, and did not check it against the import boundary. My narrow runs never
+included `test_backtest.py`.
+
+**Fix.** Rejected (a), a new script under `scripts/`: that is A's directory, and the fix needs
+nothing from it. Chose (b): the store stays injected, as `research/training.py` injects it, and
+`None` falls back to `training._new_run_dir`'s `mkdir(exist_ok=False)` under the source run's
+artefact root. That is the same atomic refusal, and it is the path the trainer's own command line
+already uses. The CLI now passes `None`. The tests keep driving B's real `StoreClient` and add
+`test_without_a_store_the_run_is_created_once_beside_its_source`. Mutations: 2 applied, 2 killed
+(the injected store ignored; the fallback writing to the wrong root). The 26 directories already
+assembled were created through the real `StoreClient` and are unaffected.
+
+### Spec 141: `backtest_emits_alpha_report` judges a digest by recomputing it, and proves the check on a real report first
+
+**Agent:** C-criteria · **Task:** spec 141 (taken over from c-eval's uncommitted Phase 7 section, at
+the lead's instruction) · **Date:** 2026-09-19
+
+**What PASS will demonstrate, and what must be true for it.** That each committed run digest
+(`tests/fixtures/phase7/run-digest-*.json`, spec 143) is the report of a curve over the run's own
+window with every day regressed, flat days included, and every decision bar carrying an equity
+row. That rests on the digest being spec 138's `AttributionReport.to_dict()`, so the check reads
+nothing the digest states about itself without recomputing it: the grid must be whole days from the
+window's start, both fits must count every grid day, the flat-day count must equal the zero returns
+in the equity series, both regressions must recompute from the series through `regress_digest`
+within 1e-9, the bar count must equal the bars the window holds, and the scenario digest must be the
+sha256 of the description it travels with. The message names the window, tier, ranking, scenario
+and both benchmarks' fits, as spec 141 step 1 asks.
+
+**Before any digest is read**, the criterion takes a fabricated six-day run (the subject) through
+the real store, the real partition reader and the real report (the contracts), and requires its
+digest to pass the same check and its window to be exactly the run's. So the check is shown to
+accept a genuine report on a fresh clone, and a producer defect is caught with no digest
+committed. **Why the window check sits there and not in the digest check:** a constant window in
+the producer moves `window_start_us` and the grid together, so the digest stays self-consistent;
+only something that knows the run's true span can see it, and the fabricated run is the one place
+the criterion knows it.
+
+**Decision: the fabricated run rather than a small committed digest as the PASS witness.**
+*Rejected:* committing a hand-made digest, which is a statement about a report rather than a
+report, and would stay green if `to_dict()` changed shape.
+
+**Open, sent to the lead:** spec 141 also says the criterion "runs a committed one-day fixture
+through the whole pipeline", which spec 142 step 1 says it will reuse. The chain needs the fold's
+model artefacts, which live under the gitignored `models/`, and one day gives one daily return,
+which cannot carry a regression. Asked a-replay what the slice will hold. Until then that half is
+stated in the docstring as not built.
+
+**Planted defects, each FAIL observed** (`tests/verify/test_phase7_criteria.py`): in a committed
+digest, flat days dropped from the fits, a constant window, a stated alpha not from the series, a
+basket fit that was never computed, a decision bar with no row, flat days miscounted, a scenario
+digest from another description, a grid not in whole days, a misstated tail, and a series shorter
+than the grid; in a copy of `attribution.py`, a regression that drops flat days and a window
+pinned to a constant. PENDING observed on an unbuilt tree (naming spec 138), on a module without
+`regress_digest`, and on the real tree with no digest (tonight's expected state).
+
+**Mutation sweep of the criterion** (`scripts/verify.py`, against the whole of
+`tests/verify/test_phase7_criteria.py`, 37 tests, in a private copy of the tree so no teammate's
+run could import a mutant; `PYTHONDONTWRITEBYTECODE=1`, restored from a byte copy after each arm,
+sha256 checked, summary line in every verdict): **18 applied, 18 killed.** Grid start, day count,
+flat-day count, bar coverage, both fit recomputations, the basket fit alone, the scenario sha, the
+day steps, the tail, the series lengths, the fabricated window, the fabricated digest's problems,
+judging only the first digest, a loosened fit tolerance, the tier dropped from the message, exact
+fields always agreeing, the HAC-lag floor, and a refusing report crashing the criterion.
+
+**First pass, on a subset (`-k "alpha or digest"`), two survived, and neither was a clean
+survivor.** A12 (the fabricated digest's problems ignored) survived because the planted producer
+defect I had written dropped flat days from `y` alone, so the report *raised* on mismatched series
+before any digest existed, and the test accepted that FAIL. The anchor replacement meant to fix it
+had silently not applied (an escaped newline in a heredoc, the mechanism code-standards names), and
+the count check I printed measured the wrong string. Re-planted as a regression that drops flat days
+from both series, so nothing raises and only the day count can tell; a separate test now covers a
+producer that raises. A16 (exact fields always agree) survived because no planted defect changed
+only a boolean or integer field of a fit. Added a flipped significance verdict, and a HAC lag below
+the Newey-West rule, which the check did not look at at all before (a digest could state lag 0 and
+pass, since `regress_digest` recomputes at the stated lag). The floor is now checked.

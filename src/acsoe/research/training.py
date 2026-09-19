@@ -1218,6 +1218,25 @@ def _skeptic_training_rows(
     ).sort(["decision_ts", "pair"])
 
 
+def _capped(
+    previous_oos: pl.DataFrame | None, fold_index: int, cap_folds: int | None
+) -> pl.DataFrame | None:
+    """The out-of-sample calls of the last ``cap_folds`` folds before ``fold_index``.
+
+    Only the lower edge is drawn here. The upper edge, folds strictly before this one, is
+    `_skeptic_training_rows`' own, and stays there so that an uncapped call and a capped one
+    exclude the current fold through the same line.
+    """
+    if previous_oos is None or cap_folds is None:
+        return previous_oos
+    if cap_folds <= 0:
+        raise TrainingError(
+            f"training.skeptic_cap_folds is {cap_folds!r}; a cap is a positive number of folds, "
+            "and zero would leave the skeptic nothing to learn from on every fold"
+        )
+    return previous_oos.filter(pl.col("fold_index") >= fold_index - cap_folds)
+
+
 def _fit_skeptic(
     previous_oos: pl.DataFrame | None,
     dataset: pl.DataFrame,
@@ -1229,8 +1248,16 @@ def _fit_skeptic(
     scaler: Scaler,
     oos: pl.DataFrame,
     buys: Sequence[bool],
+    cap_folds: int | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Meta-labelling: how likely is this BUY call to be wrong.
+
+    ``cap_folds`` is ``training.skeptic_cap_folds``: fold *k* learns only from the BUY calls of
+    folds *k* - ``cap_folds`` to *k* - 1 (operator ruling 2026-09-16, spec 136). The cap is a
+    filter on the out-of-sample calls **in front of** `_skeptic_training_rows`, and nothing in
+    that selection changes: the same BUY-only, earlier-fold-only rule, the same purge and
+    embargo against this fold's test window. ``None`` is uncapped, every earlier fold, which is
+    how every skeptic of the Phase 5 run was trained.
 
     The label is ``wrong = label != "target"`` and the inputs are the feature vector plus
     the predictor's own three probabilities and its expected move. **It can only veto.**
@@ -1246,7 +1273,7 @@ def _fit_skeptic(
     interval_s = int(_required(config, "timeframes.decision_bar_s"))
     embargo_bars = int(_required(config, "backtest.embargo_bars"))
     rows = _skeptic_training_rows(
-        previous_oos,
+        _capped(previous_oos, int(fold.fold_index), cap_folds),
         dataset,
         fold,
         names=names,

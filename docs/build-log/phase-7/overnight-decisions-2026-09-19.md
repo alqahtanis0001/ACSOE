@@ -280,3 +280,157 @@ launch, six hours of gating on the critical path.
 **Cost, stated.** Two boundaries gated in parallel off the same HEAD are each proven against HEAD
 alone. Their combination is first proven by the next gate, which starts from a HEAD holding both.
 An interaction between them surfaces one boundary late.
+
+### D15 — Each agent's scratch files live in its own folder (found by b-store)
+
+**What happened.** Every teammate shares one scratchpad. At 05:47 one agent wrote its own
+`mutate.py` over b-store's. A queued b-store sweep would have launched the other agent's harness
+with b-store's arguments; it crashed on the command line before writing anything, and b-store
+stopped it. Had the two command lines been compatible, one agent's arms would have been applied to
+another agent's files, and whether they were restored by hash would have depended on whose script
+happened to be on disk.
+
+**Chose.** A team rule: scratch files go in `scratchpad/<name>/`, and nobody runs a script from the
+scratchpad root or from another agent's folder. The lead's gate script moved to `scratchpad/lead/`.
+The committed copy is `docs/build-log/phase-7/gate.py.txt`.
+
+**Rejected.** Unique file names by convention: a convention is what failed.
+
+### Recorded: spec 139's two contestable choices, and the trial count
+
+c-eval flags two choices, neither of which can move a verdict because the promotion bar is R10b's
+HAC-plus-Bonferroni interval, not the DSR. The DSR's periods are the trades, and its trial variance
+V is 1/(T−1). The ledger counts **N = 1,679 trials**:
+- 408 leaderboard: 405 fold models plus 3 smoke-run models, counted as ambiguous;
+- 674 recon cells;
+- 287 DI and anomaly comparisons;
+- 169 ranking-study features and directions;
+- 92 skeptic veto-sweep rows;
+- 45 skeptic-against-p_target rows;
+- the 4 Phase 7 runs.
+
+There are no persisted engine 20 rows; the 6 fabricated seed rows are excluded.
+
+### D16 — The run's measured cost is ~45 h per run, not 7–15 h; engine 3's candle build is sped up, preserving its behaviour. CONTESTABLE
+
+**Measured by a-replay** on the rehearsal day, over the real partitions and rules: 231 pairs, 190
+with features, about 417k trades in the window. Mean ms per bar tick:
+- engine 3 `market_sensor`: **4,717** (a per-trade Python loop in `candles.normalise_trades`, plus
+  building a polars frame from 417k `Decimal`s);
+- engine 5 `feature`: **1,765**;
+- engine 1 `exchange`: 569.
+
+That is about 7.1 s per bar tick before engines 8–18, 8.5–9.5 s projected with them. So
+**~41–46 h per run** over 17,470 bar ticks, before minute ticks. The lead's estimate of 7–15 h was a
+sum of parts, not a measurement, and was wrong by a factor of three.
+
+**Chose (a).** A fast path for engine 3's candle build in A's own lane, proven equal: every candle
+and every trade range equals the old builder's on the fixtures, on the rehearsal day, and on
+property tests. There is a mutation sweep; money stays `Decimal`; the Phase 2 candle criteria must
+still pass; and the README records the change, because engine 3 runs live. Estimated 4.7 s → ~1.5 s,
+saving ~15 h per run.
+
+**Rejected.**
+- (b) Running as is: about 45 h per run.
+- (c) A 101-bar trade window: it changes what the first bar's return means for thin pairs with
+  gaps, so it changes a number.
+
+**CONTESTABLE.** Specs 129 and 131 say "no engine file changes". The lead reads that line's purpose
+as *no behaviour change in the replay's engines*, which the equality proof keeps. The objection: it
+touches the live path overnight without the operator. The mitigation: output equality is proven,
+not argued.
+
+**Rehearsal day: 2024-10-20 (fold 394).** Offline, 7 bars clear at tier 3 and 10 at tier 5. All 7
+tier-3 bars are on STORJUSD, with both targets and stops among them; runner-up 2024-09-02. The
+offline check applied the anomaly and DI gates, the declared spread and the served slippage; it did
+not apply the skeptic, because 136 was not on disk.
+
+**Recorded, not changed:** the declared book's ten discrete levels serve $5k slippage of
+15.8 / 19.5 / 6.5 / 1.4 bps by bucket, against the bucket table's continuous-book figures of
+17.7 / 20.8 / 7.5 / 1.7. The difference is spec 129's discrete levels. Findings §3's slippage column
+describes the continuous book, and the simulation serves the discrete one.
+
+**D16, extended.** Engine 5's 1.8 s per bar tick gets the same treatment, by c-criteria (C's lane),
+under the same conditions: exact float-for-float equality of every feature row against the
+unchanged implementation, kept as the test oracle, a mutation sweep, and the Phase 5 criteria still
+PASS. It is capped at about 2 h, after which c-criteria stops and reports. Spec 141's remaining
+criteria wait behind it, because they are not on the run's path. Not done: engine 1's 569 ms, unless
+A finds a sub-30-minute fix under the same conditions.
+
+### D17 — `fee_scenario_is_replay_only` keeps its directory marker; the rehearsal slice moves out of the directory
+
+`tests/fixtures/replay/` is reserved for the declared scenario fixtures, and the criterion treats
+any reference to it outside the replay client as a reader. a-replay's slice script wrote there, and
+the criterion FAILed. **Chose:** the slice moves to `tests/fixtures/phase7/rehearsal_<day>/`, and
+the criterion *adds* the scenario files' own names and loaders as further markers. **Rejected:**
+replacing the directory marker with the names, because it narrows a gate's marker set, and a check
+that fronts an invariant may widen but never narrow. Also rejected: exempting the script by path,
+because an exemption list in an invariant check is how it decays.
+
+### D18 — Spec 141's "one-day fixture through the whole pipeline" becomes the criterion's `--live` half
+
+The chain needs the fold artefacts, which live in gitignored `models/`, and a criterion must pass on
+a fresh clone (`ai-workflow-rules.md`). So the fresh-clone half checks the committed run digest's
+internal consistency, fabricating the subject and never the contract, and the full one-day pipeline
+runs under `--live`. The spec's two constraints meet here; neither is relaxed silently.
+
+### D19 — The rehearsal day is committed as a 7.3 MB fixture
+
+`tests/fixtures/phase7/rehearsal_2024-10-20/`: 720,585 trades across 231 pairs, zstd Parquet, with a
+manifest carrying each source partition's sha256. **Chose** to commit it at full size: the
+rehearsal is required to use the same client and pair count as the run, and spec 141's `--live`
+half reuses it. **Rejected:** a thinned slice (fewer pairs), because it would rehearse a different
+per-tick cost and a different universe. **Cost:** 7.3 MB in the repository's history for good.
+
+**D16 revised: option (a) withdrawn; the run goes as specified, at about 40–45 h per run.**
+a-replay prototyped the engine 3 fast path in memory only, with no repository file changed. It gave
+identical candles and no measurable saving: `build_candles` took 3.5–3.7 s against 2.6–3.8 s before.
+The cost is the interface itself, about 417k `TradeTick`s rebuilt into 200 bars of candles on every
+tick by a stateless engine, and no change inside the function removes that. **No engine 3 change
+is made**, which also retires D16's CONTESTABLE point. The remaining lever is engine 5 (c-criteria,
+exact equality). **Expected wall clock: the four runs in parallel take about two days**, to be
+replaced by the rehearsal's measured figure. The operator can stop the runs in the morning
+without losing anything already recorded, since each run is resumable (spec 131).
+
+### D20 — The capped skeptics are staged with an explicit `--cap 13`, not waiting on the config key
+
+**Chose.** c-models stages folds 379–404 at cap 13 and assembles the Phase 7 run directories now,
+with the cap recorded in every staged record and manifest as ruled R2 plus a CLI override. The
+`training.skeptic_cap_folds` key (a-replay's model field, the lead's YAML) is wired into the
+trainer later, as its own boundary. `_config_digest` gains the key, because the cap changes what
+the skeptic trains on. Old manifests keep their digests.
+
+**Rejected.** Waiting for the key: a-replay has not answered three requests, and the run needs the
+directories, not the key. The value is the operator's ruling (13), so where it is read from is a
+how-decision.
+
+### F4 — FINDING for the morning report: in the window, the capped skeptic adds no selection beyond the predictor's own ranking
+
+c-models, spec 136 step 4, over the window's 1,237,399 BUY calls (folds 379–404, base target rate
+0.261):
+
+| Veto threshold | Capped skeptic passes | Its target rate | Top-N by `p_target` at the same N per fold |
+|---|---|---|---|
+| 0.50 | 8.38% | 0.3935 | 0.3953 |
+| 0.60 | — | 0.370 | 0.373 |
+| 0.70 | — | 0.340 | 0.347 |
+
+The no-skill band at 0.50 is 0.277–0.282, so the skeptic has skill, but no more than the
+predictor's own confidence already carries. The **uncapped** skeptic beat the same comparison by
++0.058 over all 405 folds (findings §5b). This does not change the run: the operator ruled the
+capped skeptic (R2). It belongs in findings §5a when the run's figures go in. The sources are in
+`docs/build-log/phase-7/c-interface.md`.
+
+### Progress: spec 135/136's 26 Phase 7 run directories exist and are verified
+
+`models/train-20260913T205245-067b2b9d-f{379..404}-p7/` (gitignored). For all 26: engines 8, 13
+and 15 load them; the thresholds equal the study's recomputed quantiles; the skeptic training
+identity is recomputed independently; the uncapped skeptic is not copied. The ranking agrees with
+the offline grid on 52 of 52 sampled real bars, with expected-move difference 0.0.
+
+### Noted, not fixed: a committed historical script breaks on the new run directories
+
+`docs/dataset/di-anomaly-fit-2026-09-14.py` scans `models/` by run-name prefix and will fail if it
+is re-run now that `models/train-20260913T205245-067b2b9d-f{k}-p7/` exist beside the source folds
+(found by c-models). It is a record of a completed study and is not re-run by anything in Phase 7,
+so it is left as committed. A re-run would need to filter out the `-p7` suffix.
