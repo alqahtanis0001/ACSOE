@@ -2,7 +2,7 @@
 
 An automated spot trading system for Kraken, built as a Master's dissertation project.
 
-Its philosophy is **reject first; execute only with verified net edge**. Twenty-three engines run in a fixed order, and most of them exist to say no. Nine contain no machine learning at all — the components that protect capital are auditable arithmetic, not models anyone has to trust.
+Its philosophy is **reject first; execute only with verified net edge**. Twenty-three engines run in a fixed order, and most of them exist to say no. Nine contain no machine learning at all — the components that protect capital are auditable arithmetic, not models anyone has to trust. (Engine 7's filter is one of them; its ordering reads the predictor's output, under invariant 4 as amended 2026-09-19.)
 
 ## What it does
 

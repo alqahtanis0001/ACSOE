@@ -4,6 +4,8 @@
 
 **Phase:** 7. The Phase 7 row's third criterion.
 
+**Split by operator ruling 2026-09-19.** **Step 1, the SHAP writer, lands before the run**, after spec 145 and through its own gate. A simulation that records no SHAP cannot be asked why a model said what it said. **Steps 2 and 3, the screens, come after the run.** If C is the bottleneck for the launch, the operator would rather run without the writer than compress three engine 19 changes; the lead brings that choice to the operator rather than making it.
+
 ## Goal
 
 The console renders the leaderboard, including promotion verdicts, and a SHAP view per decision.

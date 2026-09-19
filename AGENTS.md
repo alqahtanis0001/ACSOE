@@ -7,6 +7,7 @@ Kraken changed its fee tiers, minimum order sizes, and API shapes recently. Any 
 - Fees come from `POST /0/private/TradeVolume` at runtime. Never a constant.
 - Order minimums come from `GET /0/public/AssetPairs` at runtime. Never a constant.
 - If a value cannot be fetched, live mode **blocks the trade**. Paper mode blocks too; its balance comes from the paper broker instead of the exchange, and there is no fallback — rule 2 of `context/trading-invariants.md`. An emergency liquidation is the one deliberate override — invariant 14 of the same file. Nothing else falls back on a default.
+- **Replay mode alone** reads a *declared* fee scenario and a *declared* book from committed fixtures, through the replay client in `clients/kraken/`. It is an input to an offline experiment, never a fallback, and a test refuses it anywhere else: invariant 2, "In replay mode" (operator ruling 2026-09-19).
 
 <!-- END:kraken-agent-rules -->
 

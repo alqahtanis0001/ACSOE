@@ -112,7 +112,9 @@ No filler is invented, per the run protocol.
 | 144 | The shared ranking function, skipping anomaly and DI refusals (R11) | `modelling/`, tests | the chosen pair's expected move equals engine 8's, recomputed | 2 |
 | 138 | Alpha attribution against both benchmarks | `research/attribution.py`, tests | recovers a planted alpha and beta against each benchmark; reports a removed alpha as not significant | 3 |
 | 139 | Deflated metric, the trial ledger and the promotion gate | `engines/tournament/`, `docs/dataset/`, `console/format.py`, tests | rejects the haircut-failing model; promotes it at one trial; the ledger lists every trial | 3 |
-| 140 | SHAP writer and research screens | `engines/memory/`, `console/`, tests | a refusal writes a SHAP row that renders; an engine 8 refusal writes none | 3 |
+| 145 | Every gate's verdict on both sides: `approvals.details` and `rejections.details` (operator ruling 2026-09-19). After 133 is committed | `engines/memory/`, tests | recomputed from `state`; the refuser marked; four mutations killed | 2 |
+| 140 (writer) | SHAP writer, BEFORE the run, after 145 | `engines/memory/`, tests | a refusal writes a SHAP row; an engine 8 refusal writes none | 2 |
+| 140 (screens) | Research screens, AFTER the run | `console/`, tests | the SHAP view renders a written row | 5 |
 
 ## Read this before you claim anything
 

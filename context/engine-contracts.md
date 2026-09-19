@@ -237,6 +237,15 @@ order intent engine 18 reads, so execution depends on one typed contract rather 
 keys — composition, not decision, and the engine's README says so in those words. Invariant 3
 holds the condition; do not restate it here.
 
+**Engine 7 `scout` orders its universe by engine 8's expected move, by operator ruling 2026-09-19
+(R1; invariant 4 as amended).** The registry order does not change. Engine 7 computes the ordering
+itself through the shared function in `modelling/` (spec 144), with the active fold's artefacts. It
+skips pairs with an incomplete vector and pairs the anomaly or DI gate would refuse (R11).
+**Engines 13 and 8 then judge the one chosen pair from scratch**, exactly as before, so no gate's
+verdict depends on the ordering. Engine 7 never blocks on a ranking value, and a failure to score
+is `scout_inputs_unavailable`. With `scout.rank_feature` absent it orders alphabetically, which is
+the Phase 7 baseline. Invariant 4 holds the rule; do not restate it here.
+
 The Dissimilarity Index is not an engine. It lives inside `engines/prediction/` as a fitted artefact alongside the predictor, because it must be fitted on the predictor's training set. Its arithmetic is `modelling/di.py`, so the trainer fits and the engine scores with one implementation. **Engine 8 blocks on a DI refusal** under rule 6, reason code `di_refused`, and stays a non-gate in the table below: `is_gate` is the declaration `verify.py` checks against the Gate column, and rule 6 already lets any engine halt the tick. Operator ruling 2026-09-12; the reasoning is in `feature-specs/59-phase-5-rulings-into-the-documents.md`. The execution offset bandit is likewise not an engine; it lives inside `engines/execution/` with its state in the store.
 
 ## Per-engine directory

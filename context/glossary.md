@@ -76,9 +76,9 @@ These terms have precise meanings in this codebase. Do not substitute your own.
 
 **Sharpe ratio** — return divided by the volatility endured to get it.
 
-**Buy-and-hold** — the benchmark. Doing nothing. The thing this system has to beat to justify existing.
+**Buy-and-hold** — the benchmark. Doing nothing. The thing this system has to beat to justify existing. Phase 7 reports two (operator ruling R8, 2026-09-19): BTC/USD bought and held over the run's window, and an equal-weighted basket of the pairs the run held while it held them. Each is compared with the run's equity curve including cash periods. Spec 138 is the authority.
 
-**Scout** — engine 7. Deterministic, no model. Builds the tradable universe from live pair rules and balance, then ranks what is left by a fixed score. The one candidate it emits goes to the judgement chain.
+**Scout** — engine 7. Deterministic, no model. Builds the tradable universe from live pair rules and balance with no model, then orders what is left: by engine 8's expected move, skipping pairs the anomaly or DI gate would refuse, when `scout.rank_feature` is `expected_move` (invariant 4, amended 2026-09-19), and alphabetically otherwise. The one candidate it emits goes to the judgement chain.
 
 ## Words that are easy to confuse
 

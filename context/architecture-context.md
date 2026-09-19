@@ -131,6 +131,18 @@ Kraken WebSocket v2, recorded append-only to `data/raw/`.
 
 Engine 9 (order book) and the spread component of Engine 10 cannot be backtested from the historical archives. Any backtest covering periods before live recording began must either exclude those engines or model their inputs from an explicitly documented proxy. A backtest that silently assumes zero spread is invalid.
 
+**The Phase 7 simulation uses two documented proxies** (operator rulings, 2026-09-19; invariant 2,
+"In replay mode"). Each is labelled *declared* wherever it appears:
+
+- **the declared book**: spread and depth by liquidity bucket (spec 130, `phase-7-findings.md` §3),
+  served as a synthetic book;
+- **the declared fee scenario**: Kraken's schedule fetched 2026-09-19, at one tier per run.
+
+Both live **in the client layer only**, in the replay client of `clients/kraken/` (spec 129), so no
+engine branches on mode, and engine 9 walks the declared book with its own arithmetic. The pair
+rules are a genuine `AssetPairs` recorded in 2026 (spec 127). That is a recording of another period,
+not a proxy, and the survivorship it causes is reported.
+
 **Phase 5 features are computed from the historical archive only.** The archive is OHLCVT and carries no spread, bid or ask — those exist only in the live recording, so a feature that reads them will not reproduce in replay.
 
 ## Storage model
@@ -143,6 +155,7 @@ Engine 9 (order book) and the spread component of Engine 10 cannot be backtested
 | Open and closed positions | SQLite, table `positions` | What the console renders and what `safety` counts |
 | Orders, including resting entries | SQLite, table `orders` | Keyed by `userref`; a resting post-only buy lives here |
 | Equity series | SQLite, table `equity_snapshots` | One row per tick. Feeds `safety`'s drawdown and the Phase 7 alpha curve, which needs cash periods too. `cash_source` (migration 0005) says whether the row's cash is engine 1's start-of-tick balance (`cycle_start`) or that balance plus the proceeds of this tick's exits (`after_exit`) — see the exit-cycle rule in `engine-contracts.md` |
+| Approvals | SQLite, table `approvals` (migration 0006, Phase 7) | One write-once row per placed entry, keyed by its `userref`, written by engine 19 on the placing tick: the approving tick's expected move, friction, net edge and hurdle, the three model run ids, and `details`, every engine's verdict on that candidate (spec 145). Copied onto the `trades` row when the position closes. It answers why a trade was approved as `rejections` answers why one was refused (F-new-1, fixed by operator ruling 2026-09-19). Insert-only, so its `cycle_id` is the placing tick; `orders.cycle_id` is not (prerequisite 8) |
 | Block records | SQLite, table `block_records` | One row per guard blocker per **tick**, plus one for an opportunity-chain engine that errored (invariant 12). Not a column on `rejections` — see below |
 | Trained models | Files in `models/` | Versioned by training run id, never overwritten |
 | SHAP explanations | Parquet, joined by decision id | One row per decision |
@@ -206,7 +219,7 @@ Because the guard chain records every blocker, the outage count is **the number 
 
 ### Engine 19 `memory` is the single writer of relational rows
 
-`trades`, `positions`, `orders`, `equity_snapshots`, `block_records` and `rejections` are all written by engine 19 `memory`, from `state`, in the manage chain. No other engine writes a relational row. Engine 22 `exit` closes a position on the exchange; `memory` records that it happened. Keeping one writer is what makes the manage chain's "always runs" guarantee sufficient for invariant 12, and it is why `memory` is the dependency under `safety`'s entire input surface.
+`trades`, `positions`, `orders`, `equity_snapshots`, `block_records`, `rejections` and `approvals` are all written by engine 19 `memory`, from `state`, in the manage chain. No other engine writes a relational row. Engine 22 `exit` closes a position on the exchange; `memory` records that it happened. Keeping one writer is what makes the manage chain's "always runs" guarantee sufficient for invariant 12, and it is why `memory` is the dependency under `safety`'s entire input surface.
 
 Money columns are stored as **exact decimal strings in TEXT**, never `REAL`. `Decimal` in, `Decimal` out. A float equity series drifts, and a drifting equity series moves the drawdown threshold that freezes the account — see invariant 14 for why that limit freezes rather than liquidates.
 

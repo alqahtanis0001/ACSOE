@@ -98,6 +98,36 @@ Every decision affected by a fallback records which fallback fired. A fallback i
 
 Since 2026-09-16 no paper-mode fallback remains, so the rule above binds only rule 14's liquidation, which is the one place in this document where a stale value is used. A failed fetch blocks in paper mode exactly as in live.
 
+### In replay mode: declared scenario inputs, ruled by the operator 2026-09-19
+
+**Replay mode may read a declared fee scenario and a declared book. Paper and live may not, and
+nothing above relaxes for them.** The historical archive holds trades only: no `TradeVolume`
+response, no spread and no book were ever recorded for it. So a replay of it can price the cost
+gate only from inputs somebody declared. The operator ruled that those inputs are permitted **in
+replay mode only**, as follows:
+
+- **The fee** comes from a committed scenario fixture carrying its source URL and capture time:
+  Kraken's published schedule, fetched 2026-09-19
+  (`tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json`). It is served at one tier per run
+  through the `TradeVolume` surface of the replay client (`clients/kraken/`, spec 129). An absent
+  fixture or tier is a failed fetch, and engine 10 blocks exactly as it would live.
+- **The spread and depth** come from the declared liquidity-bucket table (spec 130;
+  `docs/dataset/phase-7-findings.md` §3). The replay client serves it as a synthetic book around
+  the last traded price, and engine 9 walks that book with its own arithmetic. Every pair takes its
+  bucket's value, recorded or not. A pair with no recent trade has no quote, never a zero spread.
+- **They are declared inputs to an offline experiment, never a fallback.** Nothing substitutes
+  them for a failed fetch; they are what a replay run is *defined* on. **Every run records their
+  identity**: the `runs` row carries the scenario digest and description (spec 134), and every trade
+  and rejection reaches it through its `run_id`.
+- **Enforced by a test, not by convention.** The replay client refuses construction outside replay
+  mode, and a Phase 7 criterion proves both that refusal and that no module outside the replay
+  client imports the scenario fixtures (spec 141, `fee_scenario_is_replay_only`). The daemon
+  refuses to start in replay mode.
+- **The account's own tier is a different thing.** It is a recorded fact (tier 1, measured
+  2026-09-19; see the tracker). Tiers 3 and 5 in the Phase 7 simulation are scenarios.
+
+The paper-mode rules above do not move by a word.
+
 ## 3. Every gate is fail-closed
 
 A gate that errors blocks. A gate that cannot reach its data blocks, subject only to the emergency liquidation in rule 14. A gate that returns an unparseable result blocks. Absence of a "no" is never a "yes".
@@ -113,14 +143,22 @@ engine 18 reads — is composition, not decision, and its README says so in thos
 
 ## 4. No model output may bypass a gate
 
-No confidence score, probability, ensemble weight, or router decision may skip, soften, or override engines 4, 7, 10, 11, 13, 16, or 17. A model may only ever make the system *less* willing to trade, never more.
+No confidence score, probability, ensemble weight, or router decision may skip, soften, or override engines 4, 7, 10, 11, 13, 16, or 17. A model may never cause a trade that a gate would refuse, and may never soften, bypass or override a gate's verdict. A model's output may order candidates for examination, provided every gate judges the chosen candidate independently and no gate's verdict is influenced by the ordering. Ordering changes which candidate is examined, never whether an examined candidate is approved.
+
+*Amended by the operator 2026-09-19* to permit engine 7 to rank by engine 8's expected move. The
+sentence it replaced said a model may only ever make the system less willing to trade, never more.
+The ranking raises trades from 3 to 46 at tier 3 with the net unchanged at roughly zero. **It was
+amended to obtain a sample large enough to measure rather than a more favourable result, and had
+the net moved from negative to positive the operator would have treated that as a warning and not
+amended.** The evidence and the residual circularity are `docs/dataset/phase-7-findings.md` §R.2
+and §R.9; the implementation is spec 144.
 
 Engine 16 joined that list with its gate status on 2026-09-16: it contains no model — its check is
 a comparison of pair names and bar timestamps — so nothing a model publishes may override it.
 
 Rule 14 describes the one override in the system. It is not a model output, and it moves the system towards less exposure, so it does not weaken this rule.
 
-**Engine 7 `scout` is deterministic and is protected.** Its universe filter is arithmetic over `ordermin`, `costmin`, tick size, live spread and balance, and its candidate ranking is a deterministic score over features. It contains no model, so nothing may override it.
+**Engine 7 `scout`'s universe filter is deterministic and is protected.** The filter is arithmetic over `ordermin`, `costmin`, tick size, live spread and balance. It contains no model, so nothing may override it. **Its ordering reads the predictor's output** (amended 2026-09-19, above). With `scout.rank_feature: expected_move` it examines the filtered universe in descending order of engine 8's expected move. It skips pairs with an incomplete vector, and pairs the anomaly or DI gate would refuse, using the same artefacts and the same shared arithmetic in `modelling/`. Engines 13, 8, 10, 11, 15 and 16 then judge the one chosen pair from scratch, exactly as before. Without the key, it orders alphabetically, which is the Phase 7 baseline. A failure to score is `scout_inputs_unavailable`, and a ranking value never blocks.
 
 Gate 13 `anomaly` and gate 15 `skeptic` are both machine-learned, and they are treated differently on purpose. Anomaly is unsupervised outlier detection over *market data* — velocity, volume, spread — and its output is a threshold on a distance. It judges whether the market is broken, not whether this trade is good, so it is a data-quality gate like `data_guard` and is protected. Skeptic is supervised meta-labelling over the *predictor's own calls* — a learned opinion about this specific trade. That is what makes it a model in the sense rule 4 means, and why it is excused from the list: "a model must not override it" is meaningless for a model. Both can only veto, never approve. Both remain fail-closed under rule 3.
 
@@ -201,7 +239,7 @@ API keys come from the environment only. Never logged, never committed, never wr
 
 ## 14. Emergency liquidation is the one deliberate override
 
-Everything else in this document makes the system less willing to act. This rule is the single place where the system is made *more* willing to act, and it exists because **unknown exposure is worse than a bad fill**.
+Everything else in this document either makes the system less willing to act or, in engine 7's ordering (invariant 4, amended 2026-09-19), changes which candidate is examined without overriding any verdict. This rule is the single place where a verdict is overridden to make the system *more* willing to act, and it exists because **unknown exposure is worse than a bad fill**.
 
 ### When it fires
 
