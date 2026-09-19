@@ -1,0 +1,15 @@
+# Phase 7 run status. Usage: powershell -NoProfile -File phase7_status.ps1 <path to launch.json>
+# For each run: whether its python PID is alive, and how old its run record is.
+param([Parameter(Mandatory = $true)][string]$Launch)
+$runs = @(Get-Content $Launch -Raw | ConvertFrom-Json)
+foreach ($r in $runs) {
+    foreach ($x in @($r)) {
+        $alive = [bool](Get-Process -Id ([int]$x.py_pid) -ErrorAction SilentlyContinue)
+        $rec = [string]$x.runrecord
+        if (Test-Path $rec) {
+            $age = [int](((Get-Date) - (Get-Item $rec).LastWriteTime).TotalSeconds)
+            $last = [string](Get-Content $rec -Tail 1)
+        } else { $age = -1; $last = '' }
+        "{0,-18} py_pid={1,-6} alive={2,-5} runrecord_age_s={3,-6} last={4}" -f $x.name, $x.py_pid, $alive, $age, $last.Substring(0, [Math]::Min(110, $last.Length))
+    }
+}
