@@ -1625,6 +1625,18 @@ the reason in the YAML comment and in `DatasetConfig`.
 
 ## Open Questions
 
+- **OPEN, Phase 8, by operator ruling 2026-09-19: a non-deterministic native crash in polars.**
+  The Phase 7 gating rehearsal at `19c5a11` died with an access violation right after a polars
+  panic in its row export to Python (`polars-python/src/dataframe/export.rs:59`, "`elements` was
+  smaller than reported by its `ExactSizeIterator`", with `left: 0` and `right: 0`), 54 ticks in.
+  Two identical reruns were clean. Polars 1.44.1, CPython 3.13.5. The likely callers are the
+  per-tick `to_dicts()` in engine 3 (`candles.py:214`) and engine 5 (`engine.py:160`); not
+  confirmed. **Not chased in Phase 7** (the operator's ruling): no change to polars, its thread
+  count, or engines 3 and 5. The runs are covered by an auto-resume watchdog instead.
+  **The operator's note:** a non-deterministic access violation in native code on identical
+  input points at the machine as much as at the library. This machine has shown an unexplained
+  native memory fault before, and **the recorder is exposed to the same fault.** Evidence:
+  `docs/build-log/phase-7/lead.md`, "The gating rehearsal at `19c5a11` crashed natively in polars".
 - **OPEN, Phase 8, by operator instruction 2026-09-19 (not for the Phase 7 launch): the mutation
   harness can leave a mutant on disk.** c-eval's `mutate.py` (the Phase 7 sweep harness, in the
   session scratchpad) keeps the original bytes **in memory only** and writes them back in a

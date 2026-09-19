@@ -757,6 +757,24 @@ literature.** No source was verified for such a claim.
   the label's +3.0%. The run measures the exit rule as built. Changing it now would be changing the
   system to help it pass its own test.
 
+### How the runs were run: two facts stated before launch
+
+- **An intermittent native fault, and resumes.** The gating rehearsal on the final code
+  (`19c5a11`) crashed once, 2026-09-19: an access violation in polars' row export to Python
+  (`export.rs:59`), 54 ticks into the day. Two identical reruns of the same span on the same code
+  ran cleanly, so the fault is not deterministic.
+  - **By operator ruling**, a watchdog resumes a run whose process has died, with its exact
+    command plus `--resume`. It never touches a live one.
+  - **A resume does not change the result.** The rehearsal's kill-and-resume check shows a
+    resumed run writes the same rows as an uninterrupted one.
+  - **Every resume is recorded** (run, tick, time, number), and **the count per run is reported
+    with the results.**
+- **Each run's first decision bar is skipped by design.** On a fresh database engine 7 has no
+  stored equity to size positions against until engine 19 writes the first row at the end of
+  tick 1. Engine 7 fails closed rather than fall back to a balance, so it blocks tick 1
+  (`scout_inputs_unavailable`). That is one bar per run, 2024-10-05 00:15Z, the same at both
+  tiers.
+
 ## 8. On every interval in this document
 
 Each interval is the mean ± 1.96 standard errors, treating the trades as independent. **They are
