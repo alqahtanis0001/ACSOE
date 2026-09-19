@@ -96,3 +96,68 @@ the spec file. Three things surfaced while writing them in:
 One reading is also flagged rather than assumed. R8's second benchmark is taken as the recommendation
 worded it: the pairs held, **while** they were held, and cash otherwise. The other reading, the held
 pairs bought and held over the whole window, would be a third series, not a replacement.
+
+### The lead's own mutation harness left a mutant on disk, because it restored after the run and not in a `finally`
+
+**Agent:** Lead · **Date:** 2026-09-19
+
+**What happened.** Mutation-testing the `core/` change for D9 and F2, the harness wrote the first
+mutant into `src/acsoe/core/orchestrator.py` and then crashed launching pytest. The interpreter path
+was relative, `.venv/Scripts/python.exe`, and `CreateProcess` does not resolve it against the
+working directory the way a shell does. The restore line came after the run, so it never
+executed. The mutant (`context.mode` taken from the run state) sat in the shared checkout for
+about a minute, with five teammates importing from it.
+
+**Why.** The same shape `code-standards.md` records for B's rehearsal harness, from the other end.
+That harness restored only at the end of the run; this one restored only after the subprocess
+returned. Either way, the restore depended on the step that failed.
+
+**Fix.** Restored from the byte copy taken before the sweep, with the hash verified equal. The sweep
+was re-run with `sys.executable` and the restore in a `finally`, with the hash re-checked after
+every arm. Both arms were killed by the tests written for them: M1 (mode from the run state) by
+`test_context_mode_is_the_configured_mode_even_after_activate`, and M2 (seed ignored) by the two
+seed tests. **Consequence for teammates:** any test run between about 05:08 and 05:09 local that
+imported `acsoe.core.orchestrator` may have seen the mutant. None of the five had reported a test
+run in that window.
+
+### Spec 126 and the context half of 144: the contradicted-claim grep, with each hit's disposition
+
+**Agent:** Lead · **Date:** 2026-09-19
+
+Written: invariant 2's replay section, placed after the paper-mode rules and not inside them;
+invariant 4 in the operator's words, verbatim, with the operator's record beneath it; invariant 4's
+engine 7 paragraph; the architecture's two proxies; the Phase 7 seams in `ownership.md`; and the
+glossary's buy-and-hold and Scout entries. The config keys follow when a-replay's model fields land
+(spec 126 step 6).
+
+The grep was for the claims the new rules contradict, over `AGENTS.md`, `README.md` and
+`context/*.md`:
+
+- **"less willing" / "never more"**
+  - Invariant 4's own sentence: replaced (R12).
+  - Invariant 14, "everything else in this document makes the system less willing to act": false
+    after the ranking. Reworded: everything else either makes the system less willing or, in engine
+    7's ordering, changes which candidate is examined without overriding a verdict. Invariant 14
+    stays the one place a verdict is overridden.
+  - Invariant 2's fallback sentence: about fallbacks, true, kept.
+  - `engine-contracts.md` line 235 (engine 16): about engine 16, true, kept.
+- **"no machine learning"**
+  - `project-overview.md` and `README.md` count nine engines with no machine learning, engine 7 among
+    them. **The count is kept at nine**; the retired-vocabulary table forbids the next number down
+    beside "engines". A sentence says engine 7 is counted for its filter and that its ordering reads
+    the predictor's output.
+- **"fixed score" / "deterministic score"**
+  - The glossary's Scout entry: rewritten.
+  - Invariant 4's engine 7 paragraph: rewritten.
+- **"never a constant"**
+  - `AGENTS.md` fees and minimums: true, since the replay fee is a declared fixture, not a constant
+    in code. A pointer bullet to invariant 2's replay section was added, because `AGENTS.md` is the
+    file every agent reads first.
+  - The glossary's hurdle entry: true, kept.
+- **"no fallback" / "assumed spread" / "invalid"**
+  - The paper-mode table rows: true for paper, which the replay rule does not touch.
+  - Invariant 2's retired-tier paragraph: true.
+  - `architecture-context.md` "The consequence": extended with the two named proxies.
+
+**Held until the gate over `engine-contracts.md` finishes:** engine 7's prose there (spec 144 step
+3). A gate in the worktree holds a copy of that file.

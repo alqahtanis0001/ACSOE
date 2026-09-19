@@ -288,6 +288,78 @@ def test_a_naive_previous_now_is_refused() -> None:
         )
 
 
+def test_a_seeded_previous_now_is_the_first_ticks_previous_now() -> None:
+    """A replay resuming a killed run seeds where the last recorded tick was.
+
+    Lead decision D9, 2026-09-19 (spec 131 step 6). Without the seed the resumed first
+    tick carries None, engine 3 publishes no trade ranges for that minute, and a stop
+    touched in it is missed - so a resumed run could not reproduce the uninterrupted
+    one. The second tick is carried as always, from the tick that happened.
+    """
+    seed = dt.datetime(2026, 9, 8, 11, 59, tzinfo=dt.UTC)
+    spy = _ContextSpy()
+    orchestrator = Orchestrator(
+        config=_Config(),
+        clock=_Clock(),
+        clients=_Clients(None),
+        chains=Chains(guard=(spy,)),
+        run_id="run-resumed",
+        previous_now=seed,
+    )
+    orchestrator.tick()
+    orchestrator.tick()
+    assert spy.contexts[0].previous_now == seed
+    assert spy.contexts[1].previous_now == spy.contexts[0].now
+
+
+def test_the_default_is_still_none_so_a_restarted_daemon_fabricates_nothing() -> None:
+    """The daemon never passes the seed; its first tick after a restart stays None."""
+    spy = _ContextSpy()
+    Orchestrator(
+        config=_Config(), clock=_Clock(), clients=_Clients(None), chains=Chains(guard=(spy,))
+    ).tick()
+    assert spy.contexts[0].previous_now is None
+
+
+def test_a_seed_after_the_first_ticks_now_is_refused() -> None:
+    """A seed in the future is an interval running backwards: refused, never absorbed.
+
+    Contract rule 7 turns the raise into nothing an engine sees, so this asserts the
+    refusal at the one place it surfaces - the tick itself, which builds the context
+    before any engine runs.
+    """
+    orchestrator = Orchestrator(
+        config=_Config(),
+        clock=_Clock(),
+        clients=_Clients(None),
+        chains=Chains(guard=(_ContextSpy(),)),
+        run_id="run-bad-seed",
+        previous_now=dt.datetime(2030, 1, 1, tzinfo=dt.UTC),
+    )
+    with pytest.raises(ValueError, match="is after now"):
+        orchestrator.tick()
+
+
+# ------------------------------------------------------------------ context.mode
+
+
+def test_context_mode_is_the_configured_mode_even_after_activate() -> None:
+    """`context.mode` is paper | live | replay, never the run state.
+
+    F2, 2026-09-19: it carried `running` after an activate. Nothing read it; the
+    replay is the first code that could have.
+    """
+    spy = _ContextSpy()
+    store = _Store([{"command": "activate"}])
+    orchestrator = Orchestrator(
+        config=_Config(), clock=_Clock(), clients=_Clients(store), chains=Chains(guard=(spy,))
+    )
+    orchestrator.tick()
+    orchestrator.tick()
+    assert orchestrator.system["mode"] == "running"
+    assert [c.mode for c in spy.contexts] == ["paper", "paper"]
+
+
 # ------------------------------------------------------------------ empty registry
 
 

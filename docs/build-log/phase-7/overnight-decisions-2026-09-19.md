@@ -201,3 +201,82 @@ kept as written, because this file is not rewritten.
   list from config, so that the recorder is interrupted once rather than once per item.
 - **The account's tier is a recorded fact**: tier 1, 0.40%/0.80%, measured by the authenticated
   call. It is written into the tracker beside the Phase 7 fee scenarios.
+
+### D11 — Boundary gates run in a clean worktree, not the shared checkout
+
+**Chose.** Every boundary gate runs in `../ACSOE-gate`: reset to HEAD, with only the boundary's
+files copied in, and `PYTHONPATH` set to the worktree's `src`. Checked: there `acsoe` imports from
+`ACSOE-gate/src` and the migrations resolve to `ACSOE-gate/db/migrations`. The gate log lists the
+files with their hashes and names any that moved in the main checkout during the gate. The script
+is `gate.py` in the lead's scratchpad; each gate's log is `logs/verify/gate-<label>.log`.
+
+**Rejected.** Gating the shared checkout while five teammates edit and mutation-sweep in it. B's
+spec 132 sweep left mutants on disk for 1–25 s each during the first gate. In the shared tree that
+reads as a spurious FAIL or a false PASS. In the worktree it cannot reach the gate.
+
+**Cost.** A boundary whose files depend on something uncommitted fails in the worktree even though
+it passes in the shared tree. That is the correct answer: a commit must stand on HEAD.
+
+### D12 — Spec 127's stops, answered by spec 129's own text
+
+- **Probable rebrands among the 39 absent pairs** (MATIC/POL, FTM, RNDR, MKR): left excluded. 39 is
+  reported as an upper bound on delistings, with the probable rebrands named. Mapping them would
+  change the universe.
+- **13 window pairs are `cancel_only` in 2026**: left in the replay, because a 2026 status says
+  nothing about 2024.
+
+Spec 129 step 4 already rules both: absent is absent, and the survivorship is recorded, not patched.
+
+### F3 — FINDING, for the operator: engine 7 ignores pair status, live too
+
+`PairRule` has no status field, so a `cancel_only` pair (13 of them in the 2026 recording) would
+enter engine 7's universe **live**. An entry would then be refused by the exchange, or would rest
+where it can never fill. Raised by a-data (spec 127), and by the recorder audit before it. **Not
+fixed:** it changes engine 7's live behaviour (B's lane, plus the `clients/kraken` parser, A's).
+The live-path findings for Phase 8 are now: F1 (no `recent_trades` on the live client),
+`TradeVolume` mapped from the invented shape with no pair sent, `AssetPairs` keyed by REST names,
+and F3.
+
+### Recorded answer, spec 127 survivorship
+
+39 of the 231 archive USD pairs trading in folds 379–404 are absent from the 2026 `AssetPairs`
+(42 of 234 over the 1.5-year window). The replay's universe excludes them. It goes into findings
+§7 when the specs land.
+
+### Operator rulings of ~05:30 local: F-new-1 fixed, spec 140's writer before the run
+
+- **F-new-1 changed from recorded-not-fixed to fixed.** Every gate's verdict (value and threshold)
+  is recorded on both sides: `approvals.details`, a new column added to migration 0006 before it is
+  committed, and `rejections.details`, finally filled. Refusals record every engine that ran,
+  with the refuser marked. Approved over the two-hour mark. The lead wrote it as **spec 145**. The
+  lead's own addition, taken as a how-decision: the refuser's own values are included, marked
+  `refused_by`, beside the gates that passed before it. It answers "why refused" in the same shape
+  as "why approved".
+- **Spec 140's SHAP writer moves before the run; the screens come after.**
+- **Sequence ruled by the operator:** 133 (gated with 132), then 145, then 140's writer. One change at
+  a time through engine 19, each with its own gate. **If C is the bottleneck, the operator would
+  rather cut the SHAP writer than compress three engine 19 changes.** The lead brings that choice to
+  the operator rather than making it. The operator is asleep, so the lead will cut it rather than
+  compress it, and record that.
+
+### D13 — A seventh teammate, c-criteria, takes 141, 138 and 140's screens
+
+**Chose.** c-eval keeps engine 19 (133, 145, 140's writer) and 139, so a single agent carries the
+three sequential engine 19 changes. The off-critical-path work moves to a new C session.
+
+**Rejected.** Leaving everything with c-eval (serialises the launch behind criteria work that the
+launch does not need). Also rejected: giving 145 to a new agent (two agents in engine 19 on one
+night, the exact risk the operator sequenced against).
+
+### D14 — Two gate worktrees, run in parallel; a later boundary's gate is a superset of an ungated earlier one
+
+**Chose.** `../ACSOE-gate` and `../ACSOE-gate2`. Each boundary is gated on HEAD plus its own files.
+When an earlier boundary is not yet committed, the later gate also carries the earlier boundary's
+files, so it is a superset. Commits land in boundary order.
+
+**Rejected.** One gate at a time: at about 30 minutes each, with about 12 boundaries before the
+launch, six hours of gating on the critical path.
+
+**Cost, stated.** Two boundaries gated in parallel off the same HEAD are each proven against HEAD
+alone. Their combination is first proven by the next gate, which starts from a HEAD holding both.
+An interaction between them surfaces one boundary late.

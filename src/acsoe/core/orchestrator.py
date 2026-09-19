@@ -71,6 +71,7 @@ class Orchestrator:
         chains: Chains | None = None,
         run_id: str | None = None,
         logger: Any | None = None,
+        previous_now: datetime | None = None,
     ) -> None:
         self._config = config
         self._clock = clock
@@ -100,7 +101,14 @@ class Orchestrator:
         # interval it has no other way to bound. `None` until the second tick, and
         # `None` again for the first tick after a restart, which is the truth: nothing
         # observed the span while the process was down.
-        self._previous_now: datetime | None = None
+        #
+        # A replay resuming a killed run is the one caller that seeds it (operator-approved
+        # lead decision D9, 2026-09-19): there the span is history the replay client can serve,
+        # and leaving it None would drop the first minute's trade ranges, so a stop touched in
+        # it would be missed and the resumed rows would differ from the uninterrupted run's.
+        # The daemon never passes it, so its first tick after a restart is still None. A seed
+        # that is naive or after the first tick's `now` is refused by `EngineContext`.
+        self._previous_now: datetime | None = previous_now
 
         # The `runs` row is written once, at the top of the first tick rather than in
         # this constructor: a constructor that opens a database makes the object
@@ -145,7 +153,11 @@ class Orchestrator:
         process — never a fabricated start — and the clock is read exactly once per
         tick, here, as it always was.
         """
-        mode: Mode = self._system["mode"] if self._system["mode"] != "idle" else self._config.mode
+        # The execution mode (paper | live | replay) is the config's, always. It used to be
+        # `state["system"]["mode"]` whenever that was not idle, so after an `activate` the
+        # context carried `running` - a run state, not a mode, and outside the contract's type.
+        # Nothing read it (F2, 2026-09-19); the replay is the first code that could have.
+        mode: Mode = self._config.mode
         now = self._clock.now()
         context = EngineContext(
             mode=mode,
