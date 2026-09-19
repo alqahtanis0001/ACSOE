@@ -10,9 +10,20 @@ comparison of a balance against a literal. The filter is arithmetic; the balance
 its inputs.
 
 **Deterministic and protected.** Invariant 4: no confidence score, probability, ensemble
-weight or router decision may skip, soften or override this gate. It contains no model, so
-there is nothing here for one to override — and that is the property being protected rather
-than a coincidence.
+weight or router decision may skip, soften or override this gate. **The universe filter
+contains no model**, so there is nothing in it for one to override. That is the property
+being protected, not a coincidence.
+
+**The ordering may read a model, since 2026-09-19.** With `scout.rank_feature:
+expected_move` (operator ruling R1, spec 144), the filtered universe is examined in order of
+engine 8's expected move, computed for every pair by `modelling/ranking.py` with the
+artefacts engines 8 and 13 load. Pairs those gates would refuse are skipped (R11).
+Invariant 4 as amended in the operator's words (R12) permits a model's output to order
+candidates for examination, provided every gate judges the chosen candidate independently.
+It does: engines 13 and 8 re-judge the chosen pair from scratch, and nothing any gate reads
+comes from this ordering. The filter's verdict, meaning which pairs are tradable, never
+depends on the model. With `scout.rank_feature` absent the ordering is alphabetical, which
+is the simulation's baseline.
 
 ## Every exclusion is counted, and the counts must add up
 
@@ -43,8 +54,10 @@ the lowest it could be worth. The lead's ruling of 2026-09-10.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from types import ModuleType
 from typing import Any, ClassVar
 
 from pydantic import ValidationError
@@ -68,6 +81,7 @@ from acsoe.engines.scout.contracts import (
     PAIR_TICK_SIZE_FIELD,
     QUOTE_ASK_FIELD,
     QUOTE_BID_FIELD,
+    RANK_BY_EXPECTED_MOVE,
     REASON_BELOW_COSTMIN,
     REASON_BELOW_ORDERMIN,
     REASON_CRYPTO_QUOTED,
@@ -77,13 +91,14 @@ from acsoe.engines.scout.contracts import (
     REASON_NO_FX_RATE,
     REASON_NO_LIVE_QUOTE,
     REASON_NO_QUOTE_BALANCE,
+    REASON_NO_RANKABLE_PAIR,
     REASON_PAIR_RULES_MISSING,
     REASON_QUOTE_NOT_PROVABLY_STABLE,
     REASON_TICK_GRID_TOO_COARSE,
     PairFacts,
     ScoutUniverse,
+    rank_universe,
     round_down_to_lot,
-    select_candidate,
 )
 
 RISK_FRACTION_KEY = "trading.risk_fraction_per_trade"
@@ -96,11 +111,27 @@ REPORTING_CURRENCY_KEY = "trading.base_reporting_currency"
 #: is not empty** — see :meth:`ScoutEngine._stable_quotes`.
 STABLE_QUOTES_KEY = "trading.stable_quote_currencies"
 
-#: The feature the universe is ranked by, and which end of it to take. **Absent until the
-#: operator rules on the spec 75 ranking study**; alphabetical meanwhile. Spec 59
-#: decision 7 — the ranking is a config-named feature, never a formula written here.
+#: What the universe is ranked by, and which end of it to take. `expected_move` is the
+#: ruled ranking (R1, 2026-09-19, spec 144). Any other value is a feature engine 5
+#: publishes (spec 76). Absent means alphabetical, which is the simulation's baseline.
 RANK_FEATURE_KEY = "scout.rank_feature"
 RANK_DESCENDING_KEY = "scout.rank_descending"
+
+#: The two model runs the expected-move ranking scores with. They are the runs engines 8
+#: and 13 load, read from the same keys, so the ranking and the gates judge a pair with
+#: the same artefacts. The ranking never uses another fold's run.
+PREDICTION_RUN_ID_KEY = "models.prediction_run_id"
+ANOMALY_RUN_ID_KEY = "models.anomaly_run_id"
+
+#: Engine 6 `macro_context` (C). The predictor's vector carries its macro columns, and
+#: engine 8 reads them from here. The ranking reads the same payload, so it builds the
+#: same vector.
+MACRO_CONTEXT_KEY = "macro_context"
+MACRO_FEATURES_FIELD = "features"
+
+#: C's shared ranking function (spec 144). Imported by name when the ranking is
+#: configured, and never at module import. See :meth:`ScoutEngine._ranking_module`.
+RANKING_MODULE = "acsoe.modelling.ranking"
 
 __all__ = ["MissingInputError", "ScoutEngine"]
 
@@ -141,6 +172,13 @@ class ScoutEngine(BaseEngine):
     #: Registry table in `context/engine-contracts.md` marks engine 7 as a Gate.
     #: `is_gate_matches_registry` asserts this exact value.
     is_gate: ClassVar[bool] = True
+
+    def __init__(self) -> None:
+        # The expected-move ranking's loaded artefacts, keyed by the two run ids they
+        # were loaded for. They are loaded once and kept, as engines 8 and 13 keep
+        # theirs. A changed run id reloads.
+        self._ranking_key: tuple[str, str] | None = None
+        self._ranking_artefacts: Any = None
 
     def process(self, context: EngineContext, state: State) -> EngineResult:
         started = time.perf_counter()
@@ -203,7 +241,12 @@ class ScoutEngine(BaseEngine):
         # and burn the scan.
         rank_feature = self._rank_feature(context)
         rank_descending = self._rank_descending(context)
-        features = self._features(state, rank_feature)
+        by_expected_move = rank_feature == RANK_BY_EXPECTED_MOVE
+        features = (
+            self._feature_rows(state, RANK_BY_EXPECTED_MOVE)
+            if by_expected_move
+            else self._features(state, rank_feature)
+        )
 
         # The notional this account's equity would put behind any one position. Computed
         # once: it is a property of the account, not of a pair. Invariant 6 sizes against
@@ -236,9 +279,47 @@ class ScoutEngine(BaseEngine):
         # one. The ordering lives in `rank_universe` — one named seam, so the ranking is
         # one edit and not a hunt through this engine — and it is alphabetical while no
         # feature is configured.
-        candidate = select_candidate(
-            pairs, features=features, feature=rank_feature, descending=rank_descending
+        #
+        # With the expected-move ranking (R1), the moves come from C's shared function,
+        # scored with the artefacts engines 8 and 13 load. They are computed for the
+        # filtered universe only, and only when it is non-empty: an empty universe has
+        # nothing to order, and loading two model runs to learn that would be work
+        # with no answer. **No gate reads this ordering, and it reads no gate's published
+        # verdict.** Engines 13 and 8 re-judge the chosen pair from scratch.
+        # That is the condition invariant 4, as amended by R12, puts on a model-ordered
+        # examination.
+        ranking: Any = None
+        run_ids: dict[str, str] | None = None
+        if by_expected_move and pairs:
+            ranking, run_ids = self._expected_move_ranking(
+                context,
+                state,
+                pairs,
+                rows=features or {},
+                target_pct=target_pct,
+                stop_pct=stop_pct,
+            )
+        moves: Mapping[str, float] | None = (
+            None
+            if ranking is None
+            else {entry.pair: entry.expected_move_pct for entry in ranking.ranked}
         )
+        ordered: tuple[str, ...] = ()
+        if pairs:
+            ordered = rank_universe(
+                pairs,
+                features=features,
+                feature=rank_feature,
+                descending=rank_descending,
+                expected_moves=moves,
+            )
+        candidate = ordered[0] if ordered else None
+        if candidate is not None:
+            reason_code = None
+        elif pairs:
+            reason_code = REASON_NO_RANKABLE_PAIR
+        else:
+            reason_code = REASON_EMPTY_UNIVERSE
 
         return ScoutUniverse(
             pairs=tuple(pairs),
@@ -246,9 +327,16 @@ class ScoutEngine(BaseEngine):
             excluded=excluded,
             equity=equity,
             candidate=candidate,
-            reason_code=None if candidate is not None else REASON_EMPTY_UNIVERSE,
+            reason_code=reason_code,
             rank_feature=rank_feature,
             rank_descending=rank_descending,
+            ranked=tuple(
+                (pair, Decimal(repr(float(moves[pair])))) for pair in ordered
+            )
+            if moves is not None
+            else (),
+            rank_skipped=_tally(ranking.excluded) if ranking is not None else {},
+            rank_run_ids=run_ids,
         )
 
     def _exclusion(
@@ -537,6 +625,126 @@ class ScoutEngine(BaseEngine):
             )
         return pairs
 
+    def _feature_rows(self, state: State, rank_feature: str) -> Mapping[str, Any]:
+        """`state["feature"]["pairs"]` for the expected-move ranking, or a tick-level block.
+
+        Engine 5's `feature_names` is deliberately **not** consulted. `expected_move` is
+        not a feature, and checking it against that list would refuse the ruled ranking
+        on every tick. Engine 5's absence still blocks, for the reason
+        :meth:`_features` gives: a configured ranking that fell back to alphabetical
+        would report a ranking it never performed.
+        """
+        published = state.get(FEATURE_KEY)
+        if not isinstance(published, dict):
+            raise MissingInputError(
+                f"{FEATURE_KEY} is absent while {RANK_FEATURE_KEY} names {rank_feature!r}"
+            )
+        rows = published.get(FEATURE_PAIRS_KEY)
+        if not isinstance(rows, dict):
+            raise MissingInputError(
+                f"{FEATURE_KEY}.{FEATURE_PAIRS_KEY} is absent while "
+                f"{RANK_FEATURE_KEY} names {rank_feature!r}"
+            )
+        return rows
+
+    def _expected_move_ranking(
+        self,
+        context: EngineContext,
+        state: State,
+        pairs: Sequence[str],
+        *,
+        rows: Mapping[str, Any],
+        target_pct: Decimal,
+        stop_pct: Decimal,
+    ) -> tuple[Any, dict[str, str]]:
+        """Score the universe with C's shared function. Returns its answer and the run ids.
+
+        **This never blocks on a ranking value.** Every per-pair outcome (an incomplete
+        vector, an anomaly score or DI the gates would refuse) is a skip inside the
+        function's answer, and a tick where everything is skipped is a `PASS`. What blocks
+        is being unable to rank at all: no run id configured, a run the store cannot open,
+        an artefact the function refuses, or the function itself missing. That is
+        `scout_inputs_unavailable`, as for any other input this gate cannot read
+        (spec 144, invariant 3).
+        """
+        module = self._ranking_module()
+        prediction_run_id = self._run_id(context, PREDICTION_RUN_ID_KEY)
+        anomaly_run_id = self._run_id(context, ANOMALY_RUN_ID_KEY)
+        key = (prediction_run_id, anomaly_run_id)
+
+        if self._ranking_key != key or self._ranking_artefacts is None:
+            store = getattr(context.clients, "store", None)
+            if store is None or not hasattr(store, "model_run_dir"):
+                raise MissingInputError(
+                    "no store client with `model_run_dir`, so the ranking's artefacts "
+                    "cannot be located"
+                )
+            try:
+                # Contract rule 4: the directory comes from the store, never from a path
+                # this engine builds. The same call engines 8, 13 and 15 make.
+                prediction_dir = Path(str(store.model_run_dir(prediction_run_id)))
+                anomaly_dir = Path(str(store.model_run_dir(anomaly_run_id)))
+            except Exception as problem:
+                raise MissingInputError(
+                    f"the ranking's model runs could not be opened: {problem}"
+                ) from problem
+            try:
+                artefacts = module.load_ranking_artefacts(prediction_dir, anomaly_dir)
+            except module.RankingError as problem:
+                raise MissingInputError(
+                    f"the ranking's artefacts are unusable: {problem}"
+                ) from problem
+            self._ranking_key = key
+            self._ranking_artefacts = artefacts
+
+        macro = (state.get(MACRO_CONTEXT_KEY) or {}).get(MACRO_FEATURES_FIELD) or {}
+        try:
+            # Every universe pair is handed in, and only those. A pair engine 5 published
+            # no row for goes in as `None`, which the function records as an incomplete
+            # vector, so it is skipped and counted rather than silently missing.
+            ranking = module.rank_by_expected_move(
+                {pair: rows.get(pair) for pair in pairs},
+                macro,
+                self._ranking_artefacts,
+                target_pct=float(target_pct),
+                stop_pct=float(stop_pct),
+            )
+        except module.RankingError as problem:
+            raise MissingInputError(f"the universe could not be ranked: {problem}") from problem
+        return ranking, {"prediction": prediction_run_id, "anomaly": anomaly_run_id}
+
+    @staticmethod
+    def _run_id(context: EngineContext, key: str) -> str:
+        """A configured model run id, or a tick-level block. There is no "latest" run."""
+        value = context.config.get(key)
+        if value is None or not str(value).strip():
+            raise MissingInputError(
+                f"config {key} is not set, so the expected-move ranking has no model to "
+                "score with"
+            )
+        return str(value)
+
+    @staticmethod
+    def _ranking_module() -> ModuleType:
+        """C's `modelling/ranking.py`, imported when the ranking is configured.
+
+        **Only the module's own absence is read as "not available".** A
+        `ModuleNotFoundError` naming something else, such as a dependency the module
+        imports, is re-raised. It is a broken install, not a missing seam, and blocking on
+        it under a reason that says "not built yet" would hide it (`code-standards.md`,
+        on handlers that conflate two situations).
+        """
+        import importlib
+
+        try:
+            return importlib.import_module(RANKING_MODULE)
+        except ModuleNotFoundError as problem:
+            if problem.name != RANKING_MODULE:
+                raise
+            raise MissingInputError(
+                f"{RANKING_MODULE} does not exist, so the expected-move ranking cannot run"
+            ) from problem
+
     def _stable_quotes(self, context: EngineContext) -> frozenset[str] | None:
         """`trading.stable_quote_currencies`, or `None` when the operator has not set it.
 
@@ -586,6 +794,14 @@ class ScoutEngine(BaseEngine):
             data={"reason_code": REASON_INPUTS_UNAVAILABLE},
             duration_ms=(time.perf_counter() - started) * 1000.0,
         )
+
+
+def _tally(skipped: Iterable[tuple[str, str]]) -> dict[str, int]:
+    """`(pair, skip code)` pairs counted by code, for the console."""
+    counts: dict[str, int] = {}
+    for _pair, code in skipped:
+        counts[str(code)] = counts.get(str(code), 0) + 1
+    return counts
 
 
 def _field(container: Any, key: str) -> Any:

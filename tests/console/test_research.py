@@ -209,3 +209,87 @@ def test_the_research_markup_draws_nothing_and_says_which_phase_produces_it() ->
 def _shap_section(markup: str) -> str:
     match = re.search(r'data-region="shap".*?</section>', markup, re.S)
     return match.group(0) if match else ""
+
+
+# --------------------------------------------------------------------------- #
+# Spec 140: the leaderboard's verdict columns
+# --------------------------------------------------------------------------- #
+
+
+def _leaderboard_with(migrated_db: Path, rows: list[dict[str, Any]], clock: Any) -> list[Any]:
+    from decimal import Decimal
+
+    from acsoe.clients.store.client import StoreClient
+    from acsoe.clients.store.contracts import LeaderboardRow
+
+    with StoreClient(migrated_db) as store:
+        for index, extra in enumerate(rows):
+            store.write_leaderboard_entry(
+                LeaderboardRow(
+                    model_id=extra.pop("model_id", "predictor"),
+                    model_version=f"v{index}",
+                    trained_at=1_000 + index,
+                    n_trades=10,
+                    net_pnl=Decimal("1.00"),
+                    updated_at=1_000 + index,
+                    **extra,
+                )
+            )
+    reader = ConsoleReader(migrated_db, clock=clock, stale_after_ms=STALE_AFTER_MS)
+    try:
+        return sorted(reader.leaderboard(), key=lambda row: row.model_version)
+    finally:
+        reader.close()
+
+
+def test_a_fold_row_says_its_effective_sample_is_not_recorded_rather_than_zero(
+    migrated_db: Path, fixed_clock: Any
+) -> None:
+    (row,) = _leaderboard_with(
+        migrated_db, [{"fold": "3", "brier": 0.2, "base_rate_brier": 0.21}], fixed_clock
+    )
+    assert row.effective_sample_size is None
+    assert row.effective_sample_size_text == "not recorded"
+    assert row.base_rate_brier == 0.21
+    assert row.base_rate_brier_text == "0.21"
+    assert row.promotion_reason == ""
+
+
+def test_a_judged_runs_reason_and_effective_sample_come_from_its_notes(
+    migrated_db: Path, fixed_clock: Any
+) -> None:
+    from acsoe.console.format import REASON_PROSE
+
+    notes = json.dumps(
+        {"reason_code": "promotion_too_few_trades", "effective_sample_size": 7.25}
+    )
+    promoted_notes = json.dumps({"reason_code": None, "effective_sample_size": 30.0})
+    rejected, promoted, free_text = _leaderboard_with(
+        migrated_db,
+        [
+            {"model_id": "chain_run", "notes": notes},
+            {"model_id": "chain_run", "notes": promoted_notes, "promoted": True},
+            {"notes": "a Phase 0 seed note, not JSON"},
+        ],
+        fixed_clock,
+    )
+    assert rejected.promotion_reason == REASON_PROSE["promotion_too_few_trades"]
+    assert rejected.effective_sample_size_text == "7.2"
+    assert promoted.promotion_reason == ""
+    assert promoted.effective_sample_size == 30.0
+    assert free_text.promotion_reason == ""
+    assert free_text.effective_sample_size is None
+
+
+@pytest.mark.asyncio
+async def test_the_research_payload_carries_the_verdict_columns_as_text(console_app: Any) -> None:
+    _, body = await _get(console_app, "/api/research")
+    row = body["leaderboard"][0]
+    for key in ("base_rate_brier_text", "effective_sample_size_text", "promotion_reason"):
+        assert isinstance(row[key], str), key
+
+
+def test_the_leaderboard_markup_has_a_column_for_each_verdict_figure() -> None:
+    markup = TEMPLATE_PATH.read_text(encoding="utf-8")
+    for heading in ("Base-rate Brier", "Effective sample", "Deflated", "Promoted", "Why not"):
+        assert f">{heading}</th>" in markup, heading

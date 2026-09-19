@@ -73,14 +73,37 @@ crossing `research/labelling.py` makes.
 
 ## What it will not do
 
-**It never promotes.** `promoted` is always false. The promotion gate is Phase 7 and it is a
-different question from "which model scored best": a model can top this table and still fail
-on stability, on sample size, or on an operator's judgement about the period it was fitted in.
+**It never promotes a fold's row.** `promoted` is false on every per-fold row. Promotion is a
+different question from "which model scored best", answered by the gate below over a run's
+real trades, and it writes a row of its own.
 
-**It computes no Sharpe, no deflated Sharpe, no alpha and no beta.** A Sharpe over label
-returns with no friction, no position sizing and no holding period is not a worse Sharpe — it
-is a different quantity wearing the name, and somebody who did not write it would read it as
-the real one.
+**It computes no Sharpe, no deflated Sharpe, no alpha and no beta on a fold's row.** A Sharpe
+over label returns with no friction, no position sizing and no holding period is not a worse
+Sharpe — it is a different quantity wearing the name, and somebody who did not write it would
+read it as the real one.
+
+## The promotion gate, spec 139
+
+`TournamentEngine(promote_run_id=..., ledger_path=...)` judges one finished run instead of
+scoring a digest. It reads:
+
+| Source | Used for |
+|---|---|
+| `StoreClient.recent_closed_trades(limit=...)`, filtered to the run | every closed trade of the run; the read asks for one row more than `PROMOTION_TRADE_CAP` and refuses if it gets it, because a truncated window is a different run |
+| the trial ledger, `docs/dataset/phase-7-trial-ledger.json` | `trial_count`, refused unless it equals the number of rows beside it |
+
+Each trade's net return is `realised_pnl / (qty x entry_price)`, recomputed from the row, never
+read from `realised_pnl_pct`. The bar is `modelling/promotion.py`'s, fixed by spec 139 before
+any simulated figure existed: HAC (Newey-West, Bartlett kernel) on the per-trade series in entry
+order, the lag the largest number of other trades overlapping any one hold, Bonferroni over the
+ledger's count, promoted only if `mean - q x SE_HAC > 0`, and no interval below ten trades.
+
+It writes **one** leaderboard row per judged run: `model_id` `chain_run`, `model_version` the
+run id, `fold` null, `promoted`, the per-trade Sharpe, the deflated Sharpe ratio (reported beside
+the verdict, never deciding it), and `notes` as JSON with the reason code, every figure the
+bar computed, and the effective sample size `n x (se_naive / se_hac)^2` (capped at `n`) the
+leaderboard screen shows (spec 140). A second judgement of the same run writes nothing. Promotion changes nothing the
+running system does: `models.*_run_id` stays the operator's key.
 
 **It writes no relational row but `leaderboard`.**
 
@@ -108,7 +131,7 @@ does not exist, with a `net_pnl` of exactly zero reading as a model that broke e
 counted in `data["folds_empty"]`. A non-empty fold whose entry has lost its `run_id` is refused
 rather than given an invented version.
 
-## The four refusals
+## The refusals
 
 | Reason code | When |
 |---|---|
@@ -116,6 +139,11 @@ rather than given an invented version.
 | `tournament_no_oos` | the out-of-sample file is absent, unreadable, or missing a column |
 | `tournament_no_store` | no store client, so there is nowhere to write |
 | `tournament_digest_mismatch` | the digest and the out-of-sample file disagree about a fold; nothing is written |
+| `promotion_no_ledger` | the gate has no trial ledger, or its count disagrees with its rows; nothing is written |
+| `promotion_bad_trade` | a trade has no entry notional, or is not in the reporting currency; nothing is written |
+
+The gate's two verdict codes are not refusals: the engine returns `OK` and the code is on the
+row. `promotion_too_few_trades` (fewer than ten) and `promotion_lower_bound_not_above_zero`.
 
 The last is a block rather than a silent skip. A research run that reported success having
 written nothing is the failure this engine exists to make impossible, and Phase 6's router

@@ -619,6 +619,9 @@ def test_every_published_exclusion_code_is_one_this_module_declares(
 #: existed, ahead of the engine being finished, so it would not be the line holding up
 #: spec 47. C landed the prose before the engine was done, and the expiry test emptied this
 #: again. Twice now the mechanism has closed the gap rather than a person remembering.
+#:
+#: It held `no_rankable_pair` for minutes on 2026-09-19 (spec 144). C had landed the prose
+#: before the engine was finished, and the expiry test emptied it on the first run.
 PROSE_PENDING_WITH_C: frozenset[str] = frozenset()
 
 
@@ -1195,9 +1198,12 @@ def test_the_ordering_is_one_named_function_and_the_engine_holds_no_score(
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
-    assert "select_candidate" in called, (
-        "the candidate must come from contracts.select_candidate, so Phase 5 fixing the "
-        "ranking is one edit against a named seam rather than a hunt through the engine"
+    # Spec 144 moved the call from `select_candidate` to `rank_universe`, because the
+    # engine now publishes the whole expected-move order and not only its head. The seam
+    # is the same one: `select_candidate` holds no ordering of its own.
+    assert "rank_universe" in called, (
+        "the candidate must come from contracts.rank_universe, so the ranking is one "
+        "edit against a named seam rather than a hunt through the engine"
     )
     assert "max" not in called, "a max over a score is what the ruling forbids"
 

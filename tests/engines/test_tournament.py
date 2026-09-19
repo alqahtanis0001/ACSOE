@@ -724,9 +724,13 @@ def test_the_published_payload_is_json_serialisable(scored: Any) -> None:
     json.dumps(scored.data)
 
 
-def test_the_published_shape_carries_no_sharpe_or_promotion(scored: Any) -> None:
-    """The report cannot report a Phase 7 metric either, because it has no field for one."""
-    del scored
+def test_scoring_a_digest_reports_no_sharpe_and_no_promotion(scored: Any) -> None:
+    """Scoring folds reports no Phase 7 metric: the promotion fields spec 139 added to the
+    published shape stay null unless a run was judged. Amended by spec 139 from "the shape has
+    no field for one", which stopped being true when the gate gained its fields."""
     fields = set(TournamentState.model_fields)
-    for forbidden in ("sharpe", "deflated_sharpe", "alpha", "beta", "promoted"):
+    for field in ("sharpe", "deflated_sharpe", "promoted", "promotion_run_id", "lower_bound"):
+        assert field in fields, field
+        assert scored.data[field] is None, (field, scored.data[field])
+    for forbidden in ("alpha", "beta"):
         assert forbidden not in fields, forbidden

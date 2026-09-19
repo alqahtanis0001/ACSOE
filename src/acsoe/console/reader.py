@@ -26,11 +26,13 @@ anything this process or the browser remembers.
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from collections.abc import Mapping
 from decimal import Decimal
 from pathlib import Path
 from types import TracebackType
-from typing import Final, Self
+from typing import Any, Final, Self
 
 import structlog
 
@@ -142,6 +144,9 @@ _COST_STAGE_ENGINES: Final = frozenset({"cost"})
 _NOT_RECORDED: Final = (
     "not recorded yet \N{EM DASH} engine 7 counts this on the tick and no table stores it"
 )
+
+#: A leaderboard statistic the row does not record, as opposed to one that is zero.
+_ESS_NOT_RECORDED: Final = "not recorded"
 
 #: The SHAP pane's whole content. Written once, here, so the API payload and the
 #: page cannot disagree about what is missing or about which phase produces it.
@@ -702,7 +707,27 @@ def _rejection_history_row(row: RejectionRow) -> RejectionRowView:
     )
 
 
+def _verdict_notes(row: LeaderboardRow) -> Mapping[str, Any]:
+    """The promotion gate's figures on a judged run's row, or nothing.
+
+    Engine 20 writes them as JSON in `notes` (spec 139). A row whose `notes` is absent or
+    is not a JSON object carries no verdict figures, and reads as such rather than raising:
+    the Phase 0 seed and every fold row have free text or nothing there.
+    """
+    if not row.notes:
+        return {}
+    try:
+        parsed = json.loads(row.notes)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, Mapping) else {}
+
+
 def _leaderboard_view(row: LeaderboardRow) -> LeaderboardEntryView:
+    notes = _verdict_notes(row)
+    reason_code = notes.get("reason_code")
+    ess = notes.get("effective_sample_size")
+    ess_value = float(ess) if isinstance(ess, int | float) and not isinstance(ess, bool) else None
     return LeaderboardEntryView(
         model_id=row.model_id,
         model_version=row.model_version,
@@ -718,8 +743,18 @@ def _leaderboard_view(row: LeaderboardRow) -> LeaderboardEntryView:
         deflated_sharpe_text=format_metric(row.deflated_sharpe),
         brier=row.brier,
         brier_text=format_metric(row.brier),
+        base_rate_brier=row.base_rate_brier,
+        base_rate_brier_text=format_metric(row.base_rate_brier),
+        effective_sample_size=ess_value,
+        effective_sample_size_text=(
+            _ESS_NOT_RECORDED if ess_value is None else format(ess_value, ",.1f")
+        ),
         net_pnl=row.net_pnl,
         net_pnl_text="" if row.net_pnl is None else format_money(row.net_pnl),
         reporting_currency=row.reporting_currency,
         promoted=row.promoted,
+        promotion_reason=(
+            "" if row.promoted or not isinstance(reason_code, str)
+            else operator_reason(reason_code)
+        ),
     )

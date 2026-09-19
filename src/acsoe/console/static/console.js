@@ -308,12 +308,17 @@
       return row([
         [m.model_id, ""],
         [m.model_version, ""],
+        [m.fold === null ? "" : m.fold, "num"],
         [m.n_trades, "num"],
         [m.win_rate_text, "num"],
+        [m.brier_text, "num"],
+        [m.base_rate_brier_text, "num"],
+        [m.effective_sample_size_text, "num"],
         [m.sharpe_text, "num"],
         [m.deflated_sharpe_text, "num"],
         [m.net_pnl_text, "num"],
-        [m.promoted ? "Promoted" : "No", ""]
+        [m.promoted ? "Promoted" : "No", ""],
+        [m.promotion_reason, ""]
       ]);
     });
     /* The SHAP pane is an empty state and nothing else. There is no row to draw

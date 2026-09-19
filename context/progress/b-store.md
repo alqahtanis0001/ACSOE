@@ -1,5 +1,61 @@
 # Agent B — Store and trading
 
+## Phase 7, b-store — CLAIMED 2026-09-19, spec 132, then engine 7's half of spec 144
+
+I claimed these before writing any code, per rule 5. The Phase 6 preflight gate finished first (`exit 0`, 13/13 PASS).
+
+**Spec 132: migration 0006.** Approval economics and the three model run ids go on `trades`. The
+scenario digest and description go on `runs`. The approval is held between the placing tick and
+the trade in a new **write-once `approvals` table**, keyed by the entry order's `userref`.
+Rejected: columns on `orders`. My reasoning is in the build log. I told c-eval and the lead on
+2026-09-19. **Cross-lane, and it must land in the same gate:** `scripts/verify.py`
+`DOCUMENTED_TABLES` gains `approvals` (C), and `architecture-context.md` gets an `approvals` row in
+the storage table (lead).
+
+**Status at a glance (2026-09-19, later):**
+- **Spec 132 + `approvals.details` (spec 145's column):** DONE. The sweep killed 13/13 and then
+  5/5.
+- **Spec 144, engine 7's half:** DONE. The sweep killed 22/22.
+- **Spec 140's store surface:** DONE. That is `write_shap` and `read_shap`, plus the new
+  `StoreClient(derived_dir=...)` keyword; the sweep killed 12/12.
+  - **Waiting on A:** `cli/engine.py` and `cli/research.py` must pass `derived_dir=paths.derived`.
+    I asked a-replay.
+- **Withdrawn by c-eval:** `closed_trades(run_id=)`.
+- **Nothing blocked on me.**
+
+**Spec 132: DONE on my side, 2026-09-19.**
+- Files: `db/migrations/0006_approval_economics.sql`; `clients/store/contracts.py`
+  (`ApprovalRow`, and the new fields on `TradeRow` and `RunRow`); `clients/store/client.py`
+  (`write_approval`, `approval`, the `scenario_*` kwargs on `start_run`, and `write_run` excluding
+  the scenario); `clients/store/migrations.py` (`EXPECTED_TABLES` and `EXPECTED_INDEXES`);
+  `clients/store/__init__.py`; `tests/db/test_migrations.py` (the money-column set);
+  `tests/clients/store/test_approval_economics.py` (new, 25 tests).
+- Tests: `tests/db tests/clients/store` gives 301 passed. The store importers (`tests/core`,
+  engine 19, `tests/console`, `tests/clients`) give 1054 passed. mypy and ruff are clean.
+- Mutation sweep: 13 arms, all KILLED. M13 survived the first run and was killed after the test
+  was widened. The full record is in the build log.
+- **`db_migrates_from_empty` FAILs until C adds `approvals` to `DOCUMENTED_TABLES`.** It reports
+  `declared-only=['approvals']`, which is the expected cross-lane step.
+  `seed_fixtures_present` PASSes.
+
+**Spec 144, engine 7's half: DONE on my side, 2026-09-19.** Sweep: 22 arms, all 22 KILLED
+(build log). The scout tests and the ranking tests give 84 passed. mypy and ruff are clean for my
+files.
+`rank_universe` takes the expected-move order when `scout.rank_feature` is `expected_move`. The
+ranking is c-models' `modelling/ranking.py`, which landed before my proposal was answered. I
+adapted to its signature, and the decision is in the build log.
+- Files: `engines/scout/contracts.py`, `engine.py` and `README.md` (all four scout files were
+  normalised from CRLF to LF first); `tests/engines/test_scout.py` (the seam assertion now names
+  `rank_universe`); `tests/engines/test_scout_ranking.py` (new, 21 tests). Of those, 1 has no
+  double: the real function, a real trained run, and the real engines 13 and 8.
+- New reason code `no_rankable_pair` (PASS). C landed its prose.
+- **One Check When Done item waits on specs 135 and 142:** the ranked candidate must equal
+  `q_emrank.py`'s pick on the rehearsal day's bars. That needs the assembled fold artefacts and
+  a-replay's rehearsal. Note for whoever runs it: `q_emrank.py` ranks every scored pair, while
+  engine 7 ranks only its filtered universe. A disagreement is expected wherever the script's
+  pick is a pair engine 7 excluded, and it has to be explained in those terms rather than
+  counted as a mismatch.
+
 ## Phase 6, session 9 — CLAIMED 2026-09-18, spec 119
 
 Claimed before any code, per rule 5. Tree clean at `e3b5406`, the full gate green when handed to

@@ -33,20 +33,36 @@ a wrong boundary anywhere upstream shows up here as exactly that.
 
 ## What it will not do
 
-**It never promotes.** `promoted` is always false. The promotion gate is Phase 7 and it is a
+**It never promotes a fold's row.** `promoted` is false on every per-fold row. Promotion is a
 different question from "which model scored best" — a model can top this table and still fail
-on stability, on sample size, or on an operator's judgement about the period it was fitted in.
+on stability, on sample size, or on an operator's judgement about the period it was fitted in
+— and the gate below answers it over a run's real trades, on a row of its own.
 
-**It computes no Sharpe, no deflated Sharpe, no alpha and no beta.** Those four stay null.
-They are Phase 7's, and a number written into them now would be read as one later by somebody
-who did not write it: a Sharpe over label returns with no friction, no position sizing and no
-holding period is not a worse Sharpe, it is a different quantity wearing the name.
+**It computes no Sharpe, no deflated Sharpe, no alpha and no beta on a fold's row.** Those
+stay null there, because a Sharpe over label returns with no friction, no position sizing and
+no holding period is not a worse Sharpe, it is a different quantity wearing the name.
 
 **It writes no row for an empty fold.** The trainer reports a fold with no training or no test
 rows as empty and writes no artefact for it. A leaderboard row names a model version somebody
 could weight or promote, and an empty fold has nothing behind its name.
 
 **It reads no archive and writes no relational row but `leaderboard`.**
+
+## The promotion gate, spec 139
+
+Given a run to judge (`promote_run_id`) and the committed trial ledger (`ledger_path`), engine
+20 reads that run's closed trades through the store, turns each into its net return
+(`realised_pnl / (qty x entry_price)`, after both fees, the spread and slippage, exactly as the
+run recorded them, liquidations included), and applies `modelling/promotion.py`'s bar at the
+ledger's trial count. **The bar's statistics are that module's and nowhere else**; this engine
+only gathers the inputs and records the verdict.
+
+The verdict is one leaderboard row, `model_id` `chain_run` and the judged run's id as its
+version, with `promoted`, the per-trade Sharpe ratio, the deflated Sharpe ratio and a JSON
+`notes` holding the reason code and every figure the bar computed. **Promotion changes nothing
+the running system does**: `models.*_run_id` stays the operator's key (spec 139's scope limits).
+A missing ledger, or a trade whose net return cannot be computed in one currency, writes
+nothing and blocks, because either would produce a verdict about something other than the run.
 
 ## Idempotent, and the existence read is the store's
 
@@ -91,15 +107,20 @@ from acsoe.core.contracts import (
 )
 from acsoe.engines.tournament.contracts import (
     BRIER_TOLERANCE,
+    CHAIN_RUN_MODEL_ID,
     DIGEST_FOLDS_FIELD,
     DIGEST_RUN_ID_FIELD,
     KEY_REPORTING_CURRENCY,
     MODEL_ID,
     OOS_REQUIRED_COLUMNS,
+    PROMOTION_REASONS,
+    PROMOTION_TRADE_CAP,
     REASON_DIGEST_MISMATCH,
     REASON_NO_DIGEST,
     REASON_NO_OOS,
     REASON_NO_STORE,
+    REASON_PROMOTION_BAD_TRADE,
+    REASON_PROMOTION_NO_LEDGER,
     STATE_KEY,
     TournamentState,
 )
@@ -127,14 +148,25 @@ class TournamentEngine(BaseEngine):
     number: ClassVar[int] = 20
     is_gate: ClassVar[bool] = False
 
-    def __init__(self, *, digest_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        digest_path: Path | None = None,
+        promote_run_id: str | None = None,
+        ledger_path: Path | None = None,
+    ) -> None:
         """`digest_path` is `acsoe research --digest`. Keyword-only, and agreed by name.
 
         `cli/research.py` calls `TournamentEngine(digest_path=...)` and raises loudly if the
         keyword does not exist, rather than falling back to a no-argument call — which is how
         engine 23 spent a phase green against a labeller signature that never existed.
+
+        `promote_run_id` and `ledger_path` are spec 139's: when a run is named, this process
+        judges that run for promotion and scores no digest.
         """
         self._digest_path = None if digest_path is None else Path(digest_path)
+        self._promote_run_id = promote_run_id
+        self._ledger_path = None if ledger_path is None else Path(ledger_path)
 
     def process(self, context: EngineContext, state: State) -> EngineResult:
         del state  # Engine 20 has no `state` inputs. Contract rule 3, by having no names.
@@ -150,6 +182,9 @@ class TournamentEngine(BaseEngine):
                 "is worse than one that failed: Phase 6's router would weight by an empty "
                 "table.",
             )
+
+        if self._promote_run_id is not None:
+            return self._promote(context, store, self._promote_run_id, started)
 
         try:
             digest = self._digest()
@@ -230,6 +265,62 @@ class TournamentEngine(BaseEngine):
             )
         assert self._digest_path is not None
         return self._digest_path.parent / f"oos_{run_id}.parquet"
+
+    # ------------------------------------------------------------------ promotion
+
+    def _promote(
+        self, context: EngineContext, store: Any, run_id: str, started: float
+    ) -> EngineResult:
+        """Spec 139: judge one run's closed trades against the bar at the ledger's count."""
+        from acsoe.clients.store.contracts import to_micros
+        from acsoe.modelling.promotion import promotion_verdict
+
+        currency = str(context.config.get(KEY_REPORTING_CURRENCY))
+        try:
+            trials = _ledger_trial_count(self._ledger_path)
+            trades = _run_trades(store, run_id)
+            holds = _holds(trades, currency)
+        except TournamentError as problem:
+            return self._blocked(started, problem.reason_code, str(problem), run_id=run_id)
+
+        verdict = promotion_verdict(holds, trials)
+        reason_code = None if verdict.promoted else PROMOTION_REASONS[verdict.verdict]
+        written, skipped = _write_verdict(
+            store,
+            run_id,
+            trades,
+            verdict,
+            reason_code=reason_code,
+            currency=currency,
+            written_at=to_micros(context.now),
+        )
+        deflated = verdict.deflated
+        return EngineResult(
+            engine=self.name,
+            status=EngineStatus.OK,
+            blocks_trading=False,
+            data=TournamentState(
+                run_id=run_id,
+                rows_written=written,
+                rows_skipped=skipped,
+                reporting_currency=currency,
+                promotion_run_id=run_id,
+                promoted=verdict.promoted,
+                promotion_reason_code=reason_code,
+                trial_count=trials,
+                trades_judged=verdict.n_trades,
+                hac_lag=verdict.lag,
+                mean_net_return=verdict.mean,
+                se_hac=verdict.se_hac,
+                se_naive=verdict.se_naive,
+                confidence=verdict.confidence,
+                t_quantile=verdict.quantile,
+                lower_bound=verdict.lower_bound,
+                sharpe=None if deflated is None else deflated.sharpe,
+                deflated_sharpe=None if deflated is None else deflated.deflated_sharpe,
+            ).to_state(),
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+        )
 
     # ------------------------------------------------------------------ results
 
@@ -539,6 +630,177 @@ def _micros(digest: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]) -> 
             "exactly that.",
         )
     return max(ends) * 1_000_000
+
+
+# --------------------------------------------------------------------------- #
+# The promotion gate's inputs and its row, spec 139
+# --------------------------------------------------------------------------- #
+
+
+def _ledger_trial_count(path: Path | None) -> int:
+    """The committed ledger's `trial_count`, checked against its own rows.
+
+    A count that disagrees with the rows beside it is a ledger somebody edited by hand, which
+    is exactly what spec 139 forbids; it is refused rather than believed.
+    """
+    import json
+
+    if path is None or not path.is_file():
+        raise TournamentError(
+            REASON_PROMOTION_NO_LEDGER,
+            f"no trial ledger at {path}. The bar is widened for the number of configurations "
+            "tried on the same data, and a verdict without that number is a verdict at one "
+            "trial, the most generous there is. Build it with "
+            "`python -m acsoe.research.trial_ledger`.",
+        )
+    try:
+        payload = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, ValueError) as problem:
+        raise TournamentError(
+            REASON_PROMOTION_NO_LEDGER, f"{path} could not be read as a trial ledger: {problem}"
+        ) from problem
+    count = payload.get("trial_count") if isinstance(payload, Mapping) else None
+    rows = payload.get("trials") if isinstance(payload, Mapping) else None
+    if (
+        not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 1
+        or not isinstance(rows, list)
+        or len(rows) != count
+    ):
+        raise TournamentError(
+            REASON_PROMOTION_NO_LEDGER,
+            f"{path} states a trial_count of {count!r} beside "
+            f"{len(rows) if isinstance(rows, list) else 'no'} trial rows. The count is the "
+            "rows, one per trial; a ledger whose two disagree was not built by the script.",
+        )
+    return count
+
+
+def _run_trades(store: Any, run_id: str) -> tuple[Any, ...]:
+    """Every closed trade of `run_id`, and a refusal rather than a truncated series.
+
+    The store's one read of closed trades is `recent_closed_trades(limit)`, a window over
+    every run. A verdict decided from a window that silently dropped trades is the
+    rows-versus-ticks defect of spec 51 again, so the read asks for one row more than
+    `PROMOTION_TRADE_CAP` and refuses when it gets it: whatever that one extra row is,
+    the window did not hold the whole table. Six months at tens of trades a run is four
+    orders of magnitude below the cap.
+    """
+    rows = tuple(store.recent_closed_trades(limit=PROMOTION_TRADE_CAP + 1))
+    if len(rows) > PROMOTION_TRADE_CAP:
+        raise TournamentError(
+            REASON_PROMOTION_BAD_TRADE,
+            f"the store holds more than {PROMOTION_TRADE_CAP} closed trades, so the read "
+            "the gate judges from would be a truncated window; nothing was judged",
+        )
+    return tuple(row for row in rows if str(row.run_id) == run_id)
+
+
+def _holds(trades: Sequence[Any], currency: str) -> list[Any]:
+    """One `Hold` per closed trade: its times, and `realised_pnl / (qty x entry_price)`."""
+    from acsoe.modelling.promotion import Hold
+
+    holds: list[Any] = []
+    for trade in trades:
+        notional = Decimal(trade.qty) * Decimal(trade.entry_price)
+        if notional <= 0:
+            raise TournamentError(
+                REASON_PROMOTION_BAD_TRADE,
+                f"trade {trade.trade_id} has an entry notional of {notional}, so it has no net "
+                "return. Leaving it out would judge a different run.",
+            )
+        if str(trade.quote) != currency or str(trade.reporting_currency) != currency:
+            raise TournamentError(
+                REASON_PROMOTION_BAD_TRADE,
+                f"trade {trade.trade_id} is quoted in {trade.quote} and reported in "
+                f"{trade.reporting_currency}, not {currency}: its realised PnL and its entry "
+                "notional would be in two units, and no FX rate is recorded to join them.",
+            )
+        holds.append(
+            Hold(
+                opened_at=int(trade.opened_at),
+                closed_at=int(trade.closed_at),
+                net_return=float(Decimal(trade.realised_pnl) / notional),
+            )
+        )
+    return holds
+
+
+def _effective_sample_size(verdict: Any) -> float | None:
+    """`n x (se_naive / se_hac)^2`, capped at `n`; `None` without an interval."""
+    if not verdict.se_hac or verdict.se_naive is None:
+        return None
+    return float(min(verdict.n_trades, verdict.n_trades * (verdict.se_naive / verdict.se_hac) ** 2))
+
+
+def _write_verdict(
+    store: Any,
+    run_id: str,
+    trades: Sequence[Any],
+    verdict: Any,
+    *,
+    reason_code: str | None,
+    currency: str,
+    written_at: int,
+) -> tuple[int, int]:
+    """One `chain_run` row per judged run, never two: an existing row is left as it is."""
+    import json
+
+    from acsoe.clients.store.contracts import LeaderboardRow
+
+    if store.leaderboard_entries(model_id=CHAIN_RUN_MODEL_ID, model_version=run_id, fold=None):
+        return 0, 1
+    deflated = verdict.deflated
+    wins = sum(1 for trade in trades if str(trade.outcome) == _TARGET)
+    notes = {
+        "reason_code": reason_code,
+        "trial_count": verdict.n_trials,
+        "trades": verdict.n_trades,
+        "hac_lag": verdict.lag,
+        "mean_net_return": verdict.mean,
+        "se_hac": verdict.se_hac,
+        "se_naive": verdict.se_naive,
+        # How many independent trades the HAC standard error is worth: the count whose
+        # independent-trades SE equals it, `n x (se_naive / se_hac)^2`, capped at `n`. For
+        # the leaderboard screen (spec 140), which shows one beside every row that has one.
+        "effective_sample_size": _effective_sample_size(verdict),
+        "confidence": verdict.confidence,
+        "t_quantile": verdict.quantile,
+        "lower_bound": verdict.lower_bound,
+        "sharpe": None if deflated is None else deflated.sharpe,
+        "deflated_sharpe": None if deflated is None else deflated.deflated_sharpe,
+        "expected_max_sharpe": None if deflated is None else deflated.expected_max_sharpe,
+        "bar": "spec 139: HAC (Newey-West, Bartlett) on per-trade net returns in entry order, "
+        "lag from overlapping holds, Bonferroni over the trial ledger, promote only if the "
+        "lower bound is above zero",
+    }
+    store.write_leaderboard_entry(
+        LeaderboardRow(
+            model_id=CHAIN_RUN_MODEL_ID,
+            model_version=run_id,
+            training_run_id=None,
+            # The first entry's time: the start of what was judged. Not `now`, for the reason
+            # `_micros` gives, and not a training time, since this row judges no training.
+            trained_at=min((int(trade.opened_at) for trade in trades), default=written_at),
+            fold=None,
+            n_trades=verdict.n_trades,
+            win_rate=(wins / len(trades)) if trades else None,
+            sharpe=None if deflated is None else deflated.sharpe,
+            deflated_sharpe=None if deflated is None else deflated.deflated_sharpe,
+            # Spec 138's attribution; this gate does not compute them.
+            alpha=None,
+            beta=None,
+            brier=None,
+            base_rate_brier=None,
+            net_pnl=sum((Decimal(trade.realised_pnl) for trade in trades), Decimal(0)),
+            reporting_currency=currency,
+            promoted=verdict.promoted,
+            notes=json.dumps(notes, sort_keys=True),
+            updated_at=written_at,
+        )
+    )
+    return 1, 0
 
 
 def _as_float_or_none(value: Any) -> float | None:

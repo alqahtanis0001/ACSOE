@@ -8,6 +8,11 @@ relational row but `leaderboard`.
 It has no `state` inputs at all, which is why nothing here names one. The digest path arrives
 through the constructor from `acsoe research --digest`, because a digest names one training
 run's output file rather than a system-wide setting.
+
+**Spec 139 adds the promotion gate**, a second job run when the constructor names a run to
+judge: it reads that run's closed trades through the store and the committed trial ledger's
+count, applies `modelling/promotion.py`'s bar, and writes one leaderboard row carrying the
+verdict. The bar's statistics live in that module and nowhere else.
 """
 
 from __future__ import annotations
@@ -18,15 +23,22 @@ from pydantic import BaseModel, ConfigDict
 
 __all__ = [
     "BRIER_TOLERANCE",
+    "CHAIN_RUN_MODEL_ID",
     "DIGEST_FOLDS_FIELD",
     "DIGEST_RUN_ID_FIELD",
     "KEY_REPORTING_CURRENCY",
     "MODEL_ID",
     "OOS_REQUIRED_COLUMNS",
+    "PROMOTION_REASONS",
+    "PROMOTION_TRADE_CAP",
     "REASON_DIGEST_MISMATCH",
     "REASON_NO_DIGEST",
     "REASON_NO_OOS",
     "REASON_NO_STORE",
+    "REASON_PROMOTION_BAD_TRADE",
+    "REASON_PROMOTION_LOWER_BOUND",
+    "REASON_PROMOTION_NO_LEDGER",
+    "REASON_PROMOTION_TOO_FEW_TRADES",
     "STATE_KEY",
     "TournamentState",
 ]
@@ -40,6 +52,13 @@ STATE_KEY: Final = "tournament"
 #: leaderboard that identified rows by version alone would need a migration to hold two
 #: models, and the migration would be written while somebody was trying to compare them.
 MODEL_ID: Final = "predictor"
+
+#: The `model_id` of a promotion verdict's row (spec 139). **A verdict judges a run of the
+#: whole chain**, not one fold's predictor: the Phase 7 runs replay 26 weekly models in sequence
+#: behind every gate, and the trades being judged are the chain's. So the row sits beside the
+#: predictor's per-fold rows under its own id, with the judged run's `run_id` as its version,
+#: and engine 14 — which weights only its own model family — never reads it.
+CHAIN_RUN_MODEL_ID: Final = "chain_run"
 
 DIGEST_RUN_ID_FIELD: Final = "run_id"
 DIGEST_FOLDS_FIELD: Final = "folds"
@@ -88,6 +107,36 @@ REASON_NO_STORE: Final = "tournament_no_store"
 #: not score, and a leaderboard built from either would carry a score nobody can trace.
 REASON_DIGEST_MISMATCH: Final = "tournament_digest_mismatch"
 
+# --------------------------------------------------------------------------- #
+# The promotion gate, spec 139. The first two are verdicts, written on the leaderboard row
+# with `promoted` false; the last two are refusals that write nothing.
+# --------------------------------------------------------------------------- #
+
+#: Fewer than ten closed trades: no interval, so no promotion.
+REASON_PROMOTION_TOO_FEW_TRADES: Final = "promotion_too_few_trades"
+
+#: The overlap-robust interval, widened for the ledger's trial count, does not lie above zero.
+REASON_PROMOTION_LOWER_BOUND: Final = "promotion_lower_bound_not_above_zero"
+
+#: No trial ledger, or one whose count disagrees with its own rows. **Nothing is written**: a
+#: verdict without the trial count is a verdict at N = 1, the most generous there is.
+REASON_PROMOTION_NO_LEDGER: Final = "promotion_no_ledger"
+
+#: A trade the net return cannot be computed from honestly: no entry notional, or a quote
+#: currency other than the reporting currency (so `realised_pnl` and the notional would be in
+#: two units). **Nothing is written**, because excluding it would judge a different run.
+REASON_PROMOTION_BAD_TRADE: Final = "promotion_bad_trade"
+
+#: The most closed trades the gate will read in one store. It reads one more and refuses if
+#: it gets it, because the store's read is a window and a truncated window is a different run.
+PROMOTION_TRADE_CAP: Final = 1_000_000
+
+#: The verdict codes, by `modelling.promotion.Verdict`. A promoted row carries none.
+PROMOTION_REASONS: Final[dict[str, str]] = {
+    "too_few_trades": REASON_PROMOTION_TOO_FEW_TRADES,
+    "lower_bound_not_above_zero": REASON_PROMOTION_LOWER_BOUND,
+}
+
 
 class TournamentState(BaseModel):
     """What engine 20 publishes into ``state["tournament"]``.
@@ -116,6 +165,22 @@ class TournamentState(BaseModel):
     worst_base_rate_brier: float | None = None
     reporting_currency: str | None = None
     reason_code: str | None = None
+    #: The promotion gate's verdict (spec 139), present only when a run was judged. Every
+    #: figure is published whatever the verdict, and the deflated Sharpe ratio beside it.
+    promotion_run_id: str | None = None
+    promoted: bool | None = None
+    promotion_reason_code: str | None = None
+    trial_count: int | None = None
+    trades_judged: int | None = None
+    hac_lag: int | None = None
+    mean_net_return: float | None = None
+    se_hac: float | None = None
+    se_naive: float | None = None
+    confidence: float | None = None
+    t_quantile: float | None = None
+    lower_bound: float | None = None
+    sharpe: float | None = None
+    deflated_sharpe: float | None = None
 
     def to_state(self) -> dict[str, Any]:
         return self.model_dump(mode="json")

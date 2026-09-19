@@ -26,8 +26,15 @@ and the pair rules can all have moved.
 ## Deterministic and protected
 
 Invariant 4: no confidence score, probability, ensemble weight or router decision may skip,
-soften or override this gate. It contains no model, so there is nothing here for one to
-override — and that absence is the property being protected rather than a coincidence.
+soften or override this gate. **The universe filter contains no model**, so there is nothing
+in it for one to override. That absence is the property being protected, not a coincidence.
+
+**The ordering may read a model, since 2026-09-19** (operator ruling R1, spec 144). With
+`scout.rank_feature: expected_move`, the filtered universe is examined in order of engine 8's
+expected move. Pairs engines 13 and 8 would refuse are skipped (R11). Invariant 4 as amended
+in the operator's words (R12) permits a model's output to order candidates for examination,
+provided every gate judges the chosen candidate independently. Which pairs are tradable
+never depends on the model. See the ordering section.
 
 ## Inputs
 
@@ -38,10 +45,13 @@ override — and that absence is the property being protected rather than a coin
 | `bid`, `ask` | `state["market_sensor"]["quotes"][pair]` | 3 `market_sensor` (A) |
 | Total account equity | `store.latest_equity_snapshot()` | 19 `memory`, Phase 4 |
 | The feature vector per pair | `state["feature"]["pairs"][pair]` | 5 `feature` (C), Phase 5 |
+| Macro columns, for the expected-move ranking | `state["macro_context"]["features"]` | 6 `macro_context` (C) |
+| The predictor and the anomaly detector, for the expected-move ranking | `store.model_run_dir(models.prediction_run_id)`, `store.model_run_dir(models.anomaly_run_id)` | trained runs (C) |
 
 Configuration: `trading.risk_fraction_per_trade`, `barriers.stop_pct`, `barriers.target_pct`,
 `trading.allow_crypto_quoted`, `trading.base_reporting_currency`,
-`trading.stable_quote_currencies`, `scout.rank_feature`, `scout.rank_descending`.
+`trading.stable_quote_currencies`, `scout.rank_feature`, `scout.rank_descending`, and, for
+the expected-move ranking only, `models.prediction_run_id` and `models.anomaly_run_id`.
 
 **`state["feature"]` is read only when `scout.rank_feature` names a feature.** With no
 feature configured the engine never touches it and its absence is not a fault — which is
@@ -233,6 +243,39 @@ the spec 75 ranking study, and the committed config carries `scout.rank_descendi
 `scout.rank_feature` — so on every tick today the ordering is alphabetical and the engine
 publishes `rank_feature: null`. That is the same recorded absence as before, now with the
 mechanism behind it built and tested.
+
+### The expected-move ranking (spec 144, operator rulings R1 and R11, 2026-09-19)
+
+`scout.rank_feature: expected_move` is **not a feature name**. It names the predictor's own
+output, so the engine matches it before the check against engine 5's `feature_names`.
+
+- **The arithmetic is C's `modelling/ranking.py`.** Engines never import each other, and
+  `modelling/` is the package both sides may import. The function loads the runs named by
+  `models.prediction_run_id` and `models.anomaly_run_id`, through `store.model_run_dir` as
+  engines 8 and 13 do. It scores **only the filtered universe**, and only when that universe
+  is non-empty. It skips a pair with an incomplete vector, an anomaly score over the
+  detector's threshold, or a DI over the predictor's (R11). The artefacts are loaded once
+  per pair of run ids and reloaded when either changes.
+- **A skipped pair is dropped from the order, not sorted last.** This is the opposite of the
+  feature rule. It **stays in `pairs`**, because it is tradable; it is just not examined. The
+  skips are published per code in `rank_skipped`, apart from `excluded`, so
+  `scanned == entered + sum(excluded)` still holds.
+- **The ranking never blocks on a ranking value.** A universe skipped entirely is a `PASS`
+  with `no_rankable_pair`, not `empty_universe`, because the account could trade those pairs.
+  Being unable to rank at all blocks with `scout_inputs_unavailable`. That covers no run id,
+  a run the store cannot open, an artefact the function refuses, a ranking it cannot
+  compute, or the module itself missing. It never falls back to alphabetical, because that
+  would report a ranking that did not happen.
+- **Published:** `ranked` (the whole order, each pair with its expected move as an exact
+  decimal string, as engine 8 publishes it), `rank_skipped`, and `rank_run_ids`.
+- **Every gate re-judges the chosen pair from scratch.** No gate reads this ordering.
+  `test_the_real_ranking_chooses_engine_8s_best_pair_and_reversing_it_moves_no_verdict`
+  (`tests/engines/test_scout_ranking.py`) proves it with no double. It uses the real
+  function, a real trained run and the real engines 13 and 8. The chosen pair's expected
+  move equals engine 8's recomputed value, and reversing the order moves the candidate and
+  no gate's verdict on any pair.
+- **With `scout.rank_feature` absent the ordering is alphabetical, exactly as before.** That
+  is the operator's baseline for the Phase 7 simulation, and the model is never loaded.
 
 ### One thing to know before trusting any ordering test here
 

@@ -75,8 +75,12 @@ __all__ = [
     "PAIR_TICK_SIZE_FIELD",
     "QUOTE_ASK_FIELD",
     "QUOTE_BID_FIELD",
+    "RANKED_FIELD",
+    "RANK_BY_EXPECTED_MOVE",
     "RANK_DESCENDING_FIELD",
     "RANK_FEATURE_FIELD",
+    "RANK_RUN_IDS_FIELD",
+    "RANK_SKIPPED_FIELD",
     "REASON_BELOW_COSTMIN",
     "REASON_BELOW_ORDERMIN",
     "REASON_CRYPTO_QUOTED",
@@ -86,6 +90,7 @@ __all__ = [
     "REASON_NO_FX_RATE",
     "REASON_NO_LIVE_QUOTE",
     "REASON_NO_QUOTE_BALANCE",
+    "REASON_NO_RANKABLE_PAIR",
     "REASON_PAIR_RULES_MISSING",
     "REASON_QUOTE_NOT_PROVABLY_STABLE",
     "REASON_TICK_GRID_TOO_COARSE",
@@ -182,6 +187,31 @@ FEATURE_NAMES_KEY: Final = "feature_names"
 #: difference is which fact the reader is entitled to draw from it.
 RANK_FEATURE_FIELD: Final = "rank_feature"
 RANK_DESCENDING_FIELD: Final = "rank_descending"
+
+#: The `scout.rank_feature` value that orders the universe by engine 8's expected move.
+#: Ruled by the operator on 2026-09-19 (R1, spec 144). **It is not a feature name.** It
+#: names the predictor's own output, which engine 7 computes for every universe pair
+#: through `modelling/ranking.py`, the arithmetic engines 8 and 13 use. So it is matched
+#: before the engine checks the name against engine 5's `feature_names`, and it never
+#: reaches that check.
+RANK_BY_EXPECTED_MOVE: Final = "expected_move"
+
+#: With the expected-move ranking, the pairs that were ranked, in order, each with its
+#: expected move as an exact decimal string. This is the console's view of the ranking, so
+#: it is published in full. A pair the ranking skipped is not in it. Empty under any other
+#: ordering.
+RANKED_FIELD: Final = "ranked"
+
+#: With the expected-move ranking, how many universe pairs the ranking skipped, by the
+#: shared function's skip code (R11: an incomplete vector, or an anomaly score or DI the
+#: gates would refuse). **Not an exclusion.** A skipped pair stays in `pairs`, and
+#: `scanned == entered + sum(excluded)` is untouched. A skipped pair is tradable. The
+#: ranking only declined to examine it.
+RANK_SKIPPED_FIELD: Final = "rank_skipped"
+
+#: The model runs the ranking scored with, as `{"prediction": ..., "anomaly": ...}`. `None`
+#: when no model ranked the universe.
+RANK_RUN_IDS_FIELD: Final = "rank_run_ids"
 
 #: The two sides of the book. The ask prices the entry and the bid values the position, the
 #: same way round as engine 11 — the lead's ruling of 2026-09-10, and the reason the two
@@ -294,6 +324,19 @@ REASON_INPUTS_UNAVAILABLE: Final = "scout_inputs_unavailable"
 #: whole universe.
 REASON_EMPTY_UNIVERSE: Final = "empty_universe"
 
+#: The universe was computed and is **not** empty, but the expected-move ranking skipped
+#: every pair in it. Each one had an incomplete vector, or an anomaly score or DI the gates
+#: would refuse (R11, spec 144). So there is no candidate this tick.
+#:
+#: **A `PASS`, like :data:`REASON_EMPTY_UNIVERSE`, and for the same reason.** This matches
+#: the measurement the ruling rests on. `q_emrank.py` takes no pair on a bar where none
+#: passes anomaly and DI. It also matches what the gates would have said: every candidate
+#: examined would have been refused. Not in :data:`EXCLUSION_REASONS`, because it is a
+#: statement about the tick and not about a pair. It is its own code, not
+#: `empty_universe`, because the universe was not empty. A console that said so would be
+#: telling the operator the account can trade nothing when it can.
+REASON_NO_RANKABLE_PAIR: Final = "no_rankable_pair"
+
 #: Every reason a *pair* can be excluded, in the order the filter applies them.
 #:
 #: The order is part of the behaviour rather than an implementation detail: a pair is
@@ -346,28 +389,68 @@ def _feature_value(features: Mapping[str, Any] | None, pair: str, feature: str) 
     return None
 
 
+def _rank_by_expected_move(
+    names: list[str], expected_moves: Mapping[str, float] | None, *, descending: bool
+) -> tuple[str, ...]:
+    """The universe pairs the ranking scored, by expected move, then by name ascending.
+
+    **A pair with no expected move is dropped, the opposite of the feature rule.** Under
+    the feature ordering a pair with no value sorts last and stays examinable. Here, having
+    no value means the shared function skipped the pair: an incomplete vector, or a score
+    the anomaly or DI gate would refuse. R11, ruled 2026-09-19, says the ranking skips those
+    pairs, because the 46-trade measurement did. A non-finite value is treated as no value,
+    for the reason `_feature_value` gives.
+
+    `expected_moves` being `None` here is a caller defect, not "nothing ranked". The engine
+    always passes the function's answer, even an empty one. Reading `None` as empty would
+    turn a lost ranking into a quiet tick with no candidate.
+    """
+    if expected_moves is None:
+        raise ValueError(
+            f"rank_universe was asked to order by {RANK_BY_EXPECTED_MOVE!r} and handed no "
+            "expected moves"
+        )
+    scored: list[tuple[float, str]] = []
+    for pair in names:
+        value = expected_moves.get(pair)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            scored.append((float(value), pair))
+    # Negated rather than `reverse=True`, so the tie-break stays ascending by name in both
+    # directions. The same argument the feature ordering makes below.
+    scored.sort(key=lambda item: (-item[0] if descending else item[0], item[1]))
+    return tuple(pair for _value, pair in scored)
+
+
 def rank_universe(
     pairs: Iterable[str],
     *,
     features: Mapping[str, Any] | None = None,
     feature: str | None = None,
     descending: bool = True,
+    expected_moves: Mapping[str, float] | None = None,
 ) -> tuple[str, ...]:
     """The universe in the order the candidate is taken from.
 
     **One named feature, one direction, one tie-break.** `feature` is `scout.rank_feature`,
     `descending` is `scout.rank_descending`, and `features` is `state["feature"]["pairs"]`
-    exactly as engine 5 publishes it. Invariant 4: a deterministic score over features,
-    with no model in it and therefore nothing here for a model to override.
+    exactly as engine 5 publishes it.
 
-    With `feature` `None` the ordering is alphabetical and nothing else — see the history
-    below — and that is what the system does until the operator rules on the spec 75 study.
+    With `feature` `None` the ordering is alphabetical and nothing else. That is the
+    baseline the operator ruled for the Phase 7 simulation, and it must not move.
 
-    With a feature: by that value, then **by pair name ascending** as the tie-break, in
-    both directions. A pair with no value for it sorts after every pair that has one,
-    alphabetically among themselves, and is **never dropped**: a pair with no feature is
-    still in the universe, and dropping it would silently shrink the universe the rest of
-    this module spent the tick computing.
+    With `feature` equal to :data:`RANK_BY_EXPECTED_MOVE` (operator ruling R1,
+    2026-09-19): by `expected_moves`, the predictor's expected move for each pair the shared
+    ranking function scored, then by name ascending. **A pair with no expected move is
+    dropped**, because R11 says the ranking skips it. See :func:`_rank_by_expected_move`.
+    This ordering reads a model's output, which invariant 4 as amended by R12 permits:
+    ordering changes which candidate is examined, never whether an examined candidate is
+    approved. Every gate re-judges the chosen pair from scratch.
+
+    With any other feature: by that value, then **by pair name ascending** as the
+    tie-break, in both directions. A pair with no value for it sorts after every pair that
+    has one, alphabetically among themselves, and is **never dropped**. A pair with no
+    feature is still in the universe, and dropping it would silently shrink the universe
+    the rest of this module spent the tick computing.
 
     ## History, because the next reader will come here looking for a score
 
@@ -395,6 +478,8 @@ def rank_universe(
         # Deliberately not `sorted(..., key=...)`. With nothing configured there is
         # nothing to key on, and a key function is where a score arrives by accident.
         return tuple(sorted(names))
+    if feature == RANK_BY_EXPECTED_MOVE:
+        return _rank_by_expected_move(names, expected_moves, descending=descending)
 
     def ordering(pair: str) -> tuple[int, float, str]:
         value = _feature_value(features, pair, feature)
@@ -418,6 +503,7 @@ def select_candidate(
     features: Mapping[str, Any] | None = None,
     feature: str | None = None,
     descending: bool = True,
+    expected_moves: Mapping[str, float] | None = None,
 ) -> str | None:
     """The one pair the judgement chain will consider, or `None` when the universe is empty.
 
@@ -431,7 +517,13 @@ def select_candidate(
     Every ranking argument is passed straight through to :func:`rank_universe`. This
     function holds no ordering of its own, so there is one seam and not two.
     """
-    ordered = rank_universe(pairs, features=features, feature=feature, descending=descending)
+    ordered = rank_universe(
+        pairs,
+        features=features,
+        feature=feature,
+        descending=descending,
+        expected_moves=expected_moves,
+    )
     return ordered[0] if ordered else None
 
 
@@ -526,9 +618,22 @@ class ScoutUniverse(BaseModel):
     reason_code: str | None = None
     """Why there is no candidate, or `None` when there is one.
 
-    :data:`REASON_EMPTY_UNIVERSE` on an empty universe. That is a `PASS` and not a failure,
-    so this field is not evidence of one.
+    :data:`REASON_EMPTY_UNIVERSE` on an empty universe, and :data:`REASON_NO_RANKABLE_PAIR`
+    when the expected-move ranking skipped every pair of a non-empty one. Both are a
+    `PASS` and not a failure, so this field is not evidence of one.
     """
+
+    ranked: tuple[tuple[str, Money], ...] = ()
+    """With the expected-move ranking, `(pair, expected move)` in ranked order. Empty
+    otherwise. The expected move is a `Decimal`, published as an exact decimal string, as
+    engine 8 publishes `expected_move_pct`."""
+
+    rank_skipped: Mapping[str, int] = {}
+    """With the expected-move ranking, universe pairs skipped per skip code. Not an
+    exclusion tally: see :data:`RANK_SKIPPED_FIELD`."""
+
+    rank_run_ids: Mapping[str, str] | None = None
+    """The model runs the ranking scored with, or `None` when no model ranked."""
 
     @property
     def entered(self) -> int:
@@ -562,6 +667,12 @@ class ScoutUniverse(BaseModel):
             "reason_code": self.reason_code,
             RANK_FEATURE_FIELD: self.rank_feature,
             RANK_DESCENDING_FIELD: self.rank_descending,
+            RANKED_FIELD: [
+                {CANDIDATE_FIELD: pair, "expected_move_pct": format(move, "f")}
+                for pair, move in self.ranked
+            ],
+            RANK_SKIPPED_FIELD: dict(self.rank_skipped),
+            RANK_RUN_IDS_FIELD: None if self.rank_run_ids is None else dict(self.rank_run_ids),
         }
         if self.candidate is not None:
             payload[CANDIDATE_FIELD] = self.candidate

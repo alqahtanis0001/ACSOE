@@ -195,6 +195,10 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # failing. So: what the system did, in the past tense, with no apology and no
     # suggestion that anything is wrong.
     "empty_universe": "No pair was tradable on this bar",
+    # Engine 7, spec 144 (B): the universe was not empty, but the expected-move ranking
+    # skipped every pair in it, each one a pair the anomaly or DI gate would refuse. Worded
+    # apart from `empty_universe` because the account could trade; the market could not.
+    "no_rankable_pair": "Every tradable pair was one the market checks would refuse on this bar",
     "barriers_below_tick_size": "This pair's price steps are too coarse for a stop",
     # Engine 13 `anomaly`, spec 72. Its sentence says **market** because this gate has no
     # opinion about the trade and could not form one.
@@ -219,6 +223,17 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     # a fold, so the thing to do is find which file is wrong, not re-run anything blindly.
     "tournament_digest_mismatch": (
         "The training run's summary and its out-of-sample rows disagree, so no models were ranked"
+    ),
+    # Engine 20's promotion gate, spec 139. The first two are verdicts written on the run's
+    # leaderboard row; the last two are refusals that wrote nothing.
+    "promotion_too_few_trades": "Fewer than ten trades, too few to judge, so not promoted",
+    "promotion_lower_bound_not_above_zero": (
+        "The edge did not stay above zero once overlapping trades and every configuration "
+        "tried were allowed for, so not promoted"
+    ),
+    "promotion_no_ledger": "The count of configurations tried is missing, so nothing was judged",
+    "promotion_bad_trade": (
+        "A trade's return could not be worked out in one currency, so nothing was judged"
     ),
     "skeptic_unavailable": "No second-opinion model is loaded, so this entry was not judged",
     "anomaly_unavailable": "No market-health model is loaded, so conditions were not checked",

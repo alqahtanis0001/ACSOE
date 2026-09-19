@@ -375,10 +375,22 @@ class LeaderboardEntryView(_View):
     deflated_sharpe_text: str
     brier: float | None
     brier_text: str
+    #: The Brier a constant prediction of the fold's own target rate would earn. A Brier
+    #: means nothing without it (spec 140; migration 0004).
+    base_rate_brier: float | None
+    base_rate_brier_text: str
+    #: How many independent observations the row's statistic rests on, where the row
+    #: records one: the promotion gate's `n x (se_naive / se_hac)^2` for a judged run. A
+    #: fold's row does not record one, and says so rather than borrow the trade count.
+    effective_sample_size: float | None
+    effective_sample_size_text: str
     net_pnl: Money | None
     net_pnl_text: str
     reporting_currency: str | None
     promoted: bool
+    #: Why the promotion gate did not promote, in operator prose; empty when it did, or
+    #: when the row was never judged (spec 139's reason code, mapped by `REASON_PROSE`).
+    promotion_reason: str
 
 
 class ShapPane(_View):

@@ -254,10 +254,13 @@ def _leaderboard_payload(view: LeaderboardEntryView) -> dict[str, Any]:
         "sharpe_text": view.sharpe_text,
         "deflated_sharpe_text": view.deflated_sharpe_text,
         "brier_text": view.brier_text,
+        "base_rate_brier_text": view.base_rate_brier_text,
+        "effective_sample_size_text": view.effective_sample_size_text,
         "net_pnl": money(view.net_pnl),
         "net_pnl_text": view.net_pnl_text,
         "reporting_currency": view.reporting_currency,
         "promoted": view.promoted,
+        "promotion_reason": view.promotion_reason,
     }
 
 

@@ -250,17 +250,22 @@
       </div>
       <div class="table-scroll">
         <table>
-          <caption>Trained model versions, newest first.</caption>
+          <caption>Trained model versions and judged runs, newest first.</caption>
           <thead>
             <tr>
               <th scope="col">Model</th>
               <th scope="col">Version</th>
+              <th scope="col" class="num">Fold</th>
               <th scope="col" class="num">Trades</th>
               <th scope="col" class="num">Win rate</th>
+              <th scope="col" class="num">Brier</th>
+              <th scope="col" class="num">Base-rate Brier</th>
+              <th scope="col" class="num">Effective sample</th>
               <th scope="col" class="num">Sharpe</th>
               <th scope="col" class="num">Deflated</th>
               <th scope="col" class="num">Net</th>
               <th scope="col">Promoted</th>
+              <th scope="col">Why not</th>
             </tr>
           </thead>
           <tbody data-rows="leaderboard"></tbody>

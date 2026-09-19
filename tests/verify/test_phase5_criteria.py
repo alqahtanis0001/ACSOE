@@ -783,17 +783,51 @@ def test_a_write_routed_around_the_store_client_is_a_fail(
     goes on passing. What it loses is the single-writer property — the store client is the one
     thing that owns the schema, the transaction and the refusals.
     """
+    # The anchor carries the Phase 5 writer's next statement: since spec 139 the promotion
+    # writer imports `LeaderboardRow` the same way, and the bare import line occurs twice.
     patch(
         phase5_tree,
         "src/acsoe/engines/tournament/engine.py",
-        "    from acsoe.clients.store.contracts import LeaderboardRow",
+        "    from acsoe.clients.store.contracts import LeaderboardRow\n"
+        "\n"
+        "    run_id = str(digest[DIGEST_RUN_ID_FIELD])",
         "    import sqlite3  # noqa: F401\n"
         "\n"
-        "    from acsoe.clients.store.contracts import LeaderboardRow",
+        "    from acsoe.clients.store.contracts import LeaderboardRow\n"
+        "\n"
+        "    run_id = str(digest[DIGEST_RUN_ID_FIELD])",
     )
     outcome = run(verify_module, "tournament_writes_leaderboard_from_oos", phase5_tree)
     assert_fail(outcome, verify_module)
     assert "contract rule 4" in outcome.message.lower()
+
+
+def test_a_promotion_verdict_routed_around_the_store_client_is_a_fail(
+    verify_module: ModuleType, phase5_tree: Path
+) -> None:
+    """The same mutation in spec 139's promotion writer, which must also stay store-only.
+
+    Engine 20 writes two kinds of leaderboard row, and contract rule 4 binds both: a verdict
+    row written over a private `sqlite3` connection looks identical in the table and loses
+    the single-writer property all the same. The criterion reads the whole engine source,
+    so the Phase 5 criterion is the one that catches it.
+    """
+    patch(
+        phase5_tree,
+        "src/acsoe/engines/tournament/engine.py",
+        "    from acsoe.clients.store.contracts import LeaderboardRow\n"
+        "\n"
+        "    if store.leaderboard_entries(model_id=CHAIN_RUN_MODEL_ID",
+        "    import sqlite3  # noqa: F401\n"
+        "\n"
+        "    from acsoe.clients.store.contracts import LeaderboardRow\n"
+        "\n"
+        "    if store.leaderboard_entries(model_id=CHAIN_RUN_MODEL_ID",
+    )
+    outcome = run(verify_module, "tournament_writes_leaderboard_from_oos", phase5_tree)
+    assert_fail(outcome, verify_module)
+    assert "contract rule 4" in outcome.message.lower()
+    assert "import sqlite3" in outcome.message
 
 
 def test_a_second_run_that_writes_again_is_a_fail(
