@@ -787,6 +787,22 @@ literature.** No source was verified for such a claim.
     **By the pre-set rule, the runs launch with SHAP**, with the watchdog allowed up to 40
     resumes per run and 8 per hour. The loop detector is unchanged: two consecutive resumes
     dying at the same tick stop a run.
+- **The loss-streak breaker trips correctly; its recovery path does not exist.** Found by running
+  the system on 2026-09-20, not by reading the code: the tier-5 run froze on `loss_streak` at
+  2024-10-20 05:30Z, after five consecutive stops, and stayed frozen for the rest of the window.
+  - **What the check measures, correctly:** `safety._loss_streak` counts a **consecutive** streak
+    — losses counted backwards from the most recent closed trade until any non-losing trade
+    breaks the run — **not** a running total. A single winning closed trade resets it to zero,
+    however many losses came before. That is the intended rule, implemented correctly.
+  - **What it cannot do:** it **recomputes from trade history every tick and holds no state.** It
+    has no reference to the system mode, the `commands` table, or any clear event. So **an
+    operator reactivation cannot reset it**: the same five losses are counted again on the next
+    tick and the freeze re-trips.
+  - **The gap is the recovery path.** The intended behaviour is that clearing a freeze starts a
+    **fresh** streak — the operator has seen those five and decided to continue, so the system
+    should count from zero and freeze again only on five new consecutive losses. It cannot,
+    because the count comes from history and history does not change. **The fix:** record the
+    clear's timestamp and count only losses closed after it. Phase 8; not changed during the runs.
 - **One launch precondition was judged met by hand, and is declared here rather than left
   silent.** The gating rehearsal's `kill-and-resume identical` check was false. The cause is the
   check, not the system: `rejections.shap_ref` embeds the writing tick's cycle number, and a

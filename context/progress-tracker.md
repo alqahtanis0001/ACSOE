@@ -1625,6 +1625,25 @@ the reason in the YAML comment and in `DatasetConfig`.
 
 ## Open Questions
 
+- **OPEN, Phase 8, found by running the system on 2026-09-20: the loss-streak breaker trips
+  correctly; its recovery path does not exist.** Engine 17 `safety`'s `_loss_streak`
+  (`engines/safety/engine.py:241`) **recomputes from trade history every tick and holds no state
+  of its own.** It reads `store.recent_closed_trades(500)` and counts losses backwards from the
+  most recent closed trade until any non-losing trade breaks the run. **It has no reference to
+  the system mode, the `commands` table, or any clear event.**
+  - **What it measures, correctly:** a **consecutive** streak, not a running total. One winning
+    closed trade (`realised_pnl >= 0`, judged on money and not on `outcome`) resets it to zero,
+    however many losses came before. That is the intended rule and it is implemented correctly.
+  - **The gap:** the intended behaviour is that clearing a freeze starts a **fresh** streak — the
+    operator has seen those losses and decided to continue, so the system should count from zero
+    again and freeze only on five **new** consecutive losses. It cannot, because the count comes
+    from history and history does not change. **So an operator reactivation cannot reset it:** the
+    same five losses are counted again on the next tick and the freeze re-trips.
+  - **The fix:** record the clear's timestamp and count only losses closed after it.
+  - **Evidence:** the Phase 7 tier-5 run froze on `loss_streak` at 2024-10-20 05:30Z after five
+    consecutive stops and could not recover for the remaining ~10 weeks of the window
+    (`docs/build-log/phase-7/lead.md`, F7). **Found by running the system, not by reading the
+    code.**
 - **OPEN, Phase 8, for a-replay (operator ruling 2026-09-19): the rehearsal's identity check must
   mask the process segments inside `shap_ref`.** `scripts/rehearse_replay_day.py` drops
   `cycle_id` and `run_id` as columns (`PROCESS_COLUMNS`) when comparing an uninterrupted run with
