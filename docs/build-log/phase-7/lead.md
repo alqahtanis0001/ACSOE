@@ -439,6 +439,36 @@ on, not low enough to clear anything. The arithmetic, so the inference can be ch
 - P(0 in one arm) ≈ e^−0.96 ≈ 0.38. P(0 in both, if the rates were equal) ≈ 0.15.
 - **Zero in both arms is an ordinary result whether or not the writer is implicated.**
 
+### F7, in the run: tier 5 froze itself on 2024-10-20 and has taken no trade since
+
+**Agent:** Lead · **Date:** 2026-09-20, 05:05, while the runs are live
+
+**What happened.** At 05:01 the tier-5 run's rejections and minute ticks had not moved in 2.5
+hours of wall clock while it advanced 1,347 bar ticks. The cause is in its own rows: engine 17
+`safety` wrote **`freeze`, reason `loss_streak`, at 2024-10-20 05:30Z**, and every tick since is
+a `block_records` row (2,248 of them by 2024-11-12). **The opportunity chain has been blocked for
+the whole rest of the run so far.**
+
+**Its five trades, all stops, all on STORJ/USD, inside about 21 simulated hours:**
+−82.23, −68.37, −72.00, −69.62, −62.19 (−2.47% to −1.98% each). `safety.max_consecutive_losses`
+is 5, so the fifth loss tripped the breaker, which **freezes** rather than liquidates (invariant
+14, the operator's 2026-09-10 ruling). Equity 4,645.59 from 5,000, −7.1%, inside the 10% drawdown
+limit; it was the loss streak, not the drawdown.
+
+**Nothing un-freezes it.** A freeze is cleared by an operator, and a replay has no operator: the
+driver issues one `activate` before the first tick. So tier 5 will run its remaining ~5,000 bar
+ticks frozen, and **will end the window with 5 trades, all losses**, against the pre-registered
+estimate of 27–55.
+
+**This is the system as built, not a defect**, and it is an economically meaningful result: the
+cheaper tier's lower hurdle admitted candidates tier 3 refused at the cost gate, those trades
+lost, and the breaker ended the run's trading on day 15 of 91. **Tier 3 is unfrozen**, 4 trades
+(1 stop, 3 targets), equity 5,139.47.
+
+**Reported to the operator at once** because it changes what the tier-5 number means. The run is
+NOT stopped: its equity curve, blocks and tallies are still the record of what the system does
+after a freeze, and the benchmarks need the whole window.
+
 ### The gating rehearsals pass everything but kill-and-resume, on the cycle number inside `shap_ref`
 
 **Agent:** Lead · **Date:** 2026-09-19, 23:10
