@@ -1,0 +1,21 @@
+flowchart TD
+  %% Phase 7: the chain as it ran. Source for F8; the committed PDF/PNG is drawn by
+  %% make_phase7_figures.py so the figure reproduces offline.
+  subgraph GUARD[guard - every tick, every mode]
+    E1[1 exchange] --> E2[2 market_data_recorder] --> E3[3 market_sensor]
+    E3 --> E4{{4 data_guard - gate}} --> E17{{17 safety - gate}}
+  end
+  subgraph OPP[opportunity - bar ticks, while running and unblocked]
+    E5[5 feature] --> E6[6 macro_context] --> E7{{7 scout - gate, ranks by expected move}}
+    E7 --> E12[12 regime] --> E13{{13 anomaly - gate}} --> E8[8 prediction] --> E9[9 order_book]
+    E9 --> E10{{10 cost - gate}} --> E11{{11 risk - gate}} --> E14[14 adaptive_router]
+    E14 --> E15{{15 skeptic - gate}} --> E16{{16 decision - gate}} --> E18[18 execution]
+  end
+  subgraph MANAGE[manage - every tick]
+    E21[21 position_manager] --> E22[22 exit] --> E19[(19 memory - single writer)]
+  end
+  E17 -->|not blocked and running| E5
+  E17 -->|blocked or frozen| E21
+  E18 --> E21
+  E10 -.->|refused: chain stops, later gates never run| E19
+  E19 --- NOTE[/equity; positions, orders, trades; block_records per blocker;\n  rejections with every gate's verdict; approvals; scout_tallies per tick;\n  one SHAP file per explained decision/]

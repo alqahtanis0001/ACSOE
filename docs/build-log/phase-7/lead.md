@@ -439,6 +439,52 @@ on, not low enough to clear anything. The arithmetic, so the inference can be ch
 - P(0 in one arm) ≈ e^−0.96 ≈ 0.38. P(0 in both, if the rates were equal) ≈ 0.15.
 - **Zero in both arms is an ordinary result whether or not the writer is implicated.**
 
+### Part III written, and F7's reading of the tier contrast corrected
+
+**Agent:** Lead · **Date:** 2026-09-20, 22:00
+
+**The correction, and why.** F7 below, and Part II §4.5 of the findings, framed tier 5's freeze
+as *the cheaper tier admitting trades that tier 3 refused, while tier 3 stayed positive*. **That
+framing is wrong.** It was written at 05:05 and 16:25, when tier 3 was at +1.5% and −1.6% and
+still trading. Tier 3 then took three more trades — including LUNA/USD at −200.71 — **froze on
+drawdown at 2024-12-19 20:06Z**, and finished at **−8.44% on 12 trades, worse than tier 5's
+−7.09% on 5.** Per the operator's instruction the findings passage was **rewritten in place**
+(§4.5, marked as rewritten) rather than appended to; this entry records that it was corrected,
+and the entry below is left as written per script rule 6.
+
+**What replaces it:** two runs differing only in cost, both stopped by their own protective
+breaker before the window closed — tier 5 on the loss streak at day 15 of 91, tier 3 on drawdown
+at day 76 — and neither able to recover, for the same structural reason.
+
+**The projection is also superseded and kept.** Part II §5 projected −6% to +4% for tier 3 on the
+assumption that one trade moves equity by about ±2%. LUNA/USD moved it −6.12% in one minute, and
+the run finished below the projected range. The section now says so at its head.
+
+**Part III adds:** the final results for both runs with tier 3's full twelve-trade table; the
+deadlock as a defect *class* with both instances and their code paths; exit slippage measured for
+all 17 trades (**13 of 13 stops overshot**, mean 0.51 pp, worst 4.04 pp; targets mean −0.16 pp);
+the outcome against the pre-registration (confirmed, nothing adjusted); the funnel and what the
+counterfactual dataset can and cannot answer; the eight figures; and future work behind its
+fitting warning.
+
+**The figures.** One committed script, `docs/dataset/phase-7-figures/make_phase7_figures.py`,
+regenerates all eight as PDF and 300 dpi PNG with the CSV behind each, plus `captions.tex`. It
+reads the runs through SQLite's backup API so a live run is never locked, uses line style, marker
+and hatch rather than colour, and plots measured data only. **matplotlib was installed into a
+separate venv** (`../ACSOE-figures-venv`), never into `.venv`, because pip could have upgraded a
+package underneath the live runs; `.venv` was verified unchanged afterwards (numpy 2.5.3,
+polars 1.44.1).
+
+**Caught while checking the figures:** F5's first bar was labelled "bar ticks run" but plotted
+`scout_tallies`, which excludes frozen ticks — for tier 5 that read 1,461 against 8,736 actually
+run. Split into two stages, with the true count read from the run record.
+
+**Run state at the time of writing.** Tier 5 complete: 8,736 bar ticks, 2025-01-04 reached,
+`finished=true`, and the **watchdog detected the finish by itself**, wrote the FINISHED line to
+the handover and pushed it (`93c53b9`). Tier 3 frozen and final on trades and equity, with its
+process still ticking out the last five simulated days. **Zero crashes and zero resumes on either
+run.**
+
 ### The findings document gains Part II, written from the live runs
 
 **Agent:** Lead · **Date:** 2026-09-20, 16:25, on the operator's instruction

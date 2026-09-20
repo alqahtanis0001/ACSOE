@@ -1,0 +1,20 @@
+run,week_beginning_utc,refusing_gate_and_reason,count
+tier 3,2024-09-30,cost:net_edge_below_hurdle,190
+tier 3,2024-10-07,cost:net_edge_below_hurdle,672
+tier 3,2024-10-14,cost:net_edge_below_hurdle,647
+tier 3,2024-10-21,cost:net_edge_below_hurdle,659
+tier 3,2024-10-28,cost:net_edge_below_hurdle,669
+tier 3,2024-10-28,cost:spread_wider_than_move,2
+tier 3,2024-11-04,cost:net_edge_below_hurdle,664
+tier 3,2024-11-04,cost:spread_wider_than_move,1
+tier 3,2024-11-11,cost:net_edge_below_hurdle,629
+tier 3,2024-11-11,cost:spread_wider_than_move,6
+tier 3,2024-11-18,cost:net_edge_below_hurdle,666
+tier 3,2024-11-25,cost:net_edge_below_hurdle,670
+tier 3,2024-12-02,cost:net_edge_below_hurdle,661
+tier 3,2024-12-02,cost:spread_wider_than_move,1
+tier 3,2024-12-09,cost:net_edge_below_hurdle,668
+tier 3,2024-12-16,cost:net_edge_below_hurdle,347
+tier 5,2024-09-30,cost:net_edge_below_hurdle,190
+tier 5,2024-10-07,cost:net_edge_below_hurdle,672
+tier 5,2024-10-14,cost:net_edge_below_hurdle,583

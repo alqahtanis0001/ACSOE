@@ -1,0 +1,36 @@
+{
+ "tier 3": {
+  "approvals": 18,
+  "bar_ticks": 7280,
+  "block_records": 233,
+  "candidate_ticks": 7170,
+  "entries_filled": 12,
+  "final_equity": 4578.03550085217,
+  "freeze": {
+   "at": "2024-12-19T20:06:00+00:00",
+   "reason": "safety: drawdown"
+  },
+  "rejections": 7152,
+  "stops": 8,
+  "targets": 4,
+  "trades": 12,
+  "worst_overshoot_pp": -4.043672128063784
+ },
+ "tier 5": {
+  "approvals": 7,
+  "bar_ticks": 1461,
+  "block_records": 7278,
+  "candidate_ticks": 1452,
+  "entries_filled": 5,
+  "final_equity": 4645.588515155844,
+  "freeze": {
+   "at": "2024-10-20T05:30:00+00:00",
+   "reason": "safety: loss_streak"
+  },
+  "rejections": 1445,
+  "stops": 5,
+  "targets": 0,
+  "trades": 5,
+  "worst_overshoot_pp": -0.5260581552040744
+ }
+}

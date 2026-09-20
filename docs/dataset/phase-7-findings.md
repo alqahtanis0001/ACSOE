@@ -1035,12 +1035,24 @@ spends the overwhelming majority of its bars examining the highest-ranked pair a
 refusing it by a wide margin, and the trades that do happen come from the minority of bars where
 a volatile pair tops the ranking.
 
-**4.5 The tier contrast went against the cheaper tier.** Tier 5's friction was 0.52–0.64% against
-tier 3's 0.67–0.79%, and its hurdle 0.78–0.96% against 1.00–1.18%. That lower bar admitted STORJ
-entries on 19 October that tier 3 refused — **five of them, all stopped out**, which tripped the
-breaker. Tier 3, refusing those same candidates, is down 1.6% rather than 7.1%. On this window the
-cheaper tier's extra trades were loss-makers, and the loss-streak breaker ended its trading on day
-15 of 91.
+**4.5 Both tiers ended in a protective freeze before the window closed. REWRITTEN 2026-09-20
+21:55.** The earlier version of this passage read the contrast as "the cheaper tier admitted bad
+trades while tier 3 refused them and stayed positive". **That reading is wrong and is withdrawn**:
+it was written while tier 3 was at +1.5% and still trading. Tier 3 finished **worse** than tier 5.
+
+What the run shows instead: **two runs differing only in cost, both stopped by their own
+protective breaker before the window ended, and neither able to recover.**
+
+- **Tier 5 froze on the loss streak at 2024-10-20 05:30Z — day 15 of 91** — after five consecutive
+  stops on STORJ/USD inside 27 hours. Final: 5 trades, −7.1%.
+- **Tier 3 froze on drawdown at 2024-12-19 20:06Z — day 76 of 91** — at 10.07% against the 10%
+  limit, after eight consecutive stops. Final: 12 trades, **−8.4%**.
+- The cost difference is real and visible (tier 5's friction 0.52–0.64% and hurdle 0.78–0.96%
+  against tier 3's 0.67–0.79% and 1.00–1.18%; tier 5 took entries tier 3 refused). **It did not
+  decide the outcome.** Both tiers lost, the more expensive tier lost more, and each stopped
+  itself by a different limit.
+
+Neither freeze can lift, for the same structural reason (Part III §3).
 
 **4.6 Entries, fills and exposure.** 9 of 13 tier-3 approvals filled, close to the 3-in-4 rate
 taken from the rehearsal. Unfilled entries were cancelled by the 300 s window exactly as invariant
@@ -1063,7 +1075,16 @@ And `scout_tallies` stops being written while a run is frozen, because the oppor
 runs: tier 5's funnel therefore describes its first 15 days only, which is why its tally count
 (1,461) is a quarter of tier 3's.
 
-## 5. PROJECTED FINAL RESULT — PROJECTION, NOT A RESULT
+## 5. PROJECTED FINAL RESULT — SUPERSEDED BY PART III, KEPT FOR THE RECORD
+
+**This section is superseded. Part III holds the measured results.** It is kept unchanged below
+so the projection can be compared with what happened — and it was wrong in an instructive way:
+it put the plausible range at −6% to +4% on the assumption that one trade moves equity by about
+±2%. The LUNA/USD stop alone took −6.12%, three times that, because a market exit on the next
+minute tick does not cap a loss at the stop. **Tier 3 finished at −8.4%, below the bottom of the
+range projected here.**
+
+### The projection as written at 16:25, before the last three trades
 
 **Tier 5 is a result, not a projection.** Final: **5 trades, all stops, −354.41, equity 4,645.59,
 −7.1%**, frozen from 2024-10-20 05:30Z. Nothing in the remaining ticks can change it.
@@ -1146,3 +1167,259 @@ for refusal. A ranking that considered the cost bar would change which candidate
 which invariant 4 permits, since ordering may never approve anything a gate would refuse. *Cost:*
 net-margin ranking was rejected on live feasibility (§R.2: 127 order-book calls per bar), so any
 version of this must be feasible live before it is simulated.
+
+---
+
+# Part III. Final results of the chain simulation
+
+**Written 2026-09-20 from the runs' own databases, read through snapshot copies.** Every figure
+below is measured. Nothing here is a projection.
+
+**One scope note, stated rather than buried.** Tier 5 completed the whole window. **Tier 3's
+trading is over and its result is final** — it froze on 2024-12-19 and cannot open another
+position — but at the time of writing its process is still ticking through the last five
+simulated days, so its *tick* counts (bar ticks, rejections, blocks) are as at 21:55 and will
+tick up slightly. The trades, the equity and the freeze are final. The figure script regenerates
+every number when the process ends.
+
+## 1. FINAL RESULTS, BOTH RUNS
+
+| | Tier 3 | Tier 5 |
+|---|---|---|
+| Launched | 2026-09-19 23:12:35 local, commit `19c5a11` | same |
+| Window | 2024-10-05 00:15Z to 2025-01-04 00:00Z, folds 392–404 | same |
+| Bar ticks run | 7,468 of 8,736 (85.5%, still advancing) | **8,736 of 8,736, complete** |
+| Simulated end reached | 2024-12-21 (trading ended 12-19) | **2025-01-04 00:00Z** |
+| Minute ticks (exposure) | 918 | 152 |
+| Ticks engine 7 ran | 7,280 | 1,461 |
+| Ticks with a candidate | 7,170 | 1,452 |
+| Rejections | 7,152 | 1,445 |
+| Approvals | 18 | 7 |
+| Entries filled / cancelled | 12 / 6 | 5 / 2 |
+| **Closed trades** | **12** (4 targets, 8 stops) | **5** (0 targets, 5 stops) |
+| **Final equity (from 5,000)** | **4,578.04 = −8.44%** | **4,645.59 = −7.09%** |
+| Peak equity reached | 5,143.94 | 5,014.18 |
+| **Freeze** | **drawdown, 2024-12-19 20:06Z** (10.07% against the 10% limit) | **loss streak, 2024-10-20 05:30Z** (5 consecutive losses, limit 5) |
+| Blocked ticks after the freeze | 206 and counting | 7,278 |
+| Crashes / resumes | **0 / 0** | **0 / 0** |
+
+**Tier 3's twelve trades, complete and final:**
+
+| # | Pair | Opened (UTC) | Closed (UTC) | Held | Outcome | PnL (USD) | Return |
+|---|---|---|---|---|---|---|---|
+| 1 | STORJ/USD | 10-20 04:34 | 10-20 05:22 | 0.8 h | stop | −71.03 | −2.13% |
+| 2 | STORJ/USD | 10-20 05:49 | 10-20 06:42 | 0.9 h | target | +45.98 | +1.40% |
+| 3 | DOGE/USD | 10-20 13:20 | 10-20 17:10 | 3.8 h | target | +83.55 | +2.52% |
+| 4 | NEAR/USD | 10-25 23:46 | 10-26 02:47 | 3.0 h | target | +80.98 | +2.40% |
+| 5 | DOGE/USD | 11-14 22:31 | 11-14 22:35 | 0.1 h | stop | −75.00 | −2.19% |
+| 6 | DOGE/USD | 11-14 22:46 | 11-14 23:00 | 0.2 h | stop | −76.16 | −2.26% |
+| 7 | CRV/USD | 11-15 05:17 | 11-15 06:19 | 1.0 h | target | +86.61 | +2.61% |
+| 8 | OXT/USD | 11-25 22:33 | 11-25 22:39 | 0.1 h | stop | −80.03 | −2.37% |
+| 9 | APT/USD | 12-02 03:47 | 12-02 03:57 | 0.2 h | stop | −74.84 | −2.25% |
+| 10 | **LUNA/USD** | 12-09 21:03 | 12-09 21:04 | **0.02 h** | stop | **−200.71** | **−6.12%** |
+| 11 | XTZ/USD | 12-18 21:01 | 12-19 01:59 | 5.0 h | stop | −75.26 | −2.39% |
+| 12 | SC/USD | 12-19 20:04 | 12-19 20:11 | 0.1 h | stop | −66.05 | −2.14% |
+
+Sum of realised PnL: **−421.96**. The last eight trades were all stops.
+
+**Tier 5's five trades, complete and final:** STORJ/USD only, all stops, all inside 27 hours:
+−82.23 (−2.47%), −68.37 (−2.09%), −72.00 (−2.23%), −69.62 (−2.19%), −62.19 (−1.98%). Sum
+**−354.41**.
+
+## 2. THE DEADLOCK, AS A CLASS AND NOT AN INCIDENT
+
+**Two independent instances of one defect, found by running the system rather than by reviewing
+it.** Both of the account-level limits that can stop trading are computed from stored history on
+every tick, hold no state of their own, and have no reference to the freeze that they caused. So
+**neither has a recovery path**, and the condition that each needs in order to clear is a
+condition that only trading can produce — which the freeze prevents.
+
+**Instance 1 — the loss streak (tier 5).** `engines/safety/engine.py:241`, `_loss_streak`, reads
+`store.recent_closed_trades(500)` and counts losses backwards from the most recent closed trade
+until a non-losing trade breaks the run. It clears only when a **winning closed trade** becomes
+the most recent one. After the freeze no trade can open, so the five losses stay the five most
+recent trades for ever. Tier 5 spent **7,278 ticks — 76 of 91 days — blocked**.
+
+**Instance 2 — the drawdown (tier 3).** `_drawdown` in the same engine reads the latest equity
+snapshot and its stored `peak_equity` (`clients/store/client.py:358`, `peak_equity`, carried
+forward on the row rather than aggregated over the column). The breaker trips while
+`(peak − equity) / peak >= 10%`. It clears only when **equity recovers toward the stored peak**,
+and equity cannot rise without a winning trade. Tier 3's block records show the arithmetic
+standing still: 10.07%, then 10.18%, 10.30%, and 11.00% while both conditions were live.
+
+**The common mechanism, stated for the write-up:** *a circuit breaker whose input is derived from
+history, and whose effect is to prevent new history, cannot reset itself.* Both limits are
+correct as detectors — five consecutive losses did occur, a 10% drawdown did occur — and both are
+incomplete as controls, because the system has no way back. Live, a human would clear the freeze;
+in a replay there is no human, and, as §3 of Part II records, clearing it would not help either,
+because the same stored history would re-trip the breaker on the next tick.
+
+## 3. EXIT SLIPPAGE, MEASURED
+
+Every closed trade, with the barrier it was aiming at and what it actually realised at exit,
+gross of fees. Barrier levels come from the `positions` row written when the trade opened
+(`target_price`, `stop_price`); realised is `(exit − entry) / entry`.
+
+| Run | Pair | Outcome | Barrier | Realised | Difference |
+|---|---|---|---|---|---|
+| t3 | STORJ/USD | stop | −1.50% | −1.54% | −0.04 pp |
+| t3 | STORJ/USD | target | +3.00% | +2.01% | **−0.99 pp** |
+| t3 | DOGE/USD | target | +3.00% | +3.13% | +0.13 pp |
+| t3 | NEAR/USD | target | +3.00% | +3.01% | +0.01 pp |
+| t3 | DOGE/USD | stop | −1.50% | −1.60% | −0.10 pp |
+| t3 | DOGE/USD | stop | −1.50% | −1.66% | −0.16 pp |
+| t3 | CRV/USD | target | +3.00% | +3.22% | +0.22 pp |
+| t3 | OXT/USD | stop | −1.50% | −1.78% | −0.28 pp |
+| t3 | APT/USD | stop | −1.50% | −1.65% | −0.15 pp |
+| t3 | **LUNA/USD** | stop | −1.50% | **−5.54%** | **−4.04 pp** |
+| t3 | XTZ/USD | stop | −1.50% | −1.80% | −0.30 pp |
+| t3 | SC/USD | stop | −1.50% | −1.54% | −0.04 pp |
+| t5 | STORJ/USD | stop | −1.50% | −2.03% | −0.53 pp |
+| t5 | STORJ/USD | stop | −1.50% | −1.64% | −0.14 pp |
+| t5 | STORJ/USD | stop | −1.50% | −1.79% | −0.29 pp |
+| t5 | STORJ/USD | stop | −1.50% | −1.74% | −0.24 pp |
+| t5 | STORJ/USD | stop | −1.50% | −1.54% | −0.04 pp |
+
+**Was LUNA the only one? No — and that is the finding.**
+
+- **Every stop overshot. 13 of 13**, in both runs, without exception. Median overshoot **0.16 pp**,
+  mean **0.51 pp**, worst **4.04 pp** (LUNA/USD). Excluding LUNA the mean is 0.19 pp.
+- **Targets did not systematically fall short.** 4 of 4: one shortfall of 0.99 pp, and three at or
+  slightly above the barrier (+0.13, +0.01, +0.22). Mean **−0.16 pp**, median **+0.07 pp**.
+- **So the asymmetry is not "both sides slip a little".** F5's earlier note — the target side
+  booking +3.0% and realising +2.0% — described **one** trade, the first STORJ target, and is not
+  typical of the four. The measured asymmetry is: **the upside is capped at the barrier by
+  construction and the downside is not capped at all.** A target exit cannot realise much more
+  than +3.0% because the position is sold once the barrier is touched; a stop exit can realise any
+  amount below −1.5%, because the market sells at whatever the book holds on the next minute tick.
+- **Its cost here:** −4.04 pp on LUNA/USD is −200.71 against the roughly −70 a normal stop costs.
+  That single trade took tier 3's drawdown from 4.4% to 8.3% (F2) and is most of the distance to
+  the 10% limit that froze it.
+
+## 4. AGAINST THE PRE-REGISTRATION
+
+Everything in this subsection was fixed in §7b **before either run started** and has not been
+adjusted since. No statistic, threshold or rule was changed after a figure existed.
+
+| Pre-registered, before any figure | Outcome |
+|---|---|
+| **The promotion bar** (§R.4, spec 139): a model is promoted only if the lower bound of the Bonferroni-widened interval on net return per trade is above zero, at N = 1,679 trials | Not cleared. Both runs are negative before any interval is computed |
+| **The minimum mean net return per trade** that could clear the bar at the expected trade counts: **4.9–5.5% at tier 3**, 1.35–2.14% at tier 5 | Unreachable, as declared. Tier 3 realised **−0.70% mean per trade** (12 trades); tier 5 **−2.19%** |
+| **Below 10 trades the gate reports no interval**, so tier 3's result is descriptive | Tier 3 closed 12 trades, just above that line; tier 5 closed 5, below it |
+| **"Non-promotion is the expected outcome of this design, not a finding about skill"** | Confirmed |
+| **Expected trades: 8–11 at tier 3, 27–55 at tier 5** | Tier 3 **12**, just above. Tier 5 **5**, far below — because the breaker stopped it on day 15, a mechanism the estimate did not model |
+| **The offline expected-move cells: −0.26% to −0.17% net per trade under honest spread** (§4) | Consistent in sign. The runs' realised means are more negative, and §3 above gives the mechanism the offline grids do not model: stops overshoot, targets do not |
+
+**Stated plainly: the pre-registered expectation was confirmed.** The system did not promote a
+model, it was not expected to, and the reason it was not expected to was written down before the
+runs began. The result adds two things the pre-registration did not anticipate: **both runs were
+stopped early by their own breakers**, and **the realised loss per stop is worse than any offline
+grid assumes.**
+
+## 5. THE FUNNEL AND THE COUNTERFACTUAL RECORD
+
+| | Tier 3 | Tier 5 |
+|---|---|---|
+| Bar ticks run | 7,468 (advancing) | 8,736 |
+| Bar ticks with engine 7 running (not frozen) | 7,280 | 1,461 |
+| Ticks where engine 7 published a candidate | 7,170 | 1,452 |
+| Refusals, **all by engine 10 `cost`** | 7,152 (`net_edge_below_hurdle` 7,142; `spread_wider_than_move` 10) | 1,445 (all `net_edge_below_hurdle`) |
+| Approvals | 18 | 7 |
+| Entry orders filled | 12 | 5 |
+| `block_records` after the freeze | 206 (advancing) | 7,278 |
+| `rejections` rows carrying `details` (every gate's verdict) | 7,152 of 7,152 | 1,445 of 1,445 |
+| `rejections` rows carrying a `shap_ref` | 7,152 of 7,152 | 1,445 of 1,445 |
+| SHAP files written | 7,170 | 1,452 |
+| `scout_tallies` rows | 7,280 | 1,461 |
+| `equity_snapshots` rows | 8,398 | 8,887 |
+
+**What this dataset contains, and what can be asked of it.** For every decision bar: the universe
+engine 7 scanned (1,450 pairs), how many entered and why each was excluded, the full ranked list
+with each pair's expected move as an exact decimal, the candidate chosen, and the gate verdicts on
+it — on **both** sides, refusal and approval. For every refusal: the expected move, friction, net
+edge and hurdle, plus a SHAP file naming the features behind that prediction. For every tick: the
+account's equity, cash and open positions. For every blocked tick: which breaker, with the
+arithmetic in its message.
+
+So the dataset answers, without re-running anything: what the system examined and refused and by
+how much; how the refusal margin moved with fees between the two tiers; which pairs dominated the
+ranking; what the model said about each refused candidate; how the account evolved tick by tick;
+and exactly when and why trading stopped. **What it cannot answer:** how often the later gates
+would have refused — the cost gate stops the chain first, so anomaly, risk, skeptic and decision
+recorded no refusal in either run — and anything about a different spread, since spread is an
+input the run declares rather than measures.
+
+## 6. FIGURES
+
+Eight figures, regenerated by one committed script:
+`docs/dataset/phase-7-figures/make_phase7_figures.py`, run with the separate figures venv (its
+docstring gives the two commands that create it). Each figure is written as **vector PDF** and
+**300 dpi PNG**, beside **the CSV it was plotted from**, so every number is checkable.
+`captions.tex` holds the captions ready to paste. The script reads the runs through SQLite's
+backup API, never locking or writing to them, plots measured data only, and distinguishes series
+by line style, marker and hatch so the figures survive greyscale printing.
+
+| Figure | Shows |
+|---|---|
+| **F1** `F1_equity_curves` | Both equity curves over the window, trade closes marked, each freeze marked with date and trigger |
+| **F2** `F2_tier3_drawdown` | Tier 3's drawdown against its stored peak, the 10% limit, the LUNA stop, and the crossing on 2024-12-19 20:05Z |
+| **F3** `F3_per_trade_pnl` | Per-trade PnL in time order, hatched by outcome, LUNA labelled |
+| **F4** `F4_barrier_vs_realised` | Realised return against the barrier aimed at, with the 45° line: every stop below it, targets on or near it |
+| **F5** `F5_decision_funnel` | The funnel for both runs, from bar ticks run to trades closed, log scale |
+| **F6** `F6_rejections_over_time` | Refusals per simulated week by gate and reason; gaps are frozen weeks |
+| **F7** `F7_trading_vs_frozen` | When each run could trade, with the frozen remainder shaded |
+| **F8** `F8_engine_chain` | The chain as it ran, gates marked, where a refusal stops it, and what engine 19 records. Mermaid source committed as `F8_engine_chain.mmd`; the rendered figure is drawn by the script so it reproduces offline |
+
+**Every figure requested was produced from stored data.** One note on F8: it is drawn by the
+script rather than rendered from the Mermaid source, because rendering Mermaid needs a toolchain
+this machine does not have; the `.mmd` source is committed beside it and produces the same
+structure.
+
+## 7. FUTURE WORK
+
+**The warning first. Nothing in this section was changed during the runs.** Every item was
+identified after figures existed, and **proposing changes after seeing results is how backtests
+get fitted.** These are mechanisms, not reactions to which trades lost. **Anything acted on must
+be declared in advance of a new run, with its expected effect written down before that run
+starts.**
+
+**7.1 Neither breaker can recover (Part III §2).** *Mechanism:* both limits recompute from stored
+history every tick, hold no state, and block the trading that alone could clear them. *Why it
+matters:* it ended tier 5 on day 15 and tier 3 on day 76, so 76% and 16% of the respective windows
+produced no decision at all; live, an account would sit frozen until a human intervened.
+*To test properly:* record the clear's timestamp and count only history after it (loss streak),
+and re-base the peak on the clear (drawdown). Engine 17 plus the command reader, a gate, a
+rehearsal, and a re-run of this window with the change declared in advance. Roughly a day.
+
+**7.2 Exit slippage is asymmetric (Part III §3).** *Mechanism:* both barriers exit at market on
+the next minute tick, which caps the gain at the target and leaves the loss uncapped. Measured: 13
+of 13 stops overshot, mean 0.51 pp, worst 4.04 pp. *Options:* a resting maker limit at the target
+(invariant 8 already permits it), and an intra-minute stop that acts on the trade range rather
+than at the next tick. *Why it matters:* the mean overshoot is roughly a quarter of a typical
+stop's cost, and the tail (LUNA) is what froze tier 3. *To test properly:* engine 22 and the fill
+simulator, a gate, and a re-run — repricing cannot answer it, because a different exit rule
+changes which positions are still open later.
+
+**7.3 Repeated entries into a pair that just stopped out.** *Mechanism:* one position per pair is
+enforced, but nothing stops an immediate re-entry. Tier 5 took **five STORJ/USD entries inside 27
+hours**, all stopped; tier 3 took three DOGE/USD entries in 24 hours, two stopping four minutes
+apart. *Why it matters:* consecutive entries into one falling pair are not independent bets, and
+they are what tripped both breakers. *Caution:* this is the item closest to fitting, because the
+losing trades suggested it. *To test properly:* a per-pair cooldown after a stop, in engine 7's
+filter, with the cooldown declared in advance rather than tuned.
+
+**7.4 The cost gate's hurdle.** *Mechanism:* `hurdle_multiple: 1.5` sets the bar at 2.5× friction,
+about 1.00% at tier 3. The median refused candidate offered 0.48%, a median shortfall of 1.22 pp,
+and 7,152 of 7,170 examined candidates were refused. *Why it matters:* it is what makes the system
+selective, and it is also why three months produced twelve trades. Lowering it multiplies trades;
+the offline grids say the net stays near zero as the count rises. *To test properly:* a declared
+sensitivity run at another multiple — one more run of this length per value.
+
+**7.5 Spread, the assumption that inverted the sign offline.** *Mechanism:* spread enters
+friction, friction sets the hurdle, and the hurdle decides which candidates are examined — so a
+different spread changes **which trades happen**, not just what they earn. §3's offline comparison
+found a flat 10 bps inverted the sign of the result against the bucket table. *Why it matters:*
+it is the single input this result is most sensitive to, and the runs declare it rather than
+measure it. *To test properly:* re-run the window at the q25 and q75 spread columns — two further
+runs, declared in advance. The post-run repricing script answers a narrower question and must not
+be presented as the sensitivity.
