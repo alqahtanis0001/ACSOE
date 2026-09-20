@@ -863,3 +863,286 @@ not meaningful" or shows its n. Those include:
   least 1.50% expected, **with its caveat (§6a)**: about +0.25% before 2024 and about +1.2% in 2024.
 - **The fee schedule (§R.3).** The figures, and the fact that nothing dates a schedule before 9 July
   2026.
+
+---
+
+# Part II. The chain simulation: how it runs, and what it has produced so far
+
+**Written 2026-09-20 at 16:25 local, with both runs still going.** Everything here was read from
+snapshot copies of the live databases (SQLite's backup API); neither run was stopped, touched or
+reconfigured. Figures are "as at 16:25" unless they are marked final.
+
+## 1. THE SIMULATION AS BUILT
+
+**What it is.** Engine 23 `backtest` drives the *same* engines, in the *same* orchestrator, over
+history instead of a live feed. No engine is stubbed, disabled or given a shortcut. The only
+substitutions are the inputs the 2023–24 archive never recorded, and those are declared in §7a.
+
+**The clock and the two kinds of tick.** The loop ticks every simulated minute.
+
+- **A bar tick** is the minute in which a 15-minute decision bar closes: 96 a day, **8,736 over
+  the window**. Engine 3 `market_sensor` publishes `bar_closed`, and only then does engine 5
+  `feature` let the opportunity chain continue. This is where a candidate is chosen and judged.
+- **A minute tick** is any other minute. Engine 5 returns `PASS` and the opportunity chain stops
+  at once, but **the guard and manage chains still run**, so an open position is watched every
+  minute rather than every quarter hour. Its stop, target and timeout are decided from the
+  per-minute trade range. **Minute ticks are only run while the run is exposed** — holding a
+  position or a resting entry — which is why a run with no open trades advances in bar ticks
+  alone.
+
+**The full chain, every bar tick, guard through manage** (`engine-contracts.md`'s registry):
+
+- **Guard, always, in every mode:** 1 `exchange`, 2 `market_data_recorder`, 3 `market_sensor`,
+  4 `data_guard`, 17 `safety`. The guard chain never breaks early: two guards can block on one
+  tick and both are recorded.
+- **Opportunity, only when running and unblocked:** 5 `feature`, 6 `macro_context`, 7 `scout`
+  (the universe filter and the expected-move ranking), 12 `regime`, 13 `anomaly`, 8 `prediction`,
+  9 `order_book`, 10 `cost`, 11 `risk`, 14 `adaptive_router`, 15 `skeptic`, 16 `decision`,
+  18 `execution`. It **stops at the first block**, so the record says which gates never ran.
+- **Manage, always:** 21 `position_manager`, 22 `exit`, 19 `memory`.
+
+**The replay client** (`clients/kraken/`, spec 129) stands where the live Kraken client stands,
+and refuses to be constructed outside replay mode. It serves: the period's **real trades** from
+committed weekly partitions, walked forward and never past `now`; a **declared fee tier** from
+Kraken's committed schedule; and a **synthetic order book** built from the declared
+liquidity-bucket table around the last traded price — ten discrete levels, which engine 9 walks
+with its own unchanged arithmetic to price slippage. A pair with no trade in 24 hours has **no
+quote**, never a zero spread.
+
+**What engine 19 `memory` records, every tick, as the single writer:** the equity snapshot;
+positions, orders and closed trades; one `block_records` row per blocker; one `rejections` row
+per refused candidate, carrying the refusing gate, its reason code, the economics and
+`details` — every gate's verdict on that candidate; one `approvals` row per placed entry with
+the same economics and verdicts on the approving side; one `scout_tallies` row for every tick
+engine 7 ran, candidate or not (spec 146); and a SHAP parquet file per explained decision.
+
+**How a run resumes.** Each run writes a run record beside its database. On `--resume` the driver
+restarts after the **later** of the store's last tick and the record's last tick, so no tick is
+decided twice, seeds `previous_now` so the first resumed tick measures its trade range from where
+the killed process stopped, and mints a new `run_id`. The rehearsals show a resumed run writes
+the same rows as an uninterrupted one.
+
+### Why tier 3 and tier 5
+
+- **Tier 3 rather than tier 4**, against tier 5: the contrast has to be visible. Tier 3's round
+  trip is 0.60% and tier 4's is 0.55% — too close to separate from noise. Tier 5's is 0.45%.
+- **Tier 3 is reachable by a small retail account:** $10,000 of 30-day volume or $20,000 of assets
+  on platform, and reaching it by volume costs about $49–60 in fees (§R.1).
+- **Tier 5 needs $50,000 of 30-day volume or $100,000 held**, a scale most retail accounts never
+  reach.
+- **The pair isolates cost as the only variable.** Same models, same window, same code, same
+  declared spread and depth, same seed capital; only the fee tier differs. So any difference
+  between the two runs is attributable to cost alone — which is the whole cost-adaptive claim.
+
+## 2. WHAT IS RUNNING AND WHERE IT HAS REACHED
+
+Both launched **2026-09-19 23:12:35 local** from commit `19c5a11`, detached through WMI, over
+folds 392–404: test weeks **2024-10-05 00:15Z to 2025-01-04 00:00Z**.
+
+| | Tier 3 | Tier 5 |
+|---|---|---|
+| Bar ticks | 6,127 of 8,736 (70.1%) | 6,587 of 8,736 (75.4%) |
+| Simulated date reached | 2024-12-07 19:45Z | 2024-12-12 14:45Z |
+| Fold | 401 of 404 (10 switches so far) | 401 of 404 (10 switches) |
+| Minute ticks (exposure) | 613 | 152 |
+| Candidates examined | 6,029 ticks | 1,452 ticks |
+| Rejections | 6,016 | 1,445 |
+| Approvals | 13 | 7 |
+| Entries filled / cancelled | 9 / 4 | 5 / 2 |
+| Closed trades | 9 | 5 |
+| Open positions | 0 | 0 |
+| Equity (from 5,000) | **4,920.06 (−1.6%)** | **4,645.59 (−7.1%)** |
+| Range seen | 4,883.33 to 5,143.94 | 4,645.59 to 5,014.18 |
+| State | trading | **frozen since 2024-10-20 05:30Z** |
+| Crashes / resumes | 0 / 0 | 0 / 0 |
+
+**Tier 5's figures are FINAL.** It is frozen on the loss-streak breaker and can take no further
+trade for the remaining ~2,100 bar ticks: 5 trades, all stops, −354.41, −7.1%. Its remaining ticks
+record the guard and manage chains and nothing else.
+
+**Tier 3's figures are PARTIAL.** It is unfrozen, holding nothing, with about 2,600 bar ticks
+(roughly four simulated weeks) to run.
+
+**Tier 3's trades in full, as at 16:25:**
+
+| # | Pair | Opened | Closed | Held | Outcome | PnL | Return |
+|---|---|---|---|---|---|---|---|
+| 1 | STORJ/USD | 10-20 04:34 | 10-20 05:22 | 0.8 h | stop | −71.03 | −2.13% |
+| 2 | STORJ/USD | 10-20 05:49 | 10-20 06:42 | 0.9 h | target | +45.98 | +1.40% |
+| 3 | DOGE/USD | 10-20 13:20 | 10-20 17:10 | 3.8 h | target | +83.55 | +2.52% |
+| 4 | NEAR/USD | 10-25 23:46 | 10-26 02:47 | 3.0 h | target | +80.98 | +2.40% |
+| 5 | DOGE/USD | 11-14 22:31 | 11-14 22:35 | 0.1 h | stop | −75.00 | −2.19% |
+| 6 | DOGE/USD | 11-14 22:46 | 11-14 23:00 | 0.2 h | stop | −76.16 | −2.26% |
+| 7 | CRV/USD | 11-15 05:17 | 11-15 06:19 | 1.0 h | target | +86.61 | +2.61% |
+| 8 | OXT/USD | 11-25 22:33 | 11-25 22:39 | 0.1 h | stop | −80.03 | −2.37% |
+| 9 | APT/USD | 12-02 03:47 | 12-02 03:57 | 0.2 h | stop | −74.84 | −2.25% |
+
+Four targets, five stops, net −80.94 on closed trades. **Tier 5's five, all stops:** STORJ/USD
+−82.23, −68.37, −72.00, −69.62 (all 19 Oct) and −62.19 (20 Oct).
+
+## 3. DECISIONS — CHECKED AGAINST WHAT ACTUALLY RAN
+
+Each recorded decision was checked against the running system's own rows. **Nothing on record
+needed changing.**
+
+| Decision | Checked against | Result |
+|---|---|---|
+| Two runs only, tiers 3 and 5, expected-move ranking | two `runs` rows, two databases; both record `ranking: expected_move`, `alphabetical_baseline: false`, and every `scout_tallies` row carries `rank_feature = expected_move` | holds |
+| Three months, folds 392–404 | both began at 2024-10-05 00:15Z and are in fold 401 of 404 | holds |
+| The declared substitutes (§7a) | tier 3's approvals price friction at 0.67% (fees 0.60% + bucket spread and served slippage); tier 5's at 0.52–0.64% | holds |
+| The promotion bar and its statistics, fixed in code before the run | `modelling/promotion.py` and the trial ledger are unchanged since `bd96346`; nothing has been computed from the runs yet | holds |
+| N = 1,679, with its deliberate overcount of two | ledger unchanged; two runs ran, as already declared in §7b | holds, and the overcount stands as declared |
+| R8's basket: the pairs held, while held, cash otherwise | not yet computed; it is post-run arithmetic over stored rows, and the stored rows carry what it needs | holds |
+| F5's exit rule run as built | confirmed in the data: the four target exits realised +1.40%, +2.52%, +2.40% and +2.61% against the label's +3.0% | holds, and see §4 |
+| Spread sensitivity dropped (no q25/q75 runs) | only the two runs exist | holds |
+| Invariant 10, no labels on the live path | no labelling module is imported by the replay chain; labelled outcomes remain post-run arithmetic | holds |
+| Stop-at-first-block | visible in the record: 6,016 of tier 3's rejections name the cost gate and nothing later | holds |
+
+## 4. FINDINGS FROM THE SIMULATION
+
+**4.1 The breaker's recovery path does not exist (F7).** Recorded above in this section and in the
+tracker as a Phase 8 item: tier 5 froze on five consecutive losses, `safety._loss_streak`
+recomputes from trade history every tick and holds no state, so an operator reactivation cannot
+reset it, and a replay has no operator anyway. Tier 5 therefore spent 5,116 ticks — and will spend
+about 2,100 more — blocked.
+
+**4.2 The funnel's real ratios, from stored rows** (tier 3, 6,118 tallies):
+
+| Stage | Count | Note |
+|---|---|---|
+| Pairs scanned each tick | 1,450 | the recorded `AssetPairs` universe |
+| Pairs entering the universe | 0–190 | the rest excluded, dominated by **`no_live_quote`: 1,260** on the last tally |
+| Ticks with a candidate | 6,029 of 6,118 | the ranking almost always finds something to examine |
+| Ticks with no candidate | 88 | plus 1 tick where engine 7 itself blocked (the first tick, no equity row yet) |
+| Candidates refused | 6,016 | **6,006 `cost:net_edge_below_hurdle`**, 10 `cost:spread_wider_than_move` |
+| Approved | 13 | |
+| Entries filled | 9 of 13 (69%) | 4 cancelled at the 300 s window; fills land 1–5 minutes after placement |
+| Closed trades | 9 | |
+
+**4.3 Only one gate ever refused anything.** Every rejection in both runs names engine 10 `cost`.
+No anomaly, DI, risk, skeptic, router or decision refusal exists in either database. Two causes,
+and they matter for how the counterfactual dataset can be read: the ranking already skips pairs
+the anomaly and DI gates would refuse (R11), so those pairs never become the candidate; and
+stop-at-first-block means the cost gate ends the tick before the later gates are consulted.
+**So this run says nothing about how often the skeptic or the risk gate would have refused.**
+
+**4.4 What the cost gate refuses, and why it is not close.** Over tier 3's 6,016 refusals the
+median expected move is **0.48%** against a median hurdle of **1.00%** — a median shortfall of
+**1.22 percentage points**. The closest miss in the whole run was 0.039 pp. The ranking's most
+frequent picks are **EUR/USD (1,253 ticks), AUD/USD (1,236), USDC/USD (539), USDT/USD (328),
+GBP/USD (313)** — FX and stablecoin pairs sitting on the calibrators' low plateau. So the system
+spends the overwhelming majority of its bars examining the highest-ranked pair available and
+refusing it by a wide margin, and the trades that do happen come from the minority of bars where
+a volatile pair tops the ranking.
+
+**4.5 The tier contrast went against the cheaper tier.** Tier 5's friction was 0.52–0.64% against
+tier 3's 0.67–0.79%, and its hurdle 0.78–0.96% against 1.00–1.18%. That lower bar admitted STORJ
+entries on 19 October that tier 3 refused — **five of them, all stopped out**, which tripped the
+breaker. Tier 3, refusing those same candidates, is down 1.6% rather than 7.1%. On this window the
+cheaper tier's extra trades were loss-makers, and the loss-streak breaker ended its trading on day
+15 of 91.
+
+**4.6 Entries, fills and exposure.** 9 of 13 tier-3 approvals filled, close to the 3-in-4 rate
+taken from the rehearsal. Unfilled entries were cancelled by the 300 s window exactly as invariant
+8 requires (EWT, OCEAN, STORJ, LCX). Holding times are short: 0.1 h to 3.8 h, median about 0.8 h,
+well under the 82 minutes per approval assumed in the timing estimate. Tier 3 has been exposed on
+651 ticks of 6,740 — under 10% of the run.
+
+**4.7 Weekly retraining ran ten times with no incident.** Both runs have crossed folds 392→401 on
+schedule, switching predictor, calibrators, DI, anomaly and skeptic artefacts per fold. The
+rehearsal never tested a fold boundary; the run has now done it twenty times between them.
+
+**4.8 No data-guard block occurred at all.** Tier 3 holds zero `block_records`. That is the
+declared consequence of stamping the synthetic quote at `now` (D7): history has no outages, so
+`data_guard`'s staleness condition is structurally inert in replay. It is an artefact of the
+substitution, not evidence the guard works.
+
+**4.9 Two surprises worth naming.** The first tick of each run blocks at engine 7, because no
+equity row exists to size against until engine 19 writes one — one bar lost per run, by design.
+And `scout_tallies` stops being written while a run is frozen, because the opportunity chain never
+runs: tier 5's funnel therefore describes its first 15 days only, which is why its tally count
+(1,461) is a quarter of tier 3's.
+
+## 5. PROJECTED FINAL RESULT — PROJECTION, NOT A RESULT
+
+**Tier 5 is a result, not a projection.** Final: **5 trades, all stops, −354.41, equity 4,645.59,
+−7.1%**, frozen from 2024-10-20 05:30Z. Nothing in the remaining ticks can change it.
+
+**Tier 3 below is a PROJECTION, NOT A RESULT. It is replaced with measured figures when the run
+finishes.**
+
+At 16:25 tier 3 stands at 9 trades and −1.6% with about four simulated weeks left. Its trades have
+arrived at roughly one per 6.5 simulated days, so **1 to 3 more trades** are plausible, for a final
+count of **10 to 12** — in line with the pre-registered 8–11. Each closed trade has moved equity by
+about 1.4% to 2.6%, so a single trade is worth roughly ±2%.
+
+- **Plausible final range: about −6% to +4%**, centred near flat, dominated by how two or three
+  trades land rather than by anything systematic.
+- **The promotion bar cannot be cleared** at n ≈ 10–12: §7b fixed the required mean net return per
+  trade at 4.9–5.5% for tier 3, which exceeds what a single target exit returns after friction.
+  That was pre-registered, and remains the expected outcome of the design.
+- **What would change this projection:** a burst of trades in late December (volume falls, so more
+  likely fewer), or one unusually large move. December's remaining weeks are the quietest of the
+  window by trade count, which argues for the low end of the trade range.
+
+## 6. FUTURE WORK — WHERE THE SYSTEM COULD BE IMPROVED
+
+**Read this warning first. Nothing in this section was changed during the run.** Every item below
+was derived after figures existed, and **proposing changes after seeing results is how backtests
+get fitted.** These are mechanisms the run exposed, not a reaction to which individual trades
+lost; none of them is justified by "trade 5 would have won". **Anything acted on must be declared
+in advance of a new run, with its expected effect stated before that run starts**, or the result
+is worthless.
+
+**6.1 The breaker has no recovery path.** *Mechanism:* `safety._loss_streak` recounts from trade
+history every tick and holds no state, so a cleared freeze re-trips immediately; and in a replay
+nothing clears it at all. *Why it matters:* a five-loss run on one pair over 27 hours ended tier
+5's participation for 76 of 91 days. Live, the same account would sit frozen until a human noticed.
+*Cost to test properly:* record the clear's timestamp and count only losses closed after it —
+engine 17 plus the command reader, a gate, and a rehearsal; then a re-run of this window with the
+change declared in advance. Roughly half a day.
+
+**6.2 The exit rule realises less than the label.** *Mechanism:* a target exit sells at market on
+the next minute tick (F5), so the fill is whatever the book holds a minute later, not the barrier.
+*Evidence from the run:* the four target exits realised +1.40%, +2.52%, +2.40% and +2.61% against
+the label's +3.0%, a shortfall of 0.4–1.6 pp each. With four wins against five losses at about
+−2.2%, that shortfall is the difference between roughly flat and modestly positive. *Option:* a
+resting maker limit at the target, which invariant 8 already permits. *Cost:* engine 22 and the
+fill simulator, a gate, and a re-run; the maker exit also changes which exits complete at all, so
+it cannot be evaluated by repricing.
+
+**6.3 Immediate re-entry into a pair that just stopped out.** *Mechanism:* one position per pair is
+enforced, but nothing prevents re-entering the same pair minutes after a stop. *Evidence:* tier 5
+took five STORJ/USD entries inside 27 hours, all stopped; tier 3 took three DOGE/USD entries in 24
+hours, two of them stops four minutes apart. *Why it plausibly matters:* consecutive entries into
+one falling pair are not independent bets, and they are what drove the breaker. *Caution:* this is
+the item closest to fitting, because the losing trades suggested it. *Cost:* a per-pair cooldown
+after a stop is a change to engine 7's filter or engine 16's composition; it must be pre-declared
+with a stated cooldown, not tuned.
+
+**6.4 The cost gate's hurdle and what it refuses.** *Mechanism:* `hurdle_multiple: 1.5` means a
+candidate needs an expected move above 2.5× friction, about 1.00% at tier 3. The median refused
+candidate offers 0.48%. *Why it matters:* the bar is what makes the system selective, and it is
+also why 6,006 of 6,029 examined candidates were refused. Lowering it would multiply trades; the
+offline grids say the net stays near zero while the count rises, which is a sample-size gain rather
+than an edge. *Cost:* a declared sensitivity run at another multiple, pre-registered, on the same
+window. It is one more run of this length per value tested.
+
+**6.5 Spread is the assumption the result is most sensitive to.** *Mechanism:* spread enters
+friction, friction sets the hurdle, and the hurdle decides which candidates are examined at all —
+so a different spread changes **which trades happen**, not merely what they earn. *Evidence:* §3's
+offline comparison found a flat 10 bps inverted the sign of the result against the bucket table.
+Spread sensitivity was dropped from this phase (D25), so this run cannot speak to it. *Cost:* the
+only sound test is re-running the window at the q25 and q75 spread columns — two more runs of this
+length, declared in advance. The post-run repricing script answers a narrower question and must not
+be read as the sensitivity.
+
+**6.6 The ranking picks pairs the cost gate will not clear.** *Mechanism:* the universe is ordered
+by expected move, and the top of that order is usually an FX or stablecoin pair on the calibrators'
+low plateau — EUR/USD and AUD/USD alone topped 2,489 of 6,029 candidate ticks. Every one of those
+bars is examined and refused. *Why it matters:* the system is not choosing between plausible
+trades; on most bars it has none, and the ranking's job on those bars is only to nominate something
+for refusal. A ranking that considered the cost bar would change which candidate is examined —
+which invariant 4 permits, since ordering may never approve anything a gate would refuse. *Cost:*
+net-margin ranking was rejected on live feasibility (§R.2: 127 order-book calls per bar), so any
+version of this must be feasible live before it is simulated.

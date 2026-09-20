@@ -439,6 +439,33 @@ on, not low enough to clear anything. The arithmetic, so the inference can be ch
 - P(0 in one arm) ≈ e^−0.96 ≈ 0.38. P(0 in both, if the rates were equal) ≈ 0.15.
 - **Zero in both arms is an ordinary result whether or not the writer is implicated.**
 
+### The findings document gains Part II, written from the live runs
+
+**Agent:** Lead · **Date:** 2026-09-20, 16:25, on the operator's instruction
+
+**What was written.** `docs/dataset/phase-7-findings.md` gains **Part II**: the simulation as
+built (the two tick kinds, the full chain guard through manage, the replay client and synthetic
+book, what engine 19 records, how a resume works) and why tiers 3 and 5 isolate cost as the only
+variable; what is running and where it has reached; a check of every recorded decision against
+what actually ran; the findings so far; a projection for tier 3 **marked as a projection, not a
+result**; and future work, opened with the warning that nothing in it was changed during the run
+and that anything acted on must be declared in advance of a new run.
+
+**Method.** Both live databases were copied with SQLite's backup API and every figure read from
+the snapshots. **Neither run was stopped, touched or reconfigured**, and no statistic, threshold
+or rule was changed — figures exist now.
+
+**Run state at the time of writing.** Tier 3: 6,127 of 8,736 bar ticks (70.1%), simulated
+2024-12-07 19:45Z, fold 401, 9 trades, equity 4,920.06 (−1.6%), trading, 613 minute ticks. Tier 5:
+6,587 bar ticks (75.4%), simulated 2024-12-12 14:45Z, fold 401, 5 trades, equity 4,645.59 (−7.1%),
+frozen since 2024-10-20. **No crashes and no resumes on either run since launch.**
+
+**The decision check found nothing to correct.** The two-run scope, the three-month window, the
+declared substitutes, the pre-registered statistics and N = 1,679, R8's basket, F5's exit rule,
+the dropped spread sensitivity, invariant 10 and stop-at-first-block all hold against the runs'
+own rows. F5 is now visible in data: the four target exits realised +1.40%, +2.52%, +2.40% and
++2.61% against the label's +3.0%.
+
 ### F7, in the run: tier 5 froze itself on 2024-10-20 and has taken no trade since
 
 **Agent:** Lead · **Date:** 2026-09-20, 05:05, while the runs are live
