@@ -107,6 +107,16 @@ TARGET_PCT_KEY = "barriers.target_pct"
 ALLOW_CRYPTO_QUOTED_KEY = "trading.allow_crypto_quoted"
 REPORTING_CURRENCY_KEY = "trading.base_reporting_currency"
 
+#: How old a quote may be and still count as live. **The same key engine 4 reads**, on
+#: purpose (D10 fix 1, operator ruling 2026-09-21): two numbers meaning "too old" in two
+#: engines drift the moment one is tuned. Engines do not import each other's modules, so
+#: the string is named here and `test_the_staleness_key_is_shared` asserts it equals
+#: `data_guard`'s. Engine 4 judges the feed on it; this engine judges each pair on it.
+MAX_QUOTE_AGE_KEY = "data_guard.max_data_age_s"
+
+#: The field engine 3 stamps on every quote it publishes: `now - quote.ts`, in seconds.
+QUOTE_AGE_FIELD = "age_s"
+
 #: The operator's set of quote currencies that are not a second directional bet. **Absent
 #: is not empty** — see :meth:`ScoutEngine._stable_quotes`.
 STABLE_QUOTES_KEY = "trading.stable_quote_currencies"
@@ -144,6 +154,18 @@ class MissingInputError(Exception):
     not this: excluding one pair and blocking the tick are very different answers and must
     not share a path.
     """
+
+
+def _quote_age(quote: Any) -> Decimal | None:
+    """The quote's ``age_s`` as a `Decimal`, or `None` when it carries none.
+
+    A float from engine 3 goes through `repr`, as `_config_decimal` does, so the
+    comparison with the configured bound is exact. A bool is not an age.
+    """
+    value = quote.get(QUOTE_AGE_FIELD) if isinstance(quote, Mapping) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return Decimal(repr(value) if isinstance(value, float) else str(value))
 
 
 def _config_decimal(context: EngineContext, key: str) -> Decimal:
@@ -234,6 +256,10 @@ class ScoutEngine(BaseEngine):
         reporting_currency = str(context.config.get(REPORTING_CURRENCY_KEY))
         allow_crypto = bool(context.config.get(ALLOW_CRYPTO_QUOTED_KEY))
         stable = self._stable_quotes(context)
+        # Engine 4's bound, read from the same key (D10 fix 1). Null or absent blocks the
+        # tick like every other threshold here: a default would be a number silently
+        # deciding which prices count as live.
+        max_quote_age_s = _config_decimal(context, MAX_QUOTE_AGE_KEY)
 
         # Read before the filter runs, not after, because a configured feature with no
         # engine 5 output is a tick-level block and the whole tick is unanswerable. Doing
@@ -269,6 +295,7 @@ class ScoutEngine(BaseEngine):
                 stop_pct=stop_pct,
                 target_pct=target_pct,
                 reporting_currency=reporting_currency,
+                max_quote_age_s=max_quote_age_s,
             )
             if reason is None:
                 pairs.append(name)
@@ -352,6 +379,7 @@ class ScoutEngine(BaseEngine):
         stop_pct: Decimal,
         target_pct: Decimal,
         reporting_currency: str,
+        max_quote_age_s: Decimal,
     ) -> str | None:
         """Why this pair is not tradable right now, or `None` if it is.
 
@@ -375,6 +403,20 @@ class ScoutEngine(BaseEngine):
         if facts.ask <= 0 or facts.bid <= 0:
             # Absent is not zero and neither is a non-positive price: it is an unusable
             # quote, never a free entry.
+            return REASON_NO_LIVE_QUOTE
+        if facts.bid > facts.ask:
+            # A crossed book is not a price anyone can trade at (D10, operator ruling
+            # 2026-09-21). It used to block the whole tick in engine 4, so one thin pair
+            # crossing for a moment halted all 668; it is this pair's problem, not the
+            # feed's. Engine 4 still blocks when *every* pair is crossed.
+            return REASON_NO_LIVE_QUOTE
+        age = _quote_age(quote)
+        if age is None or age > max_quote_age_s:
+            # **A stale quote is not a live quote** — the operator's words (D10). Moved
+            # here from engine 4, which judged the whole tick on its oldest pair and so
+            # blocked every tick against the real exchange. A quote with no age cannot
+            # be shown to be live, and engine 3 stamps one on every quote it publishes,
+            # so its absence is a defect upstream: excluded, never assumed fresh.
             return REASON_NO_LIVE_QUOTE
 
         if not allow_crypto:

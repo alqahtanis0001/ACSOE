@@ -347,6 +347,7 @@ REASON_PROSE: Final[Mapping[str, str]] = {
     "input_missing": "An engine this check needs published nothing for this bar",
     "no_approved_quantity": "The risk gate approved an entry without a size, so none was placed",
     "decision_inputs_unavailable": "The final coherence check could not read what it needs",
+    "candidate_quote_not_live": "The chosen pair's price was stale or crossed at the last check, so no entry was made",
     # Engine 18 `execution`, B's spec 91, landed 2026-09-16 and caught by the walk the
     # same way engines 16 and 21 were — three engines in one afternoon. My wording, B
     # asked to replace any that is wrong.

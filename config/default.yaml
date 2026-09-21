@@ -187,8 +187,12 @@ kraken:                          # Client tuning. Requested by A, spec 25.
                                  # cost gate, so it is re-read on the timescale of the loop.
 
 data_guard:                      # Engine 4, the first real gate. Requested by A, spec 29.
-  max_data_age_s: 120            # Operator-chosen 2026-09-09. The staleness threshold: market
-                                 # data older than this blocks the tick. Two loop ticks at
+  max_data_age_s: 120            # Operator-chosen 2026-09-09. The staleness threshold, read by
+                                 # three gates (D10, 2026-09-21): engine 4 blocks the tick when
+                                 # the FRESHEST quote is older (the feed went quiet); engine 7
+                                 # excludes any one pair older as no_live_quote; engine 16
+                                 # refuses an order on one. Not the oldest pair any more: with
+                                 # 668 real pairs one is always quiet. Two loop ticks at
                                  # loop_tick_s 60, so a single missed tick is tolerated and a
                                  # second consecutive one is not. Distinct from
                                  # console.stale_after_ms, which is a rendering rule about

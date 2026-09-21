@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict
 
 __all__ = [
     "BAD_DATA_SCENARIOS",
+    "MAX_DATA_AGE_KEY",
     "REASON_MISSING_CANDLE",
     "REASON_NEGATIVE_SPREAD",
     "REASON_NO_MARKET_DATA",
@@ -37,12 +38,23 @@ __all__ = [
 #: The one key this engine writes into ``state``. Contract rule 2.
 STATE_KEY: Final = "data_guard"
 
+#: The staleness bound. **Shared with engine 7** (D10 fix 1): engine 7 excludes a pair past
+#: it under ``no_live_quote``, this engine blocks when the *freshest* quote is past it.
+#: Engines do not import each other, so engine 7 names the same string and a test asserts
+#: the two are equal.
+MAX_DATA_AGE_KEY: Final = "data_guard.max_data_age_s"
+
 # --------------------------------------------------------------------------- #
 # Reason codes — mirrored in `console/format.py`'s REASON_PROSE
 # --------------------------------------------------------------------------- #
 
 REASON_STALE: Final = "market_data_stale"
-"""The freshest quote is older than ``data_guard.max_data_age_s``."""
+"""The freshest quote is older than ``data_guard.max_data_age_s``.
+
+**The engine did not implement this until D10** (2026-09-21): it blocked on the *oldest*
+quote, so against Kraken's 668 USD pairs some thin pair was always past the bound and the
+guard blocked every tick of the first smoke run. It now judges the freshest, as written here
+— a heartbeat on the feed. Per-pair staleness is engine 7's, under ``no_live_quote``."""
 
 REASON_NO_MARKET_DATA: Final = "no_market_data"
 """Nothing has arrived at all. Distinct from stale on purpose: "the feed is behind" and
@@ -50,7 +62,11 @@ REASON_NO_MARKET_DATA: Final = "no_market_data"
 second read as the first. Invariant 3 — a gate that cannot reach its data blocks."""
 
 REASON_NEGATIVE_SPREAD: Final = "negative_spread"
-"""A crossed book: the bid is above the ask."""
+"""A crossed book (bid above ask) on **every** quoted pair — a corrupt feed, not a market.
+
+One crossed pair is that pair's problem and engine 7 excludes it under ``no_live_quote``
+(D10, operator ruling 2026-09-21). Every pair crossed at once is a bid/ask swap or a parser
+fault, and engine 7 alone would hide it behind an empty universe and a quiet PASS."""
 
 REASON_MISSING_CANDLE: Final = "missing_candle"
 """A decision bar inside the published window in which **no subscribed pair traded at all**.
@@ -98,10 +114,25 @@ class DataGuardState(BaseModel):
     reason_code: str | None = None
     findings: tuple[dict[str, Any], ...] = ()
     max_data_age_s: float | None = None
-    """The threshold applied, echoed so a block can be understood without the config."""
+    """The threshold applied, echoed so a block can be understood without the config.
+
+    **Also the value engine 16 re-checks the chosen pair against** (D10 fix 3). Engine 16
+    may not read config — its own rule — so it reads this published copy instead, which makes
+    it the same number engine 7 excluded by, from the same key, in the same tick.
+    """
 
     oldest_quote_age_s: float | None = None
+    """Recorded, never judged: one thin pair's silence is not the feed's (D10)."""
+
+    freshest_quote_age_s: float | None = None
+    """The heartbeat. Past ``max_data_age_s``, nothing on the subscription has moved."""
+
     pairs_seen: int = 0
+    fresh_pairs: int = 0
+    """Quoted pairs whose age is within ``max_data_age_s``, every tick. With ``pairs_seen`` it
+    is the fresh-pair fraction the operator asked to have **recorded, with no screen yet**
+    (ruling 2026-09-21). Engine 7 excludes the rest under ``no_live_quote``."""
+
     missing_bars: int = 0
 
     def to_state(self) -> dict[str, Any]:

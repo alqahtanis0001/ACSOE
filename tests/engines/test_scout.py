@@ -1735,3 +1735,116 @@ def test_the_ranking_runs_on_engine_5s_real_output_once_it_exists(
 
     assert published["rank_feature"] == str(names[0])
     assert published[CANDIDATE_FIELD] in published["pairs"]
+
+
+# --------------------------------------------------------------------------- #
+# D10: a stale or crossed quote is not a live quote (operator ruling 2026-09-21)
+# --------------------------------------------------------------------------- #
+#
+# Per-pair staleness and per-pair crossed books moved here from engine 4, which judged the
+# whole tick on its oldest pair and so blocked every tick against the real exchange. Each
+# test flips ONE input on one pair of a healthy tick and flips it back, so the exclusion
+# is attributable to that input and nothing else.
+
+
+def _bound(context: Any) -> float:
+    """The shared staleness bound, read from the same key engine 4 reads. Read rather than
+    retyped, so these tests follow the operator's value instead of pinning a copy of it."""
+    return float(context.config.get("data_guard.max_data_age_s"))
+
+
+def _scout_with(scout: ScoutEngine, context: Any, pair: str, **quote: Any) -> dict[str, Any]:
+    """Engine 7 over a real tick in which one pair's quote differs in the named fields."""
+    state = build_state(context)
+    state["market_sensor"]["quotes"][pair].update(quote)
+    payload: dict[str, Any] = scout.process(context, state).data
+    return payload
+
+
+def test_a_stale_quote_is_excluded_as_no_live_quote(scout: ScoutEngine, account: Any) -> None:
+    """The operator's words: a stale quote IS no live quote. 438 s is `COOKIE/USD` at the
+    smoke run's only decision bar."""
+    stale = _scout_with(scout, account, "SOL/USD", age_s=438.0)
+    fresh = _scout_with(scout, account, "SOL/USD", age_s=30.0)
+
+    assert "SOL/USD" not in stale["pairs"]
+    assert stale["excluded"][REASON_NO_LIVE_QUOTE] == 1
+    assert "SOL/USD" in fresh["pairs"], "the age was the only thing"
+
+
+def test_the_bound_itself_is_live_and_one_second_past_it_is_not(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """Same `<=` as engine 4's heartbeat, so the two gates agree on what "too old" means."""
+    bound = _bound(account)
+
+    at_bound = _scout_with(scout, account, "SOL/USD", age_s=bound)
+    past = _scout_with(scout, account, "SOL/USD", age_s=bound + 1)
+
+    assert "SOL/USD" in at_bound["pairs"]
+    assert "SOL/USD" not in past["pairs"]
+
+
+def test_a_crossed_book_is_excluded_as_no_live_quote(scout: ScoutEngine, account: Any) -> None:
+    """Bid above ask is not a price anyone can trade at. It used to block every pair in
+    engine 4; one thin book crossing is this pair's problem, not the feed's."""
+    state = build_state(account)
+    quote = state["market_sensor"]["quotes"]["SOL/USD"]
+    bid, ask = quote["bid"], quote["ask"]
+
+    crossed = _scout_with(scout, account, "SOL/USD", bid=ask, ask=bid)
+    straight = _scout_with(scout, account, "SOL/USD", bid=bid, ask=ask)
+
+    assert "SOL/USD" not in crossed["pairs"]
+    assert crossed["excluded"][REASON_NO_LIVE_QUOTE] == 1
+    assert "SOL/USD" in straight["pairs"], "the crossing was the only thing"
+
+
+def test_a_quote_carrying_no_age_is_excluded_rather_than_assumed_fresh(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """Engine 3 stamps an age on every quote, so a missing one is a defect upstream — and
+    a price that cannot be shown to be live is not treated as live."""
+    state = build_state(account)
+    del state["market_sensor"]["quotes"]["SOL/USD"]["age_s"]
+
+    result = scout.process(account, state).data
+
+    assert "SOL/USD" not in result["pairs"]
+    assert result["excluded"][REASON_NO_LIVE_QUOTE] == 1
+
+
+def test_the_tally_still_adds_up_with_stale_and_crossed_pairs(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """Reusing `no_live_quote` rather than minting a code is what keeps the arithmetic the
+    console renders from untouched: `scanned == entered + sum(excluded)`."""
+    state = build_state(account)
+    quotes = state["market_sensor"]["quotes"]
+    quotes["SOL/USD"]["age_s"] = 900.0
+    quotes["ETH/USD"]["bid"], quotes["ETH/USD"]["ask"] = (
+        quotes["ETH/USD"]["ask"],
+        quotes["ETH/USD"]["bid"],
+    )
+
+    result = scout.process(account, state).data
+
+    assert result["excluded"][REASON_NO_LIVE_QUOTE] == 2
+    assert result["scanned"] == result["entered"] + sum(result["excluded"].values())
+
+
+def test_a_null_staleness_bound_blocks_the_tick_rather_than_defaulting(
+    scout: ScoutEngine, account: Any
+) -> None:
+    """A default would be a number silently deciding which prices count as live. The same
+    OPERATOR REQUIRED reading every other threshold in this gate gets."""
+    import dataclasses
+
+    data = account.config.as_dict()
+    data["data_guard"] = {**data["data_guard"], "max_data_age_s": None}
+    unset = dataclasses.replace(account, config=MappingConfig(data))
+
+    result = scout.process(unset, build_state(unset))
+
+    assert result.status is EngineStatus.BLOCK
+    assert "max_data_age_s" in (result.reason or "")

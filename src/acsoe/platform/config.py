@@ -394,12 +394,23 @@ class MarketSensorConfig(_Section):
 
 
 class DataGuardConfig(_Section):
-    """Engine 4's staleness threshold. **A trading threshold, operator-chosen.**
+    """The staleness threshold, **read by three gates.** A trading threshold, operator-chosen.
 
-    Market data older than ``max_data_age_s`` blocks the tick. It is the whole judgement
-    of the first real gate in the system, which is why the lead would not invent it and
-    the engine raised rather than defaulting until the operator supplied a value on
-    2026-09-09.
+    **Engine 4** blocks the tick when the *freshest* quote is older than
+    ``max_data_age_s`` — the feed has gone quiet. **Engine 7** excludes any one pair whose
+    quote is older, under ``no_live_quote``. **Engine 16** refuses an order whose chosen
+    pair's quote is older, reading engine 4's published copy of this value because it may
+    not read config itself. One number, one meaning of "too old", in all three (D10,
+    operator ruling 2026-09-21).
+
+    **It used to block the tick on the oldest quote of any pair**, which with Kraken's 668
+    USD pairs meant always: some thin pair is always quiet for two minutes, and the first
+    smoke run against the real exchange blocked 18 of 22 ticks on it. That is why it is no
+    longer "the whole judgement" of engine 4 — the feed-wide half stays there and the
+    per-pair half moved to the gates that judge pairs.
+
+    The lead would not invent the value, and engine 4 raised rather than defaulting until
+    the operator supplied one on 2026-09-09.
 
     Deliberately **not** ``console.stale_after_ms``. That one is a rendering rule about
     fading a figure to half opacity and decides nothing about trading; this one decides

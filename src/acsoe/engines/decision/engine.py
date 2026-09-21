@@ -55,6 +55,7 @@ slippage is missing, so the absence is caught by a gate either way.
 from __future__ import annotations
 
 import time
+from decimal import Decimal, InvalidOperation
 from typing import Any, NamedTuple
 
 from pydantic import ValidationError
@@ -65,8 +66,15 @@ from acsoe.engines.decision.contracts import (
     CHECKED_SOURCES,
     CLOSED_BAR_TS_FIELD,
     CYCLE_ID_KEY,
+    DATA_GUARD_KEY,
+    DATA_GUARD_MAX_AGE_FIELD,
     MARKET_SENSOR_KEY,
+    MARKET_SENSOR_QUOTES_FIELD,
     PAIR_FIELD,
+    QUOTE_AGE_FIELD,
+    QUOTE_ASK_FIELD,
+    QUOTE_BID_FIELD,
+    REASON_CANDIDATE_QUOTE_NOT_LIVE,
     REASON_INPUT_MISSING,
     REASON_INPUTS_UNAVAILABLE,
     REASON_NO_APPROVED_QUANTITY,
@@ -80,6 +88,20 @@ from acsoe.engines.decision.contracts import (
     DecisionState,
     OrderIntent,
 )
+
+
+def _number(value: Any) -> Decimal | None:
+    """A published number as a `Decimal`, or `None` when it is not one.
+
+    Prices cross `state` as strings and ages as floats; a float goes through `repr`, the
+    shortest string that round-trips, so the comparison is exact. A bool is not a number.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return Decimal(repr(value) if isinstance(value, float) else str(value))
+    except (InvalidOperation, ValueError):
+        return None
 
 
 class IncoherentError(Exception):
@@ -133,6 +155,7 @@ class DecisionEngine(BaseEngine):
             pair = self._candidate_pair(state)
             bar_ts = self._closed_bar_ts(state)
             checked = self._coherence(state, pair=pair, bar_ts=bar_ts).checked
+            self._candidate_quote_is_live(state, pair)
             qty = self._approved_quantity(state)
             intent = self._compose(
                 state, pair=pair, bar_ts=bar_ts, qty=qty, cycle_id=self._cycle_id(state)
@@ -277,6 +300,62 @@ class DecisionEngine(BaseEngine):
                 )
 
     # ------------------------------------------------------------------ the quantity
+
+    def _candidate_quote_is_live(self, state: State, pair: str) -> None:
+        """The pair about to be ordered still has a live price (D10 fix 3).
+
+        Its quote must be no older than engine 4's **published** bound and its book must
+        not be crossed. Both inputs are what engines 3 and 4 published this tick — nothing
+        is read from `context`, which is this engine's rule — so the clause is arithmetic
+        over `state` and stays deterministic enough to be a gate.
+
+        Engine 7 excluded exactly these pairs under ``no_live_quote`` from the same
+        snapshot, so on a working system this never fires. It is the second gate between a
+        stale price and an order, for the day engine 7's exclusion is broken or removed:
+        per-pair freshness left engine 4 in D10, and a single gate standing between a price
+        and an order is one refactor away from none.
+
+        Every missing or unreadable input blocks (invariant 3), under the house codes: an
+        absent quote or bound is ``input_missing``, a value that is not a number is
+        ``decision_inputs_unavailable``.
+        """
+        sensor = _payload(state, MARKET_SENSOR_KEY) or {}
+        quotes = sensor.get(MARKET_SENSOR_QUOTES_FIELD)
+        quote = quotes.get(pair) if isinstance(quotes, dict) else None
+        if not isinstance(quote, dict):
+            raise IncoherentError(
+                REASON_INPUT_MISSING,
+                f"{MARKET_SENSOR_KEY} published no quote for {pair}, the pair about to be ordered",
+            )
+        guard = _payload(state, DATA_GUARD_KEY)
+        if guard is None or guard.get(DATA_GUARD_MAX_AGE_FIELD) is None:
+            raise IncoherentError(
+                REASON_INPUT_MISSING,
+                f"{DATA_GUARD_KEY} published no {DATA_GUARD_MAX_AGE_FIELD}, so the price "
+                f"of {pair} cannot be shown to be live",
+            )
+        age = _number(quote.get(QUOTE_AGE_FIELD))
+        bound = _number(guard.get(DATA_GUARD_MAX_AGE_FIELD))
+        bid = _number(quote.get(QUOTE_BID_FIELD))
+        ask = _number(quote.get(QUOTE_ASK_FIELD))
+        if age is None or bound is None or bid is None or ask is None:
+            raise IncoherentError(
+                REASON_INPUTS_UNAVAILABLE,
+                f"the quote for {pair} or {DATA_GUARD_KEY}'s bound is not a number, so its "
+                "liveness cannot be checked",
+            )
+        if age > bound:
+            raise IncoherentError(
+                REASON_CANDIDATE_QUOTE_NOT_LIVE,
+                f"{pair}'s quote is {age:.0f}s old, past the {bound:.0f}s engine 4 applied "
+                "this tick, so it is not a price to order at",
+            )
+        if bid > ask:
+            raise IncoherentError(
+                REASON_CANDIDATE_QUOTE_NOT_LIVE,
+                f"{pair}'s book is crossed (bid {bid} above ask {ask}), so it is not a price "
+                "to order at",
+            )
 
     def _approved_quantity(self, state: State) -> Any:
         """Engine 11 approved, and named how much.

@@ -43,10 +43,12 @@ from acsoe.clients.store.contracts import (
 from acsoe.core.contracts import EngineStatus
 from acsoe.engines.adaptive_router.engine import AdaptiveRouterEngine
 from acsoe.engines.cost.engine import CostEngine
+from acsoe.engines.data_guard.engine import DataGuardEngine
 from acsoe.engines.decision.contracts import (
     CHECKED_SOURCES,
     INTENT_FIELD,
     OPTIONAL_SOURCES,
+    REASON_CANDIDATE_QUOTE_NOT_LIVE,
     REASON_INPUT_MISSING,
     REASON_INPUTS_UNAVAILABLE,
     REASON_NO_APPROVED_QUANTITY,
@@ -267,6 +269,10 @@ def approving_state(
     }
     state["exchange"] = ExchangeEngine().process(context, state).data
     state["market_sensor"] = MarketSensorEngine().process(context, state).data
+    # Engine 4, which the guard chain runs between 3 and 7 on every tick. Engine 16
+    # reads its published staleness bound (D10 fix 3), so a fixture that skipped it was
+    # a tick no real chain can produce.
+    state["data_guard"] = DataGuardEngine().process(context, state).data
     state["scout"] = dict(ScoutEngine().process(context, state).data)
     if candidate is not None:
         state["scout"]["pair"] = candidate
@@ -901,7 +907,9 @@ def test_every_reason_code_this_engine_emits_is_renderable_by_the_console() -> N
         if name.startswith("REASON_") and isinstance(value, str)
     )
 
-    assert len(codes) == 5, f"engine 16's codes changed: {codes}"
+    # Six since D10 fix 3 (2026-09-21) added `candidate_quote_not_live`. A count, not a
+    # list, so the next code added trips this and whoever adds it checks its prose.
+    assert len(codes) == 6, f"engine 16's codes changed: {codes}"
     for code in codes:
         assert code in REASON_PROSE, f"{code} renders as 'No reason was recorded.'"
 
@@ -911,3 +919,109 @@ def test_the_state_key_is_the_one_engine_eighteen_will_read() -> None:
     rename that missed one side would be two engines agreeing about nothing."""
     assert STATE_KEY == "decision"
     assert DecisionEngine.name == STATE_KEY
+
+
+# --------------------------------------------------------------------------- #
+# D10 fix 3: the chosen pair still has a live price (operator ruling 2026-09-21)
+# --------------------------------------------------------------------------- #
+#
+# Per-pair freshness left engine 4 in D10 and now lives in engine 7. This clause is the
+# second gate between a stale price and an order, for the day engine 7's exclusion is
+# broken or removed. On a working chain it never fires, so every test here reaches it by
+# changing engine 7's candidate's quote *after* engine 7 ran — the shape a regression in
+# engine 7 would produce.
+
+
+def _candidate_quote(state: dict[str, Any]) -> dict[str, Any]:
+    quote: dict[str, Any] = state["market_sensor"]["quotes"][state["scout"]["pair"]]
+    return quote
+
+
+def test_a_stale_candidate_is_refused_with_no_intent(
+    decision: DecisionEngine, context: Any
+) -> None:
+    state = approving_state(context)
+    _candidate_quote(state)["age_s"] = 438.0
+
+    result = decision.process(context, state)
+
+    assert result.status is EngineStatus.BLOCK
+    assert result.data["reason_code"] == REASON_CANDIDATE_QUOTE_NOT_LIVE
+    assert INTENT_FIELD not in result.data, "no half-intent for engine 18 to read"
+    assert "438s old" in (result.reason or "")
+
+
+def test_a_crossed_candidate_is_refused(decision: DecisionEngine, context: Any) -> None:
+    state = approving_state(context)
+    quote = _candidate_quote(state)
+    quote["bid"], quote["ask"] = quote["ask"], quote["bid"]
+
+    result = decision.process(context, state)
+
+    assert result.status is EngineStatus.BLOCK
+    assert result.data["reason_code"] == REASON_CANDIDATE_QUOTE_NOT_LIVE
+    assert "crossed" in (result.reason or "")
+
+
+def test_a_candidate_exactly_at_the_bound_is_live(decision: DecisionEngine, context: Any) -> None:
+    """The same `<=` engines 4 and 7 use: three gates, one meaning of "too old"."""
+    state = approving_state(context)
+    _candidate_quote(state)["age_s"] = float(state["data_guard"]["max_data_age_s"])
+
+    result = decision.process(context, state)
+
+    assert result.status is EngineStatus.OK, result.reason
+
+
+def test_the_bound_is_engine_fours_published_one_and_not_a_config_read(
+    decision: DecisionEngine, context: Any
+) -> None:
+    """Engine 16 reads nothing from `context` — its own rule, and what lets invariant 4
+    protect it. A context whose config raises on any read proves fix 3 did not smuggle
+    one in; a tighter bound *published by engine 4* proves which number it obeys."""
+    import dataclasses
+
+    class _NoConfig:
+        def get(self, *_: Any) -> Any:
+            raise AssertionError("engine 16 read config")
+
+    blind = dataclasses.replace(context, config=_NoConfig())
+    state = approving_state(context)
+    age = _candidate_quote(state)["age_s"]
+
+    assert decision.process(blind, state).status is EngineStatus.OK
+
+    state["data_guard"]["max_data_age_s"] = age - 1
+    tightened = decision.process(blind, state)
+    assert tightened.data["reason_code"] == REASON_CANDIDATE_QUOTE_NOT_LIVE
+
+
+def test_an_absent_engine_four_payload_blocks(decision: DecisionEngine, context: Any) -> None:
+    """Invariant 3: a bound that was never published is not a bound that passed."""
+    state = approving_state(context)
+    del state["data_guard"]
+
+    result = decision.process(context, state)
+
+    assert result.data["reason_code"] == REASON_INPUT_MISSING
+
+
+def test_an_absent_candidate_quote_blocks(decision: DecisionEngine, context: Any) -> None:
+    state = approving_state(context)
+    del state["market_sensor"]["quotes"][state["scout"]["pair"]]
+
+    result = decision.process(context, state)
+
+    assert result.data["reason_code"] == REASON_INPUT_MISSING
+
+
+@pytest.mark.parametrize("field", ["age_s", "bid", "ask"])
+def test_an_unreadable_quote_field_blocks(
+    decision: DecisionEngine, context: Any, field: str
+) -> None:
+    state = approving_state(context)
+    _candidate_quote(state)[field] = "not a number"
+
+    result = decision.process(context, state)
+
+    assert result.data["reason_code"] == REASON_INPUTS_UNAVAILABLE

@@ -5,6 +5,13 @@ does not trust. It blocks on three conditions the phase criteria name — **stal
 a **negative spread**, and a **missing candle** — and on the fail-closed case invariant
 3 requires: **no market data at all**.
 
+**All four are judged on the feed, never on one pair** (D10, operator ruling 2026-09-21).
+Stale means the *freshest* quote is past the bound — a heartbeat; a negative spread means
+*every* pair is crossed; a missing candle means *no* pair traded in the bar. A single thin
+pair that is stale or crossed is excluded by engine 7 under ``no_live_quote``, and engine 16
+re-checks the chosen pair before any order. Judging the tick on its oldest pair was the
+defect that blocked every tick against the real exchange.
+
 Three properties are not negotiable and there is no flag that softens any of them.
 
 **It has no escape hatch.** `AGENTS.md`: invariants outrank tests, and a test that fails
@@ -37,6 +44,7 @@ from acsoe.core.contracts import (
     State,
 )
 from acsoe.engines.data_guard.contracts import (
+    MAX_DATA_AGE_KEY,
     REASON_MISSING_CANDLE,
     REASON_NEGATIVE_SPREAD,
     REASON_NO_MARKET_DATA,
@@ -84,7 +92,7 @@ class DataGuardEngine(BaseEngine):
         # No default, and no fallback if the key is absent. `config.get` raises, the
         # orchestrator turns it into ERROR, and ERROR blocks. A placeholder here would
         # be inventing the one number this gate exists to apply.
-        max_age_s = float(context.config.get("data_guard.max_data_age_s"))
+        max_age_s = float(context.config.get(MAX_DATA_AGE_KEY))
 
         sensor = state.get("market_sensor") or {}
         quotes = sensor.get("quotes") or {}
@@ -92,6 +100,8 @@ class DataGuardEngine(BaseEngine):
 
         findings: list[Finding] = []
         oldest_age: float | None = None
+        freshest_age: float | None = None
+        fresh_pairs = 0
 
         if not quotes:
             findings.append(
@@ -106,33 +116,59 @@ class DataGuardEngine(BaseEngine):
                 )
             )
         else:
-            for pair, quote in sorted(quotes.items()):
+            # **Feed-wide health only** (D10, operator ruling 2026-09-21). One stale or
+            # crossed pair is that pair's problem, and engine 7 excludes it under
+            # `no_live_quote`; this gate judges whether the *feed* can be trusted. Judging
+            # the tick on its oldest quote was the bug: with 668 real pairs some thin one
+            # is always past the bound, so the guard blocked every tick. It also disobeyed
+            # `REASON_STALE`'s own contract, which has always said "the *freshest* quote".
+            ages: list[float] = []
+            crossed = 0
+            for quote in quotes.values():
                 age = self._age(quote)
                 if age is not None:
-                    oldest_age = age if oldest_age is None else max(oldest_age, age)
-                    if age > max_age_s:
-                        findings.append(
-                            Finding(
-                                reason_code=REASON_STALE,
-                                pair=str(pair),
-                                detail=(
-                                    f"{pair} market data is {age:.0f}s old, past the "
-                                    f"{max_age_s:.0f}s the guard allows"
-                                ),
-                            )
-                        )
+                    ages.append(age)
+                    if age <= max_age_s:
+                        fresh_pairs += 1
                 spread_pct = _decimal(quote.get("spread_pct"))
                 if spread_pct is not None and spread_pct < 0:
-                    findings.append(
-                        Finding(
-                            reason_code=REASON_NEGATIVE_SPREAD,
-                            pair=str(pair),
-                            detail=(
-                                f"{pair} order book is crossed: the bid is above the ask "
-                                f"(spread {spread_pct})"
-                            ),
-                        )
+                    crossed += 1
+            if ages:
+                oldest_age = max(ages)
+                freshest_age = min(ages)
+
+            # The heartbeat. If even the freshest quote is past the bound, nothing on the
+            # subscription has moved within it: the feed is dead or stalled, and nothing it
+            # says can be traded on. A tick whose quotes carry no age at all cannot show the
+            # feed is alive — engine 3 stamps `age_s` on every quote it publishes, so this
+            # is a defect upstream — and the absence of a no is never a yes (invariant 3).
+            if freshest_age is None or freshest_age > max_age_s:
+                findings.append(
+                    Finding(
+                        reason_code=REASON_STALE,
+                        detail=(
+                            f"None of the {len(quotes)} quoted pairs carries an age, so the "
+                            "feed cannot be shown to be alive"
+                            if freshest_age is None
+                            else f"No pair has quoted within {max_age_s:.0f}s: the freshest "
+                            f"of {len(quotes)} quotes is {freshest_age:.0f}s old"
+                        ),
                     )
+                )
+            # A crossed book on **every** quoted pair is not a market, it is a corrupt feed
+            # — bid and ask swapped in a parser, say. Left to engine 7 alone it would read as
+            # every pair excluded for `no_live_quote`: an empty universe, a quiet PASS, and a
+            # parser defect hidden behind it. One crossed pair among many is engine 7's.
+            if crossed and crossed == len(quotes):
+                findings.append(
+                    Finding(
+                        reason_code=REASON_NEGATIVE_SPREAD,
+                        detail=(
+                            f"Every one of the {len(quotes)} quoted pairs has a crossed book "
+                            "(bid above ask), which is a corrupt feed rather than a market"
+                        ),
+                    )
+                )
 
         if missing_bars:
             findings.append(
@@ -154,7 +190,9 @@ class DataGuardEngine(BaseEngine):
             findings=tuple(finding.model_dump(mode="json") for finding in ordered),
             max_data_age_s=max_age_s,
             oldest_quote_age_s=oldest_age,
+            freshest_quote_age_s=freshest_age,
             pairs_seen=len(quotes),
+            fresh_pairs=fresh_pairs,
             missing_bars=len(missing_bars),
         )
         duration_ms = (time.perf_counter() - started) * 1000.0
