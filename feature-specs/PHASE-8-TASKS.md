@@ -55,6 +55,17 @@ Each row is one gated boundary: one commit, one gate, one push.
 | H2 | `scout.rank_feature: expected_move` in the committed config | `config/default.yaml` | a daemon started from the committed config ranks by expected move, **and the chain still runs** | **ATTEMPTED, REVERTED, NEEDS A RULING.** Setting the key makes engine 7 fail closed on every tick wherever `models.*_run_id` is absent — the committed state, since `models/` is gitignored — instead of ranking alphabetically. 34 of 63 scout tests went red on the real behaviour, not on anchors. Account: decisions D4a; options and costs in the findings |
 | H3 | The stale `rank_universe` docstring | `src/acsoe/engines/scout/contracts.py` | the docstring describes the committed state truthfully | **done, gated** — it now records that spec 75 is resolved (expected move), that the committed config does not set the key, and why setting it is not one line |
 
+### Criteria — before anything else is judged
+
+| # | Item | Owner | Acceptance |
+|---|---|---|---|
+| C0 | **Write Phase 8's criteria, PENDING first**, as spec 141 did for Phase 7 | C | `verify.py --phase 8` reports the workflow row's criteria — the three live switches, `close_all` end to end, the soak digest, no secret in any artefact — each observed PENDING, PASS and FAIL |
+
+**Why this is first.** `verify.py --phase 8` today registers only the two every-phase criteria
+(`docs_vocabulary`, `toolchain_green`) and therefore prints *"Phase 8 is green: every criterion
+PASS, zero PENDING"* while nothing of Phase 8 exists. A phase that reports green before it
+starts cannot tell the operator anything at its close.
+
 ### Path (a) — the system live and visible, no real fill
 
 | # | Item | Owner | Acceptance |

@@ -459,10 +459,18 @@ def rank_universe(
     be a check whose output resembles the claim while the claim is untrue, and that
     ranking one candidate out of a filtered set was a Phase 5 decision to be made with real
     features in front of us. Spec 59 decision 7 then made it **a config-named feature
-    rather than a formula**: the mechanism is here now, the feature itself arrives in
-    `config/default.yaml` from the operator's ruling on the spec 75 ranking study, and
-    while `scout.rank_feature` is absent the ordering stays alphabetical and the engine
-    publishes `rank_feature: null`.
+    rather than a formula**: the mechanism is here now, and the feature itself arrives in
+    `config/default.yaml` from the operator's ruling on the spec 75 ranking study.
+
+    **Spec 75 was resolved on 2026-09-19** by Phase 7's ruling R1: the feature is engine 8's
+    expected move, :data:`RANK_BY_EXPECTED_MOVE`. **The committed config does not set it
+    yet.** Phase 7 selected it per run through the replay driver's `--ranking expected_move`,
+    so with the committed config `scout.rank_feature` is absent, the ordering here stays
+    alphabetical, and the engine publishes `rank_feature: null`. Setting the key is not a
+    one-line change: with it set and `models.*_run_id` absent — which is the committed state,
+    because `models/` is gitignored — the ranking cannot load its artefacts and engine 7
+    fails closed on every tick instead of ranking. Recorded for the operator in
+    `docs/dataset/phase-8-findings.md`; the alphabetical path is kept either way.
 
     ## Why the test for this is a direct one and an end-to-end test cannot replace it
 
