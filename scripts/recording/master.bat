@@ -53,10 +53,8 @@ REM  The recorder's own output is not shown here - it would overwrite the block
 REM  every second. It goes to logs\supervisor__<source>__<date>.log, together
 REM  with every launch, every exit code and every restart.
 REM
-REM  Everything else - which machines are recording, what the archive covers,
-REM  where the holes are, importing from another machine - is the manager web
-REM  app, not this window. Start it with:
-REM      python scripts\recording\manager\serve.py
+REM  Everything else - sources, coverage, holes, imports - is the manager web app
+REM  on http://127.0.0.1:8766. This file starts it; see the note at the end.    
 REM ===========================================================================
 
 REM Render UTF-8 correctly. The status block contains an em dash, and a console
@@ -76,6 +74,8 @@ if exist ".venv\Scripts\python.exe" (set "ACSOE_PY=.venv\Scripts\python.exe") el
 
 title ACSOE recording - master
 
+start "ACSOE recording manager" /min "%ACSOE_PY%" scripts\recording\manager\serve.py
+
 "%ACSOE_PY%" scripts\recording\supervise.py --config config\recorder.yaml
 
 REM If the supervisor itself exits, hold the window open so the reason is
@@ -83,3 +83,26 @@ REM readable instead of vanishing with the console.
 echo.
 echo The supervisor has stopped. Nothing is being recorded.
 pause
+
+REM ===========================================================================
+REM  THE RECORDING MANAGER LINE, above the supervisor
+REM
+REM  The manager is a VIEWER. It reads the archive and the registry and never
+REM  records, so it must never be able to take recording down with it:
+REM
+REM  - `start` launches it as a separate process and returns at once. This file
+REM    never waits on it, so a manager that fails, crashes or hangs cannot delay
+REM    or stop the supervisor on the next line.
+REM  - /min, not /b. /b would share this console, and the manager's output would
+REM    overwrite the six-line status block described at the top.
+REM  - It binds 127.0.0.1 only (serve.py's default, deliberately): it can run ssh
+REM    with this machine's key and write into the archive.
+REM  - Closing the manager's window stops the manager and nothing else. Opening
+REM    this file twice starts a second manager that finds port 8766 taken and
+REM    exits in its own window; the recorder is untouched either way.
+REM
+REM  This note is at the END, not beside the line, on purpose. cmd re-reads a
+REM  running batch file by byte offset, so the line was added without moving any
+REM  byte above the supervisor - a window already recording when this changed
+REM  resumes exactly where it expects if the supervisor ever exits.
+REM ===========================================================================
