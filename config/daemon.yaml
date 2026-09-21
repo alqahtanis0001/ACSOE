@@ -1,0 +1,396 @@
+# ACSOE daemon configuration — the file a LIVE-READING daemon is started with:
+#
+#     acsoe --config config/daemon.yaml engine
+#
+# It is a COPY of config/default.yaml with one documented override, and
+# tests/platform/test_daemon_config.py fails if it differs anywhere else. Two files drift;
+# a test is what stops them. Ruled by the operator on 2026-09-21 (option C) in preference
+# to setting the key in default.yaml, which would make a fresh clone fail closed at engine 7,
+# and to naming model artefacts in the file every clone gets, which go stale on any retrain.
+#
+# ACSOE default configuration.
+#
+# Percentages are decimals: 0.03 means 3%. Durations are seconds unless the key
+# name says otherwise. Money values are Decimal — quote them so YAML does not
+# parse them as floats.
+#
+# NOTHING the exchange can tell us appears in this file. No fee, no order
+# minimum, no tick size, no precision. Those are fetched at runtime, every time.
+# See rule 2 of context/trading-invariants.md.
+#
+# A key whose value is `null` is OPERATOR REQUIRED: the context files name the
+# key but never specify its value, and it is trading behaviour, so the lead may
+# not invent one. The loader must REFUSE TO START while any of them is null,
+# naming the key. That is fail-closed and deliberate — a plausible default here
+# is a number that silently decides how much money is at risk.
+#
+# As of 2026-09-08 there are none left: the operator supplied all nine. They are
+# marked "Operator-chosen" and are PROVISIONAL — starting values to make Phase 3
+# runnable, to be revised once the economics are measured rather than assumed.
+# The refusal machinery stays; it is what protects the tenth such key.
+
+mode: paper                      # paper | live | replay. Phase 0 accepts paper only:
+                                 # platform/live_guard.py is a Phase 8 deliverable, and
+                                 # the absence of the guard is not permission.
+
+console:
+  port: 8765                     # README default; the config is the source of truth
+  poll_interval_ms: 500          # ui-context.md; watermark poll, not browser polling
+  stale_after_ms: 120000         # ui-context.md; two loop ticks. A figure older than
+                                 # this renders at 50% opacity with its age beside it.
+                                 # Validation: poll_interval_ms <= stale_after_ms / 4
+
+logging:
+  level: "INFO"                  # requested by A, spec 08
+  retention_days: 14             # daily rotation in logs/. Covers Phase 8's 7-day soak
+                                 # plus slack, so the run log outlives the run it proves.
+
+timeframes:
+  decision_bar_s: 900            # 15 minutes. Candidates are born only on a closed bar.
+  loop_tick_s: 60                # 1 minute. Manages positions and entry orders; never
+                                 # generates a signal.
+
+barriers:                        # Locked decisions; triple-barrier labelling
+  target_pct: 0.03               # +3%
+  stop_pct: 0.015                # -1.5%
+  timeout_bars: 48               # 48 x 15m = 12h, consistent with the 2-12h horizon
+
+dataset:                         # Which labelled rows and pairs form the training dataset.
+                                 # Two operator rulings of 2026-09-12, recorded under Locked
+                                 # Decisions in context/progress-tracker.md. Neither is a
+                                 # trading threshold: no gate reads either and no order is
+                                 # sized from them. Both decide what Phase 5 learns from.
+  decision_start_date: "2017-01-01"
+                                 # Decision bars before this UTC calendar date are excluded
+                                 # from labelling. The archive begins 2013-10-07 and its
+                                 # earliest bars are single trades of 0.1 BTC in fifteen
+                                 # minutes: real, but a market no position could have been
+                                 # taken in at any size, and a model trained on them learns
+                                 # patterns that do not transfer. The exclusion is about
+                                 # TRADABILITY, not data quality. research/labelling.py
+                                 # applies it and reports how many rows it removed, per pair.
+  min_labelled_rows: 0           # A pair with fewer labelled rows than this is left out of
+                                 # the dataset by engine 23 `backtest`. 0 means NO FLOOR and
+                                 # 0 is the value today: the eleven pairs under 20,000 rows
+                                 # are kept. A cross-sectional model may want a floor; that
+                                 # decision is deferred behind this named knob, not
+                                 # overlooked. It is 0 rather than null because a null key
+                                 # in this file means OPERATOR REQUIRED and stops every
+                                 # process at load (see the header above).
+
+safety:                          # Engine 17, the circuit breaker. Guard chain, every tick.
+  max_consecutive_data_blocks: 15   # invariant 14. One full decision bar at a 1m tick:
+                                    # long enough that a websocket reconnect never
+                                    # liquidates the account, short enough that nothing
+                                    # is carried through a second bar on bad data.
+  max_drawdown_pct: 0.10            # Operator-chosen 2026-09-08. Invariant 14's "configured
+                                    # drawdown limits". Provisional — see the tracker.
+  max_consecutive_losses: 5         # Operator-chosen 2026-09-08. At a ~61% break-even win
+                                    # rate a 5-loss run is roughly a 1-in-100 event.
+  error_rate_window_s: 3600         # architecture-context.md specifies "the trailing hour"
+                                    # for the error rate, so this one is specified, not
+                                    # operator-required. B caught that it was wrongly null.
+  max_errors_in_window: 20          # Operator-chosen 2026-09-08. 20 engine errors inside the
+                                    # 3600s window trips the breaker.
+
+trading:
+  hurdle_multiple: 1.5           # Operator-chosen 2026-09-08. Invariant 5 requires
+                                 # net_edge > hurdle_multiple x friction, so a candidate
+                                 # needs expected_move > 2.5 x friction. At tier 1 that is
+                                 # 3.125%, above the 3% target barrier — nothing clears the
+                                 # cost gate at tier 1 by design. See the tracker.
+  risk_fraction_per_trade: 0.01  # Operator-chosen 2026-09-08. 1% of total equity.
+  max_concurrent_positions: 3    # Operator-chosen 2026-09-08. Note the balance binds first
+                                 # at $5,000: one position is ~$3,333 notional. See tracker.
+  entry_unfilled_window_s: 300   # Operator-chosen 2026-09-08. 5 minutes, a third of a
+                                 # decision bar, then cancel and abandon. Never chase.
+  base_reporting_currency: USD   # Operator-chosen 2026-09-08.
+  allow_crypto_quoted: false     # invariant 7. Crypto-quoted pairs are a second
+                                 # directional bet the system did not choose to make.
+  stable_quote_currencies:       # Operator-chosen 2026-09-10. Requested by A, spec 39.
+                                 # Which quote currencies count as STABLE. Invariant 7 disables
+                                 # crypto-quoted pairs and defines one as a pair whose quote is
+                                 # "BTC, ETH, or any non-stable asset" — that sentence needs
+                                 # this set, and nothing in the repo held it. Kraken does not
+                                 # supply it: AssetPairs carries no asset class, so it is not
+                                 # derivable at runtime and must be stated.
+                                 #
+                                 # CURRENCIES, NOT PAIRS. This does not name what may be
+                                 # traded; the tradable universe is still computed per tick by
+                                 # engine 7 from balances and live prices, which is a Locked
+                                 # Decision. This only says which quote currencies are not a
+                                 # second directional bet.
+                                 #
+                                 # The two stablecoins are here on the operator's ruling and
+                                 # are the judgement call in this list: a peg is an issuer's
+                                 # promise, not a central bank's, so USDC and USDT carry a
+                                 # depeg risk that the seven fiats do not. PROVISIONAL, like
+                                 # the other operator-chosen values, and revisable.
+    - USD
+    - EUR
+    - GBP
+    - CAD
+    - AUD
+    - CHF
+    - JPY
+    - USDC
+    - USDT
+
+paper:
+  starting_balances: {USD: "5000.00"}   # Operator-chosen 2026-09-08. Currency-to-amount
+                                 # map; amounts are quoted strings, parsed as Decimal.
+
+order_book:                      # Engine 9 `order_book`. Requested by C, spec 96.
+  depth: 10                      # Levels a side engine 9 walks when it estimates the
+                                 # slippage a taker exit would pay. Chosen by the lead
+                                 # 2026-09-16 at C's request, and it is NOT an arbitrary
+                                 # ten: `scripts/record.py` subscribes the book at that
+                                 # depth, so every frame in `data/raw/` carries at most
+                                 # ten levels a side, and the committed fixture engine 9
+                                 # is validated against inherits that limit.
+                                 #
+                                 # A deeper value would configure the engine to walk past
+                                 # anything the evidence can hold, and the failure is
+                                 # silent in the direction that matters: the walk ends
+                                 # early, the book reads as thin, `book_too_thin` fires,
+                                 # and nothing says the configuration was the cause. It
+                                 # would also make that refusal one the fixture can never
+                                 # exercise honestly.
+                                 #
+                                 # PROVISIONAL, and tied to the recorder: whoever changes
+                                 # `record.py`'s subscription depth changes this, and
+                                 # `platform/config.py` bounds it at MAX_BOOK_DEPTH so the
+                                 # two cannot silently diverge.
+
+kraken:                          # Client tuning. Requested by A, spec 25.
+                                 # NOTHING here is a value the exchange can tell us: no fee,
+                                 # no order minimum, no tick size, no precision. What is here
+                                 # is OUR OWN self-imposed request budget and timeout, chosen
+                                 # by the lead, and it is explicitly NOT a claim about what
+                                 # Kraken permits — a remembered published rate limit is
+                                 # exactly the stale knowledge AGENTS.md warns about.
+                                 # Deliberately conservative: under the real ceiling costs
+                                 # latency, over it costs a ban mid-session. Flagged for
+                                 # revision against the documented limits before Phase 8.
+  rest_capacity: 15              # Token-bucket depth for REST. The burst allowance.
+  rest_refill_per_s: 0.5         # Sustained rate: one request every two seconds, far below
+                                 # what a loop tick needs at one decision per fifteen minutes.
+  rest_timeout_s: 10             # HTTP timeout. An order of magnitude above a healthy round
+                                 # trip, short enough that a hung socket cannot outlive the
+                                 # one-minute loop tick.
+  cache_ttl_s:                   # Lead-chosen 2026-09-10, spec 37. How long a fetched snapshot may
+                                 # price a decision before it must be fetched again. OUR OWN
+                                 # re-fetch interval, not a claim about anything Kraken
+                                 # publishes or permits.
+                                 #
+                                 # Invariant 2: a cache stale beyond its TTL COUNTS AS A FAILED
+                                 # FETCH. It is not returned, and in live mode the trade blocks.
+                                 # Separate from the last-known-good retention in
+                                 # `clients/kraken/`, which keeps the same values FOREVER, past
+                                 # any TTL, and may be read only by invariant 14's emergency
+                                 # liquidation. Two mechanisms, two readers; do not merge them.
+                                 #
+                                 # Two keys and not one, because the two values change on
+                                 # different timescales.
+    asset_pairs: 300             # Pair rules change when Kraken lists or delists something.
+    trade_volume: 60             # The fee tier can move on a single trade, and it prices the
+                                 # cost gate, so it is re-read on the timescale of the loop.
+
+data_guard:                      # Engine 4, the first real gate. Requested by A, spec 29.
+  max_data_age_s: 120            # Operator-chosen 2026-09-09. The staleness threshold: market
+                                 # data older than this blocks the tick. Two loop ticks at
+                                 # loop_tick_s 60, so a single missed tick is tolerated and a
+                                 # second consecutive one is not. Distinct from
+                                 # console.stale_after_ms, which is a rendering rule about
+                                 # fading a figure and decides nothing about trading.
+
+market_sensor:                   # Engine 3. Requested by A, spec 28.
+  published_bars: 200            # How many recent closed 15m candles reach `state` each tick.
+                                 # A PLUMBING BOUND, NOT A TRADING THRESHOLD — no gate reads
+                                 # it and no money depends on it, which is why the lead may
+                                 # choose it and it is not OPERATOR REQUIRED. 200 covers the
+                                 # 48-bar holding horizon plus the lookback a Phase 5
+                                 # indicator is likely to want, and is bounded so `state`
+                                 # stays serialisable. Raising it is a lead edit.
+
+backtest:
+  training_window_days: 90       # Locked decision: rolling 90-day cap
+  retrain_interval_days: 7       # Locked decision: weekly, matching the live cadence
+  embargo_bars: 48               # Lead-chosen 2026-09-11, spec 58. Invariant 10 requires folds
+                                 # to be purged AND embargoed; it does not name the embargo's
+                                 # length and nothing else in the repository did.
+                                 #
+                                 # PROVISIONAL and flagged to the operator, like
+                                 # market_sensor.published_bars and kraken.cache_ttl_s. It is a
+                                 # research-methodology bound rather than a trading threshold:
+                                 # no gate reads it and no order is sized from it. It does
+                                 # decide whether a model is honestly validated, which is why
+                                 # it is written down with its reasoning rather than defaulted
+                                 # quietly.
+                                 #
+                                 # 48 is one full label horizon, matching barriers.timeout_bars.
+                                 # The purge already removes every training row whose label
+                                 # window literally overlaps the test window; the embargo exists
+                                 # for the serial correlation that survives the purge, so a span
+                                 # equal to the horizon is the defensible starting value.
+                                 # Raising it costs training rows; lowering it risks a leak that
+                                 # no test can see from the outside.
+                                 #
+                                 # NOT OPTIONAL AT THE POINT OF USE. This is a leaf key, so
+                                 # Config.get returns None rather than raising while it is
+                                 # absent (A, spec 58 handoff). Whatever reads it must refuse a
+                                 # None explicitly. A zero or absent embargo is exactly the
+                                 # Phase 4 defect that looks like success.
+
+# --- Phase 5: models. Lead-authored 2026-09-13 after A's spec 61 fields landed. ---------
+#
+# TWO KEYS ARE DELIBERATELY ABSENT, NOT NULL: models.*_run_id and scout.rank_feature.
+# Each is an optional leaf on the config model, so an absent key reads as None and the
+# engine that needs it fails closed (blocks with a reason naming the key) while the
+# Phase 5 criterion that judges it reports PENDING. Writing either as `null` is a
+# different thing: a null in this file means OPERATOR REQUIRED and stops every process
+# at load. Absent and null are one character apart in a diff and behave in opposite
+# directions. The run ids point at artefacts under models/, which is gitignored, so a
+# fresh clone has none; the ranking feature waits on the Phase 7 question of whether any
+# ranking feature pays for a trade (operator ruling 2026-09-15), and engine 7 ranks
+# alphabetically meanwhile.
+#
+# THE THREE THRESHOLDS ARE NOW SUPPLIED AND ALL THREE ARE PROVISIONAL:
+# skeptic.veto_threshold (0.50, ruled 2026-09-14), anomaly.threshold_percentile (0.99)
+# and prediction.di_percentile (0.99, both ruled 2026-09-15). Each was withheld until the
+# walk-forward had reported (operator ruling 2026-09-12: a value chosen before there is a
+# distribution to place it on is a guess), each is chosen from that distribution, and each
+# is revisited once the chain runs end to end. The reasoning sits with the key.
+
+models:
+  dir: models                    # The artefact root. One directory per training run,
+                                 # never overwritten; see architecture-context.md.
+
+features:                        # modelling/features.py, spec 63.
+  version: "f1"                  # Written into every manifest; a model trained on f1
+                                 # features refuses to load against f2 names.
+  max_lookback_bars: 192         # 48 hours of 15m bars. Bounded by
+                                 # market_sensor.published_bars (200) and validated
+                                 # against it at load, because a lookback engine 3 does
+                                 # not publish can never be filled live.
+  min_lookback_fill: 0.8         # A window with less than 80% of its expected bars
+                                 # present yields NaN for every feature over it. The
+                                 # feature layer marks a gap; it never interpolates one.
+
+macro:                           # Engine 6, spec 65, and spec 67's offline join. Two
+                                 # spellings of one pair: what the live stream keys
+                                 # candles by, and what the archive file is called.
+                                 # PROVISIONAL on the live side: the committed fixtures
+                                 # spell it BTC/USD and the real stream must agree; if
+                                 # it does not, this line changes, not the code.
+  btc: {live: "BTC/USD", archive: "XBTUSD"}
+  eth: {live: "ETH/USD", archive: "ETHUSD"}
+
+prediction:                      # Engine 8 and the DI, specs 67, 68, 71. Plumbing.
+  di_window_days: 30             # Locked decision: 30-day per-pair window for the DI
+                                 # reference set, taken from the end of each fold's
+                                 # training window.
+  di_neighbours: 10              # k for the mean k-nearest distance.
+  di_reference_rows: 200000      # Subsample cap on the reference set, seeded from
+                                 # seeds.train, so the DI fit stays tractable per fold.
+  calibration_days: 14           # The held-out tail of the training window the
+                                 # calibrator is fitted on. Never the test window.
+  threads: 4                     # Fixed, because LightGBM determinism needs a fixed
+                                 # thread count as well as a seed.
+  di_percentile: 0.99            # OPERATOR, ruled 2026-09-15, PROVISIONAL until the chain
+                                 # runs end to end. With the 48-bar exclusion (spec 68
+                                 # amendment) the DI refuses 3.31% of complete out-of-sample
+                                 # rows against 1% nominal, over the 405 fitted folds -
+                                 # roughly three times nominal, which is the right direction
+                                 # for an out-of-distribution refusal, and nothing like the
+                                 # 74.9% it refused at this percentile before the exclusion.
+                                 # 0.95 rejected: 6.79%, too much for a gate meant to catch
+                                 # genuinely unfamiliar conditions.
+                                 # docs/dataset/di-exclusion-refit-2026-09-15.json.
+
+anomaly:                         # Engine 13, specs 70, 72.
+  threshold_percentile: 0.99     # OPERATOR, ruled 2026-09-15, PROVISIONAL. 1.24% blocked out
+                                 # of sample against 1% nominal, stable by year (0.9% to
+                                 # 1.8%), and what it blocks is the volatile tail (stop rate
+                                 # 0.67 against 0.50). 0.95 rejected: 5.55% blocked, including
+                                 # BUY calls with better pre-friction returns than the ones
+                                 # kept. The spec 70 ten-sigma question stays open - a
+                                 # ten-sigma volume spike scores at the 0.904 quantile and
+                                 # this threshold does not block it.
+
+skeptic:                         # Engine 15, specs 69, 73.
+  veto_threshold: 0.50           # OPERATOR, ruled 2026-09-14 from the veto sweep,
+                                 # PROVISIONAL until the chain runs end to end. At 0.50 the
+                                 # survivors hit the target at 0.531 against 0.473 for the
+                                 # same number of the predictor's most confident calls, the
+                                 # two sets share only 44% of calls, and the survivors beat
+                                 # the vetoed calls in every test year 2017 to 2024.
+
+regime:                          # Engine 12, spec 66. Percentile-relative rules, chosen
+                                 # by the lead as plumbing: no gate reads the label and
+                                 # no order is sized from it. PROVISIONAL.
+  high_vol_percentile: 0.9       # Short-window realised volatility above the 90th
+                                 # percentile of its own long-window distribution.
+  trend_efficiency: 0.3          # Net move over path length above 0.3 reads as
+                                 # trending; below, choppy.
+
+training:                        # research/training.py, spec 67. LightGBM hyperparameters
+                                 # as CONFIG rather than module constants, because a run
+                                 # must be reproducible from its config plus its data and a
+                                 # tree count in a constant is a number the manifest cannot
+                                 # prove. Plumbing the lead chooses, PROVISIONAL, and written
+                                 # into every manifest: no gate reads them and no order is
+                                 # sized from them. Lead-chosen 2026-09-13.
+  num_trees: 400                 # Boosting rounds per fold.
+  learning_rate: 0.05            # Shrinkage per round; strictly inside 0 and 1.
+  num_leaves: 31                 # LightGBM's default; must exceed 1, because a single leaf
+                                 # is a model that returns the base rate and would report a
+                                 # Brier equal to the base-rate Brier, reading as "no edge"
+                                 # when the truth is "never allowed one" (A-2's bound).
+  min_data_in_leaf: 200          # Rows per leaf; large, because rows overlap at a 48-bar
+                                 # horizon and the effective sample is far smaller than the
+                                 # row count (uniqueness weights, spec 59 decision 5).
+  skeptic_cap_folds: 13          # OPERATOR, ruled 2026-09-16 (spec 83); applied from Phase 7
+                                 # (R2, 2026-09-19): fold k's skeptic trains only on folds
+                                 # k-13..k-1. The Phase 7 window's skeptics were staged with
+                                 # --cap 13 before this key landed (D20); same value.
+
+scout:                           # Engine 7's ranking, spec 76.
+  rank_descending: true          # Direction for rank_feature when it is set.
+  rank_feature: expected_move    # THE ONLY DIFFERENCE FROM default.yaml (operator ruling
+                                 # 2026-09-21, option C). Engine 8's expected move: the
+                                 # ranking Phase 7 measured (R1). In default.yaml this key
+                                 # stays ABSENT so a fresh clone still runs; here it is set
+                                 # so the daemon does not depend on anyone remembering a
+                                 # command-line flag.
+                                 #
+                                 # NOT ENOUGH ON ITS OWN. Ranking loads the artefacts named
+                                 # by models.*_run_id, and those keys are absent, so engine 7
+                                 # FAILS CLOSED on every tick until they are set. Which
+                                 # trained model a live daemon runs is the operator's
+                                 # decision, not the lead's; the newest on this machine is
+                                 # train-20260913T205245-067b2b9d-f404-p7, whose training
+                                 # ends 2025-01-04. Until it is ruled, start the daemon with
+                                 # config/default.yaml and it ranks alphabetically, or set
+                                 # the three keys here.
+
+replay:                          # Phase 7, specs 126, 129, 131. Read ONLY by the offline replay
+                                 # (invariant 2, "In replay mode"); the replay client refuses
+                                 # construction in paper and live. Every value it serves that the
+                                 # archive did not record is DECLARED, never measured.
+  asset_pairs_file: tests/fixtures/kraken/asset_pairs_recorded_2026-09-19.json   # spec 127
+  instrument_file: tests/fixtures/kraken/instrument_recorded_2026-09-19.json     # spec 127
+  pair_names_file: tests/fixtures/kraken/pair_names_recorded_2026-09-19.json     # spec 127
+  spread_table_file: tests/fixtures/replay/spread_book_table_2026-09-19.json    # spec 130, declared
+  fee_schedule_file: tests/fixtures/replay/kraken_fee_schedule_2026-09-19.json  # fetched 2026-09-19, declared
+  fee_tier: 3                    # R3, operator 2026-09-19: tiers 3 and 5, one per run. The driver's
+                                 # --fee-tier sets each run's tier; this file is never edited between runs.
+  partitions_dir: data/derived/trades_weekly   # spec 128, runtime output (gitignored)
+  first_fold: 379                # R4, operator 2026-09-19: six months ending at fold 404's
+  last_fold: 404                 # test close, 2025-01-04 00:00 UTC.
+  run_id_format: "train-20260913T205245-067b2b9d-f{fold}-p7"   # spec 135's run directories
+
+seeds:
+  global: 20260908               # Every random seed comes from config, so a training run
+  train: 20260908                # is reproducible from its config plus its data.
+  seed_generator: 20260908       # B's fixture generator, so seeding twice is identical.
