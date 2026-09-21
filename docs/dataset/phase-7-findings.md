@@ -1306,7 +1306,7 @@ adjusted since. No statistic, threshold or rule was changed after a figure exist
 | Pre-registered, before any figure | Outcome |
 |---|---|
 | **The promotion bar** (§R.4, spec 139): a model is promoted only if the lower bound of the Bonferroni-widened interval on net return per trade is above zero, at N = 1,679 trials | Not cleared. Both runs are negative before any interval is computed |
-| **The minimum mean net return per trade** that could clear the bar at the expected trade counts: **4.9–5.5% at tier 3**, 1.35–2.14% at tier 5 | Unreachable, as declared. Tier 3 realised **−0.70% mean per trade** (12 trades); tier 5 **−2.19%** |
+| **The minimum mean net return per trade** that could clear the bar at the expected trade counts: **4.9–5.5% at tier 3**, 1.35–2.14% at tier 5 | Unreachable, as declared. Tier 3 realised **−0.70% mean per trade** measured as realised PnL per trade over the 5,000.00 starting balance (12 trades); as the mean of the trades' own net returns, the definition the promotion module and the bar use, it is **−1.08%**; tier 5 **−2.19%** |
 | **Below 10 trades the gate reports no interval**, so tier 3's result is descriptive | Tier 3 closed 12 trades, just above that line; tier 5 closed 5, below it |
 | **"Non-promotion is the expected outcome of this design, not a finding about skill"** | Confirmed |
 | **Expected trades: 8–11 at tier 3, 27–55 at tier 5** | Tier 3 **12**, just above. Tier 5 **5**, far below — because the breaker stopped it on day 15, a mechanism the estimate did not model |
