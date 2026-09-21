@@ -1175,12 +1175,13 @@ version of this must be feasible live before it is simulated.
 **Written 2026-09-20 from the runs' own databases, read through snapshot copies.** Every figure
 below is measured. Nothing here is a projection.
 
-**One scope note, stated rather than buried.** Tier 5 completed the whole window. **Tier 3's
-trading is over and its result is final** — it froze on 2024-12-19 and cannot open another
-position — but at the time of writing its process is still ticking through the last five
-simulated days, so its *tick* counts (bar ticks, rejections, blocks) are as at 21:55 and will
-tick up slightly. The trades, the equity and the freeze are final. The figure script regenerates
-every number when the process ends.
+**BOTH RUNS ARE COMPLETE.** Tier 5 ended 2026-09-20 21:21 local and tier 3 at 00:58 on 2026-09-21,
+each having run **all 8,736 bar ticks** to 2025-01-04 00:00Z and written `finished: true`. Every
+figure below is final. The watchdog detected each finish by itself and recorded it in the
+handover. **Neither run crashed and neither was resumed**, across about 25.8 hours of wall clock.
+
+The figure script was run twice against the finished databases and produced **byte-identical
+output on all 26 files**, so the figures in this document reproduce exactly.
 
 ## 1. FINAL RESULTS, BOTH RUNS
 
@@ -1188,8 +1189,9 @@ every number when the process ends.
 |---|---|---|
 | Launched | 2026-09-19 23:12:35 local, commit `19c5a11` | same |
 | Window | 2024-10-05 00:15Z to 2025-01-04 00:00Z, folds 392–404 | same |
-| Bar ticks run | 7,468 of 8,736 (85.5%, still advancing) | **8,736 of 8,736, complete** |
-| Simulated end reached | 2024-12-21 (trading ended 12-19) | **2025-01-04 00:00Z** |
+| Bar ticks run | **8,736 of 8,736, complete** | **8,736 of 8,736, complete** |
+| Total ticks (bar + minute) | 9,654 | 8,888 |
+| Simulated end reached | **2025-01-04 00:00Z** (trading ended 12-19) | **2025-01-04 00:00Z** |
 | Minute ticks (exposure) | 918 | 152 |
 | Ticks engine 7 ran | 7,280 | 1,461 |
 | Ticks with a candidate | 7,170 | 1,452 |
@@ -1200,7 +1202,7 @@ every number when the process ends.
 | **Final equity (from 5,000)** | **4,578.04 = −8.44%** | **4,645.59 = −7.09%** |
 | Peak equity reached | 5,143.94 | 5,014.18 |
 | **Freeze** | **drawdown, 2024-12-19 20:06Z** (10.07% against the 10% limit) | **loss streak, 2024-10-20 05:30Z** (5 consecutive losses, limit 5) |
-| Blocked ticks after the freeze | 206 and counting | 7,278 |
+| Blocked ticks after the freeze | 1,465 (16.8% of the window) | 7,278 (83.3% of the window) |
 | Crashes / resumes | **0 / 0** | **0 / 0** |
 
 **Tier 3's twelve trades, complete and final:**
@@ -1320,18 +1322,18 @@ grid assumes.**
 
 | | Tier 3 | Tier 5 |
 |---|---|---|
-| Bar ticks run | 7,468 (advancing) | 8,736 |
-| Bar ticks with engine 7 running (not frozen) | 7,280 | 1,461 |
+| Bar ticks run | 8,736 | 8,736 |
+| Bar ticks with engine 7 running (not frozen) | 7,280 (83.3%) | 1,461 (16.7%) |
 | Ticks where engine 7 published a candidate | 7,170 | 1,452 |
 | Refusals, **all by engine 10 `cost`** | 7,152 (`net_edge_below_hurdle` 7,142; `spread_wider_than_move` 10) | 1,445 (all `net_edge_below_hurdle`) |
 | Approvals | 18 | 7 |
 | Entry orders filled | 12 | 5 |
-| `block_records` after the freeze | 206 (advancing) | 7,278 |
+| `block_records` after the freeze | 1,465 | 7,278 |
 | `rejections` rows carrying `details` (every gate's verdict) | 7,152 of 7,152 | 1,445 of 1,445 |
 | `rejections` rows carrying a `shap_ref` | 7,152 of 7,152 | 1,445 of 1,445 |
 | SHAP files written | 7,170 | 1,452 |
 | `scout_tallies` rows | 7,280 | 1,461 |
-| `equity_snapshots` rows | 8,398 | 8,887 |
+| `equity_snapshots` rows | 9,653 | 8,887 |
 
 **What this dataset contains, and what can be asked of it.** For every decision bar: the universe
 engine 7 scanned (1,450 pairs), how many entered and why each was excluded, the full ranked list

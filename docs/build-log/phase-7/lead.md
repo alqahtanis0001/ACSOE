@@ -439,6 +439,26 @@ on, not low enough to clear anything. The arithmetic, so the inference can be ch
 - P(0 in one arm) ≈ e^−0.96 ≈ 0.38. P(0 in both, if the rates were equal) ≈ 0.15.
 - **Zero in both arms is an ordinary result whether or not the writer is implicated.**
 
+### Both runs complete; the figures regenerated and proven reproducible
+
+**Agent:** Lead · **Date:** 2026-09-21, 01:00
+
+**Tier 3 ended at 00:58** with `finished: true`, 9,654 ticks, having run all 8,736 bar ticks to
+2025-01-04 00:00Z. **Tier 5 ended at 21:21 the previous evening**, 8,888 ticks. The watchdog
+detected each finish on its next pass and recorded it. **Across 25.8 hours of wall clock neither
+run crashed and neither was resumed** — against the two crashes in 3,531 ticks measured the
+evening before, which is worth stating plainly: the fault did not recur, and nothing about it was
+fixed, so the rate estimate remains what it was.
+
+**The figures were regenerated from the finished databases and the script run twice: all 26
+output files are byte-identical between runs.** So the committed figures reproduce exactly.
+Part III's counts are updated to the completed runs (tier 3: 1,465 blocked ticks, 9,653 equity
+rows; tier 5 unchanged, being already complete).
+
+**Final, both runs.** Tier 3: 12 trades, 4 targets, 8 stops, equity 4,578.04, **−8.44%**, frozen
+on drawdown 2024-12-19 20:06Z, 16.8% of the window blocked. Tier 5: 5 trades, all stops, equity
+4,645.59, **−7.09%**, frozen on the loss streak 2024-10-20 05:30Z, 83.3% of the window blocked.
+
 ### Part III written, and F7's reading of the tier contrast corrected
 
 **Agent:** Lead · **Date:** 2026-09-20, 22:00
