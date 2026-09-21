@@ -86,6 +86,58 @@ to alphabetical when the artefacts are missing: that is a fallback on the rankin
 would silently trade a different system from the one Phase 7 measured. (c) Rewriting the 34
 tests to supply artefacts: over an hour, in B's lane, and it changes what those tests prove.
 
+### D4b — `rank_feature` lands by option C: `config/daemon.yaml`, with drift caught by a test
+
+**Ruled by the operator, 2026-09-21**, over option B: *"B puts specific `models.*_run_id` values
+into the config every clone gets. Those go stale the moment anything is retrained, and a
+committed config that names particular artefacts will mislead a future session."*
+
+**Chose.** `config/daemon.yaml`: an exact copy of `config/default.yaml` with one override,
+`scout.rank_feature: expected_move`, started with `acsoe --config config/daemon.yaml engine`.
+`config/default.yaml` is untouched, so a fresh clone still runs and still ranks alphabetically.
+
+**The loader has no overlay.** `Config.load(path)` reads one file — there is no `extends`, no
+include, no environment override for a config key (`platform/config.py` reads the environment
+only for credentials). So option C is necessarily a **full second file**, and the operator named
+the cost themselves: two files to keep in step.
+
+**What answers that cost:** `tests/platform/test_daemon_config.py` flattens both files and fails,
+naming the key, if they differ anywhere but the one declared override. Proven capable of failing
+by two mutations applied to a **byte copy written to disk first** (the Phase 8 rule), restored and
+hash-checked: a value changed in one file only, and the override itself changed. Both killed.
+
+**Rejected.** (a) Adding overlay support to the loader so `daemon.yaml` could be three lines:
+better engineering, but it is A's platform lane, it changes how every config in the project is
+read, and it is over the hour the operator has not approved. (b) A copy without the drift test:
+that is the two-files-drift failure the operator flagged, with nothing to catch it.
+
+**STOPPED, and reported rather than invented.** `daemon.yaml` alone does not make the daemon
+rank: ranking loads the artefacts named by `models.*_run_id`, those keys are absent, and engine 7
+therefore still fails closed. **Which trained model a live daemon runs is the operator's
+decision**, and the newest artefacts on this machine end their training on 2025-01-04, about
+twenty months before today. The file says so in a comment where whoever starts the daemon will
+read it.
+
+### D7 — Phase 8's criteria are scoped to the ruled build, not to the phase's name
+
+**Chose.** Four criteria, all PENDING on the day they were written:
+`live_client_serves_the_stream` (F1), `pair_rules_key_on_engine_names` (F3),
+`console_refuses_a_foreign_origin`, `daemon_reads_the_real_exchange` (the smoke run, judged on a
+committed digest as Phase 7 judged its runs). Each is observed PENDING, PASS and FAIL by
+`tests/verify/test_phase8_criteria.py`, with the FAIL arms aimed at the *plausible wrong
+implementation* rather than at absence: a stream member that exists but is not callable; a
+half-finished name migration; an Origin check that also refuses the operator's own kill switch; a
+digest from the fake client.
+
+**Rejected.** Writing the workflow row's criteria (`live_guard`, `close_all` live, the soak) as
+well. The operator deferred all of it on 2026-09-21, and a criterion for work nobody is doing is
+a PENDING that never moves — the thing that made "Phase 8 is green" meaningless before any of
+this existed. A test asserts none of the deferred names is registered, so adding one later is a
+deliberate act.
+
+**Cost, stated.** `verify.py --phase 8` will not judge live readiness until those criteria are
+written. The phase cannot be closed on this scope alone, and the task list says so.
+
 ### D5 — The lead edited `engines/scout/contracts.py`, which is B's lane
 
 **Chose.** The lead made the one-line docstring correction itself, under the operator's explicit

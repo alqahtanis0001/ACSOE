@@ -52,19 +52,33 @@ Each row is one gated boundary: one commit, one gate, one push.
 | # | Item | Files | Acceptance | State |
 |---|---|---|---|---|
 | H1 | Unregister the Phase 7 watchdog task | (none; Windows task) | no `ACSOE*` scheduled task, no watchdog process | **done** |
-| H2 | `scout.rank_feature: expected_move` in the committed config | `config/default.yaml` | a daemon started from the committed config ranks by expected move, **and the chain still runs** | **ATTEMPTED, REVERTED, NEEDS A RULING.** Setting the key makes engine 7 fail closed on every tick wherever `models.*_run_id` is absent — the committed state, since `models/` is gitignored — instead of ranking alphabetically. 34 of 63 scout tests went red on the real behaviour, not on anchors. Account: decisions D4a; options and costs in the findings |
+| H2 | `scout.rank_feature: expected_move` **by option C** (operator ruling 2026-09-21): a separate daemon config, `default.yaml` untouched | `config/daemon.yaml`, `tests/platform/test_daemon_config.py` | the daemon config sets the key; `default.yaml` still leaves it absent so a clone runs; the two files differ nowhere else, enforced by a test | **done, gated (p8-h2-daemon-config).** Setting the key in `default.yaml` was attempted first and reverted: it makes engine 7 fail closed wherever `models.*_run_id` is absent (decisions D4a, D4b). **Open for the operator: which trained model a live daemon runs** — without `models.*_run_id` the daemon config still fails closed at engine 7 |
 | H3 | The stale `rank_universe` docstring | `src/acsoe/engines/scout/contracts.py` | the docstring describes the committed state truthfully | **done, gated** — it now records that spec 75 is resolved (expected move), that the committed config does not set the key, and why setting it is not one line |
 
 ### Criteria — before anything else is judged
 
 | # | Item | Owner | Acceptance |
 |---|---|---|---|
-| C0 | **Write Phase 8's criteria, PENDING first**, as spec 141 did for Phase 7 | C | `verify.py --phase 8` reports the workflow row's criteria — the three live switches, `close_all` end to end, the soak digest, no secret in any artefact — each observed PENDING, PASS and FAIL |
+| C0 | **Write Phase 8's criteria, PENDING first** (operator ruling: scoped to this build, nothing for deferred work) | C | four criteria registered, **all PENDING on the day they were written**, each observed PENDING, PASS and FAIL by `tests/verify/test_phase8_criteria.py` | **done, gated (p8-c0-criteria)** |
 
-**Why this is first.** `verify.py --phase 8` today registers only the two every-phase criteria
-(`docs_vocabulary`, `toolchain_green`) and therefore prints *"Phase 8 is green: every criterion
-PASS, zero PENDING"* while nothing of Phase 8 exists. A phase that reports green before it
-starts cannot tell the operator anything at its close.
+**Why this was first.** `verify.py --phase 8` registered only the two every-phase criteria and
+therefore printed *"Phase 8 is green: every criterion PASS, zero PENDING"* while nothing of
+Phase 8 existed. A phase that reports green before it starts cannot tell the operator anything
+at its close.
+
+**The four, and what each judges:**
+
+| Criterion | Judges | Today |
+|---|---|---|
+| `live_client_serves_the_stream` | F1: the live facade forwards every `MarketStreamProtocol` member | PENDING — `recent_trades` and `drain_gaps` are not forwarded |
+| `pair_rules_key_on_engine_names` | F3: the live mapper keys pairs as the engines and the websocket do, over spec 127's recording | PENDING — all 1,450 recorded pairs are keyed by REST names |
+| `console_refuses_a_foreign_origin` | access control: a cross-origin POST is refused **and the operator's own kill switch still works** | PENDING — a foreign `Origin` is accepted today (201) |
+| `daemon_reads_the_real_exchange` | the smoke run, judged on a committed digest: paper mode, **live client**, a universe scanned and refusals recorded | PENDING — no digest committed yet |
+
+**Deliberately not written:** anything judging `mode: live`, the live order surface, `close_all`
+live or the soak. The operator deferred all four on 2026-09-21, and a test asserts none of those
+names is registered, so adding one later is a deliberate act. **Phase 8 cannot be closed on this
+scope alone**, and that is the honest position rather than a green light.
 
 ### Path (a) — the system live and visible, no real fill
 

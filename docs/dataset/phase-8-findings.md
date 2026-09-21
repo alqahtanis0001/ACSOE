@@ -42,6 +42,49 @@ instead is given at the end of Q2.
 
 ---
 
+## The rulings of 2026-09-21, and what the chosen scope defers
+
+**Ruled by the operator:** `rank_feature` by **option C** (a separate daemon config, not model
+run ids in the file every clone gets); **paper against the real exchange, not `mode: live`**;
+**the 5–8 hour scope** (F1 + F3 + the smoke run + the two access-control fixes); and **C0 first**
+— Phase 8's own criteria, written PENDING-first, scoped to what this build claims and nothing
+that was deferred.
+
+**The committed default still ranks alphabetically when no key is set, and that is deliberate.**
+`config/default.yaml` leaves `scout.rank_feature` absent so a fresh clone runs: with the key set
+and no model artefacts on disk, engine 7 fails closed on every tick. **`config/daemon.yaml` is
+what makes a live-reading daemon rank by expected move** — an exact copy of the default with that
+one override, with `tests/platform/test_daemon_config.py` failing if the two files differ
+anywhere else.
+
+**One decision the daemon config cannot make for you.** Ranking loads the artefacts named by
+`models.*_run_id`, and those keys are absent, so `daemon.yaml` alone still fails closed at engine
+7. Which trained model a live daemon runs is yours to rule: the newest on this machine is
+`train-20260913T205245-067b2b9d-f404-p7`, **whose training ends 2025-01-04 — about twenty months
+before today.** Until it is ruled, the daemon started with `default.yaml` ranks alphabetically
+and runs.
+
+### What the 5–8 hour version does NOT give you
+
+| Deferred | What you lose | Cost to add |
+|---|---|---|
+| **F2, real fees** | Every candidate is refused for a **missing fee tier**, not for *net edge below hurdle*. The screen shows the system refusing, but not the economics of why. This is the biggest functional gap in the small scope | 3–5 h |
+| **The funnel panel** | No "scanned / entered / refused" numbers on screen. `scout_tallies` holds them; the console still shows the excuse string | 2–3 h |
+| **Why it is frozen** | The band shows *Frozen*, not the breaker's own sentence ("drawdown 10.07% at or past the 10.00% limit"), which is in `block_records` | 1–1.5 h |
+| **The ranked list** | You see the candidate that was refused, not what else was considered or what ranked top | part of 2–3 h |
+| **Approvals** | Why a trade was *approved* stays invisible, though Phase 7 built the table for it | 1–1.5 h |
+| **Resting orders, timeouts, fees** | All three are already sent to the browser and have no column; Close all promises to cancel resting entries you cannot see | 0.75–1 h |
+| **Equity curve and drawdown** | One equity figure, no curve, no distance to the 10% limit that froze tier 3 in Phase 7 | 1.5–2 h |
+| **F4, pair status** | 78 `cancel_only` and 17 `post_only` pairs stay in the universe. Harmless while no order can be placed; **must land before path (b)** | 2.5–4 h |
+| **The activation control's live half** | The button cannot say which mode it will act in, and there is no second confirmation for live. Deferred with `mode: live` | 2–3.5 h |
+| **Recording manager link** | The two apps stay unlinked | 0.25–0.5 h |
+| **Path (b) entirely** | No live guard, no order surface, no `close_all` live, no soak — so no real fill | 13–20 h + 7 days |
+
+**What the small scope does give you:** a daemon that ticks against the real Kraken feed, sizes
+against your real wallet, ranks and examines a real universe, refuses candidates and records
+every refusal, with the existing screens showing positions, trades, refusals and the leaderboard
+— and a console a page in your browser can no longer fire the kill switch on.
+
 ## Q0. Housekeeping item 2 needs a ruling: it is not a one-line change
 
 `scout.rank_feature: expected_move` was written into `config/default.yaml` and **reverted**.

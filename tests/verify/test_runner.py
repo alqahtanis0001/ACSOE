@@ -115,8 +115,9 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
     that drops one from a phase fails here.
 
     Phase 0's own five are frozen. Phase 1 added the eight console criteria of
-    spec 16; phases 2 to 8 are still unwritten and carry only the two that
-    register everywhere. The point of asserting the whole registry rather than
+    spec 16; phases 2 to 7 followed, and phase 8's four were written PENDING-first
+    on 2026-09-21 before any of that phase was built. The point of asserting the
+    whole registry rather than
     one phase is that adding a criterion to the wrong phase is silent - it would
     simply never run, or run a phase too early.
     """
@@ -226,7 +227,18 @@ def test_each_phase_registers_its_own_criteria_and_no_others(
         "research_screens_render",
         "fee_scenario_is_replay_only",
     }
-    for phase in range(8, verify_module.MAX_PHASE + 1):
+    # Phase 8, written PENDING-first on 2026-09-21 (task C0). Scoped to the operator's ruled
+    # build — paper against the real exchange, the screens, access control — and deliberately
+    # carrying nothing for the deferred work (`mode: live`, the live order surface, `close_all`
+    # live, the soak), because a criterion nobody is working towards is a PENDING that never
+    # moves. `tests/verify/test_phase8_criteria.py` asserts that absence directly.
+    assert {c.name for c in verify_module._REGISTRY[8]} == every_phase | {
+        "live_client_serves_the_stream",
+        "pair_rules_key_on_engine_names",
+        "console_refuses_a_foreign_origin",
+        "daemon_reads_the_real_exchange",
+    }
+    for phase in range(9, verify_module.MAX_PHASE + 1):
         assert {c.name for c in verify_module._REGISTRY[phase]} == every_phase
 
 

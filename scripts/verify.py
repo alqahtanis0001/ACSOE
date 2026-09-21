@@ -2191,10 +2191,13 @@ class AsgiResponse:
         return self.body.decode("utf-8", errors="replace")
 
 
-def _http_scope(method: str, path: str) -> dict[str, Any]:
+def _http_scope(
+    method: str, path: str, extra: Sequence[tuple[bytes, bytes]] = ()
+) -> dict[str, Any]:
     headers = [(b"host", b"console.verify")]
     if method != "GET":
         headers.append((b"content-length", b"0"))
+    headers.extend(extra)
     return {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": "2.3"},
@@ -2211,7 +2214,9 @@ def _http_scope(method: str, path: str) -> dict[str, Any]:
     }
 
 
-async def _call_asgi(app: Any, method: str, path: str) -> AsgiResponse:
+async def _call_asgi(
+    app: Any, method: str, path: str, extra: Sequence[tuple[bytes, bytes]] = ()
+) -> AsgiResponse:
     sent: list[dict[str, Any]] = []
 
     async def receive() -> dict[str, Any]:
@@ -2220,13 +2225,15 @@ async def _call_asgi(app: Any, method: str, path: str) -> AsgiResponse:
     async def send(message: dict[str, Any]) -> None:
         sent.append(message)
 
-    await app(_http_scope(method, path), receive, send)
+    await app(_http_scope(method, path, extra), receive, send)
     status = next((m["status"] for m in sent if m["type"] == "http.response.start"), 0)
     body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
     return AsgiResponse(int(status), body)
 
 
-def asgi_request(app: Any, method: str, path: str) -> AsgiResponse:
+def asgi_request(
+    app: Any, method: str, path: str, *, headers: Sequence[tuple[bytes, bytes]] = ()
+) -> AsgiResponse:
     """One request, driven the way uvicorn drives it.
 
     Deliberately not `fastapi.testclient.TestClient`: it subclasses `httpx.Client`,
@@ -2235,7 +2242,7 @@ def asgi_request(app: Any, method: str, path: str) -> AsgiResponse:
     in-process transport. Calling the application directly also exercises the real
     routing, endpoint and encoder with no socket anywhere in the path.
     """
-    return asyncio.run(_call_asgi(app, method, path))
+    return asyncio.run(_call_asgi(app, method, path, headers))
 
 
 @dataclass(frozen=True)
@@ -14783,6 +14790,264 @@ def check_research_screens_render(ctx: VerifyContext) -> Outcome:
 
 
 # --------------------------------------------------------------------------- #
+# Phase 8 — live readiness, in the scope the operator ruled on 2026-09-21
+# --------------------------------------------------------------------------- #
+#
+# These four judge exactly what this phase's scope claims: a daemon that reads the REAL
+# exchange (in paper mode, which already wraps the real client), the screens it feeds, and
+# access control on the console. **They deliberately do not judge deferred work** — there is
+# no criterion here for `mode: live`, the live order surface, `close_all` live or the soak,
+# because none of that is being built yet and a criterion for unbuilt work that nobody
+# intends to build this week is a PENDING that means nothing.
+#
+# Each is PENDING today, which is the point of writing them first: a phase that reports
+# green before it starts cannot tell the operator anything at its close.
+
+PHASE8_SMOKE_DIGEST: Final = Path("tests") / "fixtures" / "phase8" / "smoke-digest.json"
+RECORDED_ASSET_PAIRS: Final = (
+    Path("tests") / "fixtures" / "kraken" / "asset_pairs_recorded_2026-09-19.json"
+)
+RECORDED_PAIR_NAMES: Final = (
+    Path("tests") / "fixtures" / "kraken" / "pair_names_recorded_2026-09-19.json"
+)
+
+
+def check_live_client_serves_the_stream(ctx: VerifyContext) -> Outcome:
+    """F1: the live client forwards every member of `MarketStreamProtocol`.
+
+    The transport has `recent_trades` and `drain_gaps` (`ws.py`); the facade
+    `KrakenClient` does not forward them, so engine 3 publishes `stream_available: false`
+    and the paper broker raises on every tick. This walks the protocol against the class,
+    which is the test whose absence let the gap survive: the same walk exists against
+    `PaperBroker` and nobody wrote one against the client.
+
+    No network: the walk is over the class, not an instance.
+    """
+    with root_import_path(ctx.root):
+        contracts, problem = try_import("acsoe.clients.kraken.contracts")
+        if contracts is None:
+            return problem or pending("acsoe.clients.kraken.contracts does not exist yet")
+        protocol, missing = module_attr(contracts, "MarketStreamProtocol")
+        if protocol is None:
+            return pending(missing)
+        client_module, problem = try_import("acsoe.clients.kraken.client")
+        if client_module is None:
+            return problem or pending("acsoe.clients.kraken.client does not exist yet")
+        klass, missing = module_attr(client_module, "KrakenClient")
+        if klass is None:
+            return pending(missing)
+        members = sorted(getattr(protocol, "__protocol_attrs__", ()) or ())
+        if not members:
+            return failed("MarketStreamProtocol declares no members to walk")
+        absent: list[str] = []
+        uncallable: list[str] = []
+        for name in members:
+            attribute = getattr(klass, name, None)
+            if attribute is None:
+                absent.append(name)
+            elif not (callable(attribute) or isinstance(attribute, property)):
+                uncallable.append(name)
+        if uncallable:
+            return failed(
+                "KrakenClient carries "
+                + ", ".join(sorted(uncallable))
+                + " but not as a method or property, so the chain cannot call it"
+            )
+        if absent:
+            return pending(
+                "KrakenClient does not forward "
+                + ", ".join(absent)
+                + " (F1). The transport has them; the facade does not, so the paper broker "
+                "raises on every tick against the real client"
+            )
+        return passed(
+            f"KrakenClient forwards every member of MarketStreamProtocol ({len(members)} "
+            "walked: " + ", ".join(members) + ")"
+        )
+
+
+def check_pair_rules_key_on_engine_names(ctx: VerifyContext) -> Outcome:
+    """F3: `AssetPairs` is keyed the way the engines and the websocket key pairs.
+
+    Run the live mapper over the **recorded** REST body (spec 127) and check the keys are
+    the v2 symbols the engines use (`BTC/USD`), not REST names (`XXBTZUSD`). The join is
+    spec 127's recorded name file, so this needs no network and no live key.
+
+    Bigger than engine 7: engine 2 derives the websocket subscription from these same
+    rules, so REST keys mean no market data at all, not merely an empty universe.
+    """
+    body_path = ctx.root / RECORDED_ASSET_PAIRS
+    names_path = ctx.root / RECORDED_PAIR_NAMES
+    for path in (body_path, names_path):
+        if not path.is_file():
+            return pending(f"{path.relative_to(ctx.root).as_posix()} is not recorded yet")
+    with root_import_path(ctx.root):
+        rest, problem = try_import("acsoe.clients.kraken.rest")
+        if rest is None:
+            return problem or pending("acsoe.clients.kraken.rest does not exist yet")
+        mapper, missing = module_attr(rest, "map_asset_pairs")
+        if mapper is None:
+            return pending(missing)
+        # Spec 127 records the response VERBATIM: `payload` is the raw JSON text, not a
+        # parsed object, so that the recording is the bytes Kraken sent.
+        recorded = json.loads(body_path.read_text(encoding="utf-8"))
+        payload = recorded.get("payload", recorded)
+        body = json.loads(payload) if isinstance(payload, str) else payload
+        result = body.get("result", body)
+        if not isinstance(result, Mapping) or not result:
+            return failed(
+                f"{RECORDED_ASSET_PAIRS.as_posix()} carries no AssetPairs result to map"
+            )
+        names = json.loads(names_path.read_text(encoding="utf-8")).get("pairs", {})
+        expected = {
+            str(entry.get("v2_symbol"))
+            for entry in names.values()
+            if isinstance(entry, Mapping) and entry.get("v2_symbol")
+        }
+        if not expected:
+            return failed(
+                f"{RECORDED_PAIR_NAMES.as_posix()} carries no v2 symbols to join on"
+            )
+        try:
+            rules = mapper(result, fetched_at=0)
+        except Exception as exc:
+            # PENDING, not FAIL: a mapper that cannot read the real body at all is the
+            # unbuilt live path (F3 and its neighbours), not a wrong implementation of a
+            # built one. The message carries the refusal so it is not mistaken for absence.
+            return pending(
+                "map_asset_pairs cannot read the recorded AssetPairs body yet - "
+                + f"{type(exc).__name__}: {exc}"[:200]
+            )
+        keys = {str(k) for k in getattr(rules, "pairs", rules)}
+        if not keys:
+            return failed("map_asset_pairs returned no pairs for the recorded body")
+        engine_named = keys & expected
+        if not engine_named:
+            return pending(
+                f"map_asset_pairs keys all {len(keys)} pairs by REST names (F3); the engines "
+                "and the websocket key by the v2 symbol. Sample: "
+                + ", ".join(sorted(keys)[:3])
+            )
+        rest_named = sorted(keys - expected)
+        if rest_named:
+            return failed(
+                f"{len(engine_named)} pairs are keyed by the engines' names but "
+                f"{len(rest_named)} are not: " + ", ".join(rest_named[:5])
+            )
+        return passed(
+            f"all {len(keys)} recorded pairs are keyed by the engines' own names "
+            "(the v2 symbol, joined through spec 127's recorded name file)"
+        )
+
+
+def check_console_refuses_a_foreign_origin(ctx: VerifyContext) -> Outcome:
+    """Access control: a page on another origin cannot fire the console's controls.
+
+    The console binds to loopback and has no login, which is adequate while it stays on
+    loopback — except that a page in the operator's own browser, from any origin, can POST
+    `/api/command/close_all` today: the endpoint takes no body and no token, and a simple
+    cross-origin form POST triggers no preflight. This asserts the two halves of the
+    lightest adequate fix: a foreign `Origin` is refused, and the operator's own kill
+    switch still works.
+    """
+    # `console_workspace` rather than a bare temporary directory: the console holds the
+    # SQLite file open, and on Windows the cleanup of a plain TemporaryDirectory raises
+    # PermissionError before the criterion can report anything.
+    with root_import_path(ctx.root), console_workspace() as tmp:
+        db_path, problem = seeded_console_db(tmp)
+        if db_path is None:
+            return problem or pending("the seeded database could not be built")
+        config, problem = console_config()
+        if config is None:
+            return problem or pending("the committed config could not be loaded")
+        app, problem = console_app(config, db_path)
+        if app is None:
+            return problem or pending("the console application could not be built")
+        foreign = asgi_request(
+            app,
+            "POST",
+            "/api/command/freeze",
+            headers=((b"origin", b"http://evil.example"),),
+        )
+        if foreign.status < 400:
+            return pending(
+                "a POST carrying Origin: http://evil.example was accepted "
+                f"({foreign.status}); the console has no Origin check yet, so any page in "
+                "the operator's browser can fire Freeze or Close all"
+            )
+        own = asgi_request(
+            app,
+            "POST",
+            "/api/command/freeze",
+            headers=((b"origin", b"http://console.verify"),),
+        )
+        if own.status >= 400:
+            return failed(
+                "the console refused its own origin as well "
+                f"({own.status}): the kill switch must still work for the operator"
+            )
+        return passed(
+            f"a cross-origin POST is refused ({foreign.status}) and the console's own "
+            f"origin is accepted ({own.status})"
+        )
+
+
+def check_daemon_reads_the_real_exchange(ctx: VerifyContext) -> Outcome:
+    """The smoke run: the chain ticking against the REAL Kraken client, in paper mode.
+
+    Paper mode wraps the real client (`cli/engine.py`), so this is the operator's path (a):
+    real market, real wallet, real decisions and refusals, with the fill simulated and no
+    path to a real order. `data/` is gitignored, so it is judged on a committed digest of
+    the run, as Phase 7 judged its runs.
+
+    The digest must show the run read the real exchange rather than a fixture, and must
+    carry the funnel: a universe scanned, candidates examined, and refusals with the gate
+    that refused them. **A refusal is a pass here, not a failure** — at tier 1 nothing
+    clears the cost gate, and the screen showing that honestly is the point.
+    """
+    path = ctx.root / PHASE8_SMOKE_DIGEST
+    if not path.is_file():
+        return pending(
+            f"no smoke-run digest is committed yet at {PHASE8_SMOKE_DIGEST.as_posix()}; it is "
+            "written by the first run of the daemon against the real exchange in paper mode"
+        )
+    try:
+        digest = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return failed(f"{PHASE8_SMOKE_DIGEST.as_posix()} is not valid JSON: {exc}")
+    required = ("mode", "client", "ticks", "scanned", "entered", "refusals", "run_id")
+    absent = [key for key in required if key not in digest]
+    if absent:
+        return failed(
+            f"{PHASE8_SMOKE_DIGEST.as_posix()} carries no " + ", ".join(absent)
+        )
+    if digest.get("mode") != "paper":
+        return failed(
+            f"the smoke digest records mode {digest.get('mode')!r}; this phase's scope is "
+            "paper against the real exchange, and mode: live is a separate ruling"
+        )
+    if digest.get("client") != "live":
+        return failed(
+            f"the smoke digest records client {digest.get('client')!r}; the point of the run "
+            "is that the real Kraken client served it"
+        )
+    for key in ("ticks", "scanned"):
+        if not isinstance(digest.get(key), int) or int(digest[key]) <= 0:
+            return failed(f"the smoke digest reports {key} = {digest.get(key)!r}")
+    refusals = digest.get("refusals")
+    if not isinstance(refusals, Mapping) or not refusals:
+        return failed(
+            "the smoke digest records no refusals; a tier-1 account refuses at the cost "
+            "gate and the run must show it doing so"
+        )
+    return passed(
+        f"the daemon ran {digest['ticks']} tick(s) against the real Kraken client in paper "
+        f"mode: {digest['scanned']} pairs scanned, {digest['entered']} entered, refusals "
+        + ", ".join(f"{k}={v}" for k, v in sorted(refusals.items()))
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Registration
 # --------------------------------------------------------------------------- #
 
@@ -15098,6 +15363,14 @@ register(
 )
 register(7, Criterion("research_screens_render", check_research_screens_render))
 register(7, Criterion("fee_scenario_is_replay_only", check_fee_scenario_is_replay_only))
+
+# Phase 8, written PENDING-first on 2026-09-21 before any of it was built, and scoped to
+# what the operator ruled: paper against the REAL exchange, the screens, access control.
+# Nothing here judges `mode: live`, the live order surface, `close_all` live or the soak.
+register(8, Criterion("live_client_serves_the_stream", check_live_client_serves_the_stream))
+register(8, Criterion("pair_rules_key_on_engine_names", check_pair_rules_key_on_engine_names))
+register(8, Criterion("console_refuses_a_foreign_origin", check_console_refuses_a_foreign_origin))
+register(8, Criterion("daemon_reads_the_real_exchange", check_daemon_reads_the_real_exchange))
 
 
 # --------------------------------------------------------------------------- #
