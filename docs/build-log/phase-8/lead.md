@@ -206,6 +206,24 @@ retry covers crashes and not wrong answers**: a `TypeError` is an ordinary error
 instance is added to the register in `context/progress-tracker.md`. **Not counted as a fix
 attempt**, because nothing was fixed and nothing should have been.
 
+**`p8-f3c` then crashed, and so did its retry.** `0xC0000005 ACCESS_VIOLATION` both times, three
+to four minutes into the suite, and at **two different tests** —
+`tests/research/test_training_main.py::test_the_ranking_study_refuses_without_a_dataset` on the
+first attempt and `tests/engines/test_prediction.py::test_a_di_fitted_without_the_exclusion_span_blocks_rather_than_loading`
+on the second. Neither is anywhere near this boundary, and two different sites is the fault's
+non-deterministic signature rather than a defect's. The register predicts this exact outcome:
+*"at roughly a 20% per-run crash rate, two consecutive crashes is about 4%, which is how often a
+spurious FAIL should be expected and has been seen."* Machine health checked rather than assumed:
+**56 GB of 95.7 GB free**, so there is nothing actionable here.
+
+**The judgement, stated because it is a judgement.** Re-run once more as `p8-f3d`. The operator's
+rule is *two fix attempts then record and stop* — I have made **one**, D13's, and the two reds
+since are the measuring apparatus, not the change. **If `p8-f3d` also reds on the crash class,
+item 3 stops there and F3 is not pushed**, reported as built and proven but ungated, with the
+evidence being: `pair_rules_key_on_engine_names` PASS in three separate gate runs, and one full
+suite at `3,991 passed, 4 skipped` whose only non-pass was the pyyaml fault in an untouched file.
+That is not a green gate and will not be called one.
+
 ### Access control: the kill switch was reachable from any page the browser visited
 
 **Agent:** Lead · **Task:** overnight item 5, operator items 1 and 2 · **Date:** 2026-09-21
