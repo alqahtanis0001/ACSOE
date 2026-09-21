@@ -181,18 +181,22 @@ the decision log as **D10, OPEN**; the lead has not chosen, and no smoke digest 
 `daemon_reads_the_real_exchange` stays PENDING rather than passing on a run that never reached
 the funnel.
 
-**The second finding, and it is about evidence rather than trading: three ticks left no record of
-why nothing happened.** Ticks **3, 5 and 8** were `running` and carry **no** `data_guard` block —
-so the guard chain passed and the opportunity chain ran — and yet there is no tally, no
-rejection and no order for them. Engine 20 writes a tally **on every tick engine 7 ran, candidate
-or not** (spec 146, precisely so that no-candidate ticks can be counted), so engine 7 did not
-run: the chain stopped at engine 5 `feature` or engine 6 `macro_context`, the two engines ahead
-of it. An opportunity-chain BLOCK deliberately writes **no** block record — it is a rejection,
-not a gate on the account — and a pre-scout block has no pair to write a rejection about. **So
-the database cannot say what stopped those three ticks**, and neither can the console. That is
-the shape of the operator's own requirement for this phase — *evidence it is running* — failing
-on the three ticks where the system got furthest. Recorded as **D15**; it is not the same problem
-as D10 and it would survive D10 being fixed.
+**The second finding, and it is the one that sizes the first: the whole verdict rests on one
+tick.** Three ticks — **3, 5 and 8** — were `running` and carry no block, and produced nothing.
+That is **correct behaviour, not a gap**: `decision_bar_s: 900` against a 60 s tick, and engine 5
+returns **PASS** when no bar closed, its own comment saying *"fourteen ticks out of fifteen end
+here … nothing is wrong, there is simply no new candidate"*. The orchestrator ends the chain on a
+PASS without recording a blocker, by design.
+
+Which means the run spanned **exactly one** 15-minute bar boundary, 05:00:00Z — and the tick that
+carried it, **cycle 19 at 05:00:26, was blocked by `data_guard` (`COOKIE/USD`, 438 s stale)**. So
+**one** tick in this run could ever have produced a candidate, and D10 took it. That does not
+soften D10 — the two stale pairs were still climbing when the run ended, so the next bar would
+have been blocked too — but it does bound what this run can be used to claim: it is evidence
+about the guard, **not** about the funnel, and no statement here should be read as "the system
+would have found nothing". **The ruling on D10 should be followed by a run of several hours**, so
+that several bar closes are seen instead of one. Recorded as **D15**, which also records that its
+first version — "three ticks left no record of why" — was wrong and why.
 
 **The third finding: the screens show the paper ledger, not the real wallet — and the real wallet
 figure was read and then thrown away.** Every equity row read `cash 5000.00, equity 5000.00,

@@ -23,8 +23,10 @@ reached the funnel: `data_guard` judges each tick on the oldest quote across all
 USD pairs, and with the real universe some illiquid pair is always more than 120 s stale, so **18
 of 22 ticks blocked and engine 7 never ran** (0 tallies, 0 rejections, 0 orders). Phase 6's four
 fake pairs never showed it and Phase 7's replay stamped every quote at `now`. That is **D10, OPEN
-for the operator**, with **D15** (the three ticks that were *not* blocked left no record of why
-nothing happened — the chain stopped before engine 7 and nothing writes that) and **D11** (the
+for the operator**, with **D15** (not a defect: the three unblocked ticks
+ended at engine 5 with PASS because no decision bar closed, so the 21-minute run crossed exactly
+one 15-minute bar boundary and `data_guard` blocked that tick — **the D10 ruling wants a run of
+hours behind it**) and **D11** (the
 screens show the paper ledger's 5,000.00, not the real wallet, which engine 1 reads every tick and
 nothing persists) beside it. The
 handover is `docs/build-log/phase-8/handover-2026-09-21.md`; the decisions, including every OPEN

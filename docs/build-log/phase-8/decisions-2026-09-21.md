@@ -263,36 +263,46 @@ the engines and the v2 feed use `BTC/USD`. Nothing in the test suite catches it 
 client's own fixture is keyed `BTC/USD`; it only appears when a daemon reads seeded positions
 through a client serving v2 names.
 
-### D15 — OPEN, for the operator: three ticks left no record of why nothing happened
+### D15 — CORRECTED: the three silent ticks are by design, and the run was too short to reach the funnel anyway
 
-**What happened.** Ticks **3, 5 and 8** of the smoke run were `running`, carry **no** `data_guard`
-block, and produced **no tally, no rejection and no order**. So the guard chain passed on those
-three ticks and the opportunity chain ran — and nothing anywhere says what it did.
+**This entry was first written as an OPEN defect — "three ticks left no record of why nothing
+happened" — and that was wrong.** It is corrected here rather than deleted, because the wrong
+version was committed (`cc642d7`) and because the way it was wrong is the point.
 
-**Why it is knowable that engine 7 never ran.** Engine 20 writes a `scout_tallies` row **on every
-tick engine 7 ran, candidate or not** — spec 146 exists precisely so that a no-candidate tick can
-be counted — and it writes none when engine 7 published nothing. There are zero rows. The
-opportunity chain is 5 `feature` → 6 `macro_context` → 7 `scout`, so the chain stopped at engine 5
-or engine 6. **Which of the two, and why, is not recorded anywhere**: `_write_block_records`
-writes no row for an opportunity-chain BLOCK by design (it is a rejection, not a gate on the
-account), and a block *before* engine 7 has no pair to write a rejection about. The daemon's own
-log carries three event types and none of them is a chain outcome.
+**What is actually true.** Ticks **3, 5 and 8** were `running`, carry no `data_guard` block, and
+produced nothing. The opportunity chain is 5 `feature` → 6 `macro_context` → 7 `scout`, and
+engine 5 **returns PASS, not BLOCK, when no decision bar closed on that tick** — its own comment
+says so: *"Fourteen ticks out of fifteen end here. PASS, not BLOCK: nothing is wrong, there is
+simply no new candidate, and the orchestrator stops the chain on a PASS without recording a
+blocker."* `decision_bar_s: 900`. The daemon ticks every 60 s. So 14 ticks in 15 **are supposed
+to** end silently at engine 5, and those three are three of them. Nothing is missing.
 
-**Why this matters separately from D10.** Fixing D10 makes the guard chain pass **more** often,
-so it makes this blind spot the normal case rather than the exception. And the operator's stated
-goal for the phase is *evidence it is running*: on the three ticks where the system got furthest,
-there is none.
+**And the fact that matters much more, which the wrong version obscured.** The run spanned
+04:42:00–05:03:32Z and therefore crossed **exactly one** 15-minute bar boundary, 05:00:00Z. The
+tick that carried that closed bar is **cycle 19 at 05:00:26 — and it was blocked by `data_guard`,
+`COOKIE/USD` 438 s stale.** So the smoke run's verdict on the funnel rests on **one** tick, not
+twenty: exactly one tick could ever have produced a candidate, and D10 took it.
 
-**Options, with the lead's recommendation:**
+**Consequences, both ways.**
+- **D10 is not softened.** The one tick that mattered was blocked, and `COOKIE/USD` and
+  `CSPR/USD` were still climbing when the run ended, so the next bar would have been blocked too.
+- **But the run cannot support a stronger claim than that.** A 21-minute run at a 15-minute
+  decision bar is not evidence about the funnel; it is evidence about the guard. Any statement of
+  the form "the system would have found no candidate" is unsupported, and none is made. **The
+  ruling on D10 should be followed by a run of at least a few hours**, so that several bar closes
+  are observed rather than one.
 
-| Option | What it does | Cost | Case against |
-|---|---|---|---|
-| **(a) Engine 20 records the opportunity chain's stopping point every tick** (recommended) | one row per tick naming the engine that ended the chain and its reason, whether or not a pair was involved | b-store column + engine 20, a migration, a gate, ~2–3 h | A new column and a migration, which is B's lane and a schema approval; and it must not turn into "a row on every tick makes every count meaningless", which is the reason `block_records` deliberately has no such row |
-| **(b) Log it only** — a structured event per tick with the chain's outcome | no schema change; the console cannot show it, but a human can read it | ~45 min | Puts the evidence somewhere the console cannot reach, which is the half the operator asked for |
-| **(c) Leave it** | — | 0 | The system can decline to trade for twenty minutes and give no account of itself. That is the thing this phase exists to make visible |
+**What is left of the original point, and it is small.** The console cannot distinguish "no
+decision bar closed" from any other silence, because neither is written anywhere. That is a
+labelling gap in the main window rather than a missing record, it belongs with the main-window
+work, and it is **not** an OPEN decision: the system's behaviour is correct and documented.
 
-**Not decided, not built.** It changes what is written for every tick, so it is the operator's.
-Recorded and skipped, per the overnight instruction.
+**The lesson, recorded because it is the second time tonight.** Both wrong versions came from
+describing a run from my own summary of it instead of from the run and the code — the same error
+as the "~1,450 pairs" figure an hour earlier. Reading `engines/feature/engine.py` took two
+minutes and turned a fabricated defect into the single most useful number in the run.
+
+### D13 — F3's re-keying broke a recording script's drop report, and it is joined rather than re-keyed
 
 ### D13 — F3's re-keying broke a recording script's drop report, and it is joined rather than re-keyed
 

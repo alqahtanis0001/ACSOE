@@ -251,26 +251,34 @@ ever. Phase 6 never saw it (four fake pairs) and Phase 7 never saw it (D7 stamps
 at `now` — recorded then as making this condition "structurally inert for the whole simulation").
 Live, nothing makes it inert. **D10, OPEN.**
 
-**The three ticks that were not blocked are the more uncomfortable finding.** Ticks 3, 5 and 8
-passed the guard chain and produced nothing at all — no tally, no rejection, no order. Engine 20
-writes a tally on every tick engine 7 ran, candidate or not, so engine 7 did not run: the chain
-stopped at engine 5 `feature` or engine 6 `macro_context`, and **nothing records which, or why**,
-because an opportunity-chain BLOCK deliberately writes no block record and a pre-scout block has
-no pair to reject. A system that declines to trade for twenty minutes and cannot say why is the
-exact opposite of what this phase is for. **D15, OPEN** — and note it gets *worse* if D10 is
-fixed, because then the guard chain passes more often.
+**The three ticks that were not blocked looked like a second defect and were not.** I wrote them
+up as "three ticks left no record of why nothing happened", committed that in `cc642d7`, and it
+was wrong. Engine 5 `feature` returns **PASS** when no decision bar closed on that tick, and says
+so in its own comment: *"Fourteen ticks out of fifteen end here … nothing is wrong, there is
+simply no new candidate."* `decision_bar_s: 900` against a 60 s tick. Those three ticks are three
+of the fourteen.
 
-**Not fixed, on purpose.** All three change what the system trades or what is written for every
-tick, so each is the operator's and each item is skipped rather than decided. No smoke digest is
+**Which surfaced the number that actually matters.** The run spanned 04:42:00–05:03:32Z and so
+crossed **exactly one** 15-minute bar boundary, 05:00:00Z. The tick carrying that closed bar is
+cycle 19 at 05:00:26 — **blocked by `data_guard`, `COOKIE/USD` 438 s stale.** So one tick in this
+run could ever have produced a candidate, and D10 took it. D10 is not softened (both repeat
+offenders were still climbing at the end, so the next bar would have gone the same way), but the
+run's reach is now honestly bounded: **it is evidence about the guard, not about the funnel**, and
+the D10 ruling wants a run of hours behind it, not twenty-one minutes. **D15**, corrected in
+place with the reason it was wrong.
+
+**Not fixed, on purpose.** D10 and D11 change what the system trades and what a number on screen
+means, so each is the operator's and each item is skipped rather than decided. No smoke digest is
 committed, so `daemon_reads_the_real_exchange` stays **PENDING** — making it pass on a run that
 never reached the funnel would be exactly the kind of green that means nothing.
 
-**Corrected in the same change, rather than left as first written.** My first write-up of this run
-said "~1,450 pairs subscribed" and "17 distinct stale pairs". Both were wrong: 1,450 is the pair
-count in the `AssetPairs` body, the **subscription is 668** USD-quoted pairs, and the 17 stale-pair
-blocks name **9** distinct pairs. Found by reading the run's own `subscription_count` and its
-`block_records` instead of my own summary — the same mistake as Phase 7's F5 figure, which was
-labelled with a count it was not plotting, and the same remedy: take the number from the run.
+**Two corrections in one night, both the same mistake.** "~1,450 pairs subscribed" (it is **668**;
+1,450 is the pair count in the `AssetPairs` body) and "17 distinct stale pairs" (it is **9**),
+then D15. Every one came from describing the run from my own summary instead of from the run and
+the code. Reading `subscription_count`, `block_records` and forty lines of
+`engines/feature/engine.py` cost about ten minutes and replaced two wrong figures and one invented
+defect with the single most useful fact in the run. Same failure as Phase 7's F5 figure, which
+carried a count it was not plotting; same remedy: **take the number from the run.**
 
 ### The read-only key for `fees.py`: everything but the key
 
