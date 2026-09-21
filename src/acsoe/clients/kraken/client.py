@@ -112,6 +112,26 @@ class KrakenClient:
     def drain_trades(self) -> tuple[TradeTick, ...]:
         return self._stream.drain_trades()
 
+    def recent_trades(self) -> tuple[TradeTick, ...]:
+        """The buffered window, **not** consumed. What engine 3 reads every tick.
+
+        Forwarded for the same reason as `drain_trades`, and its absence here was F1 of
+        the Phase 7 live-path findings: engine 3 guards the call with `getattr` and
+        publishes `stream_available: false` when it is missing, so live and paper the
+        chain saw no candles, no quotes and no trade ranges — and the paper broker, which
+        needs the window to decide whether a resting entry filled, raised on every tick.
+        """
+        return self._stream.recent_trades()
+
+    def drain_gaps(self) -> tuple[Mapping[str, Any], ...]:
+        """Every break recorded since the last call. Consuming, as engine 2 expects.
+
+        The same omission as `recent_trades` and quieter: engine 2 guards it with
+        `getattr` too, so a facade without it records **zero gaps** and the archive reads
+        as continuous across every reconnect, which is what invariant 11 is about.
+        """
+        return self._stream.drain_gaps()
+
     def latest_quote(self, pair: str) -> QuoteTick | None:
         return self._stream.latest_quote(pair)
 
