@@ -166,6 +166,23 @@ class StatusBand(_View):
     balance: Money | None
     balance_text: str
     currency: str | None
+    #: What the figure beside ``balance`` actually *is*, and whether it is real money.
+    #:
+    #: **The band showed a balance with no statement of its source, and in paper mode that
+    #: figure is the paper broker's ledger** — invariant 2's paper-ledger ruling makes the
+    #: broker the authority on its own cash, so it reads `paper.starting_balances` and then
+    #: whatever the simulation does to it. The Kraken account is fetched by engine 1 on
+    #: every tick and is *not* what this number shows. A screen that says "Balance: 5,000.00
+    #: USD" beside a real exchange's live prices is inviting exactly one misreading, and the
+    #: operator only has to make it once.
+    #:
+    #: ``balance_is_simulated`` is the fact; ``balance_label`` is the sentence-case words for
+    #: it (`ui-context.md`, no all-caps labels). Two fields rather than one because a later
+    #: reader — a real-balance panel, a test, a digest — wants the boolean and not a display
+    #: string parsed back into one. The live-mode amber border already distinguishes the two
+    #: modes *as modes*; it says nothing about which account a figure came from.
+    balance_is_simulated: bool
+    balance_label: str
     open_position_count: int
     resting_order_count: int
     equity_ts: Micros | None
