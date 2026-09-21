@@ -4,7 +4,31 @@
 
 ## Current Phase
 
-**Phase 7 — Evaluation. SPECS 126–144 WRITTEN AND EVERY RULING ANSWERED, 2026-09-19; AWAITING
+**Phase 8 — The live UI and a real activation control. IN PROGRESS, 2026-09-21.** Phase 7 closed
+on `48faf18` (both simulation runs complete, the write-up and the eight regenerable figures);
+everything below about Phase 7 is history and stays as written. Phase 8 is **costed before built**
+(`docs/dataset/phase-8-findings.md`) and the operator ruled the **5–8 hour scope**: F1, F3, a smoke
+run of the daemon against the real exchange, and access-control items 1 and 2. **F2 is costed at
+3.5–5.5 h and not started.** Paper mode against the real exchange; `mode: live` is not enabled and
+the UI is not exposed beyond localhost. `rank_feature` lands by **option C** — `config/daemon.yaml`
+only, with `default.yaml` left clone-safe — and the daemon runs **fold 404's** artefacts, whose
+training ends 2025-01-04, so the live screens show a stale model's decisions. **This phase
+demonstrates the system working, not trading well** (operator's words, recorded in the findings).
+
+Phase 8's own four criteria are registered PENDING-first and scoped to this build only:
+`live_client_serves_the_stream` **PASS** (`829e4cc`), `pair_rules_key_on_engine_names` **PASS**,
+`console_refuses_a_foreign_origin` **PASS** (`9a94026`), `daemon_reads_the_real_exchange`
+**PENDING** — and it stays PENDING deliberately. The smoke run reached the market and never
+reached the funnel: `data_guard` judges each tick on the oldest quote across all ~1,450 subscribed
+pairs, and with the real universe some illiquid pair is always more than 120 s stale, so **18 of
+22 ticks blocked and the opportunity chain never ran**. Phase 6's four fake pairs never showed it
+and Phase 7's replay stamped every quote at `now`. That is **D10, OPEN for the operator**, with
+**D11** (the screens show the paper ledger's 5,000.00, not the real wallet) beside it. The
+handover is `docs/build-log/phase-8/handover-2026-09-21.md`; the decisions, including every OPEN
+one, are `docs/build-log/phase-8/decisions-2026-09-21.md`.
+
+**Phase 7 — Evaluation. CLOSED by the operator on `48faf18`, 2026-09-21.** SPECS 126–144 WRITTEN
+AND EVERY RULING ANSWERED, 2026-09-19; AWAITING
 OPERATOR APPROVAL TO BUILD. Nothing claimed or built.** The seven rulings still open after the second
 round were answered by the operator on 2026-09-19 and applied to the specs and the findings the same
 day: R2 capped skeptic; R4 six months (folds 379–404, ending at fold 404's test close, 2025-01-04);
@@ -2299,6 +2323,17 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
 
 ## Session Notes
 
+- 2026-09-21, overnight — lead (Opus 5) alone, autonomous, no teammates. Phase 8's ruled scope
+  worked in the operator's order. **Built, gated and pushed:** F1 (`829e4cc`), access-control
+  items 1 and 2 (`9a94026`), the `fees.py` read-only-key plumbing with everything except the key,
+  F3 (pair keys **and** the balances' asset codes — the second half was found in the recordings,
+  not in the Phase 7 note). **Ran** the smoke run against the real exchange in paper mode: it
+  proved F1 and F3 end to end and found two things that need the operator (**D10**, **D11**).
+  **Not started:** F2, conditional on items 1–5 being green, and item 4 is not. One red gate,
+  fixed in one attempt: an unimported `Final` that only `mypy`/`ruff` could see, and a recording
+  script whose drop report subtracted one key space from the other (**D13**). Every HOW decision
+  is in `decisions-2026-09-21.md` with its rejected alternatives; every WHAT decision is OPEN
+  there with options and a recommendation, and its item was skipped rather than decided.
 - 2026-09-15 — lead (Opus 5) with C-3, C-4, B-3. Operator rulings recorded; DI 48-bar exclusion
   built with criterion `di_leave_one_out_excludes_48_bars`; engine 15 reviewed (two fail-open
   defects fixed) and rehearsed; engines 5, 6, 12, 13, 8, 15 registered; the exclusion refit over
