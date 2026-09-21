@@ -132,6 +132,23 @@ BASE_ALIASES: Final = {"BTC": "XBT", "DOGE": "XDG"}
 
 CREDENTIAL_NAMES: Final = ("KRAKEN_API_KEY", "KRAKEN_API_SECRET")
 
+#: A read-only pair for this poller alone, **preferred when both of its names are present**.
+#: Phase 8, operator ruling 2026-09-21.
+#:
+#: Why it exists. Kraken requires a key's nonce to increase, and this poller shares one key
+#: with the engine daemon. Both count microseconds (see the module docstring), and the daemon
+#: makes about two private calls a minute against this poller's hourly one, so a rejection
+#: needs two calls inside the same microsecond: rare, and when it happens the poll is written
+#: down as a gap and the next hour succeeds. A key of its own removes the class outright.
+#:
+#: Until the operator creates it, **both names are absent and nothing changes**: this falls
+#: back to the shared pair, which is what the running process is using. The poller is not
+#: restarted to pick this up (operator ruling: that happens in the morning, with the new key).
+READONLY_CREDENTIAL_NAMES: Final = ("KRAKEN_READONLY_API_KEY", "KRAKEN_READONLY_API_SECRET")
+
+#: Every name this module will read out of `.env`, and nothing else is ever held here.
+ALL_CREDENTIAL_NAMES: Final = CREDENTIAL_NAMES + READONLY_CREDENTIAL_NAMES
+
 DEFAULT_INTERVAL_S: Final = 3600
 DEFAULT_FEES_SUBDIR: Final = "fees"
 DEFAULT_ARCHIVE_DIR: Final = Path("data") / "raw"
@@ -366,7 +383,12 @@ def find_env_file(explicit: Path | None) -> Path | None:
 
 
 def parse_env_credentials(text: str) -> Credentials | None:
-    """The two credential names from ``.env`` text, or None if either is missing.
+    """The credentials from ``.env`` text, or None if neither pair is complete.
+
+    **The read-only pair wins when it is complete** (`KRAKEN_READONLY_API_KEY` and
+    `KRAKEN_READONLY_API_SECRET`), and the shared pair is the fallback. That ordering is the
+    whole point: a key of this poller's own cannot collide with the daemon's nonce, and until
+    the operator creates one the poller keeps working exactly as it does today.
 
     The parsing rules are ``platform/config.py``'s ``parse_dotenv`` — ``KEY=VALUE``,
     ``#`` comments, an optional ``export``, optional matching quotes, no
@@ -383,17 +405,22 @@ def parse_env_credentials(text: str) -> Credentials | None:
             continue
         name, _, value = line.partition("=")
         name = name.strip()
-        if name not in CREDENTIAL_NAMES:
+        if name not in ALL_CREDENTIAL_NAMES:
             continue
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
         found[name] = value
-    key = found.get(CREDENTIAL_NAMES[0], "").strip()
-    secret = found.get(CREDENTIAL_NAMES[1], "").strip()
-    if not key or not secret:
-        return None
-    return Credentials(key=key, secret=secret)
+    # Read-only first, shared second. A half-written read-only pair — one name set, the other
+    # missing or blank — is NOT used and NOT an error: it falls through to the shared pair,
+    # because the alternative is a poller that stops working the moment somebody pastes one
+    # line of two into `.env`.
+    for key_name, secret_name in (READONLY_CREDENTIAL_NAMES, CREDENTIAL_NAMES):
+        key = found.get(key_name, "").strip()
+        secret = found.get(secret_name, "").strip()
+        if key and secret:
+            return Credentials(key=key, secret=secret)
+    return None
 
 
 def read_credentials(env_file: Path | None) -> Credentials | None:

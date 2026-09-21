@@ -167,6 +167,109 @@ def test_no_env_file_is_no_credentials(tmp_path: Path) -> None:
     assert fees.read_credentials(tmp_path / "absent.env") is None
 
 
+# --------------------------------------------------------------------------- #
+# The read-only pair, preferred when complete. Phase 8, operator ruling 2026-09-21.
+#
+# The poller shares a key with the engine daemon and Kraken requires a key's nonce to
+# increase. A key of this poller's own removes that class of failure; until the operator
+# creates one, nothing may change about how the poller works today.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_read_only_pair_is_preferred_when_it_is_complete(tmp_path: Path) -> None:
+    env = _env(
+        tmp_path,
+        "KRAKEN_API_KEY=shared-k\nKRAKEN_API_SECRET=shared-s\n"
+        "KRAKEN_READONLY_API_KEY=ro-k\nKRAKEN_READONLY_API_SECRET=ro-s\n",
+    )
+
+    credentials = fees.read_credentials(env)
+
+    assert credentials is not None
+    assert (credentials.key, credentials.secret) == ("ro-k", "ro-s"), (
+        "the poller must use its own key when it has one, or it keeps sharing the daemon's "
+        "nonce sequence for no reason"
+    )
+
+
+def test_the_shared_pair_is_still_used_while_no_read_only_key_exists(tmp_path: Path) -> None:
+    """**The state of the machine tonight.** The operator creates the key in the morning;
+    until then the poller must work exactly as it does today."""
+    env = _env(tmp_path, "KRAKEN_API_KEY=shared-k\nKRAKEN_API_SECRET=shared-s\n")
+
+    credentials = fees.read_credentials(env)
+
+    assert credentials is not None
+    assert (credentials.key, credentials.secret) == ("shared-k", "shared-s")
+
+
+@pytest.mark.parametrize(
+    "readonly",
+    [
+        "KRAKEN_READONLY_API_KEY=ro-k\n",
+        "KRAKEN_READONLY_API_SECRET=ro-s\n",
+        "KRAKEN_READONLY_API_KEY=\nKRAKEN_READONLY_API_SECRET=ro-s\n",
+    ],
+)
+def test_a_half_written_read_only_pair_falls_back_rather_than_failing(
+    tmp_path: Path, readonly: str
+) -> None:
+    """One line of two pasted into `.env` must not stop the poller: it falls back to the
+    shared pair. A hard failure here would take the fee history down for the sake of tidiness."""
+    env = _env(tmp_path, "KRAKEN_API_KEY=shared-k\nKRAKEN_API_SECRET=shared-s\n" + readonly)
+
+    credentials = fees.read_credentials(env)
+
+    assert credentials is not None
+    assert (credentials.key, credentials.secret) == ("shared-k", "shared-s")
+
+
+def test_a_read_only_pair_alone_is_enough(tmp_path: Path) -> None:
+    """After the operator moves the poller onto its own key entirely, with no shared pair in
+    `.env` at all, it still has credentials."""
+    env = _env(tmp_path, "KRAKEN_READONLY_API_KEY=ro-k\nKRAKEN_READONLY_API_SECRET=ro-s\n")
+
+    credentials = fees.read_credentials(env)
+
+    assert credentials is not None
+    assert (credentials.key, credentials.secret) == ("ro-k", "ro-s")
+
+
+def test_neither_credential_value_reaches_a_message(tmp_path: Path) -> None:
+    """Invariant 13 over the new names too: `redact` covers whichever pair was chosen."""
+    env = _env(
+        tmp_path,
+        "KRAKEN_API_KEY=shared-k\nKRAKEN_API_SECRET=shared-s\n"
+        "KRAKEN_READONLY_API_KEY=ro-k\nKRAKEN_READONLY_API_SECRET=ro-s\n",
+    )
+    credentials = fees.read_credentials(env)
+
+    spoken = fees.redact("the key ro-k and the secret ro-s went out", credentials)
+
+    assert "ro-k" not in spoken and "ro-s" not in spoken
+    assert fees.REDACTED in spoken
+
+
+def test_the_module_reads_only_the_four_credential_names(tmp_path: Path) -> None:
+    """Nothing else in `.env` is ever held in this process — the property the original two
+    names had, asserted over all four."""
+    assert fees.ALL_CREDENTIAL_NAMES == (
+        "KRAKEN_API_KEY",
+        "KRAKEN_API_SECRET",
+        "KRAKEN_READONLY_API_KEY",
+        "KRAKEN_READONLY_API_SECRET",
+    )
+    env = _env(
+        tmp_path,
+        "KRAKEN_API_KEY=k\nKRAKEN_API_SECRET=s\nSOMETHING_ELSE=should-not-be-read\n",
+    )
+
+    credentials = fees.read_credentials(env)
+
+    assert credentials is not None
+    assert "should-not-be-read" not in repr(credentials)
+
+
 def test_the_nonce_counts_microseconds_and_never_repeats() -> None:
     """The daemon's client counts microseconds on the same key. A millisecond nonce
     would sit below it and be refused for ever."""
