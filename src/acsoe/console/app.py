@@ -44,7 +44,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -98,6 +98,41 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 #: *real default value* rather than a ``{{ mode }}`` marker, so
 #: ``templates/index.html`` stays a valid page that opens in a browser on its own.
 MODE_PLACEHOLDER = 'data-mode="paper"'
+
+#: What a refused cross-origin write answers with. Phase 8, operator ruling 2026-09-21.
+FOREIGN_ORIGIN_MESSAGE = (
+    "This request came from another origin, so nothing was written. The console's controls "
+    "can only be used from the console's own page."
+)
+
+
+def foreign_origin(origin: str | None, host: str | None) -> dict[str, str] | None:
+    """The refusal body when `origin` belongs to somewhere else, or `None` to serve.
+
+    **One rule, used by the POST route and the websocket**, so the two cannot drift apart:
+
+    * no `Origin` header at all — serve. That is a non-browser client (curl, the ASGI call a
+      criterion makes, uvicorn's own health probe), where the loopback bind is the control.
+      Refusing it would demand a token for the operator's own kill switch, which
+      `api_command`'s docstring refuses on purpose.
+    * `Origin` whose host and port match `Host` — serve. That is the console's own page,
+      including the `fetch` the page makes, which browsers do send an `Origin` for.
+    * anything else — refuse. A page on another origin can otherwise POST `close_all` with no
+      body, no token and no preflight, from inside the operator's browser.
+
+    Compared on the authority (host and port) rather than the scheme, because the console is
+    served over http on loopback and a scheme comparison would refuse its own page.
+    """
+    if not origin:
+        return None
+    authority = origin.split("//", 1)[-1].strip().rstrip("/")
+    if host and authority.lower() == host.strip().lower():
+        return None
+    return {
+        "status": "foreign_origin",
+        "message": FOREIGN_ORIGIN_MESSAGE,
+        "origin": authority,
+    }
 
 
 def render_page(mode: str) -> str:
@@ -278,11 +313,20 @@ def create_app(
         `console.poll_interval_ms` on every iteration — an operator who retunes
         the file gets the new cadence on an already-open socket, and neither
         number is ever written as a literal.
+
+        **A socket from another origin is closed rather than accepted** (Phase 8, operator
+        ruling 2026-09-21), by the same rule the POST route uses. Every screen the console
+        renders — the balance, the positions, the trades — goes down this socket, and before
+        this any local page could open it and read all of it.
         """
+        if foreign_origin(socket.headers.get("origin"), socket.headers.get("host")) is not None:
+            # 1008 is "policy violation". Closed without `accept`, so nothing is ever sent.
+            await socket.close(code=1008)
+            return
         await watermark_socket(socket, reader=reader, config=config, mode=str(config.mode))
 
     @app.post("/api/command/{name}")
-    async def api_command(name: str) -> JSONResponse:
+    async def api_command(name: str, request: Request) -> JSONResponse:
         """The console's only write. Spec 24.
 
         Exactly three names; anything else is a 404 that writes no row. The
@@ -291,7 +335,18 @@ def create_app(
         next tick. There is no confirmation parameter here on purpose: the
         confirmation for `close_all` is a step in the interface, and a server that
         demanded a token would be a second gate on the kill switch.
+
+        **A cross-origin request is refused** (Phase 8, operator ruling 2026-09-21).
+        This endpoint takes no body and no token, and a simple cross-origin form POST
+        triggers no preflight, so before this any page the operator's browser happened to
+        visit could fire `close_all`. The check is on `Origin` against `Host`, and a request
+        with no `Origin` at all is still served: that is a non-browser client, where the
+        loopback bind is the control, and refusing it would put a token in front of the
+        operator's own kill switch — which the paragraph above refuses to do.
         """
+        foreign = foreign_origin(request.headers.get("origin"), request.headers.get("host"))
+        if foreign is not None:
+            return JSONResponse(status_code=403, content=foreign)
         if name not in COMMAND_NAMES:
             return JSONResponse(
                 status_code=404,
