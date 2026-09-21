@@ -64,6 +64,63 @@ anywhere else.
 before today.** Until it is ruled, the daemon started with `default.yaml` ranks alphabetically
 and runs.
 
+### The model the daemon runs, and what it means for the screens
+
+**Ruled 2026-09-21: fold 404's artefacts**, `train-20260913T205245-067b2b9d-f404-p7`, set in
+`config/daemon.yaml` only. One directory carries all three (predictor, anomaly, skeptic), so the
+three `models.*_run_id` keys take the same value.
+
+**Its training data ends 2025-01-04.** A daemon started with this file therefore shows **a stale
+model's decisions against today's market** — about twenty months stale. Stated plainly so no
+screen is misread: **this phase demonstrates that the system works, not that it trades well.**
+Every figure the live screens show — expected move, the ranking, which candidate was examined —
+is that model's opinion of a market it has never seen. Nothing is retrained to change it
+(operator ruling), and Phase 5's walk-forward ended at fold 405, so there is no newer artefact.
+
+`tests/platform/test_daemon_config.py` allows the two configs to differ on **exactly four keys**
+— the ranking feature and the three run ids — and fails, naming the key, on anything else. Proven
+by four mutations on a byte copy written to disk first: a risk value changed only in the daemon
+file, a safety limit changed only there, `mode` flipped to `live`, and a declared key given a
+different value. All four killed; the file restored and hash-checked.
+
+### Q: F2's cost, and whether it collides with `fees.py` on the shared key
+
+**Cost to bring F2 back in: 3.5–5.5 h**, made of the 3–5 h mapper work plus **0.5 h** for the
+credential split below. Operator time: about 10 minutes on Kraken's key page, plus one
+authenticated call to record a real response.
+
+**Yes — F2 makes an authenticated call on the same key `fees.py` uses.** `TradeVolume` is a
+private endpoint; the daemon's REST client signs it with `KRAKEN_API_KEY`/`KRAKEN_API_SECRET`
+from `.env`, and `fees.py` reads the same two variables (`CREDENTIAL_NAMES`).
+
+**What the shared key actually risks, measured rather than assumed:**
+
+- Kraken requires a key's nonce to increase. **Both sides already count microseconds** — the
+  client takes `to_micros(clock.now())` and bumps to `max(candidate, last + 1)`; `fees.py` uses
+  `time_ns() // 1000` and documents that it chose microseconds for exactly this reason.
+- **Call rates are low and far apart:** the daemon re-reads the fee tier on a 60-second TTL
+  (`kraken.cache_ttl_s.trade_volume: 60`), so roughly one private fee call a minute plus one
+  balance call; `fees.py` polls **hourly**.
+- With both nonces tracking wall-clock microseconds and the daemon making about two calls a
+  minute, **the daemon cannot run measurably ahead of the clock** (its `+1` bump is microseconds),
+  so each new call from either process carries a larger nonce than any earlier one.
+- **So a collision needs two calls inside the same microsecond**, which is possible and rare.
+
+**What breaks if the separate key is left out:** the *later-arriving lower* nonce is rejected, so
+**one hourly `TradeVolume` poll fails occasionally**. `fees.py` already writes that absence as a
+`gap` line naming it, so the archive records the hole rather than hiding it, and the next poll an
+hour later succeeds. **The daemon is unaffected** (its own nonce always increases against itself),
+and **the recorder side is not affected at all**: market data comes from the public websocket in
+`record.py`, which uses no credentials — `funding.py` likewise. The damage is therefore
+*occasional gaps in the recorded fee history*, not lost market data and not a stopped daemon.
+
+**What the separate read-only key buys, and its cost:** it removes the class of failure entirely.
+`fees.py` would read `KRAKEN_READONLY_API_KEY`/`SECRET` when present and fall back to the shared
+pair otherwise — **0.5 h** including a test that the fallback works and that neither value is ever
+logged. The key itself is the operator's action on Kraken's key page (Query Funds only, no trade
+permission), about 10 minutes. **Recommended, but not blocking**: at these call rates the shared
+key costs an occasional recorded gap, and that gap is visible rather than silent.
+
 ### What the 5–8 hour version does NOT give you
 
 | Deferred | What you lose | Cost to add |

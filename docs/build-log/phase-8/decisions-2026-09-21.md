@@ -138,6 +138,50 @@ deliberate act.
 **Cost, stated.** `verify.py --phase 8` will not judge live readiness until those criteria are
 written. The phase cannot be closed on this scope alone, and the task list says so.
 
+### D8 — The daemon runs fold 404's artefacts; the drift test widens to exactly four keys
+
+**Ruled by the operator, 2026-09-21.** `models.prediction_run_id`, `anomaly_run_id` and
+`skeptic_run_id` are set to `train-20260913T205245-067b2b9d-f404-p7` in `config/daemon.yaml`
+**only**. One directory carries all three artefact kinds, so the three keys take one value.
+
+**Chose.** Widen `DECLARED_OVERRIDES` in `tests/platform/test_daemon_config.py` from one key to
+four, and keep the test failing on anything else. Two new tests: the run ids are asserted **by
+value and the directory is asserted to exist on disk** (a run id naming a missing directory fails
+the same way as an absent key, only later and less legibly), and `default.yaml` is asserted to
+name no artefacts at all.
+
+**Proven capable of failing**, on a byte copy written to disk first, restored and hash-checked:
+an unlisted risk value changed only in the daemon file, an unlisted safety limit likewise,
+`mode` flipped to `live`, and a declared key given a *different* value. All four killed.
+
+**Recorded, not fixed (operator ruling):** fold 404's training data ends 2025-01-04, so the live
+screens will show a twenty-month-stale model's decisions against today's market. The phase
+demonstrates the system working, not trading well. Nothing is retrained.
+
+### D9 — F2 shares a key with `fees.py`, and the nonce risk is smaller than it was recorded as
+
+**What the question was.** Phase 7 recorded that the daemon and `fees.py` share one API key and
+that "nonces can collide once the daemon runs". F2 puts a private `TradeVolume` call on the
+daemon's side, so the operator asked whether F2 triggers it.
+
+**Measured, not assumed.** Both sides already count **microseconds** — the client takes
+`to_micros(clock.now())` then `max(candidate, last + 1)`; `fees.py` uses `time_ns() // 1000` and
+its docstring says it chose that scale for this reason. The daemon re-reads the fee tier on a
+60-second TTL, so about two private calls a minute; `fees.py` polls hourly. A daemon making two
+calls a minute cannot run measurably ahead of wall clock, so **a collision needs two calls inside
+the same microsecond.**
+
+**Consequence if the separate key is skipped:** the lower nonce is rejected, one hourly poll
+fails, `fees.py` writes it as a `gap` naming the absence, and the next hour succeeds. **The
+daemon is unaffected; the recorder is not affected at all** — `record.py` and `funding.py` use
+the public websocket and no credentials. The cost is occasional, *visible* gaps in the recorded
+fee history.
+
+**Chose.** Report it as **0.5 h of plumbing (a `KRAKEN_READONLY_*` pair with fallback) plus about
+10 minutes of the operator's time**, recommended but not blocking, and let the operator decide.
+**Rejected:** treating it as blocking (the evidence does not support it), and ignoring it (the
+operator asked, and the gap is in the recorded fee history they will later analyse).
+
 ### D5 — The lead edited `engines/scout/contracts.py`, which is B's lane
 
 **Chose.** The lead made the one-line docstring correction itself, under the operator's explicit
