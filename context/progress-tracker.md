@@ -2324,6 +2324,12 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
   - **It is not reproducible on demand and the root cause was not established.** Hardware is suspected; pyarrow, `pytest-asyncio`, test ordering, `root_import_path` and the pydantic-core version were each ruled out by test; the one experiment that would have separated software from silicon was overridden by the power plan. 1,120 consecutive seeds outside pytest produced zero faults, which is suggestive at around p ≈ 0.1 and not conclusive.
   - **What is unaffected.** None of the five sites is in a code path that runs in production: they are the seed generator, the test harness and the verifier. No engine, no store write on the live path and no orchestrator tick has ever exhibited it. The limitation is on the *evidence-gathering apparatus*, not on the system under test — and that distinction is the honest way to state it.
 
+  **New instance, Phase 8, 2026-09-21 — the sixth site, and it cost a gate.** Gate `p8-f3c`'s predecessor `p8-f3b` came back FAIL with a single `ERROR` at fixture setup:
+
+  > `TypeError: object of type 'ScalarEvent' has no len()` — inside `yaml/parser.py:118`, loading `config/default.yaml` through `tests/harness/doubles.py:219`, in `tests/engines/test_decision.py::test_the_upstream_chain_actually_approves_before_engine_sixteen_sees_it`
+
+  **3,991 passed and one errored**, in a test and a config file the boundary does not touch; `tests/engines/test_decision.py` then ran 31/31 green in 1.5 s directly. It is pyyaml again, and again **an ordinary error rather than a crash**, so the retry did not fire — the second bullet above, demonstrated for the third time. Handled by re-running the gate, not by changing anything. This is also the first instance recorded *after* the register said the fault had appeared in every phase, so the count is now every phase including this one.
+
   Still not a request to chase the cause. The operator's ruling that hardware is out of scope stands. What changed at this close is where it gets written up.
 
 ## Session Notes

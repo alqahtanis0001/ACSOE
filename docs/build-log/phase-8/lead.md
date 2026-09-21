@@ -195,6 +195,17 @@ caller was in a script nothing about F3 pointed at. Joined through a new public
 — and a grep confirmed no other consumer of `PairRulesSnapshot.pairs` keys by REST name. One fix
 attempt; re-gated as `p8-f3b-pair-names`.
 
+**`p8-f3b` then came back red for a reason that was not mine.** `3,991 passed` and one `ERROR` at
+fixture setup: `TypeError: object of type 'ScalarEvent' has no len()`, inside `yaml/parser.py`
+loading `config/default.yaml`, in `tests/engines/test_decision.py` — a test and a config file
+this boundary does not touch. That is the project's known intermittent native fault, whose
+register already lists pyyaml among its sites, and whose second recorded property is that **the
+retry covers crashes and not wrong answers**: a `TypeError` is an ordinary error, so
+`toolchain_green`'s crash-aware retry never fired. Checked rather than assumed —
+`tests/engines/test_decision.py` ran **31/31 green in 1.5 s** directly. Re-run as `p8-f3c`; the
+instance is added to the register in `context/progress-tracker.md`. **Not counted as a fix
+attempt**, because nothing was fixed and nothing should have been.
+
 ### Access control: the kill switch was reachable from any page the browser visited
 
 **Agent:** Lead · **Task:** overnight item 5, operator items 1 and 2 · **Date:** 2026-09-21
