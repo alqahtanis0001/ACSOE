@@ -188,22 +188,26 @@ operator asked, and the gap is in the recorded fee history they will later analy
 Kraken exchange. **This is a WHAT decision and the lead has not taken it.**
 
 **What happened.** The daemon started, consumed the console's `activate` row, reached
-`mode: running`, and engine 2 derived a subscription of **the whole USD universe in v2 names**
-(`0G/USD`, `1INCH/USD`, `ADA/USD`, … about 1,450 pairs) which the v2 feed accepted. Quotes
-arrived and engine 19 wrote an equity row every tick. **Then every single tick was blocked by
-`data_guard`**, each on a different thin pair:
+`mode: running`, and engine 2 derived a subscription of **the USD universe in v2 names**
+(`0G/USD`, `1INCH/USD`, `ADA/USD`, … **668 pairs**, out of the 1,450 `AssetPairs` returns) which
+the v2 feed accepted. Quotes arrived and accumulated — `quote_count` 0 → 235 over the run — and
+engine 19 wrote an equity row every tick. **Then 18 of the 22 ticks were blocked by
+`data_guard`**: tick 1 for having no quote at all yet, and 17 naming one stale pair each, **9
+distinct pairs**, the repeats getting steadily worse because a pair that stops quoting never
+recovers:
 
 ```
-AEVO/USD market data is 172s old, past the 120s the guard allows
-AIOZ/USD market data is 163s old …   CAKE/USD 161s …   CSPR/USD 144s …   FLOKI/USD 124s …
+tick  4  AEVO/USD 172s old, past the 120s the guard allows
+tick 14  COOKIE/USD 130s → 15  192s → 16  253s → 17  315s → 19  438s
+tick  9  CSPR/USD 144s → 21  306s → 22  369s
 ```
 
-**11 ticks, 0 `scout_tallies`, 0 rejections: the opportunity chain never ran once.**
+**22 ticks, 0 `scout_tallies`, 0 rejections, 0 orders.**
 
 **Why.** `data_guard` judges the *tick* on the oldest published quote across **every subscribed
-pair**, against `data_guard.max_data_age_s: 120`. With ~1,450 pairs there is always some
-illiquid pair that has not traded for two minutes, so the guard blocks the whole tick
-permanently. Phase 6 never saw it because the fake exchange serves four pairs; Phase 7 never saw
+pair**, against `data_guard.max_data_age_s: 120`. With 668 pairs — only 235 of which had quoted
+at all by the last tick — there is always some illiquid pair that has not traded for two minutes,
+so the guard blocks the whole tick permanently. Phase 6 never saw it because the fake exchange serves four pairs; Phase 7 never saw
 it because D7 stamps the replay's synthetic quote at `now`, which was recorded at the time as
 making one gate condition "structurally inert for the whole simulation". **Live, nothing makes it
 inert, and the system as configured cannot trade at all.**
@@ -215,7 +219,7 @@ inert, and the system as configured cannot trade at all.**
 | **(a) Judge the candidate's data, not the whole subscription** (recommended) | `data_guard` blocks when the data behind *this tick's decision* is stale, and records per-pair staleness for the rest | engine 4 change + engine 7 seam, a gate, ~2–3 h | It is a change to a gate's meaning, and gates are the operator's. Also needs care: the guard runs *before* a candidate exists, so "the candidate's data" means the universe engine 7 will consider |
 | **(b) Exclude stale pairs from the universe instead of blocking the tick** | engine 7 drops a pair with no fresh quote (it already has `no_live_quote`); the guard stops looking at pairs nobody is trading | engine 4 + engine 7, ~2–3 h | Moves a data-quality judgement into the universe filter, where a *pair* problem is already handled but a *feed* problem is not |
 | **(c) Narrow the subscription** | engine 2 subscribes to the liquid subset | ~1 h | Changes the tradable universe, which is a Locked Decision, and hides a feed fault rather than judging it |
-| **(d) Raise `max_data_age_s`** | e.g. 600 s | minutes | Does not fix it — with 1,450 pairs some pair is quiet for ten minutes too — and it weakens the staleness rule for the pair actually being traded |
+| **(d) Raise `max_data_age_s`** | e.g. 600 s | minutes | Does not fix it — `COOKIE/USD` reached 438 s and `CSPR/USD` 369 s inside a 21-minute run, both still climbing — and it weakens the staleness rule for the pair actually being traded |
 
 **Skipped and continued, per the operator's overnight instruction.** No smoke digest is
 committed, so `daemon_reads_the_real_exchange` stays **PENDING** rather than being made to pass
@@ -258,6 +262,37 @@ freezes the daemon before it reaches the market, which measures nothing).
 the engines and the v2 feed use `BTC/USD`. Nothing in the test suite catches it because the fake
 client's own fixture is keyed `BTC/USD`; it only appears when a daemon reads seeded positions
 through a client serving v2 names.
+
+### D15 — OPEN, for the operator: three ticks left no record of why nothing happened
+
+**What happened.** Ticks **3, 5 and 8** of the smoke run were `running`, carry **no** `data_guard`
+block, and produced **no tally, no rejection and no order**. So the guard chain passed on those
+three ticks and the opportunity chain ran — and nothing anywhere says what it did.
+
+**Why it is knowable that engine 7 never ran.** Engine 20 writes a `scout_tallies` row **on every
+tick engine 7 ran, candidate or not** — spec 146 exists precisely so that a no-candidate tick can
+be counted — and it writes none when engine 7 published nothing. There are zero rows. The
+opportunity chain is 5 `feature` → 6 `macro_context` → 7 `scout`, so the chain stopped at engine 5
+or engine 6. **Which of the two, and why, is not recorded anywhere**: `_write_block_records`
+writes no row for an opportunity-chain BLOCK by design (it is a rejection, not a gate on the
+account), and a block *before* engine 7 has no pair to write a rejection about. The daemon's own
+log carries three event types and none of them is a chain outcome.
+
+**Why this matters separately from D10.** Fixing D10 makes the guard chain pass **more** often,
+so it makes this blind spot the normal case rather than the exception. And the operator's stated
+goal for the phase is *evidence it is running*: on the three ticks where the system got furthest,
+there is none.
+
+**Options, with the lead's recommendation:**
+
+| Option | What it does | Cost | Case against |
+|---|---|---|---|
+| **(a) Engine 20 records the opportunity chain's stopping point every tick** (recommended) | one row per tick naming the engine that ended the chain and its reason, whether or not a pair was involved | b-store column + engine 20, a migration, a gate, ~2–3 h | A new column and a migration, which is B's lane and a schema approval; and it must not turn into "a row on every tick makes every count meaningless", which is the reason `block_records` deliberately has no such row |
+| **(b) Log it only** — a structured event per tick with the chain's outcome | no schema change; the console cannot show it, but a human can read it | ~45 min | Puts the evidence somewhere the console cannot reach, which is the half the operator asked for |
+| **(c) Leave it** | — | 0 | The system can decline to trade for twenty minutes and give no account of itself. That is the thing this phase exists to make visible |
+
+**Not decided, not built.** It changes what is written for every tick, so it is the operator's.
+Recorded and skipped, per the overnight instruction.
 
 ### D13 — F3's re-keying broke a recording script's drop report, and it is joined rather than re-keyed
 

@@ -238,24 +238,39 @@ and is restored byte-identical (verified with `cmp`); both run databases are kep
 
 **Second attempt, on a clean database — the real result.** 22 ticks, 04:42–05:03Z, private calls
 enabled, `TradeVolume` and `AssetPairs` both HTTP 200, activation consumed and `mode: running`,
-an equity row on every tick, and a subscription of **~1,450 pairs in v2 names that the v2 feed
+an equity row on every tick, and a subscription of **668 USD pairs in v2 names that the v2 feed
 accepted** — F1 and F3 proven end to end against the real exchange, which is what a smoke run is
 for.
 
-**And the finding.** 0 `scout_tallies`, 0 rejections, 0 orders: **18 of the 22 ticks were blocked
-by `data_guard`**, 17 distinct thin pairs between them, each a quote older than the 120 s the
-guard allows. The guard judges the whole tick on the oldest quote across **every** subscribed
-pair. With 1,450 real pairs some illiquid one has always been quiet for two minutes, so the guard
-blocks for ever. Phase 6 never saw it (four fake pairs) and Phase 7 never saw it (D7 stamps the
-replay quote at `now` — recorded then as making this condition "structurally inert for the whole
-simulation"). Live, nothing makes it inert.
+**And the findings.** 0 `scout_tallies`, 0 rejections, 0 orders. **18 of the 22 ticks carry a
+`data_guard` block** — tick 1 with no quote at all yet, and 17 naming one stale pair each, 9
+distinct pairs, the repeats climbing (`COOKIE/USD` 130 s → 438 s) because a pair that stops
+quoting never recovers. The guard judges the whole tick on the oldest quote across **every**
+subscribed pair, and only 235 of the 668 had quoted at all by the last tick, so it blocks for
+ever. Phase 6 never saw it (four fake pairs) and Phase 7 never saw it (D7 stamps the replay quote
+at `now` — recorded then as making this condition "structurally inert for the whole simulation").
+Live, nothing makes it inert. **D10, OPEN.**
 
-**Not fixed, on purpose.** Changing which pairs a guard judges changes what the system trades:
-that is a WHAT decision, so it is **D10, OPEN**, with four options and a recommendation, and the
-item is skipped rather than decided. No smoke digest is committed, so
-`daemon_reads_the_real_exchange` stays **PENDING** — making it pass on a run that never reached
-the funnel would be exactly the kind of green that means nothing. The second finding, that the
-screens show the paper ledger's 5,000.00 and not the real wallet, is **D11, OPEN**.
+**The three ticks that were not blocked are the more uncomfortable finding.** Ticks 3, 5 and 8
+passed the guard chain and produced nothing at all — no tally, no rejection, no order. Engine 20
+writes a tally on every tick engine 7 ran, candidate or not, so engine 7 did not run: the chain
+stopped at engine 5 `feature` or engine 6 `macro_context`, and **nothing records which, or why**,
+because an opportunity-chain BLOCK deliberately writes no block record and a pre-scout block has
+no pair to reject. A system that declines to trade for twenty minutes and cannot say why is the
+exact opposite of what this phase is for. **D15, OPEN** — and note it gets *worse* if D10 is
+fixed, because then the guard chain passes more often.
+
+**Not fixed, on purpose.** All three change what the system trades or what is written for every
+tick, so each is the operator's and each item is skipped rather than decided. No smoke digest is
+committed, so `daemon_reads_the_real_exchange` stays **PENDING** — making it pass on a run that
+never reached the funnel would be exactly the kind of green that means nothing.
+
+**Corrected in the same change, rather than left as first written.** My first write-up of this run
+said "~1,450 pairs subscribed" and "17 distinct stale pairs". Both were wrong: 1,450 is the pair
+count in the `AssetPairs` body, the **subscription is 668** USD-quoted pairs, and the 17 stale-pair
+blocks name **9** distinct pairs. Found by reading the run's own `subscription_count` and its
+`block_records` instead of my own summary — the same mistake as Phase 7's F5 figure, which was
+labelled with a count it was not plotting, and the same remedy: take the number from the run.
 
 ### The read-only key for `fees.py`: everything but the key
 

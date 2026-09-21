@@ -154,34 +154,59 @@ between engine 18 and the exchange.
 |---|---|
 | Private calls against the real account | `private_calls_enabled: true`; `POST /0/private/TradeVolume` and `GET /0/public/AssetPairs` both **HTTP 200** |
 | The console's activation | the `activate` row the button writes was consumed at the top of the next tick and the daemon reached **`mode: running`** |
-| **F3, end to end** | engine 2 derived a subscription of **the whole USD universe in v2 names** — `0G/USD`, `1INCH/USD`, `ADA/USD`, about 1,450 pairs — and **the v2 feed accepted them**. Before F3 this was empty and no market data arrived at all |
-| Quotes and recording | quotes arrived, and engine 19 wrote an equity row on **every one of the 22 ticks** |
+| **F3, end to end** | engine 2 derived a subscription of **the USD universe in v2 names** — `0G/USD`, `1INCH/USD`, `ADA/USD`, … **668 pairs**, `subscription_derived: true`, the same 668 on all 22 ticks, out of the 1,450 pairs `AssetPairs` returns — and **the v2 feed accepted them**. Before F3 this was empty and no market data arrived at all |
+| Quotes and recording | quotes arrived and accumulated, `quote_count` 0 → 37 → … → **235** across the 22 ticks, and engine 19 wrote an equity row on **every one of them** |
 | F1, end to end | the paper broker wrapped the real client for 22 ticks without raising; before F1 it raised on the first |
 
-**What it found — and this is why a smoke run exists.** The opportunity chain **never ran once**:
-0 `scout_tallies`, 0 rejections, 0 orders. **18 of the 22 ticks were blocked by `data_guard`,
-each naming a different thin pair**, 17 distinct pairs in all:
+**What it found — and this is why a smoke run exists.** **0 `scout_tallies`, 0 rejections,
+0 orders.** Ticks 1–2 were `idle` (pre-activation) and 3–22 `running`. Of the 22, **18 carry a
+`data_guard` block**: tick 1 because no quote had arrived for any pair yet, and **17 naming one
+stale pair each — 9 distinct pairs**, several of them repeatedly and getting worse, because a
+pair that has stopped quoting never recovers:
 
 ```
-AEVO/USD market data is 172s old, past the 120s the guard allows
-AIOZ/USD 163s …   CAKE/USD 161s …   CSPR/USD 144s …   FLOKI/USD 124s …
+tick  4  AEVO/USD   172s old, past the 120s the guard allows
+tick  7  FLOKI/USD  124s …   tick 10  UXLINK/USD 175s …   tick 12  QUAI/USD 197s
+tick 14  COOKIE/USD 130s → tick 15  192s → 16  253s → 17  315s → 19  438s
+tick  9  CSPR/USD   144s → tick 21  306s → 22  369s
 ```
 
-`data_guard` judges the **tick** on the oldest quote across **every subscribed pair**. With
-~1,450 real pairs, some illiquid pair has always been quiet for two minutes, so the guard blocks
-for ever. Phase 6 never saw it (the fake exchange serves four pairs) and Phase 7 never saw it
+`data_guard` judges the **tick** on the oldest quote across **every subscribed pair**. With 668
+real pairs — of which only 235 had quoted at all by the last tick — some illiquid pair is always
+past two minutes, so the guard blocks for ever. Phase 6 never saw it (the fake exchange serves
+four pairs) and Phase 7 never saw it
 (D7 stamps the replay's quote at `now`, recorded then as making the condition "structurally inert
 for the whole simulation"). **Live, nothing makes it inert.** Options and a recommendation are in
 the decision log as **D10, OPEN**; the lead has not chosen, and no smoke digest is committed, so
 `daemon_reads_the_real_exchange` stays PENDING rather than passing on a run that never reached
 the funnel.
 
-**The second finding: the screens show the paper ledger, not the real wallet.** Equity read
-**5,000.00 USD** — `paper.starting_balances` — because invariant 2's paper-ledger ruling makes the
-paper broker the authority on its own cash, whether or not the real `Balance` call succeeded. So
-paper-against-real gives real market data, real pair rules, real fees and **simulated cash, by
-design**. **D11, OPEN**, with a 15-minute labelling fix recommended now and the real-balance panel
-with the main window.
+**The second finding, and it is about evidence rather than trading: three ticks left no record of
+why nothing happened.** Ticks **3, 5 and 8** were `running` and carry **no** `data_guard` block —
+so the guard chain passed and the opportunity chain ran — and yet there is no tally, no
+rejection and no order for them. Engine 20 writes a tally **on every tick engine 7 ran, candidate
+or not** (spec 146, precisely so that no-candidate ticks can be counted), so engine 7 did not
+run: the chain stopped at engine 5 `feature` or engine 6 `macro_context`, the two engines ahead
+of it. An opportunity-chain BLOCK deliberately writes **no** block record — it is a rejection,
+not a gate on the account — and a pre-scout block has no pair to write a rejection about. **So
+the database cannot say what stopped those three ticks**, and neither can the console. That is
+the shape of the operator's own requirement for this phase — *evidence it is running* — failing
+on the three ticks where the system got furthest. Recorded as **D15**; it is not the same problem
+as D10 and it would survive D10 being fixed.
+
+**The third finding: the screens show the paper ledger, not the real wallet — and the real wallet
+figure was read and then thrown away.** Every equity row read `cash 5000.00, equity 5000.00,
+positions_value 0, open_position_count 0, cash_source cycle_start` — that is
+`paper.starting_balances`, because invariant 2's paper-ledger ruling makes the paper broker the
+authority on its own cash. Engine 1 **does** call `Balance` against the real account on every
+tick (`engines/exchange/engine.py:126`, gathered with `AssetPairs` and `TradeVolume`), and no
+fetch failure was recorded for any of the 22 ticks — but the balances are published into
+`state` and **never persisted**, so this run cannot tell the operator what the real wallet holds.
+The honest answer to *"what was the real wallet balance as read?"* is therefore: **it was read
+successfully 22 times and stored nowhere.** Paper-against-real gives real market data, real pair
+rules, real fees and **simulated cash, by design** — what it should not also do is leave the real
+figure unreadable. **D11, OPEN**, with a 15-minute labelling fix recommended now and the
+real-balance panel with the main window.
 
 **One setup error of mine, recorded because it cost a run.** The first attempt ran against
 `data/db/acsoe.sqlite`, which holds the **Phase 0 seed** — built deliberately with a 20%

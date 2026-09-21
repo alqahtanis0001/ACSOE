@@ -19,11 +19,14 @@ Phase 8's own four criteria are registered PENDING-first and scoped to this buil
 `live_client_serves_the_stream` **PASS** (`829e4cc`), `pair_rules_key_on_engine_names` **PASS**,
 `console_refuses_a_foreign_origin` **PASS** (`9a94026`), `daemon_reads_the_real_exchange`
 **PENDING** — and it stays PENDING deliberately. The smoke run reached the market and never
-reached the funnel: `data_guard` judges each tick on the oldest quote across all ~1,450 subscribed
-pairs, and with the real universe some illiquid pair is always more than 120 s stale, so **18 of
-22 ticks blocked and the opportunity chain never ran**. Phase 6's four fake pairs never showed it
-and Phase 7's replay stamped every quote at `now`. That is **D10, OPEN for the operator**, with
-**D11** (the screens show the paper ledger's 5,000.00, not the real wallet) beside it. The
+reached the funnel: `data_guard` judges each tick on the oldest quote across all **668** subscribed
+USD pairs, and with the real universe some illiquid pair is always more than 120 s stale, so **18
+of 22 ticks blocked and engine 7 never ran** (0 tallies, 0 rejections, 0 orders). Phase 6's four
+fake pairs never showed it and Phase 7's replay stamped every quote at `now`. That is **D10, OPEN
+for the operator**, with **D15** (the three ticks that were *not* blocked left no record of why
+nothing happened — the chain stopped before engine 7 and nothing writes that) and **D11** (the
+screens show the paper ledger's 5,000.00, not the real wallet, which engine 1 reads every tick and
+nothing persists) beside it. The
 handover is `docs/build-log/phase-8/handover-2026-09-21.md`; the decisions, including every OPEN
 one, are `docs/build-log/phase-8/decisions-2026-09-21.md`.
 
