@@ -302,6 +302,78 @@ describing a run from my own summary of it instead of from the run and the code 
 as the "~1,450 pairs" figure an hour earlier. Reading `engines/feature/engine.py` took two
 minutes and turned a fabricated defect into the single most useful number in the run.
 
+### D10 — RULED BY THE OPERATOR: option (b), with three fixes in the same change
+
+**Ruled 2026-09-21**, after the operator asked the question that killed the lead's own
+recommendation: *would (a) actually stop the blocking, given engine 7's universe is ~190 pairs?*
+
+**Answered from the data, and the answer was no.** Engine 7 has ten exclusion reasons and **not
+one is about liquidity or volume**. `costmin` is **0.50 USD for all 668 USD pairs**, so
+affordability excludes nothing at this balance, and the nine stale pairs are cheap — they would be
+excluded last. What actually cuts 668 to ~190 is `no_live_quote`, and only 235 of the 668 had ever
+quoted. **So the narrowed universe is near enough "the pairs that have a quote", and a stale pair
+has a quote** — every stale pair sits inside the set (a) narrows to, by construction. (a) would
+have blocked all 22 ticks too. **The lead recommended (a) without checking this; the operator
+caught it.**
+
+**Ruled: (b), with the operator's condition and the lead's three holes fixed in the same change.**
+- Engine 7 excludes a stale pair under the **existing** `no_live_quote` reason — a stale quote is
+  not a live quote. This is the low-risk form: `EXCLUSION_REASONS` is order-sensitive and the store
+  enforces `scanned == entered + sum(excluded)`, so reusing the reason needs no new code, no
+  insertion into the tuple and no change to the tally arithmetic.
+- `data_guard` keeps **one** job: feed-wide health, so a dead websocket still halts the tick.
+- **Fix 1 — one shared staleness key**, read by both engines. Two numbers meaning "too old" in two
+  engines drift the moment one is tuned. Engine 3 already stamps every quote with a `ts`, so
+  engine 7 needs no new plumbing.
+- **Fix 2 — a stream heartbeat** rather than a binary zero-quotes test. If 600 of 668 pairs go
+  quiet and 68 keep updating, "nothing arriving at all" never fires and engine 7 silently excludes
+  600 pairs. `data_guard` blocks when no quote for *any* pair has arrived within the window.
+- **Fix 3 — re-assert freshness on the chosen pair before the order.** `max_data_age_s` is read in
+  exactly one place in the codebase (`data_guard/engine.py:87`) and **nothing downstream re-checks
+  a quote's age**. Under (b) freshness for the pair actually bought would move from a gate to a
+  filter, checked once, several engines before the order exists. That is the one thing in (b) that
+  could fairly be called weakening a protection, so it is closed in the same change.
+- **Record the fresh-pair fraction; no screen for it yet** (operator).
+
+**Then a run of hours against the real market** — because this run crossed exactly one decision-bar
+boundary (D15) and can only speak about the guard.
+
+**Also to fix in the same change, per "keep docs true":** `platform/config.py:399` says of
+`max_data_age_s` that "Market data older than this blocks the tick. **It is the whole judgement**",
+which (b) makes false.
+
+**Not yet built.** Ordered after D11 Part 1 and F3's gate.
+
+### D11 — Part 1 built: the band names whose money the balance is. Part 2 waits on the schema
+
+**Ruled by the operator 2026-09-21:** do Part 1 now; Part 2 waits until D10 is settled, and the
+schema is ruled then.
+
+**Chose.** `_balance_source(mode)` in the console reader returns `(is_simulated, label)`:
+`Paper balance`, `Replay balance`, and `Balance` in live. **Only `live` is not simulated.** The
+boolean and the words both travel in the payload — the fact for a later reader, the words for the
+band. The markup's default is `Paper balance`, because a page that has not yet received a payload
+must not imply real money, and the page applies the server's words rather than deciding them.
+
+**An unrecognised mode reads as simulated, and that is not inference.** The claim is "this is not
+`live`", which is exactly what the string says; the comparison is exact, so `LIVE` and `Live` do
+not become the one mode that means real money. Same reasoning as `_state_reading`'s, which the
+file already applies to an unknown mode.
+
+**Rejected:**
+- *Drive the label off `equity_snapshots.cash_source`* — the lead told the operator this would
+  work and **it would not**: `cash_source` is `CYCLE_START` vs `AFTER_EXIT`, *when in the tick*
+  cash was measured, and says nothing about paper versus real. Corrected before building.
+- *Rely on the live-mode amber border* — it distinguishes the modes *as modes* and says nothing
+  about which account a figure came from. It is also absent in paper mode, which is the case that
+  misleads.
+- *A boolean alone, with the page choosing the words* — two places deciding what a number means
+  is how they come to disagree; a test now asserts the page does not restate the decision.
+
+**Cost.** Inside the 15–30 min estimate. 17 tests, `tests/console` 415 passed, mypy and ruff
+clean, and a **6-arm mutation proof, 6 killed**, byte copies on disk first and every file restored
+and hash-checked.
+
 ### D16 — F3 is pushed to a branch, because "safe" and "gated" are two different things
 
 **The conflict.** Standing practice: *a push, not a commit, is what makes work safe* — never leave
