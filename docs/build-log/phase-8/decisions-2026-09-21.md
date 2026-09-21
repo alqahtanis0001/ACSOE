@@ -182,6 +182,134 @@ fee history.
 **Rejected:** treating it as blocking (the evidence does not support it), and ignoring it (the
 operator asked, and the gap is in the recorded fee history they will later analyse).
 
+### D10 — OPEN, for the operator: `data_guard` blocks every tick against the real universe
+
+**Found by the smoke run**, 2026-09-21 04:42–05:04Z, the daemon in paper mode against the real
+Kraken exchange. **This is a WHAT decision and the lead has not taken it.**
+
+**What happened.** The daemon started, consumed the console's `activate` row, reached
+`mode: running`, and engine 2 derived a subscription of **the whole USD universe in v2 names**
+(`0G/USD`, `1INCH/USD`, `ADA/USD`, … about 1,450 pairs) which the v2 feed accepted. Quotes
+arrived and engine 19 wrote an equity row every tick. **Then every single tick was blocked by
+`data_guard`**, each on a different thin pair:
+
+```
+AEVO/USD market data is 172s old, past the 120s the guard allows
+AIOZ/USD market data is 163s old …   CAKE/USD 161s …   CSPR/USD 144s …   FLOKI/USD 124s …
+```
+
+**11 ticks, 0 `scout_tallies`, 0 rejections: the opportunity chain never ran once.**
+
+**Why.** `data_guard` judges the *tick* on the oldest published quote across **every subscribed
+pair**, against `data_guard.max_data_age_s: 120`. With ~1,450 pairs there is always some
+illiquid pair that has not traded for two minutes, so the guard blocks the whole tick
+permanently. Phase 6 never saw it because the fake exchange serves four pairs; Phase 7 never saw
+it because D7 stamps the replay's synthetic quote at `now`, which was recorded at the time as
+making one gate condition "structurally inert for the whole simulation". **Live, nothing makes it
+inert, and the system as configured cannot trade at all.**
+
+**Options, with the lead's recommendation:**
+
+| Option | What it does | Cost | Case against |
+|---|---|---|---|
+| **(a) Judge the candidate's data, not the whole subscription** (recommended) | `data_guard` blocks when the data behind *this tick's decision* is stale, and records per-pair staleness for the rest | engine 4 change + engine 7 seam, a gate, ~2–3 h | It is a change to a gate's meaning, and gates are the operator's. Also needs care: the guard runs *before* a candidate exists, so "the candidate's data" means the universe engine 7 will consider |
+| **(b) Exclude stale pairs from the universe instead of blocking the tick** | engine 7 drops a pair with no fresh quote (it already has `no_live_quote`); the guard stops looking at pairs nobody is trading | engine 4 + engine 7, ~2–3 h | Moves a data-quality judgement into the universe filter, where a *pair* problem is already handled but a *feed* problem is not |
+| **(c) Narrow the subscription** | engine 2 subscribes to the liquid subset | ~1 h | Changes the tradable universe, which is a Locked Decision, and hides a feed fault rather than judging it |
+| **(d) Raise `max_data_age_s`** | e.g. 600 s | minutes | Does not fix it — with 1,450 pairs some pair is quiet for ten minutes too — and it weakens the staleness rule for the pair actually being traded |
+
+**Skipped and continued, per the operator's overnight instruction.** No smoke digest is
+committed, so `daemon_reads_the_real_exchange` stays **PENDING** rather than being made to pass
+on a run that never reached the funnel.
+
+### D11 — OPEN, for the operator: in paper mode the screens show the paper ledger, not the real wallet
+
+**Found by the same run.** The operator asked to see *my real wallet balance* on screen. The run
+fetched the real account (`private_calls_enabled: true`, `Balance` and `TradeVolume` both HTTP
+200), but the equity the console renders is **5,000.00 USD** — `paper.starting_balances`, the
+paper broker's own ledger.
+
+**Why, and it is deliberate.** Invariant 2's paper-ledger ruling (2026-09-16) makes the paper
+broker the authority on its own cash: *"In paper mode the balance is always the paper broker's…
+whether or not the real Balance fetch succeeded"*, because a fetched balance plus simulated fills
+describes no account that exists. So paper-against-real gives real market data, real pair rules,
+real fees and **simulated cash** — by design.
+
+**Options:** (a) render the real fetched balance beside the paper ledger, labelled as the
+exchange's (console + a payload field, ~1–1.5 h, and the numbers must never be added together);
+(b) accept it and label the figure "paper cash" on screen (~15 min); (c) `mode: live`, which the
+operator deferred. **Recommendation: (b) now, (a) when the main window is built** — the cheap fix
+removes the misreading, and the full fix belongs with the wallet panel.
+
+### D12 — The smoke run needed a clean database, and the seeded one is restored afterwards
+
+**What happened.** The first smoke attempt ran against `data/db/acsoe.sqlite`, which held the
+**Phase 0 seed** — deliberately carrying a 20% drawdown, an 8-loss streak and two open positions
+so that Phase 3 could test `safety` against them. The daemon read that history, `safety`
+escalated `close_all` on cycle 4, and engine 1 errored every tick with
+`PaperBrokerError: no pair rules for XBT/USD` — the seed names its positions `XBT/USD` while the
+client now serves the v2 name `BTC/USD`.
+
+**Chose.** Move the seeded database aside (a byte copy was taken first), run the smoke on a fresh
+one, and restore the seeded file afterwards. **Rejected:** adding a `--db` flag to `acsoe engine`
+(a CLI change, A's lane, and more than the run needed), and running on the seed (the account state
+freezes the daemon before it reaches the market, which measures nothing).
+
+**Recorded, not fixed — and worth a ruling later:** the Phase 0 seed names pairs `XBT/USD` where
+the engines and the v2 feed use `BTC/USD`. Nothing in the test suite catches it because the fake
+client's own fixture is keyed `BTC/USD`; it only appears when a daemon reads seeded positions
+through a client serving v2 names.
+
+### D13 — F3's re-keying broke a recording script's drop report, and it is joined rather than re-keyed
+
+**What happened.** The F3 gate went **red**, and it caught two things nothing local had:
+`src/acsoe/clients/kraken/rest.py:266` annotated `WS_ASSET_ALIASES: Final` **without importing
+`Final`** — invisible at runtime because `from __future__ import annotations` makes the
+annotation a string, so every test passed while `mypy --strict` and `ruff` both named it; and two
+tests in `tests/scripts/test_record_asset_pairs.py` failed, because `check_rules()` in
+`scripts/record_asset_pairs.py` computes its dropped-pair list as `set(result) -
+set(snapshot.pairs)`. With the snapshot keyed by the v2 symbol, that subtraction names **every**
+pair as dropped instead of the unparsable ones.
+
+**Chose.** A public `engine_pair_names(result) -> {rest_key: v2_symbol}` in the client, built
+through the same `_engine_names` the snapshot uses, and `check_rules` **joins** through it. The
+report keeps naming drops by their REST key, which is what a reader of the report holds.
+
+**Rejected:**
+- *Leave `map_asset_pairs` keyed by REST names and translate in the engines instead* — that is
+  F3 undone; the whole defect is that four separate places would each have to translate.
+- *Re-key the report to v2 symbols* — the report exists to be read beside a raw Kraken response,
+  and a dropped pair the reader cannot find in that response is a worse report.
+- *Duplicate the name rule inside the script* — two copies of a naming rule is how they drift,
+  and `fees.py` already has a third for its own purpose.
+
+**Ownership, stated.** `scripts/` and `clients/kraken/` are A's lane, edited by the lead as
+`829e4cc` already did, under the overnight instruction and with no A session running. The change
+to `check_rules` is the lead keeping an existing diagnostic **true** under F3, not changing what
+it reports — so it is a HOW decision, recorded here rather than left as an OPEN item.
+
+**Second-order finding, recorded not acted on.** Nothing else in `src/` or `scripts/` consumes
+`PairRulesSnapshot.pairs` by REST key — checked by grep, not assumed — so this was the only
+caller F3 broke.
+
+### D14 — The committed access-control test differs from the gated blob in line endings only
+
+**What happened.** `tests/console/test_access_control.py` was written with CRLF; `.gitattributes`
+normalises it to LF on commit, so the blob the gate hashed (`817110fadb2373c3`) is **not** the
+blob that is committed. The gate's verdict therefore stands on a file that differs from the
+committed one by every line ending.
+
+**Chose.** Record it, and close the phase's work with a **gate on the pushed tree itself** rather
+than re-gating the boundary. A gate that copies working-tree files can always differ from the
+commit this way; a gate that resets to a pushed commit and copies nothing cannot.
+
+**Rejected.** Calling it immaterial and saying nothing — it is immaterial *here*, because the
+tests are line-ending agnostic and both ran green, but the reason it is immaterial has to be
+stated rather than assumed. Also rejected: re-gating the same content twice for a whitespace
+difference, which buys nothing the closing gate does not.
+
+**Carried forward.** Phase 7 already learned this for generated files and fixed it with an
+explicit `newline="\n"` writer. The same rule belongs on hand-written files: write LF.
+
 ### D5 — The lead edited `engines/scout/contracts.py`, which is B's lane
 
 **Chose.** The lead made the one-line docstring correction itself, under the operator's explicit

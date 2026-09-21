@@ -142,6 +142,57 @@ against your real wallet, ranks and examines a real universe, refuses candidates
 every refusal, with the existing screens showing positions, trades, refusals and the leaderboard
 — and a console a page in your browser can no longer fire the kill switch on.
 
+## The smoke run, 2026-09-21: the daemon against the real Kraken exchange
+
+**Paper mode, the real client, `config/daemon.yaml`, 22 ticks, 04:42–05:03Z.** Run id
+`run-20260921T044200717376`. Nothing was ordered and nothing could be: the paper broker stands
+between engine 18 and the exchange.
+
+**What worked, and this is the part worth having:**
+
+| | |
+|---|---|
+| Private calls against the real account | `private_calls_enabled: true`; `POST /0/private/TradeVolume` and `GET /0/public/AssetPairs` both **HTTP 200** |
+| The console's activation | the `activate` row the button writes was consumed at the top of the next tick and the daemon reached **`mode: running`** |
+| **F3, end to end** | engine 2 derived a subscription of **the whole USD universe in v2 names** — `0G/USD`, `1INCH/USD`, `ADA/USD`, about 1,450 pairs — and **the v2 feed accepted them**. Before F3 this was empty and no market data arrived at all |
+| Quotes and recording | quotes arrived, and engine 19 wrote an equity row on **every one of the 22 ticks** |
+| F1, end to end | the paper broker wrapped the real client for 22 ticks without raising; before F1 it raised on the first |
+
+**What it found — and this is why a smoke run exists.** The opportunity chain **never ran once**:
+0 `scout_tallies`, 0 rejections, 0 orders. **18 of the 22 ticks were blocked by `data_guard`,
+each naming a different thin pair**, 17 distinct pairs in all:
+
+```
+AEVO/USD market data is 172s old, past the 120s the guard allows
+AIOZ/USD 163s …   CAKE/USD 161s …   CSPR/USD 144s …   FLOKI/USD 124s …
+```
+
+`data_guard` judges the **tick** on the oldest quote across **every subscribed pair**. With
+~1,450 real pairs, some illiquid pair has always been quiet for two minutes, so the guard blocks
+for ever. Phase 6 never saw it (the fake exchange serves four pairs) and Phase 7 never saw it
+(D7 stamps the replay's quote at `now`, recorded then as making the condition "structurally inert
+for the whole simulation"). **Live, nothing makes it inert.** Options and a recommendation are in
+the decision log as **D10, OPEN**; the lead has not chosen, and no smoke digest is committed, so
+`daemon_reads_the_real_exchange` stays PENDING rather than passing on a run that never reached
+the funnel.
+
+**The second finding: the screens show the paper ledger, not the real wallet.** Equity read
+**5,000.00 USD** — `paper.starting_balances` — because invariant 2's paper-ledger ruling makes the
+paper broker the authority on its own cash, whether or not the real `Balance` call succeeded. So
+paper-against-real gives real market data, real pair rules, real fees and **simulated cash, by
+design**. **D11, OPEN**, with a 15-minute labelling fix recommended now and the real-balance panel
+with the main window.
+
+**One setup error of mine, recorded because it cost a run.** The first attempt ran against
+`data/db/acsoe.sqlite`, which holds the **Phase 0 seed** — built deliberately with a 20%
+drawdown, an 8-loss streak and two open positions so Phase 3 could test `safety`. The daemon read
+that history, `safety` escalated `close_all` on cycle 4, and engine 1 errored every tick with
+`PaperBrokerError: no pair rules for XBT/USD`, because the seed names pairs `XBT/USD` where the
+engines and the v2 feed use `BTC/USD`. The run was redone on a clean database; the seeded file is
+**restored byte-identical** to how it was found, and both run databases are kept aside as
+evidence. The seed's naming is recorded in D12 as worth a ruling: no test catches it, because the
+fake client's own fixture is keyed the modern way.
+
 ## Q0. Housekeeping item 2 needs a ruling: it is not a one-line change
 
 `scout.rank_feature: expected_move` was written into `config/default.yaml` and **reverted**.

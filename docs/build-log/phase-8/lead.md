@@ -141,3 +141,135 @@ console's clock injected at 2025-01-03 23:46:30Z.
 **Consequence.** The PDF also embeds a pre-completion render of the exposure figure (tier 3 "1876 h",
 where the committed regeneration says 2184 h), and the console renders equity at full stored precision
 and pluralises "60 entrys" — both real properties of the committed console, reported not changed.
+
+### F1: the facade was missing two methods, and no test could have noticed
+
+**Agent:** Lead · **Task:** overnight item 1 · **Date:** 2026-09-21
+
+**What happened.** `KrakenClient` claims to satisfy `MarketStreamProtocol` and the paper broker
+calls it as one, but `recent_trades()` and `drain_gaps()` were never forwarded to the stream. The
+daemon raised `AttributeError` on the first tick that asked for a trade tape.
+
+**Why no test caught it.** Every existing facade test named the methods it expected, so the
+methods nobody remembered to write were also the methods nobody remembered to test. A list of
+names cannot catch a missing name.
+
+**Fix.** Two forwarders, and a test that **discovers** the surface instead of restating it: it
+walks `MarketStreamProtocol.__protocol_attrs__` and asserts `KrakenClient` both has each
+attribute and delegates it to the stream object. Adding a method to the protocol now fails this
+test until the facade forwards it. Criterion `live_client_serves_the_stream` PASS.
+
+### F3: the defect was two defects, and the second one was in the balances
+
+**Agent:** Lead · **Task:** overnight item 3 · **Date:** 2026-09-21
+
+**What happened.** Phase 7 recorded F3 as "`map_asset_pairs` keys by REST name, engines want v2
+names" — `XXBTZUSD` where everything downstream says `BTC/USD`. Checked against the recordings
+before writing anything, and found a second half nobody had recorded: `map_balances` returns
+**REST asset codes** too, so a wallet arrives as `XXBT`/`ZUSD` while positions and pair rules
+speak `BTC` and `USD`. Fixing only the pair keys would have produced a daemon that subscribed
+correctly and then could not find the money.
+
+**What the recordings actually say.** 1,450 pairs in the live response. `wsname` gives the v2 name
+directly for all of them, so the names are **read, not constructed** — with two aliases,
+`XBT→BTC` and `XDG→DOGE`, needed for the base/quote fields, which have no `wsname`. The naive
+"strip the leading X/Z" rule that looked reasonable from memory is wrong on real data: it turns
+`XTZ` into `TZ`. That is now an assertion, not a comment.
+
+**Fix.** `_engine_names()` prefers `wsname` and **falls back to the key** when it is absent, which
+is what keeps the Phase 0 fixture (invented, no `wsname`) working untouched — invariant 11, the
+recording is not edited to suit the code. `asset_code_names()` builds the code→name map from the
+same response; `map_balances` takes it and **sums collisions**, because two REST codes can map to
+one engine name. Unknown codes pass through unchanged rather than being dropped, so a new listing
+is visible rather than invisible. Criterion `pair_rules_key_on_engine_names` PASS.
+
+**Its gate went red, and it caught what the tests could not.** Two things, both real:
+`WS_ASSET_ALIASES: Final` with **no `Final` imported** — every test passed, because
+`from __future__ import annotations` makes the annotation a string at runtime, and only
+`mypy --strict` and `ruff` saw it; and `check_rules()` in `scripts/record_asset_pairs.py`, which
+reports a recording's dropped pairs as `set(result) - set(snapshot.pairs)` and so named **all
+1,450** of them once the snapshot was keyed by symbol. The second is the lesson worth keeping:
+re-keying a mapping breaks every caller that subtracts one key space from the other, and the
+caller was in a script nothing about F3 pointed at. Joined through a new public
+`engine_pair_names()` rather than re-keyed — reasons and the two rejected alternatives in **D13**
+— and a grep confirmed no other consumer of `PairRulesSnapshot.pairs` keys by REST name. One fix
+attempt; re-gated as `p8-f3b-pair-names`.
+
+### Access control: the kill switch was reachable from any page the browser visited
+
+**Agent:** Lead · **Task:** overnight item 5, operator items 1 and 2 · **Date:** 2026-09-21
+
+**What happened.** `POST /api/command/close_all` takes no body, no token and no confirmation, so
+it is a **simple request**: a cross-origin form POST fires it with no preflight and the browser
+sends it happily. Any page the operator had open could liquidate the account. `/ws` was accepted
+without looking at `Origin` at all, so any local page could read the balance, the positions and
+the trades. And `--host 0.0.0.0` was one flag from putting all of that on the network.
+
+**Fix, and what it deliberately is not.** `foreign_origin(origin, host)` compares authorities:
+no `Origin` → serve (curl, uvicorn's own probe, and the ASGI call a verify criterion makes, with
+the loopback bind as their control); matching authority → serve; anything else → **403 before the
+command name is looked at**, so a foreign caller cannot use the 404 to enumerate command names. A
+missing `Host` with a stated `Origin` is refused: fail closed, nothing to compare against.
+`off_loopback_refusal()` refuses to start off loopback unless `ACSOE_CONSOLE_TOKEN` is set, and
+**its value is not checked** — that is item 3, which the operator deferred — so the refusal text
+says in as many words that setting it authenticates nothing. An acknowledgement, not a
+credential; recording that distinction in the user-visible string is the point.
+
+Driven through ASGI rather than `TestClient`, for the reason `test_app.py` already gives: the
+repository's network guard patches `httpx.Client.send`, so a `TestClient` request never arrives.
+Criterion `console_refuses_a_foreign_origin` PASS.
+
+### The smoke run: it ran, it read the real exchange, and the opportunity chain never started
+
+**Agent:** Lead · **Task:** overnight item 4 · **Date:** 2026-09-21
+
+**What happened, first attempt.** The daemon froze on cycle 4 and engine 1 errored on every tick:
+`PaperBrokerError: no pair rules for XBT/USD`. The cause was mine, not the code's: I ran it
+against `data/db/acsoe.sqlite`, which holds the **Phase 0 seed** — built deliberately with a 20%
+drawdown, an 8-loss streak and two open positions so Phase 3 could test `safety`. The daemon read
+that as its own history and did exactly what it should: `safety` escalated `close_all`. The two
+seeded positions are named `XBT/USD`, and the live client serves `BTC/USD`, so the broker could
+not price them.
+
+**What that is worth knowing.** No test catches the seed's naming, because the fake client's own
+fixture is keyed the modern way — the two fixtures disagree and only a live run puts them in the
+same process. Recorded as **D12**. The seeded file was copied to scratch **before** anything ran
+and is restored byte-identical (verified with `cmp`); both run databases are kept as evidence.
+
+**Second attempt, on a clean database — the real result.** 22 ticks, 04:42–05:03Z, private calls
+enabled, `TradeVolume` and `AssetPairs` both HTTP 200, activation consumed and `mode: running`,
+an equity row on every tick, and a subscription of **~1,450 pairs in v2 names that the v2 feed
+accepted** — F1 and F3 proven end to end against the real exchange, which is what a smoke run is
+for.
+
+**And the finding.** 0 `scout_tallies`, 0 rejections, 0 orders: **18 of the 22 ticks were blocked
+by `data_guard`**, 17 distinct thin pairs between them, each a quote older than the 120 s the
+guard allows. The guard judges the whole tick on the oldest quote across **every** subscribed
+pair. With 1,450 real pairs some illiquid one has always been quiet for two minutes, so the guard
+blocks for ever. Phase 6 never saw it (four fake pairs) and Phase 7 never saw it (D7 stamps the
+replay quote at `now` — recorded then as making this condition "structurally inert for the whole
+simulation"). Live, nothing makes it inert.
+
+**Not fixed, on purpose.** Changing which pairs a guard judges changes what the system trades:
+that is a WHAT decision, so it is **D10, OPEN**, with four options and a recommendation, and the
+item is skipped rather than decided. No smoke digest is committed, so
+`daemon_reads_the_real_exchange` stays **PENDING** — making it pass on a run that never reached
+the funnel would be exactly the kind of green that means nothing. The second finding, that the
+screens show the paper ledger's 5,000.00 and not the real wallet, is **D11, OPEN**.
+
+### The read-only key for `fees.py`: everything but the key
+
+**Agent:** Lead · **Task:** overnight item 2 · **Date:** 2026-09-21
+
+**What happened.** `fees.py` polls `TradeVolume` with the same key the daemon will trade on, which
+means a recorder process holds trade-and-withdraw permissions it has no use for. The operator's
+instruction was to build everything except the key itself.
+
+**Fix.** `parse_env_credentials` now prefers `KRAKEN_READONLY_API_KEY`/`_SECRET` and falls back to
+the existing pair, so the running process keeps working with **no key in `.env` and no restart**:
+credentials are re-read on every poll, so the switch happens on the next poll after the operator
+saves the file. A half-written pair (key present, secret missing) falls back rather than failing,
+which is the state `.env` is in while it is being edited. Redaction covers the new names too —
+tested, not assumed. Exact instructions, down to which permission boxes to leave unticked
+(**Withdraw Funds** first among them), are in `readonly-key-instructions.md`. The process was not
+restarted: the operator's DO NOT list is explicit, and it does not need to be.
