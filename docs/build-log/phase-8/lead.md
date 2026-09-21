@@ -248,6 +248,42 @@ close said one session cannot tell those apart. It still cannot. What is now cer
 register's harder conclusion: **every gate in this project is a retried measurement on hardware
 with a known intermittent fault**, and tonight is the clearest illustration of it in the record.
 
+### ITEM 3 STOPPED: six crashes in a row, eight distinct sites, and no gate can be obtained tonight
+
+**Agent:** Lead · **Date:** 2026-09-21
+
+**`p8-f3e` crashed on both attempts in `ACSOE-gate2` as well.** That is **six consecutive
+crashes** across two worktrees, and the sites are now:
+
+| Run | Attempt 1 died in | Attempt 2 died in |
+|---|---|---|
+| `p8-f3c` | `research/training.py` → `test_training_main` | `engines/feature` fixture → `test_prediction` |
+| `p8-f3d` | ~17% in, site not captured | `pydantic model_dump` ← `market_sensor/contracts.py to_state` |
+| `p8-f3e` | `clients/kraken/replay.py:166 ensure` ← paper broker `_observe_trades` | `research/labelling.py:339 _label_at` |
+
+**Eight distinct sites, and the last two are in plain Python** — no C extension in the frame at
+all. An `ACCESS_VIOLATION` inside pure Python means the interpreter's own memory is corrupt, and
+eight sites with no repetition is the opposite of a defect's signature. The worktree is ruled out
+(two of them), and so is resource pressure: **56.4 GB of 95.7 GB RAM free, 65 GB disk free, ten
+`python.exe` (the recorder family), and no WHEA, Kernel-Power, disk, NTFS or volmgr error or
+warning in the Windows System log for the last six hours.** Checked, not assumed.
+
+**So item 3 stops here, exactly as written before the run.** F3 is **not pushed**. It is built
+and it is proven, and the proof is named rather than implied:
+`pair_rules_key_on_engine_names` **PASS in four separate gate runs** on the identical blob
+`2779ca6166dcdf52`, plus one full suite at **3,991 passed, 4 skipped** whose only non-pass was the
+pyyaml fault in an untouched file, plus `mypy --strict` and `ruff` clean. **That is not a green
+gate and it is not recorded as one.**
+
+**The consequence the operator needs, which is bigger than item 3.** The failure is not specific
+to this boundary: `toolchain_green` runs in every phase's gate, so **while this persists no
+boundary in this project can be gated at all** — F2 included, which is why there was no point
+starting it even if items 1–5 had been green. Short runs are unaffected and were green tonight
+(31 tests in 1.5 s, 29 in 83 s, 39 in 77 s), so the fault is **cumulative within one long
+process** rather than universal. A chunked run of the whole suite in five separate processes is
+measuring that now; whichever way it comes out, the morning's first action is a **reboot, then
+one gate run**, not another change to the code.
+
 ### Access control: the kill switch was reachable from any page the browser visited
 
 **Agent:** Lead · **Task:** overnight item 5, operator items 1 and 2 · **Date:** 2026-09-21
