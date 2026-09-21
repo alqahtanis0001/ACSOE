@@ -25,7 +25,7 @@ from typing import Any
 import pytest
 
 from acsoe.clients.kraken.errors import KrakenAPIError, KrakenUnavailableError
-from acsoe.clients.kraken.rest import HttpResponse, map_asset_pairs
+from acsoe.clients.kraken.rest import HttpResponse, engine_pair_names, map_asset_pairs
 from acsoe.platform.clock import FixedClock
 from acsoe.platform.config import load_config
 
@@ -364,7 +364,12 @@ def test_the_recorded_asset_pairs_parse_through_the_live_model(rap: ModuleType) 
     assert provenance["url"] == "https://api.kraken.com/0/public/AssetPairs"
     result = rap.asset_pairs_result(payload)
     snapshot = map_asset_pairs(result, fetched_at=0)
-    assert set(snapshot.pairs) == set(result)
+    # Keyed by the v2 symbol since F3, so the comparison joins through the client's own name
+    # map. `len` both sides as well: one recorded pair silently colliding with another onto
+    # the same symbol would keep the sets equal while losing a pair's rules.
+    names = engine_pair_names(result)
+    assert set(snapshot.pairs) == set(names.values())
+    assert len(snapshot.pairs) == len(names) == len(result)
     for rule in snapshot.pairs.values():
         assert rule.ordermin > 0 and rule.costmin > 0 and rule.tick_size > 0
 

@@ -89,6 +89,7 @@ from acsoe.clients.kraken.rest import (
     HttpTransport,
     HttpxTransport,
     KrakenRestClient,
+    engine_pair_names,
     map_asset_pairs,
 )
 from acsoe.clients.kraken.ws import KRAKEN_WS_V2_URL
@@ -319,9 +320,16 @@ def instrument_pairs(payload: Any) -> dict[str, dict[str, Any]]:
 
 
 def check_rules(result: Mapping[str, Any]) -> dict[str, Any]:
-    """Every pair through the live parser. Returns counts, and names the pairs it drops."""
+    """Every pair through the live parser. Returns counts, and names the pairs it drops.
+
+    The drops are named by their **REST key**, which is what a reader of this report holds;
+    since F3 the snapshot is keyed by the v2 symbol instead, so the two key spaces are joined
+    through the client's own :func:`engine_pair_names` rather than subtracted directly. A pair
+    the client cannot name is reported as dropped, because it is.
+    """
     snapshot = map_asset_pairs(result, fetched_at=0)
-    dropped = sorted(set(result) - set(snapshot.pairs))
+    names = engine_pair_names(result)
+    dropped = sorted(key for key in map(str, result) if names.get(key) not in snapshot.pairs)
     return {"pairs_in_payload": len(result), "parsed": len(snapshot.pairs), "dropped": dropped}
 
 

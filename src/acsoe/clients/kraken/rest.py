@@ -60,7 +60,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, NoReturn, Protocol, TypeVar
+from typing import Any, Final, NoReturn, Protocol, TypeVar
 from urllib.parse import urlencode
 
 from acsoe.clients.kraken.contracts import (
@@ -254,14 +254,114 @@ def _decimal(value: Any, key: str, call: str) -> Decimal:
         raise KrakenUnavailableError(f"{call}: {key} is not a decimal number") from exc
 
 
+#: Where Kraken's websocket v2 names an asset differently from the REST ``wsname``.
+#:
+#: **Two entries, and they are not guesses.** They are the same two ``funding.py`` and
+#: ``fees.py`` already carry, and they are confirmed against spec 127's two recordings: the
+#: rule below reproduces the v2 symbol for **1,406 of the recording's 1,450 pairs and
+#: disagrees on none**, the remainder being pairs the recorded name join keys by ``altname``
+#: rather than by the REST key. Anything Kraken renames next shows up as a pair whose symbol
+#: is absent from the v2 feed, which engine 7 then excludes as having no live quote — visible,
+#: not silent.
+WS_ASSET_ALIASES: Final = {"XBT": "BTC", "XDG": "DOGE"}
+
+
+def _engine_names(name: str, entry: Mapping[str, Any]) -> tuple[str, str, str] | None:
+    """``(symbol, base, quote)`` in the names the engines and the v2 feed use.
+
+    Phase 8, F3. REST keys a pair ``XXBTZUSD`` with base ``XXBT`` and quote ``ZUSD``; engine 3
+    publishes quotes under the v2 symbol ``BTC/USD``, and engine 7 scans the union of the two
+    key spaces — so with REST keys **every pair is excluded as having no rules and every quote
+    as having no rules either**, and engine 2 derives the websocket subscription from these
+    same keys, so the daemon would subscribe with symbols the v2 feed rejects and receive
+    nothing at all.
+
+    Taken from Kraken's own ``wsname`` rather than by stripping the legacy ``X``/``Z``
+    prefixes: stripping is a guess that breaks on every asset whose name legitimately starts
+    with one (``XTZ`` would become ``TZ``), while ``wsname`` is the exchange telling us.
+
+    **A body with no ``wsname`` is left exactly as it is** — that is the invented Phase 0
+    fixture, which is already keyed the way the engines key pairs, and the fake client that
+    serves it must keep working.
+    """
+    wsname = entry.get("wsname")
+    if not isinstance(wsname, str) or "/" not in wsname:
+        base, quote = entry.get("base"), entry.get("quote")
+        if not isinstance(base, str) or not isinstance(quote, str):
+            return None
+        return name, base, quote
+    raw_base, _, raw_quote = wsname.partition("/")
+    base = WS_ASSET_ALIASES.get(raw_base, raw_base)
+    quote = WS_ASSET_ALIASES.get(raw_quote, raw_quote)
+    if not base or not quote:
+        return None
+    return f"{base}/{quote}", base, quote
+
+
+def asset_code_names(result: Any) -> dict[str, str]:
+    """Kraken's asset codes to the engines' names — ``{"XXBT": "BTC", "ZUSD": "USD"}``.
+
+    Derived from the ``AssetPairs`` body itself, which carries both spellings for every asset
+    in use: the prefixed ``base``/``quote`` and the plain ones inside ``wsname``. Nothing is
+    hardcoded and nothing is stripped.
+
+    Needed because ``Balance`` answers in the same legacy codes, and engine 7 matches a pair's
+    quote against the balances **and** against ``trading.stable_quote_currencies``. Normalising
+    the pairs alone would exclude every pair for want of a quote balance instead; normalising
+    neither would exclude every pair as not provably stable.
+    """
+    names: dict[str, str] = {}
+    if not isinstance(result, Mapping):
+        return names
+    for name, entry in result.items():
+        if not isinstance(entry, Mapping):
+            continue
+        resolved = _engine_names(str(name), entry)
+        if resolved is None:
+            continue
+        _symbol, base, quote = resolved
+        for code, engine_name in (
+            (entry.get("base"), base),
+            (entry.get("quote"), quote),
+        ):
+            if isinstance(code, str) and code and engine_name:
+                names[code] = engine_name
+    return names
+
+
+def engine_pair_names(result: Any) -> dict[str, str]:
+    """Kraken's REST pair keys to the names a snapshot is keyed by — ``{"XXBTZUSD": "BTC/USD"}``.
+
+    The join a caller needs once F3 has landed. Before it, a caller holding the REST body could
+    ask which pairs :func:`map_asset_pairs` dropped with ``set(result) - set(snapshot.pairs)``;
+    now that the snapshot is keyed by the v2 symbol, that subtraction names **every** pair
+    instead of the unparsable ones. Going through the same :func:`_engine_names` as the snapshot
+    itself is what stops the two drifting: a pair this function cannot name is a pair the
+    snapshot does not contain either.
+    """
+    names: dict[str, str] = {}
+    if not isinstance(result, Mapping):
+        return names
+    for name, entry in result.items():
+        if not isinstance(entry, Mapping):
+            continue
+        resolved = _engine_names(str(name), entry)
+        if resolved is not None:
+            names[str(name)] = resolved[0]
+    return names
+
+
 def map_asset_pairs(result: Any, *, fetched_at: int) -> PairRulesSnapshot:
-    """``AssetPairs`` result to :class:`PairRulesSnapshot`.
+    """``AssetPairs`` result to :class:`PairRulesSnapshot`, keyed as the engines key pairs.
 
     A pair whose entry is missing a field is **dropped with the failure surfaced**
     rather than defaulted: a pair with no ``ordermin`` cannot be sized, and rule 2
     says a missing pair rule blocks that pair with no fallback. Dropping one pair
     does not fail the whole fetch, because one delisted or malformed symbol must not
     take the universe down with it.
+
+    **Keys and asset names come from :func:`_engine_names`** (Phase 8, F3), so this snapshot
+    speaks the same names as engine 3's quotes, engine 2's subscription and every gate.
     """
     if not isinstance(result, Mapping):
         raise KrakenUnavailableError("asset_pairs: result was not a mapping of pairs")
@@ -269,11 +369,15 @@ def map_asset_pairs(result: Any, *, fetched_at: int) -> PairRulesSnapshot:
     for name, entry in result.items():
         if not isinstance(entry, Mapping):
             continue
+        resolved = _engine_names(str(name), entry)
+        if resolved is None:
+            continue
+        symbol, base, quote = resolved
         try:
-            rules[str(name)] = PairRule(
-                pair=str(name),
-                base=str(_require(entry, "base", "asset_pairs")),
-                quote=str(_require(entry, "quote", "asset_pairs")),
+            rules[symbol] = PairRule(
+                pair=symbol,
+                base=base,
+                quote=quote,
                 ordermin=_decimal(_require(entry, "ordermin", "asset_pairs"), "ordermin", "ap"),
                 costmin=_decimal(_require(entry, "costmin", "asset_pairs"), "costmin", "ap"),
                 tick_size=_decimal(
@@ -316,16 +420,30 @@ def map_trade_volume(result: Any, *, fetched_at: int) -> FeeTierSnapshot:
     )
 
 
-def map_balances(result: Any, *, fetched_at: int) -> BalancesSnapshot:
-    """``Balance`` result to :class:`BalancesSnapshot`. A currency-to-amount map."""
+def map_balances(
+    result: Any, *, fetched_at: int, asset_names: Mapping[str, str] | None = None
+) -> BalancesSnapshot:
+    """``Balance`` result to :class:`BalancesSnapshot`. A currency-to-amount map.
+
+    ``asset_names`` renames Kraken's legacy codes to the engines' own (``ZUSD`` to ``USD``),
+    from :func:`asset_code_names` (Phase 8, F3). **A code the map does not know is passed
+    through unchanged** rather than dropped or guessed at: an unknown asset with a balance is
+    still a balance, and engine 7 will simply find no pair quoted in it.
+
+    Absent, nothing is renamed — which is the invented Phase 0 fixture, whose codes are already
+    the engines' names.
+    """
     if not isinstance(result, Mapping):
         raise KrakenUnavailableError("balance: result was not a mapping")
-    return BalancesSnapshot(
-        balances={
-            str(code): _decimal(amount, str(code), "balance") for code, amount in result.items()
-        },
-        fetched_at=fetched_at,
-    )
+    names = asset_names or {}
+    balances: dict[str, Decimal] = {}
+    for code, amount in result.items():
+        engine_name = names.get(str(code), str(code))
+        value = _decimal(amount, str(code), "balance")
+        # Two codes can rename onto one name only if Kraken lists the same asset twice; sum
+        # rather than let the last one win, so a balance can never be silently dropped.
+        balances[engine_name] = balances.get(engine_name, Decimal(0)) + value
+    return BalancesSnapshot(balances=balances, fetched_at=fetched_at)
 
 
 def _levels(raw: Any, side: str, depth: int, pair: str) -> tuple[BookLevel, ...]:
@@ -452,6 +570,9 @@ class KrakenRestClient:
         self._book_depth = book_depth
         self._retained: dict[str, RetainedValue] = {}
         self._nonce = 0
+        #: Kraken's asset codes to the engines' names, from the last `asset_pairs` body
+        #: (Phase 8, F3). Empty until the first successful fetch.
+        self._asset_names: dict[str, str] = {}
         # Two TTLs, two fields, two caches. Nothing here is shared between the two
         # calls, so no future edit can accidentally make one TTL govern both.
         self._asset_pairs_ttl_s = asset_pairs_ttl_s
@@ -647,6 +768,10 @@ class KrakenRestClient:
         self._cached_asset_pairs = None
         result = await self._public("asset_pairs", ASSET_PAIRS_PATH, {})
         snapshot = map_asset_pairs(result, fetched_at=self._now_micros())
+        # The asset-code map comes from this same body (Phase 8, F3) and is what `balance`
+        # renames with. Kept on the client rather than recomputed there, because `Balance`'s
+        # own response carries no second spelling to derive it from.
+        self._asset_names = asset_code_names(result)
         self._retain("asset_pairs", snapshot)
         self._cached_asset_pairs = snapshot
         return snapshot
@@ -671,8 +796,18 @@ class KrakenRestClient:
         return snapshot
 
     async def balance(self) -> BalancesSnapshot:
+        """Balances, in the engines' own asset names where they are known.
+
+        The rename uses the map built by the last successful ``asset_pairs`` (Phase 8, F3).
+        Before the first one it is empty and the codes pass through as Kraken sent them —
+        which is correct rather than convenient: engine 1 fetches pair rules on the same tick,
+        and a pair whose quote has no matching balance is excluded with a reason rather than
+        sized against a guess.
+        """
         result = await self._private("balance", BALANCE_PATH, {})
-        snapshot = map_balances(result, fetched_at=self._now_micros())
+        snapshot = map_balances(
+            result, fetched_at=self._now_micros(), asset_names=self._asset_names
+        )
         self._retain("balance", snapshot)
         return snapshot
 
