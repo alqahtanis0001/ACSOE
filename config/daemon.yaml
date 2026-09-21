@@ -265,6 +265,24 @@ backtest:
 models:
   dir: models                    # The artefact root. One directory per training run,
                                  # never overwritten; see architecture-context.md.
+                                 #
+                                 # THE THREE RUN IDS BELOW ARE IN THIS FILE ONLY, NEVER IN
+                                 # default.yaml (operator ruling 2026-09-21): a committed
+                                 # default that names particular artefacts goes stale on any
+                                 # retrain and misleads a future session. Here they are the
+                                 # machine's operational choice, and engine 7's ranking cannot
+                                 # load anything without them.
+                                 #
+                                 # WHICH MODEL THIS IS, AND WHAT IT MEANS: fold 404 of the
+                                 # Phase 5 walk-forward, the newest on this machine. **Its
+                                 # training data ends 2025-01-04.** A daemon started with this
+                                 # file therefore shows a stale model's decisions against
+                                 # today's market. That is deliberate for this phase, which
+                                 # demonstrates the system working rather than trading well.
+                                 # Nothing is retrained to change it (operator ruling).
+  prediction_run_id: train-20260913T205245-067b2b9d-f404-p7
+  anomaly_run_id: train-20260913T205245-067b2b9d-f404-p7
+  skeptic_run_id: train-20260913T205245-067b2b9d-f404-p7
 
 features:                        # modelling/features.py, spec 63.
   version: "f1"                  # Written into every manifest; a model trained on f1

@@ -13,7 +13,7 @@ except the ones declared here, so a change to `default.yaml` that is not mirrore
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 import yaml
@@ -22,8 +22,17 @@ REPO = Path(__file__).resolve().parents[2]
 DEFAULT = REPO / "config" / "default.yaml"
 DAEMON = REPO / "config" / "daemon.yaml"
 
-#: The only key the daemon config is allowed to differ on, with its value.
-DECLARED_OVERRIDES: dict[str, Any] = {"scout.rank_feature": "expected_move"}
+#: The only keys the daemon config is allowed to differ on, with their values. Widened from
+#: one to four by operator ruling 2026-09-21: the daemon runs fold 404's artefacts, and those
+#: run ids are in `daemon.yaml` alone because a committed default naming particular artefacts
+#: goes stale on any retrain. **Anything not in this map is still a failure.**
+_F404: Final = "train-20260913T205245-067b2b9d-f404-p7"
+DECLARED_OVERRIDES: dict[str, Any] = {
+    "scout.rank_feature": "expected_move",
+    "models.prediction_run_id": _F404,
+    "models.anomaly_run_id": _F404,
+    "models.skeptic_run_id": _F404,
+}
 
 
 def _flatten(data: Any, prefix: str = "") -> dict[str, Any]:
@@ -54,6 +63,38 @@ def test_the_daemon_config_exists_and_parses() -> None:
 def test_the_daemon_config_sets_the_ranking_feature(daemon_keys: dict[str, Any]) -> None:
     """The whole reason the file exists."""
     assert daemon_keys.get("scout.rank_feature") == "expected_move"
+
+
+def test_the_daemon_config_names_the_model_the_daemon_runs(daemon_keys: dict[str, Any]) -> None:
+    """Operator ruling 2026-09-21: fold 404's artefacts, in this file only.
+
+    Ranking loads what these name, so the key being set is what separates a daemon that ranks
+    from one that fails closed at engine 7 on every tick. The value is asserted, not just
+    presence: a run id pointing at a directory that does not exist fails the same way as an
+    absent key, only later and less legibly.
+    """
+    for key in ("prediction_run_id", "anomaly_run_id", "skeptic_run_id"):
+        assert daemon_keys.get(f"models.{key}") == _F404, key
+    # The named run must exist *where the artefacts exist at all*. `models/` is gitignored,
+    # so a fresh clone and every clean worktree have none — and a test that demanded the
+    # directory there would be a test that only passes on the machine that trained it, which
+    # `ai-workflow-rules.md` calls a broken criterion. Asserting it only when the root is
+    # populated still catches the failure that matters: a run id naming a directory that is
+    # missing on the machine the daemon runs on.
+    root = REPO / "models"
+    if not root.is_dir() or not any(root.iterdir()):
+        pytest.skip("models/ is empty here (gitignored); nothing to check the run id against")
+    assert (root / _F404).is_dir(), (
+        f"{_F404} is not under models/ on this machine; the daemon config names artefacts "
+        "the daemon cannot load, and engine 7 would fail closed on every tick"
+    )
+
+
+def test_the_committed_default_names_no_model_artefacts(default_keys: dict[str, Any]) -> None:
+    """The other half of the ruling: `default.yaml` names no particular artefacts, because
+    they go stale on any retrain and a fresh clone has none of them."""
+    for key in ("prediction_run_id", "anomaly_run_id", "skeptic_run_id"):
+        assert f"models.{key}" not in default_keys, key
 
 
 def test_the_committed_default_still_leaves_the_key_absent(default_keys: dict[str, Any]) -> None:
