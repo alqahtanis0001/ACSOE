@@ -302,6 +302,30 @@ describing a run from my own summary of it instead of from the run and the code 
 as the "~1,450 pairs" figure an hour earlier. Reading `engines/feature/engine.py` took two
 minutes and turned a fabricated defect into the single most useful number in the run.
 
+### D16 — F3 is pushed to a branch, because "safe" and "gated" are two different things
+
+**The conflict.** Standing practice: *a push, not a commit, is what makes work safe* — never leave
+hours of work in a working tree overnight. Project rule: **`main` takes only gated boundaries**,
+and F3's gate is not obtainable on this machine tonight. Doing either one alone breaks the other.
+
+**Chose.** Push F3 to **`phase-8-f3-ungated`** (`ce54fa6`), with the refusal in the commit
+*subject* so it cannot be missed: `UNGATED: DO NOT MERGE WITHOUT A GREEN GATE`. The commit body
+lists the evidence and names it as evidence about the content rather than a gate. Then restore the
+same four files into `main`'s working tree, **unstaged**, verified byte-identical to the gated blob
+(`2779ca6166dcdf52`), so the morning's gate has files to copy and the tree is exactly as it was.
+
+**Rejected:**
+- *Commit it to `main` anyway, noting the gate could not run* — this is the one thing the project
+  forbids the lead to do, and "the machine was broken" is precisely the excuse that would make the
+  rule meaningless. The rule exists for nights like this.
+- *Leave it in the working tree only* — one power cut and F3 is gone, which is the exact failure
+  the standing practice was written after.
+- *Stash it* — a stash is local, unpushed and easy for the next session to miss; it is not safe in
+  the sense the practice means.
+
+**Cost, stated.** There is now a branch that must be merged or deleted; a branch left to rot is
+its own kind of mess. The handover names it, its hash and its precondition in the item-3 row.
+
 ### D13 — F3's re-keying broke a recording script's drop report, and it is joined rather than re-keyed
 
 ### D13 — F3's re-keying broke a recording script's drop report, and it is joined rather than re-keyed
