@@ -2338,6 +2338,14 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
 
   **The operational consequence, which outranks any one boundary: `toolchain_green` is registered for every phase, so while this persists NO boundary in this project can be gated.** Short runs stayed green throughout (31 tests in 1.5 s, 29 in 83 s, 39 in 77 s), so the fault is **cumulative within one long process** rather than universal. Phase 8's F3 is therefore built, proven and **unpushed**: its criterion passed in four separate gate runs on an identical blob and one full suite reached 3,991 passed, which is evidence about the content and **is not a green gate**. **The first action on the machine is a reboot followed by one gate run, not a change to the code.** This is the point at which the register stops being a limitations-chapter note and becomes a blocker on the project's definition of done.
 
+  **A chunked run settled two things and refuted a third.** The same 4,004 tests in six processes: `tests/engines` **913 passed** (4 m 57 s), `tests/research` **398 passed** (5 m 05 s), `tests/clients` **626 passed** (16 s), `tests/core` **65 passed** - **2,002 tests green in four processes** - while `tests/platform` crashed at ~45% with `0xC0000409 STACK_BUFFER_OVERRUN` and the remainder crashed ~33 tests in with `0xC0000005` inside **polars** `_construct_series_with_fallbacks`, from `market_sensor/candles.py:179 build_candles`, under an orchestrator tick driven by `verify.py`'s paper-round-trip criterion.
+
+  - **Refuted: "cumulative within one long process".** `tests/platform` died seconds in while two five-minute chunks completed.
+  - **Established: the crash is nowhere near the content under gate.** F3 changes `clients/kraken/rest.py` and a recording script, and the chunk carrying its tests passed 626 tests in 16 s. Measured, not argued.
+  - **The ninth site is polars** - and Phase 7's simulation runs were interrupted by an intermittent *polars* crash that the operator ruled on with an A/B and a watchdog. Same family, a different library each time: pydantic-core, `sqlite3`, pyyaml, `ast.walk`, polars, and plain Python frames with no extension in them at all.
+
+  **Do not answer this by chunking the gate.** `toolchain_green` over a split suite is a different assertion from the one every previous phase passed, and swapping it in to get a green would quietly change the project's definition of done.
+
   Still not a request to chase the cause. The operator's ruling that hardware is out of scope stands. What changed at this close is where it gets written up.
 
 ## Session Notes

@@ -280,9 +280,36 @@ to this boundary: `toolchain_green` runs in every phase's gate, so **while this 
 boundary in this project can be gated at all** — F2 included, which is why there was no point
 starting it even if items 1–5 had been green. Short runs are unaffected and were green tonight
 (31 tests in 1.5 s, 29 in 83 s, 39 in 77 s), so the fault is **cumulative within one long
-process** rather than universal. A chunked run of the whole suite in five separate processes is
-measuring that now; whichever way it comes out, the morning's first action is a **reboot, then
-one gate run**, not another change to the code.
+process** rather than universal. A chunked run of the whole suite in six separate processes was
+run to settle that.
+
+**The chunked run, and it is the most informative thing measured tonight.** Six processes over
+the same 4,004 tests:
+
+| Chunk | Result |
+|---|---|
+| `tests/engines` | **913 passed** in 4 m 57 s |
+| `tests/research` | **398 passed** in 5 m 05 s |
+| `tests/clients` | **626 passed** in 16 s — **this is the chunk holding F3's own tests** |
+| `tests/core` | **65 passed** in 0.7 s |
+| `tests/platform` | **CRASH** at ~45%, `0xC0000409 STACK_BUFFER_OVERRUN` |
+| the remainder (`cli`, `console`, `db`, `modelling`, `scripts`, `verify`) | **CRASH** ~33 tests in, `0xC0000005`, inside **polars** `_construct_series_with_fallbacks` ← `market_sensor/candles.py:179 build_candles` ← an orchestrator tick driven by `verify.py`'s paper-round-trip criterion |
+
+**So "cumulative within one process" is wrong too.** `tests/platform` crashed seconds in, and two
+five-minute chunks completed. **2,002 tests passed** in four processes. What this does establish,
+and it is the point for the operator:
+
+- **The crash is not in anything F3 touches.** F3 changes `clients/kraken/rest.py` and a recording
+  script; **the chunk containing its tests passed 626 tests in 16 seconds**, and the crash sites
+  are `tests/platform` and a polars candle build under `market_sensor`. Nothing about the
+  content under gate is implicated, and that is now measured rather than argued.
+- **The ninth site is polars** — and Phase 7's runs were interrupted by an intermittent *polars*
+  crash, which the operator ruled on with an A/B and a watchdog. Same family, a different library
+  each time: pydantic-core, `sqlite3`, pyyaml, `ast.walk`, polars, and plain Python frames.
+- **The machine can do work; it cannot currently complete a 4,004-test process.** So the morning's
+  first action is a **reboot, then one gate run** — not a change to the code, and not a chunked
+  gate, because `toolchain_green` asserting a split suite would be a different assertion than the
+  one every previous phase passed.
 
 ### Access control: the kill switch was reachable from any page the browser visited
 
