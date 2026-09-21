@@ -224,6 +224,30 @@ evidence being: `pair_rules_key_on_engine_names` PASS in three separate gate run
 suite at `3,991 passed, 4 skipped` whose only non-pass was the pyyaml fault in an untouched file.
 That is not a green gate and will not be called one.
 
+**`p8-f3d` crashed twice as well — four consecutive crashes on one boundary — and the second
+attempt names the register's primary site outright.** It died **1–2% into the suite**, inside
+`pydantic/main.py model_dump`, called from `engines/market_sensor/contracts.py:225 to_state`
+through an orchestrator tick in `research/backtest.py`. That is the same `model_dump` site the
+register has recorded since Phase 0. The first attempt got to ~17%. The two attempts were **49
+seconds apart**, against three to four minutes for `p8-f3c`'s pair, so the rate is not even
+stable within the night.
+
+**One hypothesis tested rather than assumed, and it did not hold.** All four crashes were in the
+`ACSOE-gate` worktree, while the same suite went green in `ACSOE-gate2` and `ACSOE-gate3` within
+the hour, so the obvious suspect was that worktree's ignored cache state —
+`git clean -fd --exclude=logs/` has no `-x`, so `.hypothesis`, `.pytest_cache` and `.mypy_cache`
+survive every gate. Measured: **510 K / 404 K / 18 M in `ACSOE-gate` against 454 K / 404 K / 17 M
+in `ACSOE-gate2` and 366 K / 403 K / 17 M in `ACSOE-gate3`** — no anomaly. The hypothesis is
+recorded as refused rather than quietly dropped.
+
+**`p8-f3e` is the same boundary in `ACSOE-gate2`**, which removes the only environmental variable
+left that is cheap to remove. It is the last attempt: on a red, item 3 stops exactly as written
+above. **Four consecutive crashes at the register's ~20% per-run rate is p ≈ 0.0016**, so either
+tonight sampled catastrophically badly or the rate has risen since Phase 2 — and Phase 2's own
+close said one session cannot tell those apart. It still cannot. What is now certain is the
+register's harder conclusion: **every gate in this project is a retried measurement on hardware
+with a known intermittent fault**, and tonight is the clearest illustration of it in the record.
+
 ### Access control: the kill switch was reachable from any page the browser visited
 
 **Agent:** Lead · **Task:** overnight item 5, operator items 1 and 2 · **Date:** 2026-09-21
