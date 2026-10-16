@@ -440,14 +440,20 @@ class MemoryEngine(BaseEngine):
         hold = self._hold_reason(manager)
         for row in rows:
             stamped = self._stamped(row, context, cycle_id=cycle_id, ts=ts)
-            # The hold is a property of the **tick**, published once by engine 21, and it
-            # lands on every position that tick marked. Written unconditionally rather
-            # than only when there is one, because `write_position` upserts every column:
-            # setting it to `None` on a tick that did not hold is what *clears* the
-            # previous tick's reason. Skipping the assignment instead would carry an
-            # hour-old hold forward forever, rendering a paused manage chain over one
-            # running normally. Lead ruling, 2026-09-16, condition 2.
-            stamped[HOLD_REASON_FIELD] = hold
+            # Two holds, and the **tick's** wins. A feed-wide `data_guard` hold is
+            # published once by engine 21 at the top of its payload and lands on every
+            # position the tick marked, whatever the row says. Otherwise the row's own
+            # `hold_reason` is stored — `pair_quote_not_live` when that position's own pair
+            # had no live price (operator ruling 2026-09-21, D10) — and a row that carries
+            # no such key stores `None`.
+            #
+            # Written unconditionally rather than only when there is one, because
+            # `write_position` upserts every column: setting it to `None` on a tick that
+            # did not hold this position is what *clears* the previous tick's reason.
+            # Skipping the assignment instead would carry an hour-old hold forward
+            # forever, rendering a paused exit over a position managed normally. Lead
+            # ruling, 2026-09-16, condition 2.
+            stamped[HOLD_REASON_FIELD] = hold if hold is not None else row.get(HOLD_REASON_FIELD)
             # `value` is spec 113's payload fact, not a `positions` column, and `_Row` is
             # `extra="forbid"`: left on, it raises here and contract rule 7 turns that
             # into an `ERROR` that loses the whole tick. Taken off this copy only — the

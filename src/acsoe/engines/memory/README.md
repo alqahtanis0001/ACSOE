@@ -239,10 +239,14 @@ If engine 22 closed positions but engine 1 published no balance — the outage l
 there is no row, exactly as on any other tick with no balance.
 
 **`positions.hold_reason` is written on every position engine 21 marked, and set to
-`None` on every tick that did not hold.** The clearing is the load-bearing half:
-`write_position` upserts every column, so writing null is what removes the previous
+`None` on every tick that did not hold that position.** Two holds reach it, and the tick's
+wins: a feed-wide `data_guard_blocked`, published once at the top of engine 21's payload,
+lands on every row; otherwise the row's own `hold_reason` is stored —
+`pair_quote_not_live` when that position's own pair had no live price (operator ruling
+2026-09-21, D10) — and a row without one stores `None`. The clearing is the load-bearing
+half: `write_position` upserts every column, so writing null is what removes the previous
 tick's reason, and skipping the assignment instead would render an hour-old hold forever
-— reporting a paused manage chain over one running normally.
+— reporting a paused exit over a position managed normally.
 
 ## What it deliberately does not do
 
