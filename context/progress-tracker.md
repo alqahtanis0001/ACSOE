@@ -1685,6 +1685,17 @@ the reason in the YAML comment and in `DatasetConfig`.
   (`docs/dataset/phase-7-findings.md` §7b; `docs/build-log/phase-7/lead.md`). Mask the path's
   process segments as the column comparison does. Not done tonight: another lane's code, at
   23:10, on the launch's critical path.
+- **OPEN, Phase 8, found 2026-10-16 (cloud container only): two faults keep `toolchain_green`
+  from going green on Linux, and both reproduce on unchanged `main` (`1e0966d`).** (1) `mypy
+  --strict` reports `Statement is unreachable` at `scripts/recording/supervise.py:439`,
+  `scripts/partition_trades.py:240` and `scripts/rehearse_replay_day.py:82`: Windows-only code after
+  `if sys.platform != "win32": return`, unreachable only when mypy runs on Linux. (2)
+  `tests/scripts/test_recording_manager.py::test_the_page_and_its_assets_are_served` **hangs**
+  in this container: it is test 3,552 of 4,111, and two full runs, one stopped at 2,700 s and one
+  at 2 h, stopped at exactly that test. It also hangs on its own, on `main` as on the D10 branch,
+  inside 120 s. The cause was not chased, per the operator's instruction for environmental faults.
+  Neither fault is seen on the operator's Windows machine, where `main` was gated. **Consequence:**
+  a cloud session cannot gate a boundary, so D10 was not merged there (D23).
 - **OPEN, Phase 8, by operator ruling 2026-09-19: a non-deterministic native crash in polars.**
   The Phase 7 gating rehearsal at `19c5a11` died with an access violation right after a polars
   panic in its row export to Python (`polars-python/src/dataframe/export.rs:59`, "`elements` was
@@ -2350,6 +2361,15 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
 
 ## Session Notes
 
+- 2026-10-16 — lead with A, B and C as subagents, in a **cloud container** (no Kraken, no `.env`),
+  operator on a phone. **D10 finished on branch `phase-8-d10`**: merged `main` into the WIP
+  branch with no conflicts, then built engine 21's per-pair stop hold (`pair_quote_not_live`,
+  operator ruling 2026-09-21), engine 19 storing it per row, the console text, and the fresh-pair
+  figures on the tick log line (D18). Three Phase 6 criteria were rewritten for the ruled
+  behaviour (D19). The context docs are kept true. 63 of 63 mutation arms were killed. **Not
+  merged:** the gate is red on two cloud-only faults that unchanged `main` shares (D23; fault
+  register above). The operator gates and merges on Windows. **OPEN: D17.** The live console run
+  waits for the operator's machine (D22).
 - 2026-09-21, overnight — lead (Opus 5) alone, autonomous, no teammates. Phase 8's ruled scope
   worked in the operator's order. **Built, gated and pushed:** F1 (`829e4cc`), access-control
   items 1 and 2 (`9a94026`), the `fees.py` read-only-key plumbing with everything except the key,

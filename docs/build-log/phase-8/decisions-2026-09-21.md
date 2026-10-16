@@ -471,3 +471,147 @@ does not settle a question, the estimate says so and gives a range.
 **Rejected.** Estimating from the Phase 7 findings' descriptions of the defects. Phase 7's
 "build estimate ran about 5 h over" was a sum of parts, not a measurement, and the lesson was
 recorded then: *say "estimate" and measure before promising a time.*
+
+---
+
+## 2026-10-16 — D10 finished and proven; the gate could not be obtained in the cloud, so NOT merged (D23)
+
+The operator's instruction: finish D10, build engine 21's per-pair stop hold (ruled 2026-09-21,
+option 1), gate the boundary, merge to `main` and push. The live paper run was first set at 3
+hours, amended to ~20 minutes, then **moved to the operator's own machine** (2026-10-16): this
+session ran in a cloud container whose network policy refuses `api.kraken.com` and which holds no
+`.env`. Everything below was done there; nothing in it touched Kraken.
+
+### D10 — BUILT: option (b), the three fixes, and engine 21's per-pair stop hold
+
+**Engine 21's ruling, in the operator's words (2026-09-21, option 1):** *"Engine 21 holds a
+position's stop when THAT position's own pair has a stale or crossed quote, using the same shared
+staleness key. It still holds everything on a data_guard feed-wide block. A bad quote on some
+unrelated thin pair must no longer freeze every stop."* It was ruled in conversation and had not
+been written down in this file; it is recorded here as given.
+
+**Built** (branch `phase-8-d10`; not merged — D23). `HOLD_PAIR_QUOTE_NOT_LIVE = "pair_quote_not_live"` in
+`engines/position_manager/contracts.py`, with console prose. A position whose own quote is not
+live gets no barrier decided; every other position is managed as before. The feed-wide hold is
+unchanged. A liquidation holds nothing. The staleness key `data_guard.max_data_age_s` is now read
+by four engines (4, 7, 16, 21) and a test pins the four spellings together.
+
+**The lead's interpretation, each a choice a competent objector could contest (CONTESTABLE):**
+
+1. **"Holds a position's stop" holds all three barriers — stop, target and timeout.** The existing
+   feed-wide hold has always suppressed all three ("no barrier is decided"); the per-pair hold is
+   that hold scoped to one position, not a new kind. *Rejected:* holding the stop only and still
+   letting a target or timeout fire on the same untrusted pair — a target is a price read from
+   the same quote, and a timeout exit would sell into a book the system has just declared
+   untradeable. **Consequence:** see D17.
+2. **"Stale or crossed" is engine 7's predicate exactly**, so it also covers an absent quote, a
+   quote with no `age_s`, and a non-positive or unparseable bid or ask. Exactly at the bound is
+   live. *Rejected:* a narrower predicate, which would make engine 21 trade on a pair engine 7
+   refuses to enter — two meanings of "live" in two engines, the drift fix 1 exists to prevent.
+3. **A malformed price on one position's own pair holds that position rather than erroring the
+   tick** (B's call, endorsed). Raising would turn the tick into `ERROR` and stop managing every
+   position — exactly the "one bad pair freezes every stop" the ruling ended.
+4. **The tick-level `hold_reason` stays the feed-wide hold only**; the per-pair reason rides on
+   each position row, and engine 19 stores the row's reason when the tick has none (C). *Rejected:*
+   promoting a per-pair hold to the tick, which would render every position as held on a screen
+   where only one is.
+5. **Marking at the bid is unchanged**, including on a held position. It was unchanged under the
+   feed-wide hold too; valuation is not a barrier.
+
+**Kept true in the same change:** `context/engine-contracts.md` (the hold, and a new state row),
+`context/trading-invariants.md` (invariant 3 now names engine 16's second condition; invariant 14
+names the gap below), and the READMEs of engines 4, 7, 16, 19, 21 and 22.
+
+### D17 — OPEN, for the operator: a per-pair hold never escalates
+
+**What is true now.** `safety`'s outage escalation (invariant 14) counts consecutive **feed-wide**
+`data_guard` blocks. Before D10, one pair going quiet blocked the whole tick, so a position on a
+pair that stopped quoting was liquidated after 15 ticks — along with everything else, which is
+the defect D10 fixed. **After D10, a position on a pair that stops quoting for good is held
+indefinitely**: no stop, no target, no timeout, and nothing counts toward an escalation. The
+operator's own measurement says such pairs exist — "a pair that stops quoting never recovers".
+
+**Not decided by the lead**, because every fix changes what the system does with money:
+
+| Option | Effect | Case against |
+|---|---|---|
+| (a) `safety` also counts consecutive ticks a position has been per-pair held, and escalates past the same threshold | the invariant's reasoning restored for one position | escalation is `close_all` — **the whole account** — over one thin pair |
+| (b) A per-position liquidation of just the held position after N ticks | the narrowest fix | a new kind of exit, sold into a book the system calls untradeable |
+| (c) Let the **timeout** fire through a per-pair hold, as a taker | bounded carry, no new machinery | sells at whatever the dead book offers |
+| (d) Accept it, and show the held age on screen | no behaviour change | an unbounded carry the invariant was written against |
+
+**Exposure today: none.** The account is tier 1 and the cost gate refuses every candidate, so no
+position is opened in paper or live. It becomes real the day a trade is approved.
+
+### D18 — The fresh-pair fraction was computed every tick and stored nowhere; now it is logged
+
+**Found by A.** The operator ruled "record the fresh-pair fraction; no screen yet". The WIP
+published `fresh_pairs` and `pairs_seen` into `state["data_guard"]`, which is rebuilt every
+tick, and nothing persisted it: `block_records` holds only the reason, and only on a block.
+**Chose:** the five figures (`pairs_seen`, `fresh_pairs`, `freshest_quote_age_s`,
+`oldest_quote_age_s`, `max_data_age_s`) go on the daemon's existing `tick_market_snapshot` log
+line, `None` when engine 4 published none — no schema change. **Rejected:** a new column or table
+(a migration is a schema approval and more than "record, no screen" asked for).
+
+### D19 — Three Phase 6 criteria were re-written, not weakened
+
+`triggered_stop_holds_on_data_guard_block`, `escalation_completes_during_outage` and
+`console_shows_position_live` each crossed **one** of the drive's three pairs and expected
+`data_guard` to block. D10 deliberately ended that, so all three failed against the WIP — which
+the WIP's own commit could not have known, because it was never gated. C made the feed-wide
+block real (`Drive.cross_feed` crosses every quoted pair), kept every original assertion, and
+added the per-pair case to the held-stop criterion as its first tick. *Rejected:* a separate
+Phase 8 criterion, which would repeat a ~50 s drive to prove the same position twice.
+**Cost, stated:** a Phase 6 criterion now also proves a Phase 8 ruling. No Phase 7 number,
+figure, document or database was touched.
+
+### D20 — Mutation proof ran on a shadow copy of `src/`, not on the shared tree
+
+Three teammates were running tests in one checkout; mutating a shared `src/` file would have made
+their runs fail for reasons that were not theirs. The harness byte-copies `src/` into a scratch
+directory, proves the import resolves there (`PYTHONPATH` wins over the editable install),
+**refuses to run unless the unmutated baseline is green**, writes each mutant into the shadow,
+restores it from the byte copy and hash-checks it, and checks the real file's hash before and
+after. Its first run refused four sweeps because the shadow had no `db/migrations` — the refusal
+working as designed. `scripts/verify.py`, which its tests load by path, was mutated in place only
+after every teammate had stopped, from a byte copy on disk, restored and hash-checked per arm.
+
+### D21 — The branch was merged, not rebased
+
+`phase-8-d10-wip` (`cecdb59`) was already pushed, so `main` was merged into it (no conflicts)
+rather than rebasing it — a rebase would have rewritten a pushed commit for no gain. The
+finished branch, `phase-8-d10`, goes into `main` with `--no-ff` once gated (D23).
+
+### D22 — No live run from the cloud
+
+The run that shows the console on live data needs the real exchange and the operator's read-only
+key. This container's network policy refuses `api.kraken.com` and it has no `.env`. **Not worked
+around** — no proxy change, no mocked "live" result. The operator ruled (2026-10-16) that it waits
+for their own machine. `daemon_reads_the_real_exchange` therefore stays **PENDING**.
+
+### D23 — STOPPED: the gate cannot be obtained in the cloud, so D10 is not merged
+
+**The gate.** `verify.py --phase 8` in a clean worktree at `937f316` (log
+`logs/verify/gate-p8-d10.log`, gitignored, kept in the session only):
+`4 PASS, 1 FAIL, 1 PENDING`. The FAIL is `toolchain_green`, for two reasons, **both reproduced on
+unchanged `main` (`1e0966d`) in the same container**:
+
+- `mypy --strict` reports three `Statement is unreachable` errors in Windows-only code
+  (`supervise.py:439`, `partition_trades.py:240`, `rehearse_replay_day.py:82`), unreachable only
+  when mypy runs on Linux. No D10 file is among them.
+- pytest "timed out after 2700s". It was not slow: `test_recording_manager.py::
+  test_the_page_and_its_assets_are_served` hangs here. A second full run with no limit stopped at
+  the same test after two hours, and the test hangs on its own within 120 s on `main` as on D10.
+
+**The evidence that D10 is sound, which is not a gate and is not called one.** Every one of the
+4,111 tests ran: the first 3,551 with no failure before the hang, then the remaining files with
+that one test deselected, **597 passed**. `ruff` is clean. mypy shows only the three platform
+errors `main` shares. 63 of 63 mutation arms were killed.
+
+**Chose: stop and hand the gate to the operator's Windows machine**, where `main` was gated before.
+*Rejected:* merging on the evidence above. "Do not merge an ungated boundary" has no exception for
+a good argument, and a chunked suite is the substitute the tracker's own Phase 8 note refuses.
+*Rejected:* raising `PYTEST_TIMEOUT_S`, running mypy with `--platform win32`, or skipping the
+hanging test. Each one changes what the gate asserts in order to get a green, and none of them is
+D10's to change. No fix attempt was spent on code: neither fault is in D10, and both are
+deterministic here.

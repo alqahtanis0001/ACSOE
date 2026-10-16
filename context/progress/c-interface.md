@@ -3060,3 +3060,32 @@ one reader, which `skeptic_cap.read_cap` delegates to. `_fit_skeptic`'s `cap_fol
 The key is in `_config_digest`. Tests: 23 passed. Mutations: 5 applied, 5 killed. No load-time
 path compares a manifest's config digest with the live config (grep, in the build log), so the
 `-p7` directories are unaffected.
+
+## c-interface — Phase 8, D10 per-pair stop hold (C's half), 2026-10-16
+
+### DONE, not committed (the lead commits)
+
+- **Console prose.** `pair_quote_not_live` in `REASON_PROSE`, next to `data_guard_blocked`.
+  The spec 99 walk is green on B's `HOLD_PAIR_QUOTE_NOT_LIVE`, and so is the inverse
+  (orphan) walk. New tests: `test_the_per_pair_hold_points_at_the_pair_and_not_at_the_feed`
+  (prose) and
+  `test_a_position_held_on_its_own_pair_renders_the_per_pair_prose_and_then_nothing` (reader:
+  the hold is planted, then lifted on the same row).
+- **Engine 19.** `_write_positions` stores the tick's hold if there is one, otherwise the row's
+  own `hold_reason` (None when the row has no key). README and comment updated. Four tests in
+  `tests/engines/test_memory_rows.py`, beside the existing hold test, where the harness is. That
+  is a deviation from the brief's `test_memory.py`. The existing test's tick-2 row now says null,
+  per engine 21's contract; B confirmed it sets the key on every row, every tick.
+- **verify.py.** Three Phase 6 criteria FAILed under D10: `triggered_stop_holds_on_data_guard_block`,
+  `escalation_completes_during_outage` and `console_shows_position_live`. Each crossed one of the
+  drive's three pairs and expected engine 4 to block. Each now uses the new `Drive.cross_feed`.
+  The held-stop criterion also proves the per-pair hold, as the tick before the feed-wide one.
+  All three PASS. Two new named arms are in `MUTATIONS`.
+- **Mutation arms for the lead** (not run by C) are in
+  `/tmp/claude-0/-home-user-ACSOE/2468ab5a-5e26-5df4-a33a-85887b79f3ff/scratchpad/c/`:
+  `mutations-memory.json`, `mutations-console-format.json` and `mutations-verify.json`.
+
+### Open, for the lead
+
+- Run training-backed suites with `OMP_WAIT_POLICY=PASSIVE` while other agents are testing.
+  Without it, LightGBM's spinning threads made a 50 s criterion run past 90 minutes (build log).

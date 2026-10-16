@@ -311,7 +311,9 @@ def test_the_spread_is_published_as_a_ratio_of_mid() -> None:
 def test_a_crossed_book_is_reported_rather_than_clamped(
     engine: MarketSensorEngine, engine_context: Any, fresh_state: dict[str, Any]
 ) -> None:
-    """Engine 4 blocks on a negative spread, so engine 3 must not tidy one away."""
+    """A crossed book is judged downstream, so engine 3 must not tidy one away: engine 4
+    blocks when every pair is crossed, and engines 7, 16 and 21 exclude, refuse or hold
+    the one pair that is (D10, 2026-09-21)."""
     stream = FakeStream([trade("BTC/USD", 10, "100", "1")])
     stream.quotes["BTC/USD"] = QuoteTick(
         pair="BTC/USD", ts=ORIGIN + timedelta(seconds=20), bid="101", ask="100"

@@ -64,9 +64,9 @@ OPERATOR_REQUIRED_KEYS: tuple[str, ...] = (
     "trading.entry_unfilled_window_s",
     "trading.base_reporting_currency",
     "paper.starting_balances",
-    # Tenth, supplied 2026-09-09. Engine 4's staleness threshold: the whole
-    # judgement of the first real gate, which is why the lead would not invent it
-    # and the engine raised rather than defaulting until the operator set it.
+    # Tenth, supplied 2026-09-09. The staleness bound engines 4, 7, 16 and 21 share
+    # since D10 (2026-09-21). The lead would not invent it, and engine 4 raised
+    # rather than defaulting until the operator set it.
     "data_guard.max_data_age_s",
     # Eleventh, supplied 2026-09-10. Invariant 7 defines a crypto-quoted pair as one
     # whose quote is "BTC, ETH, or any non-stable asset" and nothing in the repo held

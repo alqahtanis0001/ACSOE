@@ -19,7 +19,7 @@ import sqlite3
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -857,25 +857,26 @@ def test_the_hold_reason_is_written_and_then_cleared(
 ) -> None:
     """B3's column, and the condition that makes it safe rather than misleading.
 
-    Engine 21 publishes `hold_reason` once per tick, not per position, and engine 19 is
-    the only writer of the column. **The clearing half is the load-bearing one**: a hold
-    written and never cleared renders an hour-old hold forever and reports a paused
-    manage chain over one running normally. `write_position` upserts every column, so
-    writing `None` on a tick that did not hold is what clears it — and skipping the
-    assignment instead would carry it forward, which is the defect this pins.
+    Engine 21 publishes the **feed-wide** hold once per tick, at the top of its payload,
+    and engine 19 is the only writer of the column. **The clearing half is the
+    load-bearing one**: a hold written and never cleared renders an hour-old hold forever
+    and reports a paused exit over a position managed normally. `write_position` upserts
+    every column, so writing `None` on a tick that did not hold is what clears it.
 
     B3 pins the same property at the store boundary. This pins it **through engine 19**,
     which is where it can actually go wrong: the store cannot know whether engine 19
     chose not to write the field or engine 21 chose not to publish one.
 
-    **The two sources are given different values on purpose, and the first version of
-    this test did not do that.** `a_position` dumps a real `PositionRow`, which carries
-    `hold_reason: None` as a model default — so the *row* already said null on tick 2,
-    the column came out null whether or not engine 19 assigned anything, and a mutation
-    setting the field only when there is a reason survived the whole sweep. Here tick 2's
-    row carries a **stale** reason, which is not a contrivance: engine 21 builds its
-    published rows from the open positions it read out of the store, so last tick's value
-    is exactly what comes back. Only engine 19's tick-level assignment can clear it.
+    **What changed under D10 (operator ruling 2026-09-21), and why tick 2's row now says
+    null.** The first version of this test gave tick 2's row a *stale* reason, so that
+    only engine 19's tick-level assignment could clear it — `a_position` dumps a real
+    `PositionRow` whose `hold_reason` defaults to `None`, and a test whose row already
+    said null was satisfied by the model default (`code-standards.md`). Since D10 the
+    row's own `hold_reason` is a real input: engine 21 publishes it on **every** row,
+    every tick — `data_guard_blocked`, `pair_quote_not_live` or null — and engine 19
+    stores it whenever the tick did not hold. A stale reason on the row is therefore no
+    longer a fixture engine 21 can produce, and storing it would be correct. The row's
+    reason is pinned by the four tests below this one; this one pins the tick's.
     """
     engine = MemoryEngine()
 
@@ -904,16 +905,130 @@ def test_the_hold_reason_is_written_and_then_cleared(
         "19 is not applying the tick's reason at all"
     )
 
-    # Tick 2 did not hold. The row still carries last tick's reason, because engine 21
-    # republishes what the store gave it; the tick-level key is absent.
-    stale = {**a_position(fixed_now), HOLD_REASON_FIELD: "data_guard"}
+    # Tick 2 did not hold, and the row says so, as engine 21's contract has it do on
+    # every row: the tick-level key is absent and the row's own reason is null.
     engine.process(
-        context_at(1), tick(2, **balances("500.00"), **{POSITION_MANAGER_KEY: marked(stale)})
+        context_at(1),
+        tick(2, **balances("500.00"), **{POSITION_MANAGER_KEY: marked(a_position(fixed_now))}),
     )
     assert [row["hold_reason"] for row in rows_in(migrated_db, "positions")] == [None], (
         "last tick's hold reason survived a tick that did not hold, so the console shows "
-        "an hour-old hold on a manage chain that is running normally"
+        "an hour-old hold on a position managed normally"
     )
+
+
+# --- the per-position hold, D10 (operator ruling 2026-09-21) ---------------- #
+#
+# Engine 21 holds the barriers of a position whose **own** pair has no live price, and
+# says so on that position's row as `pair_quote_not_live`. Engine 19 stores the tick's
+# feed-wide hold when there is one and the row's own reason otherwise. The four tests
+# share one baseline — a single position, no tick-level hold — and each flips one input.
+# The codes are spelled as literals: engine 19 stores them opaquely and owns none of
+# them, and the console's prose test is where the vocabulary is checked.
+
+PAIR_HOLD: Final = "pair_quote_not_live"
+FEED_HOLD: Final = "data_guard_blocked"
+
+
+def held_positions(*rows: dict[str, Any], tick_hold: str | None = None) -> dict[str, Any]:
+    """`state["position_manager"]` carrying these rows, and the tick's hold when given.
+
+    The tick-level key is **absent** rather than null when there is none, which is the
+    weaker of engine 21's two spellings of "no feed-wide hold" — so a test passing here
+    passes against both.
+    """
+    payload: dict[str, Any] = {
+        POSITIONS_FIELD: list(rows),
+        POSITIONS_VALUE_FIELD: "350.00",
+        "unrealised_pnl": "0.00",
+    }
+    if tick_hold is not None:
+        payload[HOLD_REASON_FIELD] = tick_hold
+    return {POSITION_MANAGER_KEY: payload}
+
+
+def stored_holds(db_path: Path) -> dict[str, Any]:
+    return {row["position_id"]: row["hold_reason"] for row in rows_in(db_path, "positions")}
+
+
+def test_a_rows_own_pair_hold_is_stored_when_the_tick_did_not_hold(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """The flip from the baseline: the row carries `pair_quote_not_live`.
+
+    Before D10 engine 19 overwrote every row with the tick's reason, which on this tick
+    is null — so the one position whose exits are paused would read as managed normally,
+    and the operator would see a stop not firing with nothing on screen saying why.
+    """
+    row = {**a_position(fixed_now), HOLD_REASON_FIELD: PAIR_HOLD}
+    MemoryEngine().process(context_at(0), tick(1, **balances("500.00"), **held_positions(row)))
+    assert stored_holds(migrated_db) == {"pos-1": PAIR_HOLD}, (
+        "the row said its own pair had no live price and the tick held nothing, so a "
+        "stored null means engine 19 is still overwriting the row with the tick's reason"
+    )
+
+
+def test_a_rows_own_hold_is_cleared_on_the_next_tick_it_is_not_held(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """The clearing property, for the per-row hold. Tick 1 is the test above; tick 2
+    flips one input — the same row, now carrying `hold_reason: None`.
+
+    The hold is planted first, so the clearing has something to clear: a column that was
+    never written reads null whether or not anything cleared it.
+    """
+    engine = MemoryEngine()
+    held = {**a_position(fixed_now), HOLD_REASON_FIELD: PAIR_HOLD}
+    engine.process(context_at(0), tick(1, **balances("500.00"), **held_positions(held)))
+    assert stored_holds(migrated_db) == {"pos-1": PAIR_HOLD}
+
+    live = {**a_position(fixed_now), HOLD_REASON_FIELD: None}
+    engine.process(context_at(1), tick(2, **balances("500.00"), **held_positions(live)))
+    assert stored_holds(migrated_db) == {"pos-1": None}, (
+        "the pair quoted again and the row said so, but last tick's per-pair hold "
+        "survived: the console shows paused exits on a position managed normally"
+    )
+
+
+def test_a_feed_wide_hold_wins_over_every_rows_own_reason(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """The flip: the tick carries `data_guard_blocked`. Two rows, one carrying the
+    per-pair reason and one carrying none, so both directions of precedence are seen.
+
+    A feed-wide block holds every position whatever its own pair says, and the stored
+    reason has to name the cause the operator would act on: the feed, not one pair.
+    """
+    own = {**a_position(fixed_now, "pos-1", "AAA/USD"), HOLD_REASON_FIELD: PAIR_HOLD}
+    other = {**a_position(fixed_now, "pos-2", "BBB/USD"), HOLD_REASON_FIELD: None}
+    MemoryEngine().process(
+        context_at(0),
+        tick(1, **balances("500.00"), **held_positions(own, other, tick_hold=FEED_HOLD)),
+    )
+    assert stored_holds(migrated_db) == {"pos-1": FEED_HOLD, "pos-2": FEED_HOLD}, (
+        "a feed-wide hold did not land on every position: the row's own reason was "
+        "preferred over the tick's, or a row without one was left unheld"
+    )
+
+
+def test_a_row_with_no_hold_key_and_no_tick_hold_stores_none(
+    context_at: Any, migrated_db: Path, fixed_now: Any
+) -> None:
+    """The flip: the row carries **no** `hold_reason` key at all, after a tick that held it.
+
+    `a_position` dumps a real `PositionRow`, which always carries the key, so it is
+    removed here. Absent is read as null — engine 19 does not raise on a row from an
+    engine 21 that predates the per-row field, and it does not keep the old reason.
+    """
+    engine = MemoryEngine()
+    held = {**a_position(fixed_now), HOLD_REASON_FIELD: PAIR_HOLD}
+    engine.process(context_at(0), tick(1, **balances("500.00"), **held_positions(held)))
+    assert stored_holds(migrated_db) == {"pos-1": PAIR_HOLD}
+
+    bare = a_position(fixed_now)
+    del bare[HOLD_REASON_FIELD]
+    engine.process(context_at(1), tick(2, **balances("500.00"), **held_positions(bare)))
+    assert stored_holds(migrated_db) == {"pos-1": None}
 
 
 # --- the equity defect ------------------------------------------------------ #

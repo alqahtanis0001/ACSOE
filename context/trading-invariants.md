@@ -134,11 +134,15 @@ A gate that errors blocks. A gate that cannot reach its data blocks, subject onl
 
 Gate engines: 4 (data guard), 7 (scout), 10 (cost), 11 (risk), 13 (anomaly), 15 (skeptic), 16 (decision), 17 (safety).
 
-**Engine 16 `decision` became a gate by operator ruling 2026-09-16.** It blocks on exactly one
-condition, and the condition is deterministic arithmetic over `state`: **every approving engine
-judged *this* tick's candidate** — the same pair engine 7 chose and the same decision bar. A pair
+**Engine 16 `decision` became a gate by operator ruling 2026-09-16.** It blocks on two
+conditions, both deterministic arithmetic over `state`. First, **every approving engine judged
+*this* tick's candidate** — the same pair engine 7 chose and the same decision bar. A pair
 disagreement, a payload carrying a previous bar, an absent input where the chain says the engine
-ran, or an approval carrying no quantity all block. Its other work — composing the order intent
+ran, or an approval carrying no quantity all block. Second, since D10 fix 3 (operator ruling
+2026-09-21), **the chosen pair's own quote is still live**: no older than the bound engine 4
+published this tick from `data_guard.max_data_age_s`, and not crossed — `candidate_quote_not_live`
+otherwise. Per-pair freshness left `data_guard` in D10, and this keeps a gate between a stale price
+and an order. Its other work — composing the order intent
 engine 18 reads — is composition, not decision, and its README says so in those words.
 
 ## 4. No model output may bypass a gate
@@ -245,7 +249,7 @@ Everything else in this document either makes the system less willing to act or,
 
 `close_intent` is set in exactly two ways: an operator presses Close all, or engine 17 `safety` escalates. **`safety` escalates on exactly one condition:**
 
-- **A sustained data outage.** Once `data_guard` has blocked more than `safety.max_consecutive_data_blocks` consecutive ticks — default **15** — `safety` writes `close_all`. The manage chain holds exits while the guard is rejecting data, and a hold that never ends is a position carried indefinitely on data nobody trusts. Fifteen one-minute ticks is one full decision bar: long enough that a websocket reconnect never liquidates the account, short enough that nothing is carried through a second bar.
+- **A sustained data outage.** Once `data_guard` has blocked more than `safety.max_consecutive_data_blocks` consecutive ticks — default **15** — `safety` writes `close_all`. The manage chain holds exits while the guard is rejecting data, and a hold that never ends is a position carried indefinitely on data nobody trusts. Fifteen one-minute ticks is one full decision bar: long enough that a websocket reconnect never liquidates the account, short enough that nothing is carried through a second bar. **Since D10 (2026-09-21) this counts feed-wide blocks only.** One pair going quiet no longer blocks the tick; engine 21 holds the barriers of a position on that pair alone (`pair_quote_not_live`), and that per-pair hold is **not** counted here, so a position on a pair that stops quoting for good is held without escalating. Recorded as OPEN for the operator, D17 in `docs/build-log/phase-8/decisions-2026-09-21.md`; not decided by the lead.
 
 `safety` escalates only when there are **open positions or resting entry orders**. A resting post-only buy is exposure that has not happened yet; left on the book through a blackout it can open a position into a market the system has already declared untrustworthy.
 

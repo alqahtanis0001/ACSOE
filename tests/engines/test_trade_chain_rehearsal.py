@@ -124,6 +124,8 @@ from acsoe.engines.memory.engine import MemoryEngine
 from acsoe.engines.order_book.engine import OrderBookEngine
 from acsoe.engines.position_manager.contracts import (
     HOLD_DATA_GUARD_BLOCKED,
+    HOLD_PAIR_QUOTE_NOT_LIVE,
+    HOLD_REASON_FIELD,
     POSITION_VALUE_FIELD,
     position_id_for,
 )
@@ -457,9 +459,15 @@ def check_recorded(
         orders[int(row["userref"])] = OrderRow.model_validate({**row, **stamp})
     positions: dict[str, PositionRow] = {}
     for publisher, row in published(state, ("position_manager", "exit"), "positions"):
-        hold = state[publisher].get("hold_reason")
+        # Two holds, as `context/engine-contracts.md` rules them (D10, 2026-09-21): the
+        # tick-level one is the feed-wide hold and lands on every row; when it is null the
+        # row's own reason is stored — `pair_quote_not_live` for a position whose pair had
+        # no live quote — and a row carrying none stores null.
+        hold = state[publisher].get(HOLD_REASON_FIELD)
+        if hold is None:
+            hold = row.get(HOLD_REASON_FIELD)
         positions[str(row["position_id"])] = PositionRow.model_validate(
-            {**without(row, POSITION_VALUE_FIELD), **stamp, "hold_reason": hold}
+            {**without(row, POSITION_VALUE_FIELD), **stamp, HOLD_REASON_FIELD: hold}
         )
     # A closed trade carries its entry's approval (spec 133), captured from the placing
     # tick's published payloads by the rehearsal; an entry with none carries nulls.
@@ -1018,20 +1026,57 @@ def test_an_unfilled_entry_is_cancelled_at_its_window_and_not_replaced(
 
 
 # --------------------------------------------------------------------------- #
-# 4. A data_guard block holds a triggered stop; close_intent then exits it
+# 4. A held stop, then Close all: feed-wide (data_guard) and per-pair (engine 21)
 # --------------------------------------------------------------------------- #
+#
+# One scenario until D10 (operator ruling 2026-09-21), when it crossed the traded pair's
+# book alone and engine 4 blocked the tick on it. Engine 4 now judges only the *feed*, so a
+# single crossed pair no longer blocks anything, and the hold for that case moved to engine
+# 21, per position. Split rather than weakened: (4a) makes the feed itself untrustworthy —
+# every quoted pair crossed — and keeps every original assertion; (4b) crosses only the
+# position's own pair and asserts the per-pair hold that replaced the tick-wide one.
+
+
+def touch_the_stop_on_a_crossed_book(
+    rehearsal: Rehearsal, filled: Filled, *, crossed_pairs: tuple[str, ...]
+) -> tuple[int, Decimal]:
+    """Touch the stop between ticks, cross the named pairs' stream quotes, and move the
+    traded pair's REST book to where a liquidation will sell.
+
+    Returns `(opened_s, liquidation_bid)`. Only the **stream** quote is crossed: that is
+    what engines 3, 4 and 21 judge. The REST book stays a valid book because engine 22's
+    market sell walks it, and a liquidation sells at whatever it holds (invariant 14).
+    Pairs not named keep the healthy quote `build` pinned.
+    """
+    assert TRADED in crossed_pairs
+    opened_s = filled.opened_at // 1_000_000
+    crossed = (filled.stop - Decimal("0.4")).quantize(Decimal("0.001"))
+    liquidation_bid = (filled.stop - Decimal("0.7")).quantize(Decimal("0.001"))
+    rehearsal.trade(datetime.fromtimestamp(opened_s + 30, tz=UTC), filled.stop - Decimal("0.5"))
+    for pair in crossed_pairs:
+        rehearsal.market.set_quote(pair, bid=str(crossed), ask=str(crossed - SPREAD))
+    rehearsal.market.set_order_book(
+        TRADED,
+        bids=[(str(liquidation_bid), "1000")],
+        asks=[(str(liquidation_bid + SPREAD), "1000")],
+    )
+    return opened_s, liquidation_bid
 
 
 def test_a_data_guard_block_holds_a_touched_stop_and_close_intent_then_exits_it(
     tmp_path: Path, trained: tuple[Path, str], window: list[Bar]
 ) -> None:
-    """The stop is touched on a tick whose book is crossed, so engine 4 blocks.
+    """(4a) The stop is touched on a tick on which **every** quoted pair's book is crossed,
+    so engine 4 blocks: a feed that is crossed everywhere is corrupt, not a market.
 
     Tick A: engines 21 and 22 place nothing, `hold_reason` is recorded on the position,
     and the touch is visible in engine 3's range — so this is a stop that *was* touched
     and was held, not a tick on which nothing happened. Tick B: the book is still crossed
     and the operator presses Close all; the same position is liquidated regardless of the
     guard, and the orchestrator clears `close_intent` because both flags came back true.
+
+    **Every** pair, not the traded one: since D10 one crossed pair is that pair's problem
+    (4b below), and crossing the traded pair alone no longer blocks the tick.
 
     Before spec 103, engine 17 also blocked on tick B, as a second guard blocker, because
     of finding 1 in the module docstring. Nothing here asserts on engine 17 either way.
@@ -1041,21 +1086,14 @@ def test_a_data_guard_block_holds_a_touched_stop_and_close_intent_then_exits_it(
     rehearsal = build(tmp_path, trained, window)
     entry, _ = the_entry(rehearsal)
     filled, _ = the_fill(rehearsal, entry)
-    opened_s = filled.opened_at // 1_000_000
-
-    crossed = (filled.stop - Decimal("0.4")).quantize(Decimal("0.001"))
-    liquidation_bid = (filled.stop - Decimal("0.7")).quantize(Decimal("0.001"))
-    rehearsal.trade(datetime.fromtimestamp(opened_s + 30, tz=UTC), filled.stop - Decimal("0.5"))
-    rehearsal.market.set_quote(TRADED, bid=str(crossed), ask=str(crossed - SPREAD))
-    rehearsal.market.set_order_book(
-        TRADED,
-        bids=[(str(liquidation_bid), "1000")],
-        asks=[(str(liquidation_bid + SPREAD), "1000")],
+    opened_s, liquidation_bid = touch_the_stop_on_a_crossed_book(
+        rehearsal, filled, crossed_pairs=PAIRS
     )
     held = rehearsal.tick(datetime.fromtimestamp(opened_s + TICK, tz=UTC))
 
     assert held["trading_blocked_by"] == "data_guard", held.get("block_reason")
     assert held["data_guard"]["reason_code"] == REASON_NEGATIVE_SPREAD
+    assert held["data_guard"]["pairs_seen"] == len(PAIRS), "a pair was not quoted at all"
     assert Decimal(held["market_sensor"]["trade_ranges"][TRADED]["low"]) <= filled.stop, (
         "no stop was touched, so there was nothing to hold"
     )
@@ -1079,6 +1117,76 @@ def test_a_data_guard_block_holds_a_touched_stop_and_close_intent_then_exits_it(
     assert liquidated["guard_blockers"][0]["engine"] == "data_guard"
     manager = liquidated["position_manager"]
     assert manager["hold_reason"] is None, "a liquidation never holds"
+    assert manager["entry_orders_cancelled"] is True
+    exit_trade(liquidated, entry, filled, exit_price=liquidation_bid, outcome="liquidation")
+    recorded = rehearsal.tables.positions[filled.position_id]
+    assert (recorded.status.value, recorded.hold_reason) == ("closed", None)
+    assert rehearsal.orchestrator is not None
+    assert rehearsal.orchestrator.system == {"mode": "frozen", "close_intent": False}
+    assert rehearsal.store.pending_commands() == ()
+    assert rehearsal.store.claimed_unconsumed_commands() == ()
+
+
+def test_a_crossed_quote_on_the_positions_own_pair_holds_its_stop_and_close_all_exits_it(
+    tmp_path: Path, trained: tuple[Path, str], window: list[Bar]
+) -> None:
+    """(4b) Only the position's **own** pair is crossed; every other quoted pair is fine.
+
+    D10 (operator ruling 2026-09-21): engine 4 judges the feed, which is alive, so the tick
+    is **not** blocked. The crossed pair is engine 21's to hold, for that position alone:
+    a stop computed from a book nobody can trade on is the same fabricated trigger the
+    feed-wide hold refuses. Tick A: the stop was touched (engine 3's range says so) and
+    nothing is triggered, no exit order exists, the tick-level `hold_reason` is null —
+    that one is the feed-wide hold only — and the stored position carries
+    `pair_quote_not_live`. Tick B: Close all liquidates it regardless, because a
+    liquidation never holds (invariant 14), and the stored hold clears.
+    """
+    rehearsal = build(tmp_path, trained, window)
+    entry, _ = the_entry(rehearsal)
+    filled, _ = the_fill(rehearsal, entry)
+    opened_s, liquidation_bid = touch_the_stop_on_a_crossed_book(
+        rehearsal, filled, crossed_pairs=(TRADED,)
+    )
+    held = rehearsal.tick(datetime.fromtimestamp(opened_s + TICK, tz=UTC))
+
+    assert "trading_blocked_by" not in held, held.get("block_reason")
+    guard = held["data_guard"]
+    assert guard["blocked"] is False, guard
+    assert (guard["pairs_seen"], guard["fresh_pairs"]) == (len(PAIRS), len(PAIRS))
+    quotes = held["market_sensor"]["quotes"]
+    assert Decimal(quotes[TRADED]["bid"]) > Decimal(quotes[TRADED]["ask"]), "not crossed"
+    for pair in PAIRS:
+        if pair != TRADED:
+            assert Decimal(quotes[pair]["bid"]) < Decimal(quotes[pair]["ask"]), pair
+    assert Decimal(held["market_sensor"]["trade_ranges"][TRADED]["low"]) <= filled.stop, (
+        "no stop was touched, so there was nothing to hold"
+    )
+    manager = held["position_manager"]
+    assert manager["hold_reason"] is None, "the tick-level hold is the feed-wide one only"
+    assert manager["triggered"] == [], "a stop was decided on a crossed book"
+    assert manager["reason_code"] is None, "engine 21 failed rather than held"
+    (row,) = manager["positions"]
+    assert (row["position_id"], row["hold_reason"]) == (
+        filled.position_id,
+        HOLD_PAIR_QUOTE_NOT_LIVE,
+    )
+    assert held["exit"]["orders"] == []
+    assert held["exit"]["positions_closed"] is False
+    assert held["exit"]["reason_code"] == REASON_NOTHING_TO_EXIT
+    position = rehearsal.tables.positions[filled.position_id]
+    assert (position.status.value, position.hold_reason) == ("open", HOLD_PAIR_QUOTE_NOT_LIVE)
+    assert exit_userref_for(filled.position_id) not in rehearsal.tables.orders
+    assert held["system"]["close_intent"] is False
+
+    rehearsal.command(CommandName.CLOSE_ALL)
+    liquidated = rehearsal.tick(datetime.fromtimestamp(opened_s + 2 * TICK, tz=UTC))
+
+    assert liquidated["data_guard"]["blocked"] is False, "the feed was never the problem"
+    quotes = liquidated["market_sensor"]["quotes"]
+    assert Decimal(quotes[TRADED]["bid"]) > Decimal(quotes[TRADED]["ask"]), "still crossed"
+    manager = liquidated["position_manager"]
+    assert manager["hold_reason"] is None, "a liquidation never holds"
+    assert all(row["hold_reason"] is None for row in manager["positions"]), manager["positions"]
     assert manager["entry_orders_cancelled"] is True
     exit_trade(liquidated, entry, filled, exit_price=liquidation_bid, outcome="liquidation")
     recorded = rehearsal.tables.positions[filled.position_id]

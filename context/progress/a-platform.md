@@ -2381,3 +2381,35 @@ quote PYUSD, and ETH/PYUSD has base ETH and quote PYUSD. In REST, XBTPYUSD's `ws
 XBT/PYUSD with quote PYUSD, and ETHPYUSD's is ETH/PYUSD. So the name map gives both pairs quote
 **PYUSD, not USD**. Engine 7 excludes them for want of a PYUSD balance (invariant 7), as it
 would live.
+
+## PHASE 8 — D10 option (b) follow-through (2026-10-16)
+
+Claimed from the lead's task on branch `phase-8-d10`, before any edit. Lane A only. No commit
+and no push: the lead does both.
+
+| Task | What | Files I touched | State |
+|---|---|---|---|
+| 1 (spec 87) | The rehearsal's data_guard scenario split: **4a feed-wide** (every quoted pair crossed, every original assertion kept) and **4b per-pair** (only the position's own pair crossed: no tick block, no trigger, stored `hold_reason = pair_quote_not_live`, no exit; then Close all liquidates it and the hold clears). `check_recorded` stores the row's hold when the tick's is null, as engine 19 does | `tests/engines/test_trade_chain_rehearsal.py` | **DONE** — whole file `8 passed in 2637.76s` against B's engine 21 and C's engine 19 (`3b45942`); mypy strict data_guard clean; `ruff check src tests scripts` clean |
+| 2 | data_guard tests, one input from a pass: four-fresh baseline, half-dead feed (2 of 4 fresh, passes, records the fraction and both ages), dead feed (the last fresh quote goes past the bound), every-crossed versus three-of-four, the fresh count at the inclusive bound, and engine 21 added to the shared-key test. README made true | `tests/engines/test_data_guard.py`, `src/acsoe/engines/data_guard/{README.md,engine.py}` (docstring only), `src/acsoe/platform/config.py` (docstring only) | **DONE** — 34 passed |
+| 3 | Mutation arms, **not run**: 12 on data_guard, 4 on engine 21 through the rehearsal (optional) | scratch `a/mutations-*.json` | **HANDED TO THE LEAD** |
+| 4 | Paper-run scouting: operator commands and a read-only report script, tested on a seeded scratch DB | scratch `a/paper-run-instructions.md`, `a/paper_run_report.py` | **DONE, NOT RUN**: the container cannot reach Kraken |
+| 5 (lead follow-up) | **The fresh-pair fraction persisted.** `tick_market_snapshot` now carries engine 4's `pairs_seen`, `fresh_pairs`, `freshest_quote_age_s`, `oldest_quote_age_s` and `max_data_age_s` from that tick's `state["data_guard"]`. Every key is always present; a value engine 4 did not publish, or published with the wrong type, is `None`, never 0. The report script reads them from `--log` | `src/acsoe/cli/engine.py`, `tests/cli/test_market_snapshot.py`, scratch `a/mutations-cli-engine-snapshot.json` (8 arms, not run) | **DONE**: touched files 318 passed; mypy strict `cli` clean; ruff clean |
+| 6 (lead follow-up) | The three comments made false by D10 corrected | `tests/platform/test_config.py`, `tests/cli/test_entrypoints.py`, `tests/engines/test_market_sensor.py` | **DONE** |
+
+### Open items, reported to the lead (not built)
+
+- **CLOSED by task 5 above** (lead: build it). Kept for the record: **the fresh-pair fraction is not persisted anywhere.** Engine 4 publishes `fresh_pairs` and
+  `pairs_seen` in `state` on every tick. Engine 19 stores `state["data_guard"]` nowhere:
+  `block_records` gets only `blocked_by`, the prose `reason` and the status, and only on a block.
+  `scout_tallies` gets engine 7's `excluded` counts (`no_live_quote` includes stale pairs), and
+  only on bar-close ticks that reach engine 7. The daemon's `tick_market_snapshot` log line has
+  `quote_count` and `subscription_count`, but no ages. The operator's "record it" is therefore
+  met only inside the tick. The cheapest fix in lane A, with no schema change: add the four
+  data_guard figures to that log line (`cli/engine.py`). Not built, because the lead asked for
+  a report. The report script already reads them if they appear.
+- **CLOSED by task 6 above.** **Out of my writable list this session, now slightly false, left alone:** a comment in
+  `tests/platform/test_config.py` and `tests/cli/test_entrypoints.py` ("Engine 4's staleness
+  threshold: the whole judgement of the first real gate"), and the docstring of
+  `test_a_crossed_book_is_reported_rather_than_clamped` in `tests/engines/test_market_sensor.py`
+  ("Engine 4 blocks on a negative spread"). All three are A-owned files. Prose only; no test
+  relies on one stale or crossed pair blocking the tick.

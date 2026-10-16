@@ -29,6 +29,18 @@ the circuit breaker.
 answer here — "I considered holding and did not" — where an omission would be
 indistinguishable from an engine that had not run. That is the same distinction engine 7
 draws between `pair` (omitted when there is none) and `rank_feature` (null).
+
+## Two hold reasons, at two levels (D10, operator ruling 2026-09-21)
+
+The **tick's** `hold_reason` is the feed-wide hold only: `data_guard_blocked` or null. It
+is a property of the tick, and engine 19 stores it on every position the tick marked.
+
+**Every position row** carries a `hold_reason` key of its own, set on every row every
+tick and never copied from the store: `data_guard_blocked` on a feed-wide hold,
+`pair_quote_not_live` when that position's own pair has no live quote, and null
+otherwise — null throughout a liquidation. Engine 19 stores the row's value when the
+tick's is null, so a row republished without its reason being *set* would carry an
+earlier tick's hold forward forever.
 """
 
 from __future__ import annotations
@@ -49,8 +61,10 @@ __all__ = [
     "EXECUTION_KEY",
     "EXECUTION_ORDERS_FIELD",
     "HOLD_DATA_GUARD_BLOCKED",
+    "HOLD_PAIR_QUOTE_NOT_LIVE",
     "HOLD_REASON_FIELD",
     "MARKET_SENSOR_KEY",
+    "MAX_DATA_AGE_KEY",
     "ORDERS_FIELD",
     "PAIR_RULES_PAIRS_KEY",
     "POSITIONS_FIELD",
@@ -58,6 +72,8 @@ __all__ = [
     "POSITION_ID_FIELD",
     "POSITION_VALUE_FIELD",
     "QUOTES_FIELD",
+    "QUOTE_AGE_FIELD",
+    "QUOTE_ASK_FIELD",
     "QUOTE_BID_FIELD",
     "REASON_POSITION_UNRECORDABLE",
     "STATE_KEY",
@@ -87,12 +103,20 @@ CLOSE_INTENT_FIELD: Final = "close_intent"
 #: holds on exactly one value of it and on nothing else.
 TRADING_BLOCKED_BY_KEY: Final = "trading_blocked_by"
 
-#: The one blocker that holds exits. Invariant 14: the manage chain holds while the guard
-#: is rejecting data, because a barrier computed from rejected data is a fabricated
+#: The one blocker that holds every exit. Invariant 14: the manage chain holds while the
+#: guard is rejecting data, because a barrier computed from rejected data is a fabricated
 #: trigger acting on real money. **A block by any other engine does not hold** — a `cost`
 #: or `safety` block is a statement about whether to *open* something, and a position
-#: already open still has to be managed.
+#: already open still has to be managed. A position whose *own* pair has no live quote is
+#: held on its own, without any blocker — see `HOLD_PAIR_QUOTE_NOT_LIVE`.
 DATA_GUARD_NAME: Final = "data_guard"
+
+#: How old a position's own quote may be and still count as live. **The same key engines
+#: 4 and 7 read** (D10 fix 1, operator ruling 2026-09-21): two numbers meaning "too old"
+#: drift the moment one is tuned. Restated rather than imported (contract rule 3); a test
+#: asserts it equals `data_guard`'s `MAX_DATA_AGE_KEY` and `scout`'s `MAX_QUOTE_AGE_KEY`.
+#: Read only when a position is judged, and never defaulted.
+MAX_DATA_AGE_KEY: Final = "data_guard.max_data_age_s"
 
 #: Engine 3 `market_sensor` (A). Marks come from `quotes` and barriers from
 #: `trade_ranges`, and the two are different readings on purpose — see the engine.
@@ -103,6 +127,12 @@ TRADE_RANGES_FIELD: Final = "trade_ranges"
 #: A position is marked at the **bid**: what a sale would actually receive. The ask would
 #: value every holding at a price nobody is offering to pay.
 QUOTE_BID_FIELD: Final = "bid"
+
+#: The other two quote fields the per-pair liveness check reads — the same predicate
+#: engine 7 excludes a pair by. `age_s` is `now - quote.ts`, stamped by engine 3 on every
+#: quote it publishes; the ask is read only to tell a crossed book (bid above ask).
+QUOTE_ASK_FIELD: Final = "ask"
+QUOTE_AGE_FIELD: Final = "age_s"
 
 #: Spec 85's per-tick traded range. `low` and `high` are what the market *traded*, not
 #: what it quoted, which is the whole reason engine 21 can decide a barrier at all: a
@@ -168,9 +198,18 @@ ENTRY_ORDERS_CANCELLED_FIELD: Final = "entry_orders_cancelled"
 #: again next tick. Flagged to C for `REASON_PROSE` (spec 99).
 REASON_POSITION_UNRECORDABLE: Final = "position_unrecordable"
 
-#: The one hold reason engine 21 emits today. Named, not spelled inline, because the
-#: console renders it and engine 19 records it.
+#: The feed-wide hold: `data_guard` blocked the tick and this is not a liquidation. The
+#: only value the **tick-level** `hold_reason` ever takes, and on such a tick every
+#: position row carries it too. Named, not spelled inline, because the console renders it
+#: and engine 19 records it.
 HOLD_DATA_GUARD_BLOCKED: Final = "data_guard_blocked"
+
+#: The per-position hold (D10, operator ruling 2026-09-21, option 1): **this position's
+#: own pair** has no live quote — absent, no positive bid or ask, crossed, carrying no
+#: `age_s`, or older than `data_guard.max_data_age_s` — so no barrier is decided for it.
+#: Carried on that position's row only, never on the tick: a bad quote on one pair must
+#: not freeze the stops of every other. Never set during a liquidation.
+HOLD_PAIR_QUOTE_NOT_LIVE: Final = "pair_quote_not_live"
 
 
 class Barrier:

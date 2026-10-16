@@ -28,11 +28,13 @@ considered.
 | Open positions | `store.open_positions()` | 19 `memory` (C) |
 | Fills and cancels | `clients.kraken.query_orders`, `cancel_order` | A's order surface (spec 84); B's paper broker in paper mode |
 | The mark | `state["market_sensor"]["quotes"][pair]["bid"]` | 3 `market_sensor` (A) |
+| Whether a position's own pair is live | `state["market_sensor"]["quotes"][pair]` — `bid`, `ask`, `age_s` | 3 `market_sensor` (A) |
 | The barrier test | `state["market_sensor"]["trade_ranges"][pair]` | 3 `market_sensor` (A), spec 85 |
 | `base`, `quote` | `state["exchange"]["pair_rules"]["pairs"][pair]` | 1 `exchange` (A) |
 
 Configuration: `barriers.target_pct`, `barriers.stop_pct`, `barriers.timeout_bars`,
-`timeframes.decision_bar_s`, `trading.entry_unfilled_window_s`.
+`timeframes.decision_bar_s`, `trading.entry_unfilled_window_s`, and
+`data_guard.max_data_age_s` — engine 4's key, shared on purpose (see the hold).
 
 **Last tick's decisions come from the store, never from `state`.** `state` is rebuilt
 every tick and an engine is stateless across cycles.
@@ -92,22 +94,58 @@ alpha decay.
 
 ## The hold
 
-When `state["trading_blocked_by"] == "data_guard"` and `close_intent` is not set, no
-barrier is decided, `triggered` is empty and `hold_reason` is `data_guard_blocked`. A
+There are two, and they differ in scope, not in what they suppress: each decides **no
+barrier at all** — no stop, no target, no timeout — for what it holds.
+
+**The feed-wide hold.** When `state["trading_blocked_by"] == "data_guard"` and
+`close_intent` is not set, no barrier is decided for any position, `triggered` is empty,
+and `hold_reason` is `data_guard_blocked` — on the tick and on every position row. A
 trigger computed from data engine 4 has just rejected is a fabricated trigger acting on
 real money.
+
+**The per-pair hold** (D10, operator ruling 2026-09-21, option 1). Otherwise, a position
+whose **own** pair has no live quote is held alone: no barrier is decided for it and its
+row carries `hold_reason: pair_quote_not_live`. Every position on a live pair is decided
+exactly as before, so a stale quote on some unrelated thin pair no longer freezes every
+stop. Positions opened by this tick's fill are judged the same way. "Live" is engine 7's
+`no_live_quote` predicate, restated:
+
+| Not live when | |
+|---|---|
+| the quote is absent | |
+| the bid or ask is absent, unparseable, or not positive | a float is "not a price" here, which holds the one position, rather than an error that would stop the tick and every other stop with it |
+| the bid is above the ask | a crossed book |
+| the quote carries no `age_s`, or it is not a number, or it is a bool | engine 3 stamps one on every quote, so its absence is a defect upstream |
+| `age_s` is past `data_guard.max_data_age_s` | **exactly at the bound is live** — the `<=` engines 4, 7 and 16 use |
+
+The bound is **the key engines 4 and 7 read** (D10 fix 1), restated in `contracts.py` as
+`MAX_DATA_AGE_KEY` and pinned to theirs by a test. It is read with **no default**: null
+errors the tick. It is read only when there is a position to judge and neither the
+feed-wide hold nor a liquidation applies — a tick on which it decides nothing never
+consults it.
+
+**The tick-level `hold_reason` is the feed-wide hold only** (`data_guard_blocked` or
+null): it is a property of the tick. The per-pair reason lives on the row, and engine 19
+stores the row's reason when the tick's is null. So **every row carries the key, set
+every tick, never copied from the store** — a row republished with an earlier tick's
+reason would carry that hold forward forever.
+
+**The per-pair hold is not counted by `safety`'s outage escalation**, which counts
+`data_guard` blocks only. A position on a pair that stops quoting for good is held without
+escalating — OPEN for the operator as D17 in
+`docs/build-log/phase-8/decisions-2026-09-21.md`.
 
 **A block by any other engine does not hold.** A `cost` or `safety` block is a statement
 about whether to *open* something; a position already open is still managed. Holding on a
 `safety` freeze would leave a stop unactioned because the account was frozen, which is the
 opposite of what a freeze is for.
 
-**A liquidation never holds**, and `hold_reason` is null throughout one. Invariant 14: a
-feed outage is what triggers the escalation and the same outage is what would hold it, so
-if the hold applied, `close_all` would be blocked by the exact condition it exists to
-answer.
+**A liquidation never holds anything**, and every `hold_reason` — the tick's and each
+row's — is null throughout one. Invariant 14: a feed outage is what triggers the
+escalation and the same outage is what would hold it, so if either hold applied,
+`close_all` would be blocked by the exact condition it exists to answer.
 
-**The stale-entry cancel still happens during a hold.** Invariant 8 says so in as many
+**The stale-entry cancel still happens during either hold.** Invariant 8 says so in as many
 words: it is a decision about elapsed time, it reads `context.now`, it needs no market
 data, and it reduces exposure. The hold suppresses **exits**, never this.
 
@@ -146,8 +184,9 @@ the total is present. That test is what keeps engine 19's two paths in agreement
 it has been shown to fail when they disagree. `value` is a payload field, not a
 `positions` column.
 
-**`hold_reason` is null rather than omitted** on a tick that did not hold. Null is the
-answer there; an omission is indistinguishable from an engine that never ran.
+**`hold_reason` is null rather than omitted** on a tick that did not hold, and on every
+position row that was not held. Null is the answer there; an omission is
+indistinguishable from an engine that never ran.
 
 **`entry_orders_cancelled` is the literal boolean `True` only when no resting entry
 remains.** A failed cancel, or an order the client will not report on, leaves it `False`,
@@ -187,4 +226,5 @@ and typed `Any`. The account is in `docs/build-log/phase-6/b-store.md`, 2026-09-
 - **Writes no relational row.** Engine 19 is the single writer.
 - **Never replaces, re-prices or re-places an entry.** Invariant 8.
 - **Never holds on any blocker other than `data_guard`, and never holds a liquidation.**
+  The one hold without a blocker is per position, on that position's own pair's quote.
 - **Never decides a fill itself.** The client decides.

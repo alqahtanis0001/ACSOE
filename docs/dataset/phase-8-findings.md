@@ -177,7 +177,7 @@ past two minutes, so the guard blocks for ever. Phase 6 never saw it (the fake e
 four pairs) and Phase 7 never saw it
 (D7 stamps the replay's quote at `now`, recorded then as making the condition "structurally inert
 for the whole simulation"). **Live, nothing makes it inert.** Options and a recommendation are in
-the decision log as **D10, OPEN**; the lead has not chosen, and no smoke digest is committed, so
+the decision log as **D10, OPEN** at the time (ruled 2026-09-21, built 2026-10-16 — see the section after this one); the lead had not chosen, and no smoke digest is committed, so
 `daemon_reads_the_real_exchange` stays PENDING rather than passing on a run that never reached
 the funnel.
 
@@ -221,6 +221,42 @@ engines and the v2 feed use `BTC/USD`. The run was redone on a clean database; t
 **restored byte-identical** to how it was found, and both run databases are kept aside as
 evidence. The seed's naming is recorded in D12 as worth a ruling: no test catches it, because the
 fake client's own fixture is keyed the modern way.
+
+## D10 built, 2026-10-16: what changed, and what the next run should show
+
+**Built and proven on branch `phase-8-d10`; not yet merged**, because the gate could not be obtained in the cloud (decision log, 2026-10-16 block: D10 BUILT, D17–D23). The smoke run
+above is the "before". The "after" has not been measured yet — the cloud session that built it
+cannot reach Kraken, and the run waits for the operator's machine (D22).
+
+**What judges staleness now, one key read by four engines** (`data_guard.max_data_age_s`, 120 s):
+
+| Engine | What it judges | What it does |
+|---|---|---|
+| 4 `data_guard` | the **feed**: the freshest quote's age; whether every pair is crossed | blocks the tick only when nothing on the subscription has moved within 120 s, every pair is crossed, or no data arrived |
+| 7 `scout` | each pair | excludes a stale, crossed or age-less pair as `no_live_quote` |
+| 16 `decision` | the chosen pair, again, just before the order | refuses with `candidate_quote_not_live` |
+| 21 `position_manager` | an open position's own pair | holds that position's barriers, `pair_quote_not_live` (operator ruling 2026-09-21, option 1) |
+
+**Re-reading the smoke run under the new rules — an inference, not a measurement.** Every one of
+the 17 stale-pair blocks named one pair while 200+ others were quoting, so none of them would
+have blocked: `COOKIE/USD`, `CSPR/USD` and the rest would have been excluded by engine 7 instead.
+Tick 1 (no quote had arrived yet) would still block, as `no_market_data`. **What the next run
+must show is the part the smoke run could not:** what refuses candidates once the guard lets bar
+closes through. At tier 1 the expected refuser is the cost gate (`net_edge_below_hurdle`), but
+gates 8, 13, 15 and 11 sit before or beside it and the run, not this paragraph, will say which.
+
+**The fresh-pair fraction is now recorded** on every `tick_market_snapshot` log line
+(`pairs_seen`, `fresh_pairs`, `freshest_quote_age_s`, `oldest_quote_age_s`, `max_data_age_s`) —
+D18: before this change it was computed every tick and stored nowhere. No screen, as ruled.
+
+**One consequence for the operator, OPEN as D17:** a position on a pair that stops quoting for good
+is now held indefinitely, and `safety`'s outage escalation does not count it. No exposure at tier 1,
+where nothing is approved.
+
+**The run's measurements, to be filled in from the operator's run:** ticks run · ticks blocked by
+`data_guard` (and why) · ticks past it · bar closes reached · refusals after the guard, by engine
+and reason · fresh-pair fraction (mean, minimum). The read-only report script is committed at
+`docs/build-log/phase-8/paper_run_report.py.txt`.
 
 ## Q0. Housekeeping item 2 needs a ruling: it is not a one-line change
 

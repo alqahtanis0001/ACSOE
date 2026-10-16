@@ -30,6 +30,7 @@ __all__ = [
     "INTENT_FIELD",
     "OPTIONAL_SOURCES",
     "PAIR_FIELD",
+    "REASON_CANDIDATE_QUOTE_NOT_LIVE",
     "REASON_INPUTS_UNAVAILABLE",
     "REASON_INPUT_MISSING",
     "REASON_NO_APPROVED_QUANTITY",
@@ -57,6 +58,20 @@ INTENT_FIELD: Final = "intent"
 #: Engine 3, the guard chain. The bar every other payload is measured against.
 MARKET_SENSOR_KEY: Final = "market_sensor"
 CLOSED_BAR_TS_FIELD: Final = "closed_bar_ts"
+
+#: Engine 3's quotes, and the three fields of one that the liveness clause reads (D10
+#: fix 3). ``age_s`` is ``now - quote.ts``, stamped by engine 3 on every quote.
+MARKET_SENSOR_QUOTES_FIELD: Final = "quotes"
+QUOTE_AGE_FIELD: Final = "age_s"
+QUOTE_BID_FIELD: Final = "bid"
+QUOTE_ASK_FIELD: Final = "ask"
+
+#: Engine 4, the guard chain. **Its published bound, not the config key**: engine 16 reads
+#: nothing from `context` — no config, no clock — and that is what makes it a coherence
+#: check invariant 4 can protect. Engine 4 echoes the threshold it applied into its own
+#: payload, so this is the number engine 7 excluded by, from the same key, this tick.
+DATA_GUARD_KEY: Final = "data_guard"
+DATA_GUARD_MAX_AGE_FIELD: Final = "max_data_age_s"
 
 #: Engine 7. The candidate, and therefore the pair every other payload must name.
 SCOUT_KEY: Final = "scout"
@@ -144,6 +159,17 @@ REASON_NO_APPROVED_QUANTITY: Final = "no_approved_quantity"
 #: number or a timestamp is neither. The house pattern every sibling gate carries
 #: (`cost_inputs_unavailable`, `risk_inputs_unavailable`, `scout_inputs_unavailable`).
 REASON_INPUTS_UNAVAILABLE: Final = "decision_inputs_unavailable"
+
+#: The pair about to be ordered has no live price: its quote is older than engine 4's
+#: published bound, or its book is crossed (D10 fix 3, operator ruling 2026-09-21).
+#:
+#: **Engine 7 already excluded exactly these pairs** under ``no_live_quote``, from the
+#: same snapshot, so on a working system this clause never fires. It exists for the day
+#: engine 7's exclusion is broken or removed: per-pair freshness left ``data_guard`` in
+#: D10, and this puts a second gate between a stale price and an order, at the last
+#: point before the intent exists. Defence in depth, not a second opinion — it can only
+#: refuse, never approve.
+REASON_CANDIDATE_QUOTE_NOT_LIVE: Final = "candidate_quote_not_live"
 
 
 class OrderIntent(BaseModel):

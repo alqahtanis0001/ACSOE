@@ -12,6 +12,7 @@ gate that only checked staleness pass the negative-spread test.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 from typing import Any
 
@@ -395,3 +396,239 @@ def test_a_second_guard_still_runs_on_a_tick_this_gate_blocked(
     assert probe.ran == 1
     assert [blocker["engine"] for blocker in state["guard_blockers"]] == ["data_guard"]
     assert state["safety"] == {"ran": 1}
+
+
+# --------------------------------------------------------------------------- #
+# D10: the feed, not one pair (operator ruling 2026-09-21)
+# --------------------------------------------------------------------------- #
+#
+# Every scenario above uses ONE pair, and with one pair the oldest quote and the freshest
+# are the same quote. That is how the engine judged the tick on its *oldest* pair for a
+# fortnight while its own contract said "the freshest" — no test could tell the two apart.
+# Against the real exchange's 668 USD pairs it blocked 18 of the first smoke run's 22 ticks.
+# These use several pairs, so the two readings finally disagree.
+
+
+def several(**ages: float) -> dict[str, Any]:
+    """The clean scenario, re-quoted: one healthy quote per named pair, each at its age.
+
+    Pair names use `_` for `/` so they can be keyword arguments; the published name keeps
+    the slash. Every quote is the clean scenario's own, so a test differs from a healthy
+    multi-pair tick only in the ages and spreads it sets.
+    """
+    state = scenario("clean")
+    healthy = next(iter(state["market_sensor"]["quotes"].values()))
+    quotes: dict[str, Any] = {}
+    for key, age in ages.items():
+        pair = key.replace("_", "/")
+        quotes[pair] = {**healthy, "pair": pair, "age_s": age}
+    state["market_sensor"]["quotes"] = quotes
+    return state
+
+
+def test_one_stale_pair_among_fresh_ones_does_not_block(
+    engine: DataGuardEngine, guard_context: Any
+) -> None:
+    """**The D10 defect, pinned.** Tick 19 of the smoke run — the one tick that carried a
+    closed decision bar — was blocked on `COOKIE/USD` at 438 s while other pairs were
+    quoting. One quiet pair is that pair's problem: engine 7 excludes it."""
+    state = several(BTC_USD=4.0, ETH_USD=11.0, COOKIE_USD=438.0)
+
+    result = engine.process(guard_context, state)
+
+    assert result.blocks_trading is False, result.reason
+    assert result.data["oldest_quote_age_s"] == 438.0, "recorded, never judged"
+    assert result.data["freshest_quote_age_s"] == 4.0
+
+
+def test_the_heartbeat_blocks_when_even_the_freshest_quote_is_stale(
+    engine: DataGuardEngine, guard_context: Any
+) -> None:
+    """Nothing on the subscription has moved within the bound: the feed is dead."""
+    state = several(BTC_USD=125.0, ETH_USD=300.0, CSPR_USD=369.0)
+
+    result = engine.process(guard_context, state)
+
+    assert result.blocks_trading is True
+    assert result.data["reason_code"] == REASON_STALE
+    assert "freshest" in (result.reason or "") and "125s" in (result.reason or "")
+
+
+def test_the_heartbeat_is_the_freshest_quote_at_the_boundary(
+    engine: DataGuardEngine, guard_context: Any
+) -> None:
+    """At exactly the bound the feed is alive; one second past it, it is not. Same `<=`
+    as engine 7's per-pair rule, so the two engines agree on what "too old" means."""
+    alive = engine.process(guard_context, several(BTC_USD=MAX_AGE_S, ETH_USD=900.0))
+    dead = engine.process(guard_context, several(BTC_USD=MAX_AGE_S + 1, ETH_USD=900.0))
+
+    assert alive.blocks_trading is False, alive.reason
+    assert dead.blocks_trading is True
+    assert (alive.data["fresh_pairs"], dead.data["fresh_pairs"]) == (1, 0), (
+        "the fresh-pair count uses the same bound, inclusive"
+    )
+
+
+def test_quotes_carrying_no_age_cannot_show_the_feed_is_alive(
+    engine: DataGuardEngine, guard_context: Any
+) -> None:
+    """Engine 3 stamps `age_s` on every quote, so this is a defect upstream — and the
+    absence of a no is never a yes (invariant 3). It must not read as a healthy feed."""
+    state = several(BTC_USD=1.0, ETH_USD=1.0)
+    for quote in state["market_sensor"]["quotes"].values():
+        del quote["age_s"]
+
+    result = engine.process(guard_context, state)
+
+    assert result.blocks_trading is True
+    assert result.data["reason_code"] == REASON_STALE
+    assert "cannot be shown to be alive" in (result.reason or "")
+
+
+def test_one_crossed_pair_among_good_ones_does_not_block(
+    engine: DataGuardEngine, guard_context: Any
+) -> None:
+    """A thin book crossing for a moment is that pair's problem (operator ruling
+    2026-09-21: engine 7, under `no_live_quote`). It used to halt every pair."""
+    state = several(BTC_USD=2.0, ETH_USD=2.0, AEVO_USD=2.0)
+    state["market_sensor"]["quotes"]["AEVO/USD"]["spread_pct"] = "-0.00010"
+
+    result = engine.process(guard_context, state)
+
+    assert result.blocks_trading is False, result.reason
+
+
+def test_every_pair_crossed_is_a_corrupt_feed_and_blocks(
+    engine: DataGuardEngine, guard_context: Any
+) -> None:
+    """Bid and ask swapped in a parser looks exactly like this. Left to engine 7 alone it
+    would be every pair excluded, an empty universe and a quiet PASS — the defect hidden."""
+    state = several(BTC_USD=2.0, ETH_USD=2.0, AEVO_USD=2.0)
+    for quote in state["market_sensor"]["quotes"].values():
+        quote["spread_pct"] = "-0.00010"
+
+    result = engine.process(guard_context, state)
+
+    assert result.blocks_trading is True
+    assert result.data["reason_code"] == REASON_NEGATIVE_SPREAD
+    assert "Every one of the 3" in (result.reason or "")
+
+
+def test_the_fresh_pair_fraction_is_recorded_on_every_tick(
+    engine: DataGuardEngine, guard_context: Any
+) -> None:
+    """Operator ruling: record it, no screen yet. Published on a passing tick as well as a
+    blocked one — a figure that only appears when trading stops says nothing about the
+    ticks where it did not."""
+    passing = engine.process(guard_context, several(A_USD=5.0, B_USD=60.0, C_USD=500.0))
+    blocked = engine.process(guard_context, several(A_USD=500.0, B_USD=600.0))
+
+    assert (passing.data["fresh_pairs"], passing.data["pairs_seen"]) == (2, 3)
+    assert (blocked.data["fresh_pairs"], blocked.data["pairs_seen"]) == (0, 2)
+
+
+#: Four pairs, all well inside the bound. The passing baseline the two tests below each
+#: change in exactly one respect: which quotes are past the bound.
+_ALL_FRESH: dict[str, float] = {"A_USD": 5.0, "B_USD": 30.0, "C_USD": 60.0, "D_USD": 90.0}
+
+
+def test_four_fresh_pairs_pass_and_are_all_counted_fresh(
+    engine: DataGuardEngine, guard_context: Any
+) -> None:
+    """The baseline. Without it, the two tests below are satisfied by a gate that refuses
+    every multi-pair tick, and the fraction by one that counts nothing."""
+    result = engine.process(guard_context, several(**_ALL_FRESH))
+
+    assert result.blocks_trading is False, result.reason
+    assert (result.data["fresh_pairs"], result.data["pairs_seen"]) == (4, 4)
+    assert result.data["findings"] == []
+
+
+def test_a_half_dead_feed_does_not_block_and_records_the_fresh_fraction(
+    engine: DataGuardEngine, guard_context: Any
+) -> None:
+    """**Half the subscription quiet, half quoting: the feed is alive.** The baseline with
+    C and D aged past the bound and nothing else changed. Engine 7 excludes the two quiet
+    pairs; this gate passes, and records what it saw — the fresh-pair fraction (2 of 4,
+    operator ruling 2026-09-21: recorded, no screen yet) and both ends of the age range."""
+    ages = {**_ALL_FRESH, "C_USD": 500.0, "D_USD": 900.0}
+
+    result = engine.process(guard_context, several(**ages))
+
+    assert result.blocks_trading is False, result.reason
+    assert result.status is EngineStatus.OK
+    assert (result.data["fresh_pairs"], result.data["pairs_seen"]) == (2, 4)
+    assert result.data["freshest_quote_age_s"] == 5.0
+    assert result.data["oldest_quote_age_s"] == 900.0
+    assert result.data["findings"] == []
+
+
+def test_a_dead_feed_blocks_when_its_last_fresh_quote_goes_past_the_bound(
+    engine: DataGuardEngine, guard_context: Any
+) -> None:
+    """**The heartbeat, one input from a pass.** Three quiet pairs and one quoting is a live
+    feed; age that one quote a second past the bound, change nothing else, and the feed is
+    dead. Staleness is the only finding, so the block cannot be attributed elsewhere."""
+    ages = {**_ALL_FRESH, "B_USD": 500.0, "C_USD": 600.0, "D_USD": 900.0}
+    alive = engine.process(guard_context, several(**ages))
+    dead = engine.process(guard_context, several(**{**ages, "A_USD": MAX_AGE_S + 1}))
+
+    assert alive.blocks_trading is False, alive.reason
+    assert (alive.data["fresh_pairs"], alive.data["pairs_seen"]) == (1, 4)
+    assert dead.blocks_trading is True
+    assert dead.status is EngineStatus.BLOCK
+    assert dead.data["reason_code"] == REASON_STALE
+    assert [finding["reason_code"] for finding in dead.data["findings"]] == [REASON_STALE]
+    assert (dead.data["fresh_pairs"], dead.data["pairs_seen"]) == (0, 4)
+    assert dead.data["freshest_quote_age_s"] == MAX_AGE_S + 1
+    assert dead.data["oldest_quote_age_s"] == 900.0
+
+
+def test_every_pair_crossed_blocks_but_all_but_one_does_not(
+    engine: DataGuardEngine, guard_context: Any
+) -> None:
+    """All versus any, one input apart: three of four crossed is three pairs' problem; the
+    fourth crossed too is a corrupt feed. Ages are fresh throughout, so the only finding on
+    the blocked tick is the crossed book."""
+    state = several(**_ALL_FRESH)
+    quotes = state["market_sensor"]["quotes"]
+    for pair in ("A/USD", "B/USD", "C/USD"):
+        quotes[pair]["spread_pct"] = "-0.00010"
+    three = engine.process(guard_context, copy.deepcopy(state))
+    quotes["D/USD"]["spread_pct"] = "-0.00010"
+    four = engine.process(guard_context, state)
+
+    assert three.blocks_trading is False, three.reason
+    assert four.blocks_trading is True
+    assert [finding["reason_code"] for finding in four.data["findings"]] == [REASON_NEGATIVE_SPREAD]
+    assert (four.data["fresh_pairs"], four.data["pairs_seen"]) == (4, 4), (
+        "a crossed book is not a stale one; the fraction counts age only"
+    )
+
+
+def test_the_threshold_is_published_for_engine_sixteen(
+    engine: DataGuardEngine, guard_context: Any
+) -> None:
+    """Engine 16 may not read config, so it re-checks the chosen pair against this
+    published copy (D10 fix 3). It must be there on a passing tick — the only kind on
+    which engine 16 ever runs."""
+    result = engine.process(guard_context, several(BTC_USD=3.0))
+
+    assert result.blocks_trading is False
+    assert result.data["max_data_age_s"] == MAX_AGE_S
+
+
+def test_the_staleness_key_is_shared_by_the_three_gates() -> None:
+    """D10 fix 1: one key, one meaning of "too old". Engines do not import each other, so
+    each names the string; this is what stops them drifting apart. Engine 21 is the fourth
+    reader since its per-pair stop hold (2026-09-21): not a gate, the same bound."""
+    from acsoe.engines.data_guard.contracts import MAX_DATA_AGE_KEY, STATE_KEY, DataGuardState
+    from acsoe.engines.decision import contracts as decision
+    from acsoe.engines.position_manager import contracts as position_manager
+    from acsoe.engines.scout import engine as scout
+
+    assert scout.MAX_QUOTE_AGE_KEY == MAX_DATA_AGE_KEY == "data_guard.max_data_age_s"
+    assert position_manager.MAX_DATA_AGE_KEY == MAX_DATA_AGE_KEY
+    assert decision.DATA_GUARD_KEY == STATE_KEY
+    assert decision.DATA_GUARD_MAX_AGE_FIELD in DataGuardState.model_fields
+    assert decision.QUOTE_AGE_FIELD == scout.QUOTE_AGE_FIELD == "age_s"

@@ -541,6 +541,30 @@ def test_engine_twenty_two_spells_the_hold_exactly_as_engine_twenty_one_does() -
     assert exit_contracts.REASON_DATA_GUARD_BLOCKED in REASON_PROSE
 
 
+def test_the_per_pair_hold_points_at_the_pair_and_not_at_the_feed() -> None:
+    """D10, operator ruling 2026-09-21: engine 21 holds one position whose own pair has
+    no live price, and the rest are managed normally.
+
+    The sentence has to say the same two things the feed-wide one says — exits are
+    paused, the position is still watched — and point somewhere else: at this position's
+    own pair. Given the feed-wide sentence, an operator goes looking for a dead websocket
+    while every other position's stops are firing.
+    """
+    from acsoe.engines.position_manager import contracts as manager_contracts
+
+    per_pair = REASON_PROSE[manager_contracts.HOLD_PAIR_QUOTE_NOT_LIVE]
+    feed_wide = REASON_PROSE[manager_contracts.HOLD_DATA_GUARD_BLOCKED]
+    assert per_pair != feed_wide
+    lowered = per_pair.lower()
+    assert "paused" in lowered, per_pair
+    assert "still watched" in lowered, per_pair
+    assert "pair" in lowered, per_pair
+    assert "pair" not in feed_wide.lower(), (
+        "the feed-wide sentence names a pair, so the two holds no longer point at "
+        "different causes"
+    )
+
+
 def test_the_exit_outcome_codes_do_not_read_as_refusals() -> None:
     """Engine 22 is not a gate either, and two of its five codes are things it *did*.
 

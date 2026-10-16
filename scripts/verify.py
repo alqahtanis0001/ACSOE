@@ -11984,14 +11984,33 @@ class Drive:
             )
 
     def cross(self, pair: str, *, quoted: Decimal, book_bid: Decimal) -> None:
-        """A crossed stream quote on `pair`, which engine 4 blocks on as a negative
-        spread, and a sound REST book at `book_bid` for anything that has to sell."""
+        """A crossed stream quote on `pair`, and a sound REST book at `book_bid` for
+        anything that has to sell.
+
+        **One crossed pair does not block the tick** (D10, operator ruling 2026-09-21):
+        engine 4 judges the feed, engine 7 excludes the pair under `no_live_quote`, and
+        engine 21 holds the barriers of a position on that pair alone. A criterion that
+        needs engine 4 to block crosses the whole feed with :meth:`cross_feed`.
+        """
         self.market.set_quote(pair, bid=str(quoted), ask=str(quoted - FILL_SUBJECT_SPREAD))
         self.market.set_order_book(
             pair,
             bids=[(str(book_bid), PINNED_LEVEL_QTY)],
             asks=[(str(book_bid + FILL_SUBJECT_SPREAD), PINNED_LEVEL_QTY)],
         )
+
+    def cross_feed(self, pair: str, *, quoted: Decimal, book_bid: Decimal) -> None:
+        """Every pair the drive quotes crossed, which engine 4 blocks on as a negative
+        spread: a crossed book on every pair is a corrupt feed, not a market (D10).
+
+        `pair` is crossed at `quoted` over a sound book at `book_bid`, exactly as
+        :meth:`cross` does it, because that is the pair a criterion sells; every other
+        pair is crossed at the pinned bid over a sound book there.
+        """
+        for other in self.pairs:
+            if other != pair:
+                self.cross(other, quoted=self.bid, book_bid=self.bid)
+        self.cross(pair, quoted=quoted, book_bid=book_bid)
 
     def command(self, name: str) -> None:
         """A command row, the way the console writes one."""
@@ -12765,28 +12784,99 @@ def _unfilled_body(tier: str, tools: dict[str, Any], polars: Any, subject: FillS
 # --- triggered_stop_holds_on_data_guard_block ------------------------------- #
 
 
+def _no_exit_placed(drive: Drive, exiting: Mapping[str, Any], *, on: str) -> None:
+    """Engine 22 placed nothing and the broker was asked to sell nothing."""
+    if (
+        exiting.get("orders")
+        or exiting.get("positions_closed") is not False
+        or drive.orders_with_intent("exit")
+        or any(r.side.value == "sell" for r in drive.broker.requests)
+    ):
+        raise DriveError(
+            f"an exit was placed on {on}: engine 22 said {exiting.get('reason_code')!r}, "
+            f"the broker was asked for {[r.order_type.value for r in drive.broker.requests]}"
+        )
+
+
 def _held_stop_body(tier: str, tools: dict[str, Any], polars: Any, subject: FillSubjectModel) -> str:
+    """Three ticks on one position whose stop is touched on the first two.
+
+    1. **Only the position's own pair crossed** - since D10 (operator ruling 2026-09-21)
+       that does not block the tick: engine 4 judges the feed. Engine 21 holds this
+       position alone, publishing `pair_quote_not_live` on its row and no trigger, the
+       tick-level hold stays null, and engine 19 stores the row's reason. This is the
+       scenario the criterion always ran - one crossed pair, a touched stop, no exit -
+       with the mechanism the ruling gave it.
+    2. **Every quoted pair crossed** - the feed-wide block the criterion was written for:
+       engine 4 blocks, engine 21 holds with `data_guard_blocked` and that reason wins
+       on the stored row over the per-pair one the same row still carries.
+    3. **`close_all`, the feed still crossed** - invariant 14: the liquidation is not held.
+    """
     del tier
     manager_contracts, guard = tools["manager"], tools["guard"]
     hold = str(manager_contracts.HOLD_DATA_GUARD_BLOCKED)
+    pair_hold = str(manager_contracts.HOLD_PAIR_QUOTE_NOT_LIVE)
     with _driven(tools, subject, polars) as drive:
         _warm_up(drive)
         entry, entry_state = _entry(drive)
         filled, _ = _fill(drive, entry)
         pair = entry.pair
-        held_at = filled.filled_at + drive.tick_s
         printed = filled.stop - TOUCH_PAST
         quoted = (filled.stop - Decimal("0.4")).quantize(Decimal("0.001"))
         book_bid = (filled.stop - Decimal("0.7")).quantize(Decimal("0.001"))
+
+        # 1. The position's own pair crossed, and only it.
+        pair_at = filled.filled_at + drive.tick_s
+        drive.market.plant_trade(
+            pair, at=datetime.fromtimestamp(pair_at - drive.tick_s // 2, tz=UTC), price=str(printed)
+        )
+        drive.cross(pair, quoted=quoted, book_bid=book_bid)
+        alone = drive.tick(pair_at)
+        if "trading_blocked_by" in alone:
+            raise DriveError(
+                f"one crossed pair among {len(drive.pairs)} blocked the tick on "
+                f"{alone['trading_blocked_by']!r}; since D10 engine 4 judges the feed, and a "
+                "single pair is engine 7's and engine 21's"
+            )
+        low = Decimal(str(alone["market_sensor"]["trade_ranges"][pair]["low"]))
+        if low > filled.stop:
+            raise DriveError(f"no stop was touched (low {low}, stop {filled.stop}), so nothing was held")
+        manager = alone.get("position_manager") or {}
+        rows = {
+            str(row.get("position_id")): row.get("hold_reason")
+            for row in manager.get("positions") or []
+        }
+        if manager.get("triggered") != [] or rows.get(filled.position_id) != pair_hold:
+            raise DriveError(
+                f"with only {pair} crossed engine 21 triggered {manager.get('triggered')} and "
+                f"published the position's hold_reason as {rows.get(filled.position_id)!r}; "
+                f"a stop touched on a pair with no live price is no trigger and {pair_hold!r}"
+            )
+        if manager.get("hold_reason") is not None:
+            raise DriveError(
+                f"engine 21 published the tick-level hold {manager.get('hold_reason')!r} on a "
+                "tick nothing blocked; the tick-level hold is the feed-wide one only"
+            )
+        _no_exit_placed(drive, alone.get("exit") or {}, on="the tick only its pair was crossed")
+        stored = drive.store.position(filled.position_id)
+        if stored is None or stored.status.value != "open" or stored.hold_reason != pair_hold:
+            raise DriveError(
+                f"engine 19 stored the position held on its own pair as "
+                f"{None if stored is None else (stored.status.value, stored.hold_reason)}, not "
+                f"open with hold_reason {pair_hold!r}"
+            )
+
+        # 2. Every quoted pair crossed: the feed-wide block.
+        held_at = pair_at + drive.tick_s
         drive.market.plant_trade(
             pair, at=datetime.fromtimestamp(held_at - drive.tick_s // 2, tz=UTC), price=str(printed)
         )
-        drive.cross(pair, quoted=quoted, book_bid=book_bid)
+        drive.cross_feed(pair, quoted=quoted, book_bid=book_bid)
         held = drive.tick(held_at)
 
         if held.get("trading_blocked_by") != "data_guard":
             raise DriveError(
-                f"the crossed quote did not block the tick on data_guard: "
+                f"every quoted pair crossed did not block the tick on data_guard: "
                 f"{held.get('trading_blocked_by')!r}"
             )
         if (held.get("data_guard") or {}).get("reason_code") != guard.REASON_NEGATIVE_SPREAD:
@@ -12801,25 +12891,16 @@ def _held_stop_body(tier: str, tools: dict[str, Any], polars: Any, subject: Fill
                 f"{manager.get('hold_reason')!r} on a tick data_guard blocked; the hold is no "
                 f"trigger and {hold!r}"
             )
-        exiting = held.get("exit") or {}
+        _no_exit_placed(drive, held.get("exit") or {}, on="the held tick")
         stored = drive.store.position(filled.position_id)
-        if (
-            exiting.get("orders")
-            or exiting.get("positions_closed") is not False
-            or drive.orders_with_intent("exit")
-            or any(r.side.value == "sell" for r in drive.broker.requests)
-        ):
-            raise DriveError(
-                f"an exit was placed on the held tick: engine 22 said {exiting.get('reason_code')!r}, "
-                f"the broker was asked for {[r.order_type.value for r in drive.broker.requests]}"
-            )
         if stored is None or stored.status.value != "open" or stored.hold_reason != hold:
             raise DriveError(
                 f"engine 19 stored the held position as "
                 f"{None if stored is None else (stored.status.value, stored.hold_reason)}, not open "
-                f"with hold_reason {hold!r}"
+                f"with hold_reason {hold!r}; the feed-wide hold wins over the row's own"
             )
 
+        # 3. close_all, with the whole feed still crossed.
         drive.command("close_all")
         closed_at = held_at + drive.tick_s
         liquidated = drive.tick(closed_at)
@@ -12845,13 +12926,16 @@ def _held_stop_body(tier: str, tools: dict[str, Any], polars: Any, subject: Fill
         _close_all_consumed(drive, source="console", at=closed_at)
     return (
         f"{pair} position {filled.position_id}: a trade at {printed} touched the stop "
-        f"{filled.stop} on a tick engine 4 blocked for a crossed quote, and engines 21 and "
-        f"22 placed no exit - no trigger, no order at the broker - with hold_reason "
-        f"{hold!r} published and stored on the position. The operator's close_all on the "
-        f"next tick, with data_guard still blocking, sold the same position as a taker at "
-        f"{closed.exit_price} (outcome liquidation, realised {closed.realised}, every row "
-        "reconciled), cleared the hold, and the orchestrator cleared close_intent and "
-        "consumed the command"
+        f"{filled.stop} on two ticks and engines 21 and 22 placed no exit on either - no "
+        f"trigger, no order at the broker. With only {pair} crossed the tick was not blocked "
+        f"(D10: engine 4 judges the feed) and engine 21 held this position alone, "
+        f"{pair_hold!r} on its row and stored, the tick-level hold null. With every one of "
+        f"the {len(drive.pairs)} quoted pairs crossed engine 4 blocked for a negative spread "
+        f"and the hold was {hold!r}, published and stored over the row's own reason. The "
+        f"operator's close_all on the next tick, with data_guard still blocking, sold the "
+        f"same position as a taker at {closed.exit_price} (outcome liquidation, realised "
+        f"{closed.realised}, every row reconciled), cleared the hold, and the orchestrator "
+        "cleared close_intent and consumed the command"
     )
 
 
@@ -12883,7 +12967,8 @@ def _outage_held(state: dict[str, Any], guard: Any, at: int) -> str:
     ):
         raise DriveError(
             f"at {at} the primary blocker is {state.get('trading_blocked_by')!r}, not data_guard "
-            "on the crossed quote"
+            "on the crossed feed (every quoted pair crossed; one crossed pair no longer "
+            "blocks the tick since D10)"
         )
     exchange = state.get("exchange") or {}
     failures = {row.get("call"): row.get("reason") for row in exchange.get("failed_fetches") or []}
@@ -12916,7 +13001,7 @@ def _escalation_positions(drive: Drive) -> str:
     filled, _ = _fill(drive, entry)
     limit = int(drive.config.get("safety.max_consecutive_data_blocks"))
     book_bid = (drive.bid - Decimal("0.2")).quantize(Decimal("0.001"))
-    drive.cross(entry.pair, quoted=drive.bid, book_bid=book_bid)
+    drive.cross_feed(entry.pair, quoted=drive.bid, book_bid=book_bid)
     _fail_the_outage(drive)
     equity_rows = len(drive.run_equity())
 
@@ -12969,7 +13054,7 @@ def _escalation_positions(drive: Drive) -> str:
     if drive.open_orders():
         raise DriveError("an order is still open at the broker after the liquidation")
     return (
-        f"engine 4 blocked {limit + 1} consecutive minute ticks on a crossed quote while "
+        f"engine 4 blocked {limit + 1} consecutive minute ticks on a crossed feed while "
         f"the balance and AssetPairs fetches failed (engine 1: {balance_reason}); engine 17 "
         f"wrote close_all on blocked tick {limit + 1} ({escalated_at}) and not before "
         f"(safety.max_consecutive_data_blocks {limit}); on the next tick, still blocked and "
@@ -12993,7 +13078,7 @@ def _escalation_entry(drive: Drive, *, unreachable: str) -> str:
             f"the close_all tick is {elapsed_s}s after placement, not inside the {window_s}s "
             "window, so a cancel there could not be told from the window's"
         )
-    drive.cross(entry.pair, quoted=drive.bid, book_bid=drive.bid)
+    drive.cross_feed(entry.pair, quoted=drive.bid, book_bid=drive.bid)
     _fail_the_outage(drive)
     drive.command("close_all")
     state = drive.tick(at)
@@ -13381,7 +13466,7 @@ def _console_position_body(
         drive.market.plant_trade(
             pair, at=datetime.fromtimestamp(held_at - drive.tick_s // 2, tz=UTC), price=str(printed)
         )
-        drive.cross(
+        drive.cross_feed(
             pair,
             quoted=(filled.stop - Decimal("0.4")).quantize(Decimal("0.001")),
             book_bid=(filled.stop - Decimal("0.7")).quantize(Decimal("0.001")),
@@ -13389,7 +13474,7 @@ def _console_position_body(
         blocked_state = drive.tick(held_at)
         if blocked_state.get("trading_blocked_by") != "data_guard":
             raise DriveError(
-                "the crossed quote did not block the tick on data_guard: "
+                "every quoted pair crossed did not block the tick on data_guard: "
                 f"{blocked_state.get('trading_blocked_by')!r}"
             )
         if (blocked_state.get("data_guard") or {}).get("reason_code") != guard.REASON_NEGATIVE_SPREAD:
@@ -13449,7 +13534,7 @@ def _console_position_body(
         f"{expected_move} on {entry.qty} - live, not a snapshot. Past "
         f"console.stale_after_ms ({stale_after_ms}ms) the same row reports stale with its "
         f"age {stale.staleness.age_text!r} beside it, and fresh before it. On the tick "
-        f"engine 4 blocked for a crossed quote the row shows the hold as "
+        f"engine 4 blocked for a crossed feed the row shows the hold as "
         f"{held.hold_reason_text!r} and never the code {hold!r}. Signed percentages "
         f"({second.unrealised_pnl_pct_text} and {held.unrealised_pnl_pct_text}), a real "
         f"U+2212, and the entry price at exactly this pair's {pair_decimals} AssetPairs "
@@ -13854,6 +13939,18 @@ def check_triggered_stop_holds_on_data_guard_block(ctx: VerifyContext) -> Outcom
 
     The named wrong implementations are the hold removed from engine 21, and engine 22
     reading a liquidation as an ordinary tick.
+
+    **Since D10 (operator ruling 2026-09-21) the criterion holds the stop twice.** One
+    crossed pair no longer blocks the tick - engine 4 judges the feed - so the scenario
+    this criterion always ran, the position's own pair crossed and its stop touched, now
+    proves engine 21's **per-position** hold: no trigger, no exit, `pair_quote_not_live`
+    on the row and on the stored position, and the tick-level hold null. The feed-wide
+    hold is proven on the next tick by crossing **every** quoted pair, which is what
+    engine 4 blocks on, and the liquidation through that block is unchanged. Both live in
+    one criterion rather than a second one registered for phase 8, because the per-pair
+    tick is this criterion's original input with the mechanism the ruling gave it - a
+    touched stop on untrusted data still places no exit - and one drive proves the two
+    holds in sequence on the same position, including which reason wins on the stored row.
     """
     return _driven_verdict(ctx, _held_stop_body, what="the held stop")
 

@@ -1,0 +1,358 @@
+"""Read-only report on one paper-mode daemon run's SQLite database.
+
+Usage (from the repository root, with the repo's venv):
+
+    python paper_run_report.py --db <run.sqlite> [--log logs/acsoe.jsonl] [--run-id <id>]
+                               [--config config/daemon.yaml]
+
+Opens the database **read-only** (``mode=ro`` URI): it never writes, migrates or locks
+for writing, so it is safe against a database a daemon is still using. Prints, per run:
+
+* ticks run — exact from the log's ``tick_market_snapshot`` lines when ``--log`` is given,
+  otherwise the highest ``cycle_id`` any table recorded (a lower bound: a final tick that
+  wrote no row is invisible to the database);
+* ticks whose primary blocker is ``data_guard`` (``block_records``, ``is_primary = 1``),
+  with the block reasons grouped (digits folded so "135s" and "140s" group together);
+* ticks that got past ``data_guard``, and past every guard;
+* decision-bar boundaries the ticks crossed (derived from tick timestamps and
+  ``timeframes.decision_bar_s`` read from ``--config``), how many of those ticks
+  ``data_guard`` blocked, and how many reached engine 7 (``scout_tallies`` rows);
+* what refused after ``data_guard``: other primary guard blocks, engine 7's outcomes and
+  summed exclusions, ``rejections`` by engine and reason code, and orders/positions/trades;
+* the fresh-pair fraction (engine 4's ``fresh_pairs``/``pairs_seen``) from the log's
+  ``tick_market_snapshot`` lines, which carry it since the D10 follow-up (2026-10-16), plus
+  the worst freshest-quote age. **Pass ``--log``:** no table stores the fraction. A run on
+  code older than that follow-up has no figure, and the report says so rather than
+  estimating it.
+
+Nothing here is a trading threshold; ``decision_bar_s`` is read from the config file.
+"""
+
+from __future__ import annotations
+
+import argparse
+import itertools
+import json
+import re
+import sqlite3
+import sys
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Iterator
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+DATA_GUARD = "data_guard"
+SNAPSHOT_EVENT = "tick_market_snapshot"
+#: Tables carrying `(run_id, cycle_id, ts)` for a tick. `ts` is microseconds since epoch.
+TICK_TABLES = ("equity_snapshots", "block_records", "scout_tallies", "rejections")
+FRACTION_FIELDS = ("fresh_pairs", "pairs_seen")
+
+
+def connect_read_only(path: Path) -> sqlite3.Connection:
+    if not path.is_file():
+        raise SystemExit(f"no database at {path}")
+    connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def tables(connection: sqlite3.Connection) -> set[str]:
+    rows = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    return {str(row["name"]) for row in rows}
+
+
+def columns(connection: sqlite3.Connection, table: str) -> list[str]:
+    return [str(row["name"]) for row in connection.execute(f"PRAGMA table_info({table})")]
+
+
+def decision_bar_seconds(config_path: Path) -> int:
+    with config_path.open(encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    try:
+        return int(config["timeframes"]["decision_bar_s"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SystemExit(f"{config_path} has no timeframes.decision_bar_s: {exc!r}") from exc
+
+
+def fold_digits(text: str) -> str:
+    return re.sub(r"\d+(\.\d+)?", "N", text)
+
+
+def log_lines(path: Path) -> Iterator[dict[str, Any]]:
+    with path.open(encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                yield record
+
+
+def log_files(path: Path) -> list[Path]:
+    """The named file plus its midnight rotations (``acsoe.jsonl.2026-10-16``)."""
+    rotated = sorted(path.parent.glob(path.name + ".*"))
+    return [*rotated, path] if path.is_file() else rotated
+
+
+def snapshots_by_run(paths: Iterable[Path]) -> dict[str, list[dict[str, Any]]]:
+    found: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for path in paths:
+        for record in log_lines(path):
+            if record.get("event") == SNAPSHOT_EVENT and record.get("run_id"):
+                found[str(record["run_id"])].append(record)
+    return found
+
+
+def tick_times(connection: sqlite3.Connection, present: set[str], run_id: str) -> dict[int, int]:
+    """`cycle_id -> earliest ts (µs)` over every table that stamps a tick."""
+    times: dict[int, int] = {}
+    for table in TICK_TABLES:
+        if table not in present:
+            continue
+        rows = connection.execute(
+            f"SELECT cycle_id, MIN(ts) AS ts FROM {table} WHERE run_id = ? GROUP BY cycle_id",
+            (run_id,),
+        )
+        for row in rows:
+            cycle, ts = int(row["cycle_id"]), int(row["ts"])
+            times[cycle] = min(ts, times.get(cycle, ts))
+    return times
+
+
+def bar_close_cycles(times: dict[int, int], bar_s: int) -> list[int]:
+    """Cycles on which a decision-bar boundary fell in `(previous tick, this tick]`.
+
+    Derived from timestamps, not read from engine 3: engine 3's `bar_closed` is not stored.
+    The first recorded tick is never counted, because nothing says when the one before it was.
+    """
+    ordered = sorted(times.items(), key=lambda item: item[1])
+    closes: list[int] = []
+    for (_, before), (cycle, now) in itertools.pairwise(ordered):
+        if now // 1_000_000 // bar_s > before // 1_000_000 // bar_s:
+            closes.append(cycle)
+    return closes
+
+
+def section(title: str) -> None:
+    print(f"\n  {title}")
+
+
+def line(label: str, value: Any) -> None:
+    print(f"    {label:<52} {value}")
+
+
+def report_run(
+    connection: sqlite3.Connection,
+    present: set[str],
+    run: sqlite3.Row,
+    *,
+    bar_s: int,
+    snapshots: list[dict[str, Any]] | None,
+) -> None:
+    run_id = str(run["run_id"])
+    print(f"\n=== run {run_id}  (mode {run['mode']}) ===")
+    times = tick_times(connection, present, run_id)
+    max_cycle = max(times) if times else 0
+
+    section("Ticks")
+    if snapshots:
+        logged ={int(record["cycle_id"]) for record in snapshots if "cycle_id" in record}
+        ticks = len(logged)
+        line("ticks run (log, tick_market_snapshot lines)", ticks)
+        line("highest cycle_id any table recorded", max_cycle)
+    else:
+        ticks = max_cycle
+        line("ticks run (highest cycle_id recorded; lower bound)", ticks)
+    line("ticks with at least one stored row", len(times))
+
+    primary = Counter[str]()
+    guard_reasons = Counter[str]()
+    guard_cycles: set[int] = set()
+    any_primary_cycles: set[int] = set()
+    if "block_records" in present:
+        rows = connection.execute(
+            "SELECT cycle_id, blocked_by, block_reason, status FROM block_records "
+            "WHERE run_id = ? AND is_primary = 1",
+            (run_id,),
+        )
+        for row in rows:
+            primary[f"{row['blocked_by']} ({row['status']})"] += 1
+            any_primary_cycles.add(int(row["cycle_id"]))
+            if row["blocked_by"] == DATA_GUARD:
+                guard_cycles.add(int(row["cycle_id"]))
+                guard_reasons[fold_digits(str(row["block_reason"]))] += 1
+
+    section("data_guard (block_records, primary rows)")
+    line("ticks blocked by data_guard", len(guard_cycles))
+    line("ticks that got past data_guard", ticks - len(guard_cycles))
+    line("ticks past every guard (no primary block at all)", ticks - len(any_primary_cycles))
+    for reason, count in guard_reasons.most_common(10):
+        print(f"      {count:>6}  {reason}")
+
+    closes = bar_close_cycles(times, bar_s)
+    tallies = 0
+    if "scout_tallies" in present:
+        (tallies,) = connection.execute(
+            "SELECT COUNT(*) FROM scout_tallies WHERE run_id = ?", (run_id,)
+        ).fetchone()
+    section(f"Decision bars ({bar_s}s)")
+    line("bar boundaries crossed (derived from tick ts)", len(closes))
+    line("  of which the tick was blocked by data_guard", len(set(closes) & guard_cycles))
+    line("bar-close ticks that reached engine 7 (scout_tallies)", tallies)
+
+    section("Refusals after data_guard")
+    others = {key: count for key, count in primary.items() if not key.startswith(DATA_GUARD)}
+    line("other primary blockers (engine (status): ticks)", others or "none")
+    if "scout_tallies" in present:
+        outcomes = Counter[str]()
+        excluded = Counter[str]()
+        scanned: list[int] = []
+        entered: list[int] = []
+        rows = connection.execute(
+            "SELECT reason_code, candidate, scanned, entered, excluded FROM scout_tallies "
+            "WHERE run_id = ?",
+            (run_id,),
+        )
+        for row in rows:
+            if row["candidate"]:
+                outcomes["candidate"] += 1
+            else:
+                outcomes[str(row["reason_code"])] += 1
+            if row["scanned"] is not None:
+                scanned.append(int(row["scanned"]))
+            if row["entered"] is not None:
+                entered.append(int(row["entered"]))
+            if row["excluded"]:
+                for reason, count in json.loads(row["excluded"]).items():
+                    excluded[str(reason)] += int(count)
+        line("engine 7 outcomes", dict(outcomes) or "none")
+        if scanned:
+            line("engine 7 scanned per tally (min / max)", f"{min(scanned)} / {max(scanned)}")
+        if entered:
+            line("engine 7 entered per tally (min / max)", f"{min(entered)} / {max(entered)}")
+        line("engine 7 exclusions summed over tallies", dict(excluded.most_common()) or "none")
+    else:
+        line("scout_tallies", "table absent (database predates migration 0007)")
+    if "rejections" in present:
+        rows = connection.execute(
+            "SELECT rejected_by, reason_code, COUNT(*) AS n FROM rejections WHERE run_id = ? "
+            "GROUP BY rejected_by, reason_code ORDER BY n DESC",
+            (run_id,),
+        )
+        found = [f"{row['rejected_by']}/{row['reason_code']}: {row['n']}" for row in rows]
+        line("rejections (engine/reason_code: count)", ", ".join(found) or "none")
+    for table in ("orders", "positions", "trades"):
+        if table in present:
+            (count,) = connection.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            line(f"{table} rows", count)
+
+    section("Fresh-pair fraction (engine 4: fresh_pairs / pairs_seen)")
+    stored = [
+        table for table in sorted(present) if set(FRACTION_FIELDS) <= set(columns(connection, table))
+    ]
+    if stored:
+        for table in stored:
+            if "run_id" not in columns(connection, table):
+                continue
+            row = connection.execute(
+                f"SELECT COUNT(*) AS n, AVG(1.0 * fresh_pairs / pairs_seen) AS mean, "
+                f"MIN(1.0 * fresh_pairs / pairs_seen) AS low FROM {table} "
+                f"WHERE run_id = ? AND pairs_seen > 0",
+                (run_id,),
+            ).fetchone()
+            line(f"{table}: rows / mean / min", f"{row['n']} / {row['mean']} / {row['low']}")
+    # Logged on `tick_market_snapshot` since the D10 follow-up; `None` when engine 4
+    # published no figure that tick, and such ticks are counted, never treated as zero.
+    logged_fraction = [
+        record
+        for record in (snapshots or [])
+        if all(isinstance(record.get(f), int) for f in FRACTION_FIELDS)
+    ]
+    unpublished = len(snapshots or []) - len(logged_fraction)
+    if logged_fraction:
+        fractions = [
+            int(r["fresh_pairs"]) / int(r["pairs_seen"])
+            for r in logged_fraction
+            if int(r["pairs_seen"]) > 0
+        ]
+        if fractions:
+            line(
+                "log: ticks / mean / min fresh fraction",
+                f"{len(fractions)} / {sum(fractions) / len(fractions):.3f} / {min(fractions):.3f}",
+            )
+        last = logged_fraction[-1]
+        line("log: fresh / seen on the last tick", f"{last['fresh_pairs']} / {last['pairs_seen']}")
+        freshest = [
+            float(r["freshest_quote_age_s"])
+            for r in logged_fraction
+            if isinstance(r.get("freshest_quote_age_s"), (int, float))
+        ]
+        if freshest:
+            line("log: freshest quote age, worst tick (s)", f"{max(freshest):.1f}")
+        bound = last.get("max_data_age_s")
+        if isinstance(bound, (int, float)):
+            line("log: max_data_age_s applied", bound)
+        if unpublished:
+            line("log: ticks with no data_guard figure (None)", unpublished)
+    if not stored and not logged_fraction:
+        line("recorded?", "NO - not in any table or log line of this run")
+    if snapshots:
+        quoted = [
+            (int(r.get("quote_count", 0)), int(r.get("subscription_count", 0))) for r in snapshots
+        ]
+        last_quoted, last_subscribed = quoted[-1]
+        line(
+            "log: quoted / subscribed pairs on the last tick",
+            f"{last_quoted} / {last_subscribed}  (quoted, NOT fresh)",
+        )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--db", type=Path, required=True, help="the run's SQLite database")
+    parser.add_argument("--log", type=Path, default=None, help="logs/acsoe.jsonl (optional)")
+    parser.add_argument("--run-id", default=None, help="one run only (default: every run)")
+    parser.add_argument(
+        "--config", type=Path, default=Path("config/daemon.yaml"), help="for decision_bar_s"
+    )
+    args = parser.parse_args(argv)
+
+    bar_s = decision_bar_seconds(args.config)
+    connection = connect_read_only(args.db)
+    try:
+        present = tables(connection)
+        if "runs" not in present:
+            raise SystemExit(f"{args.db} has no runs table; is it an ACSOE database?")
+        query = "SELECT run_id, mode, started_at, ended_at FROM runs"
+        params: tuple[Any, ...] = ()
+        if args.run_id:
+            query += " WHERE run_id = ?"
+            params = (args.run_id,)
+        runs = list(connection.execute(query + " ORDER BY started_at", params))
+        if not runs:
+            raise SystemExit("no matching run in the runs table")
+        snapshots = snapshots_by_run(log_files(args.log)) if args.log else None
+        print(f"database {args.db}  ({len(runs)} run(s); read-only)")
+        for run in runs:
+            report_run(
+                connection,
+                present,
+                run,
+                bar_s=bar_s,
+                snapshots=None if snapshots is None else snapshots.get(str(run["run_id"]), []),
+            )
+    finally:
+        connection.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
