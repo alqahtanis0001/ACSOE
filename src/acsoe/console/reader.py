@@ -187,6 +187,44 @@ def _state_reading(system_mode: str | None, *, restarted: bool) -> str:
     return IDLE_RESTARTED if restarted else IDLE
 
 
+#: The one mode in which the balance on screen is money that exists. Phase 8, D11.
+LIVE_MODE: Final = "live"
+
+#: Sentence case, per `ui-context.md` — no all-caps labels, no tracked-out eyebrows.
+BALANCE_LABELS: Final = {
+    "paper": "Paper balance",
+    "replay": "Replay balance",
+    LIVE_MODE: "Balance",
+}
+
+#: What an unrecognised mode is called. It cannot come from a validated config —
+#: `Config.mode` is `Literal["paper", "live", "replay"]` — but `status_band` takes a
+#: `str`, and the honest reading for a mode we cannot name is still *not real money*.
+UNKNOWN_BALANCE_LABEL: Final = "Simulated balance"
+
+
+def _balance_source(mode: str) -> tuple[bool, str]:
+    """``(is_simulated, label)`` for the figure in the balance field. Phase 8, D11.
+
+    **Only `live` shows the Kraken account.** In paper and replay the paper broker is the
+    authority on its own cash (invariant 2's paper-ledger ruling), so the figure is
+    `paper.starting_balances` and whatever the simulation did to it — while the prices
+    beside it are the real exchange's. The smoke run of 2026-09-21 showed `5,000.00 USD`
+    under the word "Balance" against live Kraken quotes, which is one misreading the
+    operator only has to make once.
+
+    **An unrecognised mode reads as simulated, and that is not a guess.** The claim is not
+    "this mode is a simulation"; it is "this mode is not `live`", which is exactly what the
+    string says. Asserting the opposite — an unnamed mode showing real money — is the error
+    that costs something, and the same reasoning as `_state_reading`'s applies: a value this
+    does not recognise is never rendered raw to the operator.
+    """
+    label = BALANCE_LABELS.get(mode)
+    if label is None:
+        return True, UNKNOWN_BALANCE_LABEL
+    return mode != LIVE_MODE, label
+
+
 def _feed_order(row: FeedRowView) -> tuple[int, int]:
     """Sort key for the feed. ``ts`` first, always.
 
@@ -364,6 +402,7 @@ class ConsoleReader:
         system_mode, run_record_missing = self._system_mode(current)
 
         equity = self._store.latest_equity_snapshot()
+        balance_is_simulated, balance_label = _balance_source(str(mode))
         watermark = self._store.watermark()
         # A watermark of 0 is an empty database, not a figure written at the epoch.
         watermark_ts = watermark if watermark > 0 else None
@@ -379,6 +418,8 @@ class ConsoleReader:
             balance=None if equity is None else equity.equity,
             balance_text="" if equity is None else format_money(equity.equity),
             currency=None if equity is None else equity.currency,
+            balance_is_simulated=balance_is_simulated,
+            balance_label=balance_label,
             open_position_count=self._store.count_open_positions(),
             resting_order_count=self._store.count_resting_orders(),
             equity_ts=None if equity is None else equity.ts,

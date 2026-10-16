@@ -151,6 +151,9 @@
   function applyState(payload) {
     var band = payload.band;
     setText(byField("balance"), band.balance_text + (band.currency ? " " + band.currency : ""));
+    // Whose money the figure is (D11). The words are computed server-side, like every
+    // other reading in the band, so the page never decides what the number means.
+    setText(byField("balance-label"), band.balance_label);
     setText(byField("mode"), band.mode.charAt(0).toUpperCase() + band.mode.slice(1));
     setText(byField("state"), band.state);
     setText(byField("data-age"), band.data_staleness ? band.data_staleness.age_text : "");

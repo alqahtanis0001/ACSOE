@@ -134,6 +134,11 @@ def state_payload(band: StatusBand, positions: tuple[PositionView, ...]) -> dict
             "balance": money(band.balance),
             "balance_text": band.balance_text,
             "currency": band.currency,
+            # Whose money the figure is. In paper and replay it is the paper broker's
+            # ledger, not the Kraken account engine 1 fetches every tick (D11). The
+            # boolean is the fact; the label is the words the band renders.
+            "balance_is_simulated": band.balance_is_simulated,
+            "balance_label": band.balance_label,
             "open_position_count": band.open_position_count,
             "resting_order_count": band.resting_order_count,
             "equity_ts": band.equity_ts,

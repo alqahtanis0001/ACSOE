@@ -34,7 +34,11 @@
        question in under two seconds: is this safe, and what is it doing? -->
   <header class="band" data-region="status-band">
     <div class="band__field band__field--balance">
-      <span class="band__label" id="label-balance">Balance</span>
+      <!-- The label names whose money this is, and the server decides the words: in
+           paper and replay the figure is the paper broker's ledger, not the Kraken
+           account (D11). "Paper balance" is the safe default in the markup, because a
+           page that never received a payload must not imply real money. -->
+      <span class="band__label" id="label-balance" data-field="balance-label">Paper balance</span>
       <span class="band__figure num" data-field="balance" aria-labelledby="label-balance"></span>
       <!-- Rule 5: a figure past console.stale_after_ms fades to 50% and shows its
            age beside it. The verdict and the text are computed server-side against
