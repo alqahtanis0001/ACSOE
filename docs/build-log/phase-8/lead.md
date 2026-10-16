@@ -412,3 +412,40 @@ which is the state `.env` is in while it is being edited. Redaction covers the n
 tested, not assumed. Exact instructions, down to which permission boxes to leave unticked
 (**Withdraw Funds** first among them), are in `readonly-key-instructions.md`. The process was not
 restarted: the operator's DO NOT list is explicit, and it does not need to be.
+
+## 2026-10-16, afternoon — the operator's Windows machine
+
+### D10's gate, which the cloud could not give, is green here
+
+**What happened.** The cloud's two faults (D23) were the container's. On Windows, `verify.py
+--phase 8` on `b4a8072` gave 5 PASS, 0 FAIL, 1 PENDING. pytest ran 4,107 passed in 40 min,
+including the recording-manager test that hung in the cloud, and mypy reported no `unreachable`.
+It was merged `--no-ff` as `0d53368`, with the merge tree checked byte-identical to the gated
+tree before the push. Then the operator's own work was folded in as its own gated boundary
+(D28), and the report material as a docs commit (D29). Everything is in the decision log,
+D24–D29.
+
+**Two shell lessons, both Windows PowerShell 5.1.** `git stash apply stash@{0}` silently ran
+with no argument, because PowerShell parses `{0}` as a script block. Quote it: `'stash@{0}'`. And
+a `git commit -m` message with embedded double quotes is split into pathspecs. Use `-F <file>`.
+Neither lost anything: the stash and the backup held the work, and the gate was running on the
+staged tree, which the later commit did not change.
+
+### The paper run: the guard is fixed, and the funnel now stops one engine later, for good
+
+**What happened.** The data guard blocked only the first tick. On the 11:00 bar engine 7 scanned
+1,461 pairs and let 174 in, and then the expected-move ranking skipped all 174 as
+`anomaly_inputs_incomplete`. **I first read this as warm-up and told the operator "about 10 to 19
+hours".** That was wrong, and I corrected it within the hour. The daemon's whole candle history is
+one 200,000-trade deque shared by every pair, and the recorder's own archive puts the market at
+~31,650 trades/hour. The window is ~6.3 h, and the shortest lookback the gates require is 9.6 h.
+It never warms up (D26).
+
+**The lesson.** "It needs time" is a claim about a quantity, so measure the quantity before
+saying it. The buffer bound and the trade rate were both one grep away.
+
+**And a second defect, found by asking why one bar close had a tally and two did not.** Engine 3's
+`bar_closed` subtracts the configured 60 s, and these ticks take 70–110 s. Replaying the rule
+over the stored `now` of every tick reproduces the one hit and both misses exactly (D30). On the
+way there I also told the operator the daemon had "stalled for 8 minutes". It had not: my regex
+read a `ts` from inside the quote list. I corrected it at once. The lesson is the same as above.

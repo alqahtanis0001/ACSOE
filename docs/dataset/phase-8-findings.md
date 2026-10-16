@@ -224,9 +224,9 @@ fake client's own fixture is keyed the modern way.
 
 ## D10 built, 2026-10-16: what changed, and what the next run should show
 
-**Built and proven on branch `phase-8-d10`; not yet merged**, because the gate could not be obtained in the cloud (decision log, 2026-10-16 block: D10 BUILT, D17–D23). The smoke run
-above is the "before". The "after" has not been measured yet — the cloud session that built it
-cannot reach Kraken, and the run waits for the operator's machine (D22).
+**Built in the cloud, gated on the operator's Windows machine and merged as `0d53368`**
+(5 PASS, 0 FAIL, 1 PENDING; decision log D10 BUILT, D17–D24). The smoke run above is the
+"before". The "after" is the run measured at the end of this section (D25, D26).
 
 **What judges staleness now, one key read by four engines** (`data_guard.max_data_age_s`, 120 s):
 
@@ -253,10 +253,32 @@ D18: before this change it was computed every tick and stored nowhere. No screen
 is now held indefinitely, and `safety`'s outage escalation does not count it. No exposure at tier 1,
 where nothing is approved.
 
-**The run's measurements, to be filled in from the operator's run:** ticks run · ticks blocked by
-`data_guard` (and why) · ticks past it · bar closes reached · refusals after the guard, by engine
-and reason · fresh-pair fraction (mean, minimum). The read-only report script is committed at
-`docs/build-log/phase-8/paper_run_report.py.txt`.
+**The run's measurements.** Operator's Windows machine, 2026-10-16, run
+`run-20261016T104237559291`, paper mode against the real exchange, D10's code. These are from
+`docs/build-log/phase-8/paper_run_report.py.txt` after 19 ticks:
+
+| Measure | Value |
+|---|---|
+| ticks run | 19 here; 37 by 11:29 (each 70–110 s at `loop_tick_s: 60`) |
+| blocked by `data_guard` | **1**: tick 1, "No market data has arrived", before any quote |
+| past `data_guard` | 18, with the oldest quote up to ~1,300 s. Before D10, every one of them would have blocked |
+| bar closes reached engine 7 | **1 of 3 by 11:29.** 10:45 and 11:15 were never fired, because engine 3's `bar_closed` rule subtracts the configured 60 s while the ticks take 70–110 s (D30, OPEN). The 11:00 bar was judged at 11:00:25 |
+| engine 7 on that bar | 1,461 scanned, 174 entered, 1,287 `no_live_quote`; **outcome `no_rankable_pair`**: all 174 skipped as `anomaly_inputs_incomplete` |
+| refusals by a gate | **none**, because no candidate existed; 0 orders, 0 positions |
+| fresh-pair fraction | mean 0.884, minimum 0.733 (first 5 ticks); later ticks ~0.42 of quoted pairs within 120 s |
+
+**So the guard no longer stops the funnel, but something earlier now does, and it is permanent
+as built (decision log D26, OPEN).** The daemon's candles come only from one 200,000-trade
+buffer shared by all 678 subscribed pairs. At today's ~31,650 trades/hour, that buffer holds
+~6.3 h, about 25 bars. Engines 13 and 8 need a 48- or 96-bar lookback 80% filled (39 or 77 bars),
+so no pair's vector ever completes, however long the daemon runs. The cost gate, the expected
+refuser at tier 1, is never reached. `daemon_reads_the_real_exchange` stays PENDING, and no
+digest was written to force it. The options and a recommendation are in D26.
+
+**On the screen** (D27, OPEN): the status band reads correctly (Paper, Running, "Paper balance
+5000.00", data age in seconds). The feed shows the one tick-1 block. The funnel's "Pairs
+scanned" and "Entered" still say "not recorded" although `scout_tallies` stores them. The bar
+close's `no_rankable_pair` is not shown anywhere, so the operator sees a quiet feed and no reason.
 
 ## Q0. Housekeeping item 2 needs a ruling: it is not a one-line change
 

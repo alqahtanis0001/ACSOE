@@ -615,3 +615,149 @@ a good argument, and a chunked suite is the substitute the tracker's own Phase 8
 hanging test. Each one changes what the gate asserts in order to get a green, and none of them is
 D10's to change. No fix attempt was spent on code: neither fault is in D10, and both are
 deterministic here.
+
+## 2026-10-16, afternoon — on the operator's Windows machine: D10 gated and merged, the paper run
+
+### D24 — D10 gated on Windows and merged; neither cloud fault appears here
+
+`verify.py --phase 8` ran on `b4a8072` in a clean detached worktree (`ACSOE-d10`, `PYTHONPATH`
+set to its `src/`, as `gate.py` does), log `logs/verify/gate-p8-d10-win.log`. The result was
+**5 PASS, 0 FAIL, 1 PENDING**, which is this boundary's green. `toolchain_green` gave pytest
+`4107 passed, 4 skipped` in 2,428 s, with mypy `--strict` and ruff clean. The PENDING is
+`daemon_reads_the_real_exchange` (D26). The merge was `--no-ff` onto `origin/main` (`1e0966d`,
+unmoved since the branch point) as `0d53368`. **Its tree is byte-identical to the gated tree**
+(`fe2a1e1`), so what was pushed is exactly what was gated. The intermittent native crash did
+not occur.
+
+**The operator's uncommitted work came first** (operator instruction). Fourteen items were found:
+three modified console files and eleven untracked report files. Nothing was ahead of origin.
+All were copied to `C:\Users\saad2\Documents\ACSOE-wip-backup-2026-10-16\` and hash-checked
+before anything moved. The gate and merge ran in a separate worktree, so the operator's checkout
+was never touched for D10. It was then brought level by `stash` → `merge --ff-only` →
+`stash apply` (**apply, not pop**: the stash stays as a third copy). *Rejected:* the handover's
+"commit everything to `local-work-2026-10-16`" route, which would have pushed a 14.7 MB generated
+file and unfinished work to the remote before anyone had looked at them.
+
+### D25 — The paper run used D10's code from the worktree, with the main checkout as its working directory
+
+The operator asked for the run "from the D10 worktree" while its gate was running. **Chose:**
+`PYTHONPATH` and `--config` point at `ACSOE-d10`. The working directory is the main checkout,
+because `.env`, `models/` (fold 404's artefacts), `data/` and `logs/` all resolve from the
+working directory. *Rejected:* the worktree as the working directory. That would mean copying
+`.env` (a secret) into a second tree and writing `data/` and `logs/` into the tree a running gate
+was reading.
+
+**The database was not the seed.** `data/db/acsoe.sqlite` carried a 1.4 MB uncheckpointed `-wal`
+holding four paper runs of 2026-09-21 (340 block records, 200 equity snapshots). The handover's D12
+steps (`copy` → `fc` → `del`) assume the Phase 0 seed. **Chose:** copy the three files, hash-check
+them, then *rename* the originals to `*.pre-d10-aside`. Nothing was deleted. Copies are in
+`C:\ACSOE-runs\pre-d10-run-2026-10-16\`. The daemon created a fresh database. Activate was
+pressed through the console's own endpoint (`POST /api/command/activate`), which is the paper
+mode the handover prescribes.
+
+### D26 — OPEN, for the operator: as built, the live daemon can never produce a candidate
+
+**Measured, run `run-20261016T104237559291`.** The data guard blocked tick 1 only ("No market
+data has arrived"), and every later tick passed it, with the oldest quote up to 1,500 s. That is
+D10 working. Of three bar boundaries, only the 11:00 UTC one reached engine 7. The other two were
+never fired at all (D30). 1,461 pairs were scanned, 174 entered, and 1,287 were
+excluded as `no_live_quote`. **All 174 were then skipped by the ranking as
+`anomaly_inputs_incomplete`**, so the outcome was `no_rankable_pair` and no candidate existed for
+any gate to refuse.
+
+**Why — and it does not go away with time.** Engine 3 builds candles only from the client's
+`recent_trades()` window (`engines/market_sensor/README.md`). Nothing backfills history, and that
+window is one `deque(maxlen=200_000)` shared by every subscribed pair (`clients/kraken/ws.py`,
+`max_buffered_trades`, a constructor default, not config). Today's full-universe recorder
+archive shows **~31,650 trades/hour** across the USD pairs (10:43–11:08 UTC; the 11-pair `msi`
+archive alone is ~18,700/h). So the buffer holds about the **last 6.3 h, ~25 bars**. Engines 13
+and 8 need a 48- or 96-bar lookback filled to `min_lookback_fill: 0.8`, which is 39 or 77 bars.
+**No pair's vector ever completes.** A 25-minute rate sample, though; at half the rate the buffer
+spans ~12.6 h, enough for the 48-bar window, still not the 96.
+
+**Consequence:** `daemon_reads_the_real_exchange` cannot close. Its digest requires refusals
+"with the gate that refused them", and none exist. **No digest was written.** Recording the
+ranking skip as a refusal would turn the criterion green without the thing it asks for.
+
+| Option | Effect | Case against |
+|---|---|---|
+| (a) Backfill candles at startup from the recorder's archive (`data/raw`, via the replay path the README names) | warm on the first tick; same reduction as Phase 7 | couples the daemon to the recorder being up; a gap in the archive is a gap in the features |
+| (b) Backfill from Kraken's REST `OHLC` endpoint | no dependency on the recorder | Kraken's OHLC is not the trade reduction the model was trained on (the README says so), so it needs a parity check first |
+| (c) Bound the trade window per pair and by time (≥ 96 bars) instead of one global count | the shortest change | memory grows with the universe; still a 19–24 h warm-up after every restart |
+| (d) Accept it, and run the cost-gate evidence in replay | no live change | the live path's funnel stays unproven past engine 7 |
+
+**Recommendation, not a decision:** (a) for the warm start, plus (c)'s per-pair bound so one busy
+pair cannot push a quiet pair's history out. Not built: another lane's code, and it changes what
+the system trades on.
+
+### D27 — OPEN, for the operator: the console's funnel says "not recorded" for numbers that are recorded
+
+The feed's "Pairs scanned" and "Entered the tradable universe" read *"not recorded yet — engine 7
+counts this on the tick and no table stores it"*. Since spec 146 (`19c5a11`), `scout_tallies`
+stores both on every tick engine 7 runs (1,461 and 174 above). C's Phase 3 note records the gap as
+structural, and that reason no longer holds. The bar-close outcome (`no_rankable_pair`, and
+`rank_skipped`) also appears nowhere on the screen, so an operator watching this run sees a
+quiet feed and no reason. **What the line should show is a WHAT decision about a number on
+screen** (D11's precedent): the latest tally, or one summed over the window, and whether the
+ranking skip gets a feed row. **Recommendation:** the latest bar-close tally's `scanned` and
+`entered`, with a feed row per bar close naming its outcome. C's lane, about 2 hours with tests.
+Not built.
+
+### D28 — The operator's console visual fixes landed as their own boundary
+
+Operator ruling 2026-10-16: finish the three uncommitted console files and gate them after D10,
+not with it. The changes: local clock times instead of UTC (`format.py`), "Not available yet" for
+two empty states, and hover text on the status band and buttons. The two tests that pinned the
+old wording now pin the new wording. Each keeps its guards: no zero shown, no stale engine or
+phase named, no chart drawn. No context doc stated UTC for the console, so none needed changing.
+Gated in a fresh worktree (`ACSOE-gate-console`) on commit `4a071d5`, because the existing
+`ACSOE-gate` holds another session's uncommitted F3 files and was left alone. The result was
+**5 PASS, 0 FAIL, 1 PENDING**, with pytest `4107 passed, 4 skipped` in 2,363 s, log
+`logs/verify/gate-p8-console-win.log`. It was pushed as a fast-forward, `0d53368..4a071d5`. The
+running console still serves D10's code, without these fixes, until it is restarted from `main`.
+
+### D29 — The report evidence material is committed; the source dump is gitignored
+
+Operator ruling 2026-10-16. `docs/report/**` was committed. `docs/ACSOE_source_dump.md`
+(14.7 MB, generated) went into `.gitignore`. It is regenerable by
+`docs/report/evidence/make_source_dump.py`, which is committed in the same change. *Correction to
+the ruling's premise:* the script was not already committed; it was one of the untracked files.
+**A secret check ran first:** neither `.env` value appears in any of these files, the zip's
+members or the dump. The two pattern hits were the variable *name* `KRAKEN_API_KEY` in prose and a
+sha256. The gate's ruff, mypy and pytest cover `src/`, `tests/` and `scripts/` only, and
+`docs_vocabulary` covers `AGENTS.md`, `README.md` and `context/`, so no criterion reads
+`docs/report`. Noted, not fixed: ruff reports one finding in `make_source_dump.py`, which no gate
+checks.
+
+### D30 — OPEN, for the operator: engine 3 silently skips bar closes whenever a tick runs longer than `loop_tick_s`
+
+**Measured, same run.** Engine 3 decides the decision-bar tick by
+`(now // interval) != ((now - loop_tick) // interval)`, with `loop_tick` the **configured**
+60 s (`engines/market_sensor/README.md`, "`bar_closed`"). On this machine, against 678 pairs,
+a tick takes **70–110 s**, so the loop never runs at 60 s. When the gap since the previous tick
+exceeds 60 s, a boundary that falls in the first `gap − 60` seconds after that tick is fired by
+**no** tick. Replaying the rule over each tick's stored `now` (`equity_snapshots.ts`) matches
+the database exactly. It fires once, at cycle 16 (11:00:25), which is the only `scout_tallies`
+row. It misses 10:45 (cycle 4 at 10:46:01; `now − 60` = 10:45:01) and 11:15 (cycle 28 at
+11:16:36). **Two of the run's first three bar closes were never judged**, with nothing on the
+screen or in the log to say so. The README's claim that it "fires exactly once however late the
+loop ran" holds only for gaps of 60 s or less.
+
+| Option | Effect | Case against |
+|---|---|---|
+| (a) Use `context.previous_now`, which engine 3 already reads for `trade_ranges`: fire when the bar index changed since the previous tick's real stamp | fires exactly once per boundary at any tick length | the first tick of a run has no previous stamp and needs its own rule (it is the D15 partial bar today) |
+| (b) Keep the rule and make ticks fit inside 60 s | no rule change | not in anyone's control on a 678-pair universe; still silent when it slips |
+| (c) Raise `loop_tick_s` | fewer misses | config hiding a defect; still silent on a slow tick |
+
+**Recommendation:** (a), with a test that drives a 107 s gap across a boundary. Engine 3's lane
+(A). It changes which bars the system trades on, so it is not built here.
+
+### Findings noted, not chased
+
+- **A negative quote age.** Every tick's `freshest_quote_age_s` is about −8 to −15 s, yet this
+  machine's clock agrees with Kraken's `/0/public/Time` to within 1 s. So the age is computed from
+  a timestamp that runs ahead of receipt, not from clock skew. Engine 4's lane. Harmless to the
+  guard's verdict today; it would hide 10 s of real staleness. Windows time sync also reports
+  "not synchronized" (Local CMOS Clock).
+- **Ticks take 70–110 s at `loop_tick_s: 60`.** Recorded here first as harmless; it is the
+  cause of D30.

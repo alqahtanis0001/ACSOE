@@ -1695,7 +1695,10 @@ the reason in the YAML comment and in `DatasetConfig`.
   at 2 h, stopped at exactly that test. It also hangs on its own, on `main` as on the D10 branch,
   inside 120 s. The cause was not chased, per the operator's instruction for environmental faults.
   Neither fault is seen on the operator's Windows machine, where `main` was gated. **Consequence:**
-  a cloud session cannot gate a boundary, so D10 was not merged there (D23).
+  a cloud session cannot gate a boundary, so D10 was not merged there (D23). **Confirmed absent on
+  Windows, 2026-10-16:** the D10 gate (`b4a8072`) ran there with mypy `--strict` and ruff clean
+  and pytest `4107 passed, 4 skipped` in 2,428 s, the recording-manager test included (D24). The
+  entry stays OPEN for cloud sessions only.
 - **OPEN, Phase 8, by operator ruling 2026-09-19: a non-deterministic native crash in polars.**
   The Phase 7 gating rehearsal at `19c5a11` died with an access violation right after a polars
   panic in its row export to Python (`polars-python/src/dataframe/export.rs:59`, "`elements` was
@@ -2361,6 +2364,20 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
 
 ## Session Notes
 
+- 2026-10-16, afternoon — lead alone, on the **operator's Windows machine**. **D10 gated and
+  merged:** `verify.py --phase 8` on `b4a8072` in a clean worktree gave 5 PASS, 0 FAIL, 1 PENDING.
+  It was merged `--no-ff` as `0d53368` (tree identical to the gated one) and pushed (D24). The
+  operator's uncommitted work was inventoried and copied aside first, and none of it was lost. The
+  console visual fixes of 2026-09-21 landed as their own gated boundary (D28). The report evidence
+  material was committed, and the source dump gitignored (D29). **Paper run against the real
+  exchange** (D25): the data guard blocked only tick 1. On the 11:00 bar close engine 7 found
+  `no_rankable_pair`, because every tradable pair's anomaly inputs were incomplete. Candles come
+  only from one 200,000-trade buffer shared by every pair, which holds about 6.3 h at today's
+  rate, and that is short of the 39 bars a 48-bar lookback needs. **As built, the live daemon
+  never produces a candidate (D26, OPEN).** Separately, engine 3 skipped 2 of the first 3 bar closes
+  because ticks run 70–110 s against a rule that assumes 60 s (D30, OPEN).
+  `daemon_reads_the_real_exchange` stays PENDING, and no digest was written to force it. **OPEN
+  for the operator:** D17, D26, D27 (the console's funnel ignores `scout_tallies`) and D30.
 - 2026-10-16 — lead with A, B and C as subagents, in a **cloud container** (no Kraken, no `.env`),
   operator on a phone. **D10 finished on branch `phase-8-d10`**: merged `main` into the WIP
   branch with no conflicts, then built engine 21's per-pair stop hold (`pair_quote_not_live`,
