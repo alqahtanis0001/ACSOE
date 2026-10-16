@@ -588,3 +588,30 @@ The run that shows the console on live data needs the real exchange and the oper
 key. This container's network policy refuses `api.kraken.com` and it has no `.env`. **Not worked
 around** — no proxy change, no mocked "live" result. The operator ruled (2026-10-16) that it waits
 for their own machine. `daemon_reads_the_real_exchange` therefore stays **PENDING**.
+
+### D23 — STOPPED: the gate cannot be obtained in the cloud, so D10 is not merged
+
+**The gate.** `verify.py --phase 8` in a clean worktree at `937f316` (log
+`logs/verify/gate-p8-d10.log`, gitignored, kept in the session only):
+`4 PASS, 1 FAIL, 1 PENDING`. The FAIL is `toolchain_green`, for two reasons, **both reproduced on
+unchanged `main` (`1e0966d`) in the same container**:
+
+- `mypy --strict` reports three `Statement is unreachable` errors in Windows-only code
+  (`supervise.py:439`, `partition_trades.py:240`, `rehearse_replay_day.py:82`), unreachable only
+  when mypy runs on Linux. No D10 file is among them.
+- pytest "timed out after 2700s". It was not slow: `test_recording_manager.py::
+  test_the_page_and_its_assets_are_served` hangs here. A second full run with no limit stopped at
+  the same test after two hours, and the test hangs on its own within 120 s on `main` as on D10.
+
+**The evidence that D10 is sound, which is not a gate and is not called one.** Every one of the
+4,111 tests ran: the first 3,551 with no failure before the hang, then the remaining files with
+that one test deselected, **597 passed**. `ruff` is clean. mypy shows only the three platform
+errors `main` shares. 63 of 63 mutation arms were killed.
+
+**Chose: stop and hand the gate to the operator's Windows machine**, where `main` was gated before.
+*Rejected:* merging on the evidence above. "Do not merge an ungated boundary" has no exception for
+a good argument, and a chunked suite is the substitute the tracker's own Phase 8 note refuses.
+*Rejected:* raising `PYTEST_TIMEOUT_S`, running mypy with `--platform win32`, or skipping the
+hanging test. Each one changes what the gate asserts in order to get a green, and none of them is
+D10's to change. No fix attempt was spent on code: neither fault is in D10, and both are
+deterministic here.

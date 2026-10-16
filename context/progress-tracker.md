@@ -2361,6 +2361,15 @@ All five findings were from the eighth audit's own fixes. The theme is narrower 
 
 ## Session Notes
 
+- 2026-10-16 — lead with A, B and C as subagents, in a **cloud container** (no Kraken, no `.env`),
+  operator on a phone. **D10 finished on branch `phase-8-d10`**: merged `main` into the WIP
+  branch with no conflicts, then built engine 21's per-pair stop hold (`pair_quote_not_live`,
+  operator ruling 2026-09-21), engine 19 storing it per row, the console text, and the fresh-pair
+  figures on the tick log line (D18). Three Phase 6 criteria were rewritten for the ruled
+  behaviour (D19). The context docs are kept true. 63 of 63 mutation arms were killed. **Not
+  merged:** the gate is red on two cloud-only faults that unchanged `main` shares (D23; fault
+  register above). The operator gates and merges on Windows. **OPEN: D17.** The live console run
+  waits for the operator's machine (D22).
 - 2026-09-21, overnight — lead (Opus 5) alone, autonomous, no teammates. Phase 8's ruled scope
   worked in the operator's order. **Built, gated and pushed:** F1 (`829e4cc`), access-control
   items 1 and 2 (`9a94026`), the `fees.py` read-only-key plumbing with everything except the key,
