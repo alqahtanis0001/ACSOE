@@ -42,6 +42,14 @@ trigger acting on real money, and the cost of the duplicate check is one compari
 **A block by any other engine does not hold.** A `cost` or `safety` block is a statement
 about whether to *open* something; a position already open still has to be got out of.
 
+**The per-pair hold has one lock, not two, and that is deliberate.** Since D10 (operator
+ruling 2026-09-21) engine 21 also holds a single position whose *own* pair has no live
+quote, publishing `pair_quote_not_live` on that position's row and no trigger for it.
+This engine has no per-pair check of its own: it sells only what engine 21 triggered, so
+a held position simply never reaches it, and every other position is exited as usual.
+The tick is not a `data_guard_blocked` tick, so this engine's `reason_code` is whatever
+it did with the rest — `nothing_to_exit` when the held position was the only one.
+
 ## Invariant 14 — what the liquidation overrides
 
 | Overridden | Not overridden |

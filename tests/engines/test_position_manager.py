@@ -48,11 +48,15 @@ from acsoe.engines.market_sensor.engine import MarketSensorEngine
 from acsoe.engines.position_manager.contracts import (
     ENTRY_ORDERS_CANCELLED_FIELD,
     HOLD_DATA_GUARD_BLOCKED,
+    HOLD_PAIR_QUOTE_NOT_LIVE,
     HOLD_REASON_FIELD,
+    MAX_DATA_AGE_KEY,
     ORDERS_FIELD,
     POSITION_VALUE_FIELD,
     POSITIONS_FIELD,
     POSITIONS_VALUE_FIELD,
+    QUOTE_AGE_FIELD,
+    QUOTE_ASK_FIELD,
     TRIGGERED_FIELD,
     UNREALISED_PNL_FIELD,
     Barrier,
@@ -729,6 +733,467 @@ def test_a_liquidation_never_holds_even_on_a_data_guard_block(
 
     assert data[HOLD_REASON_FIELD] is None
     assert data[ORDERS_FIELD][0]["status"] == OrderStatus.CANCELLED.value
+
+
+# --------------------------------------------------------------------------- #
+# The per-pair hold: D10, operator ruling 2026-09-21, option 1
+# --------------------------------------------------------------------------- #
+#
+# "Engine 21 holds a position's stop when THAT position's own pair has a stale or crossed
+# quote, using the same shared staleness key. It still holds everything on a data_guard
+# feed-wide block. A bad quote on some unrelated thin pair must no longer freeze every
+# stop." Every test below starts from one baseline — a SOL/USD position whose stop the
+# market traded through, on a live quote, so the stop triggers — and flips one input.
+# A stale quote is made by engine 3 itself, from a quote stamped that many seconds ago on
+# the fake; a crossed or malformed one is the published quote with one field changed after
+# engine 3 ran, because engine 3 refuses to publish a crossed book at all.
+
+
+def bound_s(context: Any) -> int:
+    """The shared staleness bound, read from the key engines 4 and 7 read. Read rather
+    than retyped, so these tests follow the operator's value instead of a copy of it."""
+    return int(context.config.get(MAX_DATA_AGE_KEY))
+
+
+def quoted_ago(
+    kraken: FakeKrakenWithStream,
+    context: Any,
+    age_s: int,
+    *,
+    pair: str = PAIR,
+    bid: str = "99.99",
+    ask: str = "100.00",
+) -> None:
+    """Restamp a pair's quote `age_s` seconds before `now`; engine 3 derives `age_s`."""
+    kraken.quote(pair, bid=bid, ask=ask, at=context.now - timedelta(seconds=age_s))
+
+
+def stop_touched(
+    context: Any, store: StoreClient, kraken: FakeKrakenWithStream
+) -> None:
+    """The baseline: a SOL/USD position and a print through its 97.515 stop."""
+    store.write_position(open_position(context))
+    traded(kraken, context, ["90.00"])
+
+
+def swap_bid_and_ask(state: dict[str, Any], pair: str) -> None:
+    quote = state["market_sensor"]["quotes"][pair]
+    quote["bid"], quote["ask"] = quote["ask"], quote["bid"]
+
+
+def rows_by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {str(row["position_id"]): row for row in data[POSITIONS_FIELD]}
+
+
+@pytest.mark.parametrize(
+    ("age_from_bound", "held"),
+    [(None, False), (0, False), (1, True)],
+    ids=["a fresh quote: the stop triggers", "exactly at the bound is live", "one second past"],
+)
+def test_a_position_whose_own_quote_is_stale_is_held_alone(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    age_from_bound: int | None,
+    held: bool,
+) -> None:
+    """One input moves: how old SOL/USD's own quote is.
+
+    A stale quote is not a live quote (the operator's words, D10), and a stop decided
+    against a market the system no longer sees is a fabricated trigger. **Exactly at the
+    bound is live** — the `<=` engines 4, 7 and 16 use — so four engines agree on "too
+    old". The tick-level reason stays null: it is the feed-wide hold only, and nothing
+    blocked the tick.
+    """
+    stop_touched(context, store, kraken)
+    if age_from_bound is not None:
+        quoted_ago(kraken, context, bound_s(context) + age_from_bound)
+    state = build_state(context, previous_now=one_minute_ago(context))
+
+    result = manager.process(context, state)
+    data = result.data
+
+    assert result.status is EngineStatus.OK
+    assert data[HOLD_REASON_FIELD] is None, "the tick did not hold; one position did"
+    row = data[POSITIONS_FIELD][0]
+    assert row[HOLD_REASON_FIELD] == (HOLD_PAIR_QUOTE_NOT_LIVE if held else None)
+    assert [entry["barrier"] for entry in data[TRIGGERED_FIELD]] == (
+        [] if held else [Barrier.STOP]
+    )
+    # Marking at the bid is unchanged by the hold: the quote is old, not absent.
+    assert Decimal(row["last_price"]) == Decimal("99.99")
+
+
+@pytest.mark.parametrize("crossed", [False, True], ids=["straight book", "crossed book"])
+def test_a_position_whose_own_book_is_crossed_is_held(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    crossed: bool,
+) -> None:
+    """One input moves: SOL/USD's bid and ask change places. Bid above ask is not a
+    price anyone can trade at, so its stop is not decided against it."""
+    stop_touched(context, store, kraken)
+    state = build_state(context, previous_now=one_minute_ago(context))
+    if crossed:
+        swap_bid_and_ask(state, PAIR)
+
+    data = manager.process(context, state).data
+
+    assert data[POSITIONS_FIELD][0][HOLD_REASON_FIELD] == (
+        HOLD_PAIR_QUOTE_NOT_LIVE if crossed else None
+    )
+    assert len(data[TRIGGERED_FIELD]) == (0 if crossed else 1)
+
+
+@pytest.mark.parametrize(
+    ("change", "held"),
+    [
+        (None, False),
+        ("the whole quote", True),
+        ("age_s", True),
+        ("ask", True),
+        ("bid", True),
+    ],
+    ids=["baseline", "quote absent", "age absent", "ask absent", "bid absent"],
+)
+def test_a_quote_that_cannot_be_shown_live_holds_its_position(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    change: str | None,
+    held: bool,
+) -> None:
+    """Absence is never freshness. Engine 3 stamps `age_s` on every quote it publishes,
+    so a quote without one is a defect upstream — and a price that cannot be shown to be
+    live is not treated as live, which is engine 7's reading of the same quote."""
+    stop_touched(context, store, kraken)
+    state = build_state(context, previous_now=one_minute_ago(context))
+    quotes = state["market_sensor"]["quotes"]
+    if change == "the whole quote":
+        del quotes[PAIR]
+    elif change is not None:
+        del quotes[PAIR][change]
+
+    result = manager.process(context, state)
+
+    assert result.status is EngineStatus.OK
+    assert result.data[POSITIONS_FIELD][0][HOLD_REASON_FIELD] == (
+        HOLD_PAIR_QUOTE_NOT_LIVE if held else None
+    )
+    assert len(result.data[TRIGGERED_FIELD]) == (0 if held else 1)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("age_s", True),
+        ("age_s", "30"),
+        ("ask", "0"),
+        ("bid", "-1"),
+        ("ask", "not a price"),
+    ],
+    ids=["a bool is not an age", "a string is not an age", "a zero ask", "a negative bid",
+         "an unparseable ask"],
+)
+def test_a_malformed_quote_holds_its_position_and_errors_nothing(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    field: str,
+    value: Any,
+) -> None:
+    """Each case differs from the baseline of the test above in one field of one quote.
+
+    Held, and **not** an error: an error stops the whole tick, which would freeze every
+    other position's stop over one pair's bad quote — the exact thing the ruling ended."""
+    stop_touched(context, store, kraken)
+    state = build_state(context, previous_now=one_minute_ago(context))
+    state["market_sensor"]["quotes"][PAIR][field] = value
+
+    result = manager.process(context, state)
+
+    assert result.status is EngineStatus.OK
+    assert result.data[POSITIONS_FIELD][0][HOLD_REASON_FIELD] == HOLD_PAIR_QUOTE_NOT_LIVE
+    assert result.data[TRIGGERED_FIELD] == []
+
+
+@pytest.mark.parametrize("btc_held_too", [False, True], ids=["no BTC position", "a BTC position"])
+@pytest.mark.parametrize(
+    "defect", [None, "stale", "crossed"], ids=["BTC live", "BTC stale", "BTC crossed"]
+)
+def test_a_bad_quote_on_another_pair_never_holds_this_positions_stop(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    defect: str | None,
+    btc_held_too: bool,
+) -> None:
+    """The operator's sentence: a bad quote on some unrelated thin pair must no longer
+    freeze every stop.
+
+    One input moves: BTC/USD's quote, between live, stale and crossed. SOL/USD's stop
+    triggers in all three and its row carries no hold. With a BTC position open as well,
+    *that* position is held alone — the hold is scoped to the position, not spread across
+    the book, and not keyed off every pair that happens to be quoted.
+    """
+    stop_touched(context, store, kraken)
+    quoted_btc(kraken, context)
+    if btc_held_too:
+        store.write_position(btc_position(context))
+    if defect == "stale":
+        quoted_ago(
+            kraken, context, bound_s(context) + 1, pair=BTC, bid=BTC_BID, ask="60001.00"
+        )
+    state = build_state(context, previous_now=one_minute_ago(context))
+    assert BTC in state["market_sensor"]["quotes"], "engine 3 publishes the BTC quote"
+    if defect == "crossed":
+        swap_bid_and_ask(state, BTC)
+
+    data = manager.process(context, state).data
+    rows = rows_by_id(data)
+
+    assert data[HOLD_REASON_FIELD] is None
+    assert rows["pos-1"][HOLD_REASON_FIELD] is None
+    assert data[TRIGGERED_FIELD] == [{"position_id": "pos-1", "barrier": Barrier.STOP}]
+    if btc_held_too:
+        assert rows["pos-btc"][HOLD_REASON_FIELD] == (
+            None if defect is None else HOLD_PAIR_QUOTE_NOT_LIVE
+        )
+
+
+@pytest.mark.parametrize("blocker", [None, "data_guard"], ids=["no block", "data_guard"])
+def test_a_feed_wide_block_still_holds_every_position_and_says_so_on_every_row(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    blocker: str | None,
+) -> None:
+    """One input moves: whether `data_guard` blocked the tick.
+
+    SOL/USD is live and its stop is touched; BTC/USD is stale. Unblocked, SOL's stop
+    triggers and BTC is held alone. Blocked, nothing is decided, and the feed-wide reason
+    is on the tick **and on every row** — including the row whose own pair was live, and
+    the one whose own pair would otherwise read `pair_quote_not_live`.
+    """
+    stop_touched(context, store, kraken)
+    quoted_btc(kraken, context)
+    store.write_position(btc_position(context))
+    quoted_ago(kraken, context, bound_s(context) + 1, pair=BTC, bid=BTC_BID, ask="60001.00")
+    state = build_state(context, blocked_by=blocker, previous_now=one_minute_ago(context))
+
+    data = manager.process(context, state).data
+    rows = rows_by_id(data)
+
+    if blocker is None:
+        assert data[HOLD_REASON_FIELD] is None
+        assert rows["pos-1"][HOLD_REASON_FIELD] is None
+        assert rows["pos-btc"][HOLD_REASON_FIELD] == HOLD_PAIR_QUOTE_NOT_LIVE
+        assert len(data[TRIGGERED_FIELD]) == 1
+    else:
+        assert data[HOLD_REASON_FIELD] == HOLD_DATA_GUARD_BLOCKED
+        assert {row[HOLD_REASON_FIELD] for row in rows.values()} == {HOLD_DATA_GUARD_BLOCKED}
+        assert data[TRIGGERED_FIELD] == []
+
+
+@pytest.mark.parametrize("blocker", [None, "data_guard"], ids=["no block", "data_guard"])
+@pytest.mark.parametrize("close_intent", [False, True], ids=["ordinary", "liquidation"])
+def test_a_liquidation_holds_nothing_and_every_hold_reason_is_null(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    close_intent: bool,
+    blocker: str | None,
+) -> None:
+    """Invariant 14: a liquidation stops reasoning about price quality and gets flat.
+
+    SOL/USD's own quote is stale and its stop touched. Without `close_intent` it is held
+    (by its pair, or by the feed). With it, nothing is held: every `hold_reason` is null
+    and the stop is decided as on any live tick.
+    """
+    stop_touched(context, store, kraken)
+    quoted_ago(kraken, context, bound_s(context) + 1)
+    state = build_state(
+        context,
+        blocked_by=blocker,
+        close_intent=close_intent,
+        previous_now=one_minute_ago(context),
+    )
+
+    data = manager.process(context, state).data
+    row = data[POSITIONS_FIELD][0]
+
+    if close_intent:
+        assert data[HOLD_REASON_FIELD] is None
+        assert row[HOLD_REASON_FIELD] is None
+        assert [entry["barrier"] for entry in data[TRIGGERED_FIELD]] == [Barrier.STOP]
+    else:
+        expected = HOLD_PAIR_QUOTE_NOT_LIVE if blocker is None else HOLD_DATA_GUARD_BLOCKED
+        assert row[HOLD_REASON_FIELD] == expected
+        assert data[TRIGGERED_FIELD] == []
+
+
+@pytest.mark.parametrize("stale", [False, True], ids=["fresh", "stale"])
+def test_a_position_opened_by_this_ticks_fill_is_judged_the_same_way(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    stale: bool,
+) -> None:
+    """One input moves: the age of SOL/USD's quote on the tick an entry fills.
+
+    The 97.00 print fills the 99.00 entry and touches its 97.515 stop in the same
+    interval, so on a live quote the brand-new position triggers. On a stale one it is
+    held like any other position on that pair — and its row says so, since it reaches
+    engine 19 like every other row."""
+    store.write_order(resting_entry(context))
+    traded(kraken, context, ["97.00"])
+    if stale:
+        quoted_ago(kraken, context, bound_s(context) + 1)
+    state = build_state(context, previous_now=one_minute_ago(context))
+
+    data = manager.process(context, state).data
+    row = rows_by_id(data)[position_id_for(USERREF)]
+
+    assert row[HOLD_REASON_FIELD] == (HOLD_PAIR_QUOTE_NOT_LIVE if stale else None)
+    assert data[TRIGGERED_FIELD] == (
+        []
+        if stale
+        else [{"position_id": position_id_for(USERREF), "barrier": Barrier.STOP}]
+    )
+
+
+def test_every_row_carries_this_ticks_answer_and_never_the_stores(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+) -> None:
+    """Engine 19 stores a row's `hold_reason` when the tick's is null. A row republished
+    with last tick's `pair_quote_not_live` still on it would therefore be held on the
+    console forever, so the key is present on every row and is this tick's answer — here
+    `None`, over a stored row that still says otherwise."""
+    stored = open_position(context).model_copy(update={"hold_reason": HOLD_PAIR_QUOTE_NOT_LIVE})
+    store.write_position(stored)
+
+    row = manager.process(context, build_state(context)).data[POSITIONS_FIELD][0]
+
+    assert HOLD_REASON_FIELD in row
+    assert row[HOLD_REASON_FIELD] is None
+
+
+@pytest.mark.parametrize("stale", [False, True], ids=["fresh", "stale"])
+def test_engine_nineteen_stores_the_rows_hold_reason(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    stale: bool,
+) -> None:
+    """The seam, through the real engine 19 into the real store, not only the payload:
+    the store is what the console renders the paused exit from."""
+    from acsoe.engines.memory.engine import MemoryEngine
+
+    store.write_position(open_position(context))
+    if stale:
+        quoted_ago(kraken, context, bound_s(context) + 1)
+    state = build_state(context)
+    state["position_manager"] = manager.process(context, state).data
+
+    assert MemoryEngine().process(context, state).status is EngineStatus.OK
+    recorded = store.position("pos-1")
+    assert recorded is not None
+    assert recorded.hold_reason == (HOLD_PAIR_QUOTE_NOT_LIVE if stale else None)
+
+
+def _null_bound(context: Any) -> Any:
+    import dataclasses
+
+    from tests.harness.doubles import MappingConfig
+
+    data = context.config.as_dict()
+    data["data_guard"] = {**data["data_guard"], "max_data_age_s": None}
+    return dataclasses.replace(context, config=MappingConfig(data))
+
+
+@pytest.mark.parametrize(
+    ("position", "blocker", "close_intent", "errors"),
+    [
+        (True, None, False, True),
+        (False, None, False, False),
+        (True, "data_guard", False, False),
+        (True, None, True, False),
+    ],
+    ids=[
+        "a position to judge: ERROR",
+        "nothing to judge",
+        "the feed-wide hold judges nothing",
+        "a liquidation judges nothing",
+    ],
+)
+def test_a_null_staleness_bound_errors_rather_than_defaulting(
+    manager: PositionManagerEngine,
+    context: Any,
+    store: StoreClient,
+    kraken: FakeKrakenWithStream,
+    position: bool,
+    blocker: str | None,
+    close_intent: bool,
+    errors: bool,
+) -> None:
+    """A default would be a number silently deciding which stops act. Null is OPERATOR
+    REQUIRED and the tick errors, through the existing error path — nothing triggered.
+
+    Each passing case differs from the ERROR case in one input, and each is a tick on
+    which the bound decides nothing, so it is not read: no position, the feed-wide hold,
+    or a liquidation. A liquidation in particular must never be stopped by a threshold
+    it does not consult.
+    """
+    unset = _null_bound(context)
+    if position:
+        stop_touched(context, store, kraken)
+    state = build_state(
+        unset, blocked_by=blocker, close_intent=close_intent, previous_now=one_minute_ago(unset)
+    )
+
+    result = manager.process(unset, state)
+
+    if errors:
+        assert result.status is EngineStatus.ERROR
+        assert MAX_DATA_AGE_KEY in (result.reason or "")
+        assert result.data[TRIGGERED_FIELD] == []
+    else:
+        assert result.status is EngineStatus.OK, result.reason
+
+
+def test_the_staleness_key_is_the_one_engines_four_and_seven_read() -> None:
+    """D10 fix 1: one key, one meaning of "too old", now read by a fourth engine.
+    Contract rule 3 means each names the string; this is what stops them drifting."""
+    from acsoe.engines.data_guard import contracts as data_guard
+    from acsoe.engines.decision import contracts as decision
+    from acsoe.engines.scout import engine as scout
+
+    assert MAX_DATA_AGE_KEY == data_guard.MAX_DATA_AGE_KEY == scout.MAX_QUOTE_AGE_KEY
+    assert QUOTE_AGE_FIELD == scout.QUOTE_AGE_FIELD == decision.QUOTE_AGE_FIELD
+    assert QUOTE_ASK_FIELD == decision.QUOTE_ASK_FIELD
+
+
+def test_the_per_pair_hold_is_spelled_as_the_contract_states() -> None:
+    """Engine 19 stores this string, the console maps it to prose, and
+    `context/engine-contracts.md` names it. Every behavioural test above imports the
+    constant, so a renamed spelling would pass all of them and render as "No reason was
+    recorded." — this is the one place the literal is pinned. It must also never be the
+    feed-wide reason: the two holds mean different things to the operator."""
+    assert HOLD_PAIR_QUOTE_NOT_LIVE == "pair_quote_not_live"
+    assert HOLD_DATA_GUARD_BLOCKED == "data_guard_blocked"
 
 
 # --------------------------------------------------------------------------- #

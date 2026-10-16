@@ -415,6 +415,17 @@ REASON_PROSE: Final[Mapping[str, str]] = {
         "Exits are paused while this tick's market data is rejected; the position is still "
         "watched"
     ),
+    # Its per-position sibling, engine 21 (B), operator ruling 2026-09-21 (D10). Since D10
+    # one quiet pair no longer blocks the tick, so a stale or crossed quote on the pair a
+    # position is *in* holds that position's barriers alone, and the row says so. The
+    # sentence has to differ from the one above in what it points at — the feed is fine,
+    # this pair is not — or an operator would go looking for a dead websocket while every
+    # other position is being managed normally. Same voice as above: what is paused is the
+    # exit, and the watching is not.
+    "pair_quote_not_live": (
+        "Exits for this position are paused: its own pair has no live price (the quote is "
+        "stale or the book is crossed); it is still watched"
+    ),
     # Engine 22 `exit`, B's spec 93. Four codes here, and `data_guard_blocked` above is
     # the fifth — engine 22 spells its hold exactly as engine 21 does, on purpose, so
     # one fact keeps one sentence rather than growing a near-duplicate. That is the same

@@ -1,6 +1,6 @@
 """Engine 16 `decision` — the check nothing else performs, and the intent engine 18 reads.
 
-## What it decides, which is one thing
+## What it decides
 
 **Every approving engine judged *this* tick's candidate.** By the time engine 16 runs,
 four gates have already said yes — 7 `scout`, 10 `cost`, 11 `risk`, 15 `skeptic` — so
@@ -13,6 +13,12 @@ of them approved.
 That is deterministic arithmetic, it fails closed, and it can only ever make the system
 less willing to trade — which is why the operator made it a gate on 2026-09-16 and why
 invariant 4 protects it. There is no model in it.
+
+**Since D10 fix 3 (operator ruling 2026-09-21) it also asks one more question of that
+candidate: does its price still count as live?** The chosen pair's quote must be no older
+than engine 4's *published* bound and not crossed — `candidate_quote_not_live` otherwise.
+Engine 7 already excluded such pairs from the same snapshot, so this is the second gate
+between a stale price and an order, not a second opinion. See `_candidate_quote_is_live`.
 
 ## What it does *not* decide
 

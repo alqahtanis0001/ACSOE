@@ -31,21 +31,33 @@ exists for. Spec 85's `trade_ranges` is the record of that interval, and its `lo
 `high` are **traded** prices, so a book that quoted 100 and never traded there did not
 touch 100.
 
-## The hold, and the one thing it does not suppress
+## The two holds, and the one thing neither suppresses
 
-When `state["trading_blocked_by"] == "data_guard"` and `close_intent` is not set, no
-barrier is decided and `triggered` is empty. A trigger computed from data engine 4 has
-just rejected is a fabricated trigger acting on real money.
+**The feed-wide hold.** When `state["trading_blocked_by"] == "data_guard"` and
+`close_intent` is not set, no barrier is decided for any position and `triggered` is
+empty. A trigger computed from data engine 4 has just rejected is a fabricated trigger
+acting on real money. The tick's `hold_reason` and every row's are `data_guard_blocked`.
 
-**The stale-entry cancel still happens during a hold.** Invariant 8 says so in as many
-words: it is a decision about elapsed time, it reads `context.now`, it needs no market
-data, and it reduces exposure. Suppressing it would leave a post-only buy on the book
-through a blackout, which is the thing invariant 14 escalates over.
+**The per-pair hold** (D10, operator ruling 2026-09-21, option 1). Otherwise, a position
+whose **own** pair has no live quote gets no barrier at all — no stop, target or timeout,
+the same thing the feed-wide hold does, scoped to that position — and its row carries
+`pair_quote_not_live`. "Live" is the predicate engine 7 excludes a pair by: a quote is
+present, its bid and ask are positive, the bid is not above the ask, it carries an
+`age_s`, and that age is no more than `data_guard.max_data_age_s` (the bound itself is
+live). The bound is the key engines 4 and 7 read, and it is read with no default. Every
+position on a live pair is decided exactly as before: a stale quote on some unrelated
+thin pair no longer freezes every stop. Positions opened by this tick's fill are judged
+the same way. The tick's `hold_reason` stays null — it is the feed-wide hold only.
+
+**The stale-entry cancel still happens during either hold.** Invariant 8 says so in as
+many words: it is a decision about elapsed time, it reads `context.now`, it needs no
+market data, and it reduces exposure. Suppressing it would leave a post-only buy on the
+book through a blackout, which is the thing invariant 14 escalates over.
 
 **A block by any other engine does not hold.** A `cost` or `safety` block is a statement
 about whether to *open* something. A position already open is still managed.
 
-**A liquidation never holds**, and `hold_reason` is null throughout one.
+**A liquidation never holds anything**, and every `hold_reason` is null throughout one.
 
 ## Barriers are measured from the fill
 
@@ -107,10 +119,15 @@ from acsoe.engines.position_manager.contracts import (
     EXECUTION_KEY,
     EXECUTION_ORDERS_FIELD,
     HOLD_DATA_GUARD_BLOCKED,
+    HOLD_PAIR_QUOTE_NOT_LIVE,
+    HOLD_REASON_FIELD,
     MARKET_SENSOR_KEY,
+    MAX_DATA_AGE_KEY,
     PAIR_RULES_PAIRS_KEY,
     POSITION_ID_FIELD,
     POSITION_VALUE_FIELD,
+    QUOTE_AGE_FIELD,
+    QUOTE_ASK_FIELD,
     QUOTE_BID_FIELD,
     QUOTES_FIELD,
     REASON_POSITION_UNRECORDABLE,
@@ -161,6 +178,39 @@ def _money(value: Any) -> Decimal:
     if isinstance(value, float):
         raise ValueError("money must never be a float; a price arrived as one")
     return Decimal(str(value))
+
+
+def _quote_price(value: Any) -> Decimal | None:
+    """One side of a quote as a usable price, or `None` when it is not one.
+
+    Absent, unparseable, non-finite or non-positive are all `None`: none of them is a
+    price anyone can trade at, so the quote is not live. A float is refused here as
+    `_money` refuses it — but as "not a price", which holds this one position, rather
+    than as an error that would stop the whole tick and freeze every other stop with it.
+    """
+    if value is None or isinstance(value, (bool, float)):
+        return None
+    try:
+        price = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if not price.is_finite() or price <= 0:
+        return None
+    return price
+
+
+def _quote_age(quote: dict[str, Any]) -> Decimal | None:
+    """The quote's `age_s` as a `Decimal`, or `None` when it carries none.
+
+    Engine 7's reading, restated (contract rule 3): a float goes through `repr` so the
+    comparison with the configured bound is exact, and a bool is not an age. A
+    non-finite age cannot be compared with anything and is no age either.
+    """
+    value = quote.get(QUOTE_AGE_FIELD)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    age = Decimal(repr(value) if isinstance(value, float) else str(value))
+    return age if age.is_finite() else None
 
 
 class PositionManagerEngine(BaseEngine):
@@ -253,8 +303,23 @@ class PositionManagerEngine(BaseEngine):
         marked, value, unrealised = self._mark(state, positions, fills)
 
         triggered: tuple[dict[str, str], ...] = ()
-        if not held:
-            triggered = self._barriers(context, state, marked, now=now)
+        if held:
+            # The feed-wide hold: nothing is decided, and every row says why.
+            for _, row in marked:
+                row[HOLD_REASON_FIELD] = HOLD_DATA_GUARD_BLOCKED
+        else:
+            not_live = self._pairs_not_live(context, state, marked, close_intent=close_intent)
+            # **Set on every row, every tick, never left as the store had it.** Engine 19
+            # stores the row's reason when the tick's is null, so a row republished with
+            # an earlier tick's `pair_quote_not_live` still on it would carry that hold
+            # forward forever. The rows here are built fresh in `_mark`, and this line is
+            # what gives each one its answer for *this* tick.
+            for _, row in marked:
+                row[HOLD_REASON_FIELD] = (
+                    HOLD_PAIR_QUOTE_NOT_LIVE if str(row["pair"]) in not_live else None
+                )
+            judged = [(position, row) for position, row in marked if row[HOLD_REASON_FIELD] is None]
+            triggered = self._barriers(context, state, judged, now=now)
 
         return ManagedPositions(
             positions=tuple(row for _, row in marked),
@@ -572,6 +637,55 @@ class PositionManagerEngine(BaseEngine):
         if not complete:
             return marked, None, None
         return marked, value, unrealised
+
+    # ------------------------------------------------------------------ liveness
+
+    def _pairs_not_live(
+        self,
+        context: EngineContext,
+        state: State,
+        marked: list[tuple[Any, dict[str, Any]]],
+        *,
+        close_intent: bool,
+    ) -> frozenset[str]:
+        """The pairs, among the positions held, whose own quote is not live this tick.
+
+        **A liquidation holds nothing** (invariant 14): the system stops reasoning about
+        price quality and gets flat, so nothing is judged and the bound is not read. With
+        no position to judge the bound is not read either — there is nothing it could
+        decide. Otherwise the bound is read with **no default**: null raises, and the
+        tick errors rather than letting a number nobody chose decide which stops act.
+        """
+        if close_intent or not marked:
+            return frozenset()
+        bound = _config_decimal(context, MAX_DATA_AGE_KEY)
+        pairs = {str(row["pair"]) for _, row in marked}
+        return frozenset(pair for pair in pairs if not self._quote_is_live(state, pair, bound))
+
+    @staticmethod
+    def _quote_is_live(state: State, pair: str, bound: Decimal) -> bool:
+        """Engine 7's `no_live_quote` predicate, for one position's own pair.
+
+        Not live when the quote is absent; when its bid or ask is absent or not a
+        positive price; when the book is crossed (bid above ask); when it carries no
+        `age_s`; or when that age is past the bound. **Exactly at the bound is live** —
+        the same `<=` engines 4, 7 and 16 use, so four engines agree on "too old".
+        """
+        sensor = state.get(MARKET_SENSOR_KEY)
+        quotes = sensor.get(QUOTES_FIELD) if isinstance(sensor, dict) else None
+        quote = quotes.get(pair) if isinstance(quotes, dict) else None
+        if not isinstance(quote, dict):
+            return False
+        bid = _quote_price(quote.get(QUOTE_BID_FIELD))
+        ask = _quote_price(quote.get(QUOTE_ASK_FIELD))
+        if bid is None or ask is None:
+            return False
+        if bid > ask:
+            return False
+        age = _quote_age(quote)
+        if age is None:
+            return False
+        return age <= bound
 
     # ------------------------------------------------------------------ barriers
 

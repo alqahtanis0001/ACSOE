@@ -1805,11 +1805,14 @@ def test_a_quote_carrying_no_age_is_excluded_rather_than_assumed_fresh(
 ) -> None:
     """Engine 3 stamps an age on every quote, so a missing one is a defect upstream — and
     a price that cannot be shown to be live is not treated as live."""
+    baseline = scout.process(account, build_state(account)).data
     state = build_state(account)
     del state["market_sensor"]["quotes"]["SOL/USD"]["age_s"]
 
     result = scout.process(account, state).data
 
+    assert "SOL/USD" in baseline["pairs"], "the same tick with the age is tradable"
+    assert baseline["excluded"].get(REASON_NO_LIVE_QUOTE, 0) == 0
     assert "SOL/USD" not in result["pairs"]
     assert result["excluded"][REASON_NO_LIVE_QUOTE] == 1
 

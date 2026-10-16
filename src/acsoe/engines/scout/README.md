@@ -42,7 +42,7 @@ never depends on the model. See the ordering section.
 |---|---|---|
 | `ordermin`, `costmin`, `tick_size`, `lot_decimals`, `base`, `quote` | `state["exchange"]["pair_rules"]["pairs"]` | 1 `exchange` (A), from `AssetPairs` |
 | Per-currency spendable balance | `state["exchange"]["balances"]` | 1 `exchange` (A) |
-| `bid`, `ask` | `state["market_sensor"]["quotes"][pair]` | 3 `market_sensor` (A) |
+| `bid`, `ask`, `age_s` | `state["market_sensor"]["quotes"][pair]` | 3 `market_sensor` (A) |
 | Total account equity | `store.latest_equity_snapshot()` | 19 `memory`, Phase 4 |
 | The feature vector per pair | `state["feature"]["pairs"][pair]` | 5 `feature` (C), Phase 5 |
 | Macro columns, for the expected-move ranking | `state["macro_context"]["features"]` | 6 `macro_context` (C) |
@@ -50,8 +50,9 @@ never depends on the model. See the ordering section.
 
 Configuration: `trading.risk_fraction_per_trade`, `barriers.stop_pct`, `barriers.target_pct`,
 `trading.allow_crypto_quoted`, `trading.base_reporting_currency`,
-`trading.stable_quote_currencies`, `scout.rank_feature`, `scout.rank_descending`, and, for
-the expected-move ranking only, `models.prediction_run_id` and `models.anomaly_run_id`.
+`trading.stable_quote_currencies`, `data_guard.max_data_age_s` (engine 4's key, shared on
+purpose — see below), `scout.rank_feature`, `scout.rank_descending`, and, for the
+expected-move ranking only, `models.prediction_run_id` and `models.anomaly_run_id`.
 
 **`state["feature"]` is read only when `scout.rank_feature` names a feature.** With no
 feature configured the engine never touches it and its absence is not a fault — which is
@@ -71,7 +72,7 @@ to exactly one, which is what makes the tally exhaustive.
 | # | Reason code | The pair is excluded because |
 |---|---|---|
 | 1 | `pair_rules_missing` | `AssetPairs` does not list it, or its rules are unparseable. Invariant 2 gives pair rules no fallback in any mode: a wrong `ordermin` produces invalid orders. |
-| 2 | `no_live_quote` | There is no live top-of-book, or the price is not positive. **Never read as a zero spread** — invariant 2 says an assumed spread invalidates the cost gate, and zero is the most optimistic value the field can take. |
+| 2 | `no_live_quote` | There is no live top-of-book: the quote is absent, a price is not positive, the book is **crossed** (bid above ask), the quote carries no `age_s`, or it is **older than `data_guard.max_data_age_s`** (exactly at the bound is live). **Never read as a zero spread** — invariant 2 says an assumed spread invalidates the cost gate, and zero is the most optimistic value the field can take. See "Stale and crossed quotes" below. |
 | 3 | `crypto_quoted` | Its quote is a non-stable asset and `trading.allow_crypto_quoted` is false. Invariant 7: profit denominated in a volatile asset is a second directional bet the system did not choose to make. |
 | 4 | `quote_not_provably_stable` | `trading.stable_quote_currencies` is **absent**, so no quote can be shown stable. See below — this is a separate code on purpose. |
 | 5 | `no_quote_balance` | The account holds nothing spendable in that quote currency. Invariant 7, and **positive**, not merely present: a currency in the map with nothing in it is a drained account, not a held one. |
@@ -143,6 +144,37 @@ is a fault somebody must fix.
 **Absent and empty are different answers.** An absent key means nobody has decided; an empty
 set is an operator saying "none of them are", which is a decision and excludes under the
 ordinary `crypto_quoted` code.
+
+### Stale and crossed quotes (D10, operator ruling 2026-09-21)
+
+**A stale quote is not a live quote** — the operator's words. Per-pair staleness and
+per-pair crossed books used to be engine 4's: it judged the whole tick on its oldest quote,
+and against the real 668-pair USD universe some thin pair was always past two minutes, so
+every tick blocked. Under option (b) engine 4 keeps the feed (a heartbeat on the freshest
+quote, and a block only when *every* pair is crossed), and this engine excludes the one pair:
+
+- **Stale:** `age_s` (engine 3's `now - quote.ts`) past `data_guard.max_data_age_s`. Exactly
+  at the bound is live — the same `<=` as engine 4's heartbeat, engine 16's re-check and
+  engine 21's per-pair hold. Compared as `Decimal`, a float through `repr`.
+- **Age-less:** a quote with no `age_s`, or one that is not a number or is a bool. Engine 3
+  stamps one on every quote, so its absence is a defect upstream: excluded, never assumed
+  fresh.
+- **Crossed:** bid above ask is not a price anyone can trade at.
+
+All three reuse `no_live_quote` rather than minting a code. `EXCLUSION_REASONS` is
+order-sensitive and the store enforces `scanned == entered + sum(excluded)`, so reusing the
+reason needs no new tally arithmetic and no new console sentence.
+
+**One key, read by four engines.** The bound is `data_guard.max_data_age_s`, named here as
+`MAX_QUOTE_AGE_KEY` and read with no default — null blocks the tick like every other
+threshold in this gate. Engines do not import each other, so the string is restated, and a
+test asserts it equals engine 4's (and engine 21's). Two numbers meaning "too old" drift the
+moment one is tuned.
+
+**This filter is not the last word.** Engine 16 re-checks the chosen pair's quote against
+engine 4's published bound before the intent exists (`candidate_quote_not_live`), because a
+filter applied once, several engines before the order, would otherwise be the only thing
+between a stale price and an order.
 
 ## One candidate, or none
 

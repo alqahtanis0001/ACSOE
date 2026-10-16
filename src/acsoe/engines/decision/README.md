@@ -5,8 +5,9 @@ stage 3, after engine 15 `skeptic` and before engine 18 `execution`.
 
 Engine 16 does two things, and it is important that they are described differently.
 
-1. It **decides** one thing: whether every approving engine judged *this* tick's
-   candidate.
+1. It **decides** whether every approving engine judged *this* tick's candidate — and,
+   since D10 fix 3 (operator ruling 2026-09-21), whether that candidate still has a live
+   price at the moment the intent would be composed.
 2. It **composes** the order intent. That is assembly, not a decision, and nothing below
    calls it one.
 
@@ -32,6 +33,8 @@ willing to trade. That is why it is a gate and why invariant 4 protects it.
 |---|---|
 | `cycle_id` | the intent's `cycle_id` |
 | `market_sensor.closed_bar_ts` | **the bar every other payload is measured against** |
+| `market_sensor.quotes[pair]` — `age_s`, `bid`, `ask` | the chosen pair's liveness (D10 fix 3) |
+| `data_guard.max_data_age_s` | the bound engine 4 applied this tick, **as published** — not the config key |
 | `scout.pair` | **the pair every other payload is measured against** |
 | `prediction` | `model_run_id`; its `pair` and `bar_ts` are checked |
 | `order_book` | `estimated_slippage_pct`; provenance only |
@@ -42,7 +45,11 @@ willing to trade. That is why it is a gate and why invariant 4 protects it.
 
 Nothing is read from `context`. No client, no clock, no configuration key — engine 16 is
 arithmetic over what the engines before it published. A config threshold appearing here
-would mean it had stopped being a coherence check.
+would mean it had stopped being a coherence check. That is why the staleness bound is
+engine 4's **published** `max_data_age_s` rather than `data_guard.max_data_age_s` read from
+config: it is the number engine 7 excluded by, from the same key, on this tick.
+`test_the_bound_is_engine_fours_published_one_and_not_a_config_read` hands the engine a
+config that raises on any read.
 
 ## Output written to `state`
 
@@ -82,11 +89,22 @@ same shape and the same argument as engine 11 omitting `qty` on a rejection.
    row nobody can act on.
 4. **A payload names a bar that is not this tick's** — `stale_bar`. The sentence names
    the engine, the bar it carried and this tick's.
-5. **Engine 11 approved and published no `qty`, or did not approve at all** —
+5. **The chosen pair has no live price** — `candidate_quote_not_live` (D10 fix 3,
+   operator ruling 2026-09-21). Its quote's `age_s` is past the bound engine 4 published
+   this tick (exactly at the bound is live), or its book is crossed. The sentence names
+   the pair and the age, or the bid and ask. An absent quote or an absent published bound
+   is `input_missing`; a field that is not a number is `decision_inputs_unavailable`.
+
+   **Engine 7 already excluded exactly these pairs** under `no_live_quote`, from the same
+   snapshot, so on a working chain this never fires. It exists because D10 moved per-pair
+   freshness out of engine 4 into a filter applied once, several engines before the order;
+   this puts a second gate between a stale price and an order at the last point before the
+   intent exists. Defence in depth, not a second opinion — it can only refuse.
+6. **Engine 11 approved and published no `qty`, or did not approve at all** —
    `no_approved_quantity`. Engine 11 omits the field on a rejection, so an approval with
    no quantity is one payload asserting an approval and a refusal at once, and neither
    half can be trusted over the other.
-6. **The check itself could not run** — `decision_inputs_unavailable`. A `closed_bar_ts`
+7. **The check itself could not run** — `decision_inputs_unavailable`. A `closed_bar_ts`
    that is not a timestamp, a `cycle_id` that is not a number, a quantity that does not
    parse as money. Invariant 3: a clause that cannot be evaluated blocks.
 
@@ -125,7 +143,8 @@ which requiring these two would refuse something that requiring the other five d
 ## What this engine must never do
 
 - **Re-derive, recompute, adjust or re-check any number it copies.** Disagreement is a
-  block, never a correction.
+  block, never a correction. (The liveness clause reads a quote's age and engine 4's
+  bound; it copies neither into the intent and can only refuse.)
 - **Size, price, weight or scale anything.** A quantity lowered here would be a veto
   wearing a sizing costume.
 - **Block on a model's judgement.** Engine 15 has already vetoed or not. Engine 16's

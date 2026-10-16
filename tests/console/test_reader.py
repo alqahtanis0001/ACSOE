@@ -27,7 +27,7 @@ from pydantic import ValidationError
 
 from acsoe.clients.store.client import StoreClient
 from acsoe.clients.store.contracts import RunMode, RunRow, SystemMode
-from acsoe.console.format import MINUS_SIGN, format_age
+from acsoe.console.format import MINUS_SIGN, REASON_PROSE, format_age
 from acsoe.console.reader import ConsoleReader, ReadOnlyStore, open_readonly_connection
 from acsoe.console.views import (
     FROZEN,
@@ -681,6 +681,54 @@ def test_a_position_says_how_long_it_has_been_open(
     assert position.age_us == max(seeded_reader.now_micros() - position.opened_at, 0)
     assert position.age_text
     assert position.age_text == format_age(position.age_us // 1000)
+
+
+def test_a_position_held_on_its_own_pair_renders_the_per_pair_prose_and_then_nothing(
+    seeded_db: Path, seed_clock: Any
+) -> None:
+    """D10's per-position hold, operator ruling 2026-09-21, from the stored row to the
+    screen.
+
+    Engine 21 publishes `pair_quote_not_live` on the row of a position whose own pair has
+    no live price, and engine 19 stores it on `positions.hold_reason`. The reader maps
+    that column through `operator_reason` like any other hold, so the sentence is
+    asserted to be the one `REASON_PROSE` holds — and to differ from the feed-wide one,
+    because an operator told "this tick's market data is rejected" would look for a dead
+    feed while every other position is managed normally.
+
+    The hold is planted and then lifted on the **same** row, so the blank has something
+    to clear: a column never written reads null whatever the reader does with it.
+    """
+    store = StoreClient(seeded_db)
+    try:
+        stored = store.open_positions()[0]
+        store.write_position(stored.model_copy(update={"hold_reason": "pair_quote_not_live"}))
+    finally:
+        store.close()
+
+    reader = reader_for(seeded_db, seed_clock)
+    try:
+        held = next(p for p in reader.positions() if p.position_id == stored.position_id)
+    finally:
+        reader.close()
+    assert held.hold_reason == "pair_quote_not_live"
+    assert held.hold_reason_text == REASON_PROSE["pair_quote_not_live"]
+    assert held.hold_reason_text != REASON_PROSE["data_guard_blocked"]
+    assert "pair_quote_not_live" not in held.hold_reason_text, "a code reached the screen"
+
+    store = StoreClient(seeded_db)
+    try:
+        store.write_position(stored.model_copy(update={"hold_reason": None}))
+    finally:
+        store.close()
+
+    reader = reader_for(seeded_db, seed_clock)
+    try:
+        cleared = next(p for p in reader.positions() if p.position_id == stored.position_id)
+    finally:
+        reader.close()
+    assert cleared.hold_reason is None
+    assert cleared.hold_reason_text == ""
 
 
 def test_the_age_is_not_the_staleness_and_the_two_can_disagree(

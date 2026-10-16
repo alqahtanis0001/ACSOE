@@ -940,6 +940,7 @@ def _candidate_quote(state: dict[str, Any]) -> dict[str, Any]:
 def test_a_stale_candidate_is_refused_with_no_intent(
     decision: DecisionEngine, context: Any
 ) -> None:
+    assert decision.process(context, approving_state(context)).status is EngineStatus.OK
     state = approving_state(context)
     _candidate_quote(state)["age_s"] = 438.0
 
@@ -951,7 +952,36 @@ def test_a_stale_candidate_is_refused_with_no_intent(
     assert "438s old" in (result.reason or "")
 
 
+def test_a_chosen_pair_that_went_stale_after_selection_is_refused(
+    decision: DecisionEngine, context: Any
+) -> None:
+    """The shape fix 3 exists for, one input from a passing tick.
+
+    Engine 7 chose the pair from a live quote, and every gate after it approved. Between
+    that and the order, the chosen pair's quote is aged to one second past the bound
+    **engine 4 published this tick**. One second past is the boundary: with the at-bound
+    test below, it pins the comparison to exactly `age > bound`.
+    """
+    passing = approving_state(context)
+    assert decision.process(context, passing).status is EngineStatus.OK
+
+    state = approving_state(context)
+    chosen = state["scout"]["pair"]
+    bound = float(state["data_guard"]["max_data_age_s"])
+    assert chosen in state["scout"]["pairs"], "engine 7 chose it from its universe"
+    assert _candidate_quote(state)["age_s"] <= bound, "it was live when engine 7 chose it"
+    _candidate_quote(state)["age_s"] = bound + 1
+
+    result = decision.process(context, state)
+
+    assert result.status is EngineStatus.BLOCK
+    assert result.data["reason_code"] == REASON_CANDIDATE_QUOTE_NOT_LIVE
+    assert chosen in (result.reason or "")
+    assert INTENT_FIELD not in result.data
+
+
 def test_a_crossed_candidate_is_refused(decision: DecisionEngine, context: Any) -> None:
+    assert decision.process(context, approving_state(context)).status is EngineStatus.OK
     state = approving_state(context)
     quote = _candidate_quote(state)
     quote["bid"], quote["ask"] = quote["ask"], quote["bid"]
