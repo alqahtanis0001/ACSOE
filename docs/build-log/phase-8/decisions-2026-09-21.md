@@ -474,7 +474,7 @@ recorded then: *say "estimate" and measure before promising a time.*
 
 ---
 
-## 2026-10-16 — D10 finished, gated and merged (autonomous run, operator on a phone)
+## 2026-10-16 — D10 finished and proven; the gate could not be obtained in the cloud, so NOT merged (D23)
 
 The operator's instruction: finish D10, build engine 21's per-pair stop hold (ruled 2026-09-21,
 option 1), gate the boundary, merge to `main` and push. The live paper run was first set at 3
@@ -490,7 +490,7 @@ staleness key. It still holds everything on a data_guard feed-wide block. A bad 
 unrelated thin pair must no longer freeze every stop."* It was ruled in conversation and had not
 been written down in this file; it is recorded here as given.
 
-**Built.** `HOLD_PAIR_QUOTE_NOT_LIVE = "pair_quote_not_live"` in
+**Built** (branch `phase-8-d10`; not merged — D23). `HOLD_PAIR_QUOTE_NOT_LIVE = "pair_quote_not_live"` in
 `engines/position_manager/contracts.py`, with console prose. A position whose own quote is not
 live gets no barrier decided; every other position is managed as before. The feed-wide hold is
 unchanged. A liquidation holds nothing. The staleness key `data_guard.max_data_age_s` is now read
@@ -579,8 +579,8 @@ after every teammate had stopped, from a byte copy on disk, restored and hash-ch
 ### D21 — The branch was merged, not rebased
 
 `phase-8-d10-wip` (`cecdb59`) was already pushed, so `main` was merged into it (no conflicts)
-rather than rebasing it — a rebase would have rewritten a pushed commit for no gain. Then the
-finished branch was merged into `main`.
+rather than rebasing it — a rebase would have rewritten a pushed commit for no gain. The
+finished branch, `phase-8-d10`, goes into `main` with `--no-ff` once gated (D23).
 
 ### D22 — No live run from the cloud
 

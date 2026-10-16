@@ -224,7 +224,7 @@ fake client's own fixture is keyed the modern way.
 
 ## D10 built, 2026-10-16: what changed, and what the next run should show
 
-**Built, gated and merged** (decision log, 2026-10-16 block: D10 BUILT, D17–D22). The smoke run
+**Built and proven on branch `phase-8-d10`; not yet merged**, because the gate could not be obtained in the cloud (decision log, 2026-10-16 block: D10 BUILT, D17–D23). The smoke run
 above is the "before". The "after" has not been measured yet — the cloud session that built it
 cannot reach Kraken, and the run waits for the operator's machine (D22).
 
