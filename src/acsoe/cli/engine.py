@@ -196,6 +196,40 @@ MARKET_SNAPSHOT_EVENT: Final = "tick_market_snapshot"
 #: the quantity `reconcile_spread.py` converts to basis points.
 QUOTE_FIELDS: Final = ("bid", "ask", "spread", "spread_pct", "ts")
 
+#: Engine 4's published feed figures, copied onto the line under the same names.
+#: `fresh_pairs` over `pairs_seen` is the fresh-pair fraction the operator ruled on
+#: 2026-09-21 is to be **recorded, with no screen yet** (D10). Engine 4 publishes it
+#: in `state` only, and `state` is gone at the end of the tick, so this line is the
+#: one place it survives. Named here rather than imported: the CLI reads `state`
+#: as data, and engine 4's contract test pins the names on its side.
+DATA_GUARD_STATE_KEY: Final = "data_guard"
+DATA_GUARD_COUNT_FIELDS: Final = ("pairs_seen", "fresh_pairs")
+DATA_GUARD_AGE_FIELDS: Final = ("freshest_quote_age_s", "oldest_quote_age_s", "max_data_age_s")
+DATA_GUARD_FIELDS: Final = DATA_GUARD_COUNT_FIELDS + DATA_GUARD_AGE_FIELDS
+
+
+def data_guard_figures(state: Mapping[str, Any]) -> dict[str, int | float | None]:
+    """Engine 4's five feed figures for this tick, each ``None`` when not published.
+
+    **Never invented.** Every key is always present so a line says "no figure"
+    rather than leaving the reader to wonder whether the field was ever written;
+    a value is carried only when engine 4 published one of the right type — an
+    integer count, a real-number age. Anything else is ``None``: a guard that
+    errored publishes nothing, and a zero here would read as "no fresh pair",
+    which is a claim about the feed nobody made.
+    """
+    region = state.get(DATA_GUARD_STATE_KEY)
+    guard: Mapping[str, Any] = region if isinstance(region, Mapping) else {}
+    figures: dict[str, int | float | None] = {}
+    for field in DATA_GUARD_COUNT_FIELDS:
+        value = guard.get(field)
+        figures[field] = value if isinstance(value, int) and not isinstance(value, bool) else None
+    for field in DATA_GUARD_AGE_FIELDS:
+        value = guard.get(field)
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+        figures[field] = float(value) if ok else None
+    return figures
+
 
 def market_snapshot(state: Mapping[str, Any]) -> dict[str, Any]:
     """What engine 2 subscribed to and what engine 3 quoted, on this tick.
@@ -225,6 +259,15 @@ def market_snapshot(state: Mapping[str, Any]) -> dict[str, Any]:
     replaced by `<redacted>` — silently, on every tick, for that pair only, and
     the reconciler would simply never see it. As a list, a pair symbol is always a
     *value* and never a key name, so the redactor cannot reach it.
+
+    ## Engine 4's feed figures
+
+    Since D10 (operator ruling 2026-09-21) the line also carries `pairs_seen`,
+    `fresh_pairs`, `freshest_quote_age_s`, `oldest_quote_age_s` and
+    `max_data_age_s`, copied from that tick's `state["data_guard"]` and ``None``
+    when engine 4 published none. It is the only place the fresh-pair fraction is
+    kept: no table stores it, because `block_records` is written only on a block.
+    See :func:`data_guard_figures`.
 
     ## Size
 
@@ -264,6 +307,10 @@ def market_snapshot(state: Mapping[str, Any]) -> dict[str, Any]:
         "subscription_derived": bool(recorder_map.get("subscription_derived", False)),
         "quotes": quotes,
         "quote_count": len(quotes),
+        # Engine 4's feed figures (D10). Flat, not nested, so a reader finds
+        # `fresh_pairs` beside `quote_count`; none of the five names contains a
+        # token `platform/logging.py` redacts, and a test runs them through it.
+        **data_guard_figures(state),
     }
 
 

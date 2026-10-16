@@ -167,6 +167,95 @@ def test_a_quote_missing_a_field_is_carried_with_what_it_has() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Engine 4's feed figures (D10, operator ruling 2026-09-21: record the
+# fresh-pair fraction, no screen yet). The line is the only place they survive.
+# --------------------------------------------------------------------------- #
+
+GUARD_MAX_AGE_S = 120.0
+
+
+@pytest.fixture
+def guard_context(engine_context: Any) -> Any:
+    """The committed config with the staleness bound pinned, as the guard's own tests do."""
+    data = engine_context.config.as_dict()
+    data["data_guard"] = {"max_data_age_s": GUARD_MAX_AGE_S}
+    return dataclasses.replace(engine_context, config=MappingConfig(data))
+
+
+def guarded(context: Any, *, eth_age_s: float) -> dict[str, Any]:
+    """`wired_state()` after the **real** engine 4 has judged it, ETH's quote at `eth_age_s`.
+
+    The figures on the line come from what engine 4 actually published, never from a
+    dict written here, so a rename on either side fails this file.
+    """
+    from acsoe.engines.data_guard.engine import DataGuardEngine
+
+    state = wired_state()
+    state["market_sensor"]["quotes"]["ETH/USD"]["age_s"] = eth_age_s
+    state["data_guard"] = DataGuardEngine().process(context, state).data
+    return state
+
+
+def test_the_line_carries_engine_fours_feed_figures(guard_context: Any) -> None:
+    snapshot = market_snapshot(guarded(guard_context, eth_age_s=3.0))
+
+    assert {field: snapshot[field] for field in DATA_GUARD_FIELDS} == {
+        "pairs_seen": 2,
+        "fresh_pairs": 2,
+        "freshest_quote_age_s": 0.5,
+        "oldest_quote_age_s": 3.0,
+        "max_data_age_s": GUARD_MAX_AGE_S,
+    }
+
+
+def test_one_stale_pair_moves_fresh_pairs_on_the_line_and_nothing_else(
+    guard_context: Any,
+) -> None:
+    """One input flipped: ETH's quote ages past the bound. The fraction on the line drops
+    from 2/2 to 1/2 and the oldest age follows; every other field of the line is
+    unchanged, so the move is attributable to that one quote."""
+    fresh = market_snapshot(guarded(guard_context, eth_age_s=3.0))
+    stale = market_snapshot(guarded(guard_context, eth_age_s=GUARD_MAX_AGE_S + 1))
+
+    assert (fresh["fresh_pairs"], stale["fresh_pairs"]) == (2, 1)
+    assert stale["pairs_seen"] == 2
+    assert stale["oldest_quote_age_s"] == GUARD_MAX_AGE_S + 1
+    assert stale["freshest_quote_age_s"] == fresh["freshest_quote_age_s"] == 0.5
+    changed = {key for key in fresh if fresh[key] != stale[key]}
+    assert changed == {"fresh_pairs", "oldest_quote_age_s"}, changed
+
+
+def test_a_quote_exactly_at_the_bound_is_logged_fresh(guard_context: Any) -> None:
+    """The bound is inclusive in engine 4, so the line must say so too."""
+    snapshot = market_snapshot(guarded(guard_context, eth_age_s=GUARD_MAX_AGE_S))
+    assert snapshot["fresh_pairs"] == 2
+
+
+@pytest.mark.parametrize(
+    "region",
+    [None, "not a mapping", {}, {"pairs_seen": "2", "fresh_pairs": True, "max_data_age_s": "120"}],
+    ids=["absent", "malformed", "errored-empty", "wrong-types"],
+)
+def test_figures_engine_four_did_not_publish_are_none_never_zero(region: Any) -> None:
+    """Never invented. A guard that errored publishes `{}`; a zero would read as "no fresh
+    pair", a statement about the feed nobody made. Every key is still on the line."""
+    state = wired_state()
+    if region is not None:
+        state["data_guard"] = region
+    snapshot = market_snapshot(state)
+    assert {field: snapshot[field] for field in DATA_GUARD_FIELDS} == dict.fromkeys(
+        DATA_GUARD_FIELDS
+    )
+
+
+def test_the_figures_survive_the_real_redactor(guard_context: Any) -> None:
+    """None of the five names may contain a token `platform/logging.py` redacts."""
+    redacted = _redact_value(market_snapshot(guarded(guard_context, eth_age_s=500.0)))
+    assert (redacted["fresh_pairs"], redacted["pairs_seen"]) == (1, 2)
+    assert redacted["oldest_quote_age_s"] == 500.0
+
+
+# --------------------------------------------------------------------------- #
 # End to end, through the real loop and the real log pipeline
 # --------------------------------------------------------------------------- #
 
