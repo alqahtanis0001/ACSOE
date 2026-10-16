@@ -922,6 +922,32 @@ MUTATIONS: dict[str, tuple[str, str, bytes, bytes, str]] = {
         b"        return False\n",
         "with close_intent set the held position was not sold",
     ),
+    # D10 (operator ruling 2026-09-21): engine 21 judges no pair as not live, so a stop
+    # touched on the one crossed pair is taken on a quote nobody trusts. Since D10 that
+    # tick is not blocked by engine 4, so engine 21's per-pair hold is all that stops it.
+    "per_pair_hold_removed_from_21": (
+        "triggered_stop_holds_on_data_guard_block",
+        _E + "position_manager/engine.py",
+        (
+            b"            not_live = self._pairs_not_live(context, state, marked, "
+            b"close_intent=close_intent)\n"
+        ),
+        b"            not_live = set()\n",
+        "a stop touched on a pair with no live price is no trigger",
+    ),
+    # Engine 19 overwrites every row with the tick's hold, as it did before D10, so the
+    # per-pair hold engine 21 published is stored as null and the screen shows nothing.
+    # In C's own lane.
+    "memory_overwrites_the_rows_hold": (
+        "triggered_stop_holds_on_data_guard_block",
+        _E + "memory/engine.py",
+        (
+            b"            stamped[HOLD_REASON_FIELD] = hold if hold is not None "
+            b"else row.get(HOLD_REASON_FIELD)\n"
+        ),
+        b"            stamped[HOLD_REASON_FIELD] = hold\n",
+        "engine 19 stored the position held on its own pair as",
+    ),
     # Engine 22 reads this tick's pair rules only, never the retained ones.
     "liquidation_needs_fresh_pair_rules": (
         "escalation_completes_during_outage",
