@@ -26,14 +26,16 @@ appeared only when there was something to say would collapse them into one.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.harness.doubles import MappingConfig
 
-from acsoe.cli.engine import MARKET_SNAPSHOT_EVENT, market_snapshot, run_loop
+from acsoe.cli.engine import DATA_GUARD_FIELDS, MARKET_SNAPSHOT_EVENT, market_snapshot, run_loop
 from acsoe.platform.logging import _redact_value, configure_logging
 
 STAMP = "2026-09-11T19:30:00.000000Z"
@@ -299,6 +301,35 @@ def test_the_loop_writes_one_line_per_tick_at_info(tmp_path: Path) -> None:
     # A timestamp the reconcilers can window on.
     assert datetime.fromisoformat(first["ts"].replace("Z", "+00:00")).tzinfo is not None
     assert first["ts"] <= datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
+class _GuardedStubOrchestrator(_StubOrchestrator):
+    """Ticks whose `state` carries engine 4's payload, the fresh count falling by one."""
+
+    def tick(self) -> dict[str, Any]:
+        state = super().tick()
+        state["data_guard"] = {
+            "pairs_seen": 2,
+            "fresh_pairs": 3 - self.cycle_id,
+            "freshest_quote_age_s": 0.5,
+            "oldest_quote_age_s": 60.0 * self.cycle_id,
+            "max_data_age_s": GUARD_MAX_AGE_S,
+        }
+        return state
+
+
+def test_the_written_line_records_the_fresh_pair_fraction_each_tick(tmp_path: Path) -> None:
+    """Through `run_loop`, structlog and the file handler: the fraction reaches the file,
+    one figure per tick, and a reader of `acsoe.jsonl` can recover it."""
+    configure_logging(level="INFO", log_dir=tmp_path, retention_days=1)
+    run_loop(_GuardedStubOrchestrator(), tick_seconds=0.001, max_ticks=2)
+
+    written = (tmp_path / "acsoe.jsonl").read_text(encoding="utf-8")
+    lines = [json.loads(raw) for raw in written.splitlines() if raw.strip()]
+    snapshots = [line for line in lines if line.get("event") == MARKET_SNAPSHOT_EVENT]
+    assert [(line["fresh_pairs"], line["pairs_seen"]) for line in snapshots] == [(2, 2), (1, 2)]
+    assert [line["oldest_quote_age_s"] for line in snapshots] == [60.0, 120.0]
+    assert all(line["max_data_age_s"] == GUARD_MAX_AGE_S for line in snapshots)
 
 
 def test_the_line_never_carries_a_credential(tmp_path: Path) -> None:
