@@ -714,7 +714,8 @@ Gated in a fresh worktree (`ACSOE-gate-console`) on commit `4a071d5`, because th
 `ACSOE-gate` holds another session's uncommitted F3 files and was left alone. The result was
 **5 PASS, 0 FAIL, 1 PENDING**, with pytest `4107 passed, 4 skipped` in 2,363 s, log
 `logs/verify/gate-p8-console-win.log`. It was pushed as a fast-forward, `0d53368..4a071d5`. The
-running console still serves D10's code, without these fixes, until it is restarted from `main`.
+console alone was then restarted from `main` (11:38 UTC), so it serves these fixes; the daemon
+was not touched.
 
 ### D29 — The report evidence material is committed; the source dump is gitignored
 
