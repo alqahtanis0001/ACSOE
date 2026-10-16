@@ -225,9 +225,11 @@ def data_guard_figures(state: Mapping[str, Any]) -> dict[str, int | float | None
         value = guard.get(field)
         figures[field] = value if isinstance(value, int) and not isinstance(value, bool) else None
     for field in DATA_GUARD_AGE_FIELDS:
-        value = guard.get(field)
-        ok = isinstance(value, (int, float)) and not isinstance(value, bool)
-        figures[field] = float(value) if ok else None
+        age = guard.get(field)
+        if isinstance(age, (int, float)) and not isinstance(age, bool):
+            figures[field] = float(age)
+        else:
+            figures[field] = None
     return figures
 
 

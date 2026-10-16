@@ -65,3 +65,28 @@ engine 7's exclusion counts, and only on ticks that reach engine 7. The daemon's
 **Not fixed: reported to the lead.** No schema change was asked for. The lane-A option with no
 schema change is to add the four data_guard figures to `tick_market_snapshot` in `cli/engine.py`.
 The paper-run report script reads them from the log if they are there.
+
+### Decision: the fresh-pair fraction is kept on the per-tick log line, with `None` for "not published"
+
+**Agent:** A · **Task:** lead follow-up to the finding above · **Date:** 2026-10-16
+
+**Options.** Add a column or table, which is a schema change and B's and the lead's. Or carry
+engine 4's figures on the `tick_market_snapshot` line, which is already written at INFO on every
+tick precisely because `state` is otherwise lost. The lead ruled for the log line.
+
+**Chose.** Five flat fields copied from that tick's `state["data_guard"]`: `pairs_seen`,
+`fresh_pairs`, `freshest_quote_age_s`, `oldest_quote_age_s` and `max_data_age_s`. They are flat
+rather than nested so a reader finds them beside `quote_count`, and no name contains a token the
+log redactor matches; a test runs them through the real redactor anyway. **Every key is always
+present, and a value is `None` unless engine 4 published one of the right type.** A guard that
+errored publishes `{}`, and a 0 there would read as "no fresh pair", which is a statement about
+the feed that nobody made. A string, or a boolean standing in for a count, is also `None`.
+
+**Consequence.** The tests run the **real** engine 4 on the snapshot test's state, so the logged
+figures are what the engine published. They flip one input, ETH aged past the bound, and assert
+that exactly `fresh_pairs` and `oldest_quote_age_s` move, and nothing else on the line. They
+also check the inclusive bound, unpublished and wrong-typed regions, the redactor, and the
+written file through `run_loop`. Eight mutation arms are in scratch, not run. The paper-run
+report now takes the fraction from `--log`, and it counts ticks with no figure rather than
+treating them as zero. One fix was needed along the way: `mypy --strict` does not narrow through
+a boolean held in a variable, so the age check became a direct `isinstance` branch.
