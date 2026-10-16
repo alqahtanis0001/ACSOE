@@ -290,7 +290,7 @@ def test_engine_19_wrote_both_block_rows_even_though_the_feed_shows_one(
     assert {row[2] for row in rows} == {BlockStatus.BLOCK.value}
 
 
-def test_the_empty_state_names_engine_7_rather_than_the_engine_it_used_to_name(
+def test_the_empty_state_says_not_available_and_never_names_a_stale_engine(
     live_reader: Any,
 ) -> None:
     """The stale line carried over from the Phase 3 handoff.
@@ -300,6 +300,10 @@ def test_the_empty_state_names_engine_7_rather_than_the_engine_it_used_to_name(
     wait for something already built. The counts are still absent — nothing persists
     them — and the line must still not show a zero, because a zero there reads as "no
     pair qualified", which is a result.
+
+    Operator instruction 2026-09-21: the line reads plainly "Not available yet", with no
+    engine number on the screen. The engine-7 explanation lives at `_NOT_RECORDED` in
+    `reader.py`'s comment, not in the operator's view.
     """
     stages = {stage.label: stage for stage in live_reader.feed_summary().stages}
     scanned = stages["Pairs scanned"]
@@ -307,5 +311,5 @@ def test_the_empty_state_names_engine_7_rather_than_the_engine_it_used_to_name(
     assert scanned.count is None
     assert "Phase 2" not in scanned.detail
     assert "engine 4" not in scanned.detail
-    assert "engine 7" in scanned.detail
+    assert scanned.detail == "Not available yet"
     assert stages["Entered the tradable universe"].count is None

@@ -613,22 +613,22 @@ def format_outcome(outcome: str) -> str:
 
 
 def format_clock_time(micros: int) -> str:
-    """``HH:MM:SS`` in UTC, for the cycle feed's time column.
+    """``HH:MM:SS`` in **this machine's local time**, for the cycle feed's time column.
 
-    UTC, never a local zone. The daemon writes microseconds since the epoch and
-    the operator may not be sitting in the same zone as the machine; a feed whose
-    times silently shift with the viewer's clock cannot be compared against a log.
+    Operator instruction 2026-09-21: local time rather than UTC. The earlier choice was
+    UTC, on the ground that a feed which shifts with the machine's zone cannot be compared
+    against a log written in UTC; the daemon's logs are still UTC, so compare with care.
     """
-    return from_micros(micros).strftime("%H:%M:%S")
+    return from_micros(micros).astimezone().strftime("%H:%M:%S")
 
 
 def format_timestamp(micros: int) -> str:
-    """``YYYY-MM-DD HH:MM:SS`` in UTC, for history and the leaderboard.
+    """``YYYY-MM-DD HH:MM:SS`` in this machine's local time, for history and the leaderboard.
 
     History spans days, so the date is part of the value there in a way it is not
     in a feed of the current run's ticks.
     """
-    return from_micros(micros).strftime("%Y-%m-%d %H:%M:%S")
+    return from_micros(micros).astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def format_rate_pct(value: float | None, *, places: int = PERCENT_PLACES) -> str:

@@ -142,7 +142,7 @@ _COST_STAGE_ENGINES: Final = frozenset({"cost"})
 #: in this column reads as "no pair qualified", which is a result, when the truth is that
 #: nobody wrote the number down.
 _NOT_RECORDED: Final = (
-    "not recorded yet \N{EM DASH} engine 7 counts this on the tick and no table stores it"
+    "Not available yet"
 )
 
 #: A leaderboard statistic the row does not record, as opposed to one that is zero.

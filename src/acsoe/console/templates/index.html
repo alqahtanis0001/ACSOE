@@ -33,7 +33,7 @@
   <!-- Status band. Fixed, never scrolls, always visible. It answers the primary
        question in under two seconds: is this safe, and what is it doing? -->
   <header class="band" data-region="status-band">
-    <div class="band__field band__field--balance">
+    <div class="band__field band__field--balance" title="The account's value. In paper mode this is the simulation's money, not your Kraken wallet; only live mode would show the real account.">
       <!-- The label names whose money this is, and the server decides the words: in
            paper and replay the figure is the paper broker's ledger, not the Kraken
            account (D11). "Paper balance" is the safe default in the markup, because a
@@ -46,12 +46,12 @@
       <span class="age" data-age="balance"></span>
     </div>
 
-    <div class="band__field">
+    <div class="band__field" title="Paper trades simulated money against real Kraken prices; live would trade real money and is switched off.">
       <span class="band__label" id="label-mode">Mode</span>
       <span class="band__value" data-field="mode" aria-labelledby="label-mode">Paper</span>
     </div>
 
-    <div class="band__field">
+    <div class="band__field" title="What the daemon is doing: Idle until Activate is pressed, Running once it is, Frozen after Freeze or Close all.">
       <!-- Four readings: Idle, Idle - restarted not trading, Running, Frozen. The
            first two are decided by whether the current run has a previous runs
            row; the last two are read from the mode the daemon persisted, never
@@ -61,7 +61,7 @@
       <span class="band__value" data-field="state" aria-labelledby="label-state">Idle</span>
     </div>
 
-    <div class="band__field">
+    <div class="band__field" title="How long since the daemon last wrote anything the console can see; it keeps growing if the daemon stops.">
       <span class="band__label" id="label-data-age">Data age</span>
       <span class="band__value num" data-field="data-age" aria-labelledby="label-data-age"></span>
     </div>
@@ -74,9 +74,9 @@
              `disabled` in the served markup and console.js enables them, so a
              page whose script failed to load offers nothing rather than offering
              a button that silently does nothing. -->
-        <button class="button" type="button" data-command="activate" disabled>Activate</button>
-        <button class="button" type="button" data-command="freeze" disabled>Freeze</button>
-        <button class="button" type="button" data-command="close_all" disabled>Close all positions</button>
+        <button class="button" type="button" data-command="activate" disabled title="Tells the daemon to start trading; it takes effect at its next tick, within about a minute.">Activate</button>
+        <button class="button" type="button" data-command="freeze" disabled title="Tells the daemon to stop trading; it takes effect at its next tick.">Freeze</button>
+        <button class="button" type="button" data-command="close_all" disabled title="Asks you to confirm, then tells the daemon to sell every open position and stop trading.">Close all positions</button>
       </div>
     </div>
   </header>
@@ -89,8 +89,8 @@
   <div class="confirm" data-region="confirm" role="alertdialog" aria-labelledby="confirm-question" hidden>
     <p class="confirm__question" id="confirm-question" data-field="confirm-question"></p>
     <div class="actions">
-      <button class="button" type="button" data-confirm="yes">Close all positions</button>
-      <button class="button" type="button" data-confirm="no">Cancel</button>
+      <button class="button" type="button" data-confirm="yes" title="Confirms it: sell every open position and stop trading.">Close all positions</button>
+      <button class="button" type="button" data-confirm="no" title="Closes this question and does nothing.">Cancel</button>
     </div>
   </div>
 
@@ -283,8 +283,7 @@
         <h2>Explanations</h2>
       </div>
       <p class="empty" data-empty="shap">
-        Per-decision feature attribution arrives with the predictor in Phase 5.
-        Nothing is computed yet, so there is nothing here to show.
+        Not available yet.
       </p>
     </section>
   </main>

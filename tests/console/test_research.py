@@ -190,20 +190,25 @@ async def test_no_research_payload_smuggles_a_shap_row_in_beside_the_leaderboard
     assert set(body) == {"leaderboard", "shap"}
 
 
-def test_the_research_markup_draws_nothing_and_says_which_phase_produces_it() -> None:
+def test_the_research_markup_draws_nothing_and_says_it_is_not_available() -> None:
     """The pane's emptiness holds on the page too, not only in the payload.
 
     `ui-context.md` leaves the visualisation undesigned on purpose, so there is
     nothing on this page that would draw one: no canvas, no inline SVG, and no
     charting library — which the page could not have fetched anyway, since it
     fetches nothing from a third party.
+
+    The served markup's fallback reads "Not available yet." (operator instruction
+    2026-09-21). The old line, "arrives with the predictor in Phase 5", was false once
+    Phase 5 shipped; the payload's message above still carries the phase numbers.
     """
     markup = TEMPLATE_PATH.read_text(encoding="utf-8").lower()
     section = _shap_section(markup)
     assert section, "the research pane has no shap region"
     for element in _CHART_ELEMENTS:
         assert element not in markup, element
-    assert "phase 5" in section
+    assert "not available yet." in section
+    assert "phase 5" not in section
 
 
 def _shap_section(markup: str) -> str:
