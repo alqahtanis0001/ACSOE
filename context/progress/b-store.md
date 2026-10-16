@@ -1,5 +1,71 @@
 # Agent B — Store and trading
 
+## Phase 8, 2026-10-16 — D10: engine 21's per-pair stop hold (operator ruling 2026-09-21, option 1)
+
+**Claimed from the lead's brief, on branch `phase-8-d10`.** Not committed by me. The lead
+took two WIP snapshots (`572c278`, `fc5deb9`) while I was working, and my last test edits
+are in the working tree.
+
+**Done.**
+- **Engine 21, `contracts.py`.** Added `HOLD_PAIR_QUOTE_NOT_LIVE = "pair_quote_not_live"`.
+  Added `MAX_DATA_AGE_KEY = "data_guard.max_data_age_s"`, restated from engine 4 rather
+  than imported. Added `QUOTE_ASK_FIELD` and `QUOTE_AGE_FIELD`. All four are in
+  `__all__`. The docstring now describes both hold levels.
+- **Engine 21, `engine.py`.** Added `_pairs_not_live` and `_quote_is_live`. The predicate
+  is engine 7's: the quote is absent; bid or ask is absent, unparseable, non-finite or not
+  positive; bid > ask; `age_s` is absent, not a number, or a bool; or `age_s` is past the
+  bound. Exactly at the bound counts as live. Comparisons are Decimal, with floats going
+  through `repr`.
+  - The bound is read with `_config_decimal` and has no default. It is read only when
+    there is a marked position, no feed-wide hold and no liquidation.
+  - On a feed-wide hold, every row gets `data_guard_blocked` and nothing triggers.
+  - Otherwise each row gets `pair_quote_not_live` or None, and barriers are decided only
+    for rows with None. Positions opened by this tick's fill are judged the same way.
+  - During a liquidation every row is None.
+  - The tick-level `hold_reason` is still only the feed-wide hold. The error path and
+    marking are unchanged.
+- **Tests, `tests/engines/test_position_manager.py`.** 59 → 98 tests. Each new test flips
+  one input from a stop-triggering baseline. They cover:
+  - own pair stale, crossed, absent, or with no age;
+  - malformed quote fields;
+  - another pair stale or crossed, with and without a position on that pair;
+  - exactly at the bound;
+  - the feed-wide hold, on the tick and on every row;
+  - `close_intent`, with and without a `data_guard` block;
+  - a fill made this tick;
+  - the row value is always this tick's, never the stored one;
+  - a round trip through C's real engine 19;
+  - a null bound: ERROR only when a position is judged;
+  - the shared key against engines 4, 7 and 16;
+  - the pinned spelling.
+- **Task 3 audit.** In `test_scout.py`, the age-less test now asserts its own baseline. In
+  `test_decision.py`, the stale and crossed tests now assert a passing baseline first. I
+  added `test_a_chosen_pair_that_went_stale_after_selection_is_refused`: engine 7's pair,
+  aged to engine 4's *published* bound + 1.
+- **READMEs.** The position_manager README has a new hold section, inputs and config. The
+  scout README updates row 2 and the inputs and config, and adds a section on stale and
+  crossed quotes. The decision README updates the inputs, adds clause 5
+  `candidate_quote_not_live` and says it now decides two things. The exit README adds a
+  paragraph on the per-pair hold, which has one lock rather than two. The decision engine
+  docstring changes to match.
+- **Mutation arms** are in `/tmp/claude-0/-home-user-ACSOE/2468ab5a-5e26-5df4-a33a-85887b79f3ff/scratchpad/b/`:
+  four JSON files with 19 + 3 + 4 + 5 arms. All are killed. I checked this on a scratch
+  copy of `src/` shadowed through PYTHONPATH (`shadow_mutate.py`), so the shared tree was
+  never mutated. The lead's sequential run is still the authority.
+
+**For the lead.**
+- `docs/build-log/phase-8/decisions-2026-09-21.md` has no D17 entry yet. The
+  position_manager README links to it, as `engine-contracts.md` and invariant 14 already do.
+- Invariant 3 says engine 16 "blocks on exactly one condition", but since D10 fix 3 it
+  blocks on two. That file is the lead's.
+- `pair_quote_not_live` is in `REASON_PROSE` (C's `console/format.py`, already in the
+  snapshot).
+- A position whose pair stops quoting entirely also loses its **timeout**. This follows
+  the lead's contract ("no stop, target or timeout") and the existing feed-wide hold. It
+  is the same D17 exposure.
+
+**Blocked on.** Nothing.
+
 ## Phase 7, b-store — CLAIMED 2026-09-19, spec 132, then engine 7's half of spec 144
 
 I claimed these before writing any code, per rule 5. The Phase 6 preflight gate finished first (`exit 0`, 13/13 PASS).

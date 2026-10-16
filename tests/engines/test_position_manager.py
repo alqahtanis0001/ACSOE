@@ -893,11 +893,20 @@ def test_a_quote_that_cannot_be_shown_live_holds_its_position(
         ("age_s", True),
         ("age_s", "30"),
         ("ask", "0"),
+        ("bid", "0"),
         ("bid", "-1"),
         ("ask", "not a price"),
     ],
-    ids=["a bool is not an age", "a string is not an age", "a zero ask", "a negative bid",
-         "an unparseable ask"],
+    ids=[
+        "a bool is not an age",
+        "a string is not an age",
+        "a zero ask",
+        # The one case only the positivity check catches: a zero bid is not above the
+        # ask, so the crossed-book check passes it. A zero ask is caught twice.
+        "a zero bid",
+        "a negative bid",
+        "an unparseable ask",
+    ],
 )
 def test_a_malformed_quote_holds_its_position_and_errors_nothing(
     manager: PositionManagerEngine,

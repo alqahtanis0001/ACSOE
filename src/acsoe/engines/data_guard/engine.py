@@ -220,10 +220,10 @@ class DataGuardEngine(BaseEngine):
     def _age(quote: Any) -> float | None:
         """The quote's age in seconds, or None when it does not carry one.
 
-        A quote with no age is **not** treated as fresh. It contributes no staleness
-        finding on its own, but it also cannot satisfy the check — and if no quote in
-        the tick carries an age, `oldest_quote_age_s` stays null and the operator sees
-        that the guard had nothing to measure.
+        A quote with no age is **not** treated as fresh. It is skipped when the freshest
+        and oldest ages are taken and is never counted in `fresh_pairs`, so it cannot
+        keep the heartbeat alive — and if no quote in the tick carries an age, both ages
+        stay null and the tick blocks as stale: the feed cannot be shown to be alive.
         """
         if not isinstance(quote, dict):
             return None

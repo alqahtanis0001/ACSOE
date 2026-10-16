@@ -134,11 +134,15 @@ A gate that errors blocks. A gate that cannot reach its data blocks, subject onl
 
 Gate engines: 4 (data guard), 7 (scout), 10 (cost), 11 (risk), 13 (anomaly), 15 (skeptic), 16 (decision), 17 (safety).
 
-**Engine 16 `decision` became a gate by operator ruling 2026-09-16.** It blocks on exactly one
-condition, and the condition is deterministic arithmetic over `state`: **every approving engine
-judged *this* tick's candidate** — the same pair engine 7 chose and the same decision bar. A pair
+**Engine 16 `decision` became a gate by operator ruling 2026-09-16.** It blocks on two
+conditions, both deterministic arithmetic over `state`. First, **every approving engine judged
+*this* tick's candidate** — the same pair engine 7 chose and the same decision bar. A pair
 disagreement, a payload carrying a previous bar, an absent input where the chain says the engine
-ran, or an approval carrying no quantity all block. Its other work — composing the order intent
+ran, or an approval carrying no quantity all block. Second, since D10 fix 3 (operator ruling
+2026-09-21), **the chosen pair's own quote is still live**: no older than the bound engine 4
+published this tick from `data_guard.max_data_age_s`, and not crossed — `candidate_quote_not_live`
+otherwise. Per-pair freshness left `data_guard` in D10, and this keeps a gate between a stale price
+and an order. Its other work — composing the order intent
 engine 18 reads — is composition, not decision, and its README says so in those words.
 
 ## 4. No model output may bypass a gate
